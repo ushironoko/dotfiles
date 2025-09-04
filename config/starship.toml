@@ -1,0 +1,2 @@
+[nodejs]
+format = '[$version](bold green) '

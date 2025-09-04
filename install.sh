@@ -53,6 +53,12 @@ fi
 create_symlink "$DOTFILES_DIR/config/git" "$HOME/.config/git"
 # Note: gh config contains OAuth tokens and should not be tracked in dotfiles
 
+# Starship configuration
+create_symlink "$DOTFILES_DIR/config/starship.toml" "$HOME/.config/starship.toml"
+
+# Mise configuration
+create_symlink "$DOTFILES_DIR/config/mise" "$HOME/.config/mise"
+
 echo "Dotfiles installation complete!"
 echo ""
 echo "To reload your shell configuration, run:"

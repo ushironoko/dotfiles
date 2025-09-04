@@ -1,0 +1,10 @@
+[tools]
+node = "24.6.0"
+starship = "latest"
+ni = "23.2.0"
+pnpm = "latest"
+rust = "latest"
+
+[settings]
+experimental = true
+idiomatic_version_file_enable_tools = ["node"]
