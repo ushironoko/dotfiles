@@ -39,14 +39,17 @@ create_symlink "$DOTFILES_DIR/git/.gitconfig" "$HOME/.gitconfig"
 # Claude configuration
 echo "Setting up Claude configuration..."
 # Only link essential Claude files - other files should remain in ~/.claude
-for file in agents commands CLAUDE.md .mcp.json settings.json; do
+for file in agents commands CLAUDE.md settings.json; do
     create_symlink "$DOTFILES_DIR/claude/.claude/$file" "$HOME/.claude/$file"
 done
 
 # .config directory contents
 echo "Setting up .config directory contents..."
 mkdir -p "$HOME/.config"
-create_symlink "$DOTFILES_DIR/config/fish" "$HOME/.config/fish"
+# Only link if the directory exists in dotfiles
+if [ -d "$DOTFILES_DIR/config/fish" ]; then
+    create_symlink "$DOTFILES_DIR/config/fish" "$HOME/.config/fish"
+fi
 create_symlink "$DOTFILES_DIR/config/git" "$HOME/.config/git"
 # Note: gh config contains OAuth tokens and should not be tracked in dotfiles
 
