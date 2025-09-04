@@ -1,19 +1,37 @@
-# .DS_Store
+# Security - Never commit these
+config/gh/
+*.key
+*.pem
+*_token*
+.env
+.env.local
+.envrc
+credentials*
+secrets*
+
+# System files
 .DS_Store
+Thumbs.db
 
 # Node modules
 node_modules/
 
 # Logs
-.log
-
-# Environment variables
-.env
-.envrc
+*.log
 
 # Build output
 dist/
 build/
 
+# Editor files  
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
 # Temporary files
 tmp/
+*.tmp
+*.bak
+*.backup

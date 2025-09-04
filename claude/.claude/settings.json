@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm:*)",
+      "Bash(pnpm:*)",
+      "Bash(git:*)",
+      "Bash(cargo:*)",
+      "Bash(go:*)",
+      "Read(**)",
+      "WebFetch(domain:*)",
+      "Read(~/.bashrc)",
+      "mcp__serena__list_dir",
+      "mcp__serena__replace_regex",
+      "mcp__serena__find_symbol",
+      "mcp__serena__search_for_pattern",
+      "mcp__serena__think_about_whether_you_are_done"
+    ],
+    "deny": [
+      "Bash(curl:*)"
+    ]
+  },
+  "model": "opus",
+  "statusLine": {
+    "type": "command",
+    "command": "npx ccusage@latest statusline"
+  }
+}

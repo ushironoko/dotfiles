@@ -1,0 +1,8 @@
+[user]
+	name = ushironoko
+	email = apple19940820@gmail.com
+[core]
+	editor = vim
+[credential "https://github.com"]
+	helper = 
+	helper = !/usr/bin/gh auth git-credential
