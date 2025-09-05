@@ -15,13 +15,13 @@
       "mcp__serena__search_for_pattern",
       "mcp__serena__think_about_whether_you_are_done"
     ],
-    "deny": [
-      "Bash(curl:*)"
-    ]
+    "deny": ["Bash(curl:*)"]
   },
   "model": "opus",
   "statusLine": {
     "type": "command",
-    "command": "npx ccusage@latest statusline"
-  }
+    "command": "~/.claude/statusline.sh",
+    "padding": 0
+  },
+  "enableAllProjectMcpServers": true
 }
