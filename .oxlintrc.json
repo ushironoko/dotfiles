@@ -1,0 +1,46 @@
+{
+  "env": {
+    "node": true,
+    "es2022": true
+  },
+  "plugins": [
+    "typescript",
+    "import",
+    "unicorn"
+  ],
+  "rules": {
+    "no-unused-vars": "warn",
+    "no-undef": "error",
+    "no-await-in-loop": "off",
+    "no-continue": "off",
+    "no-ternary": "off",
+    "sort-keys": "off",
+    "sort-imports": "off",
+    
+    "typescript/no-explicit-any": "error",
+    "typescript/no-unused-vars": "warn",
+    "typescript/explicit-function-return-type": "off",
+    "typescript/no-non-null-assertion": "warn",
+    
+    "import/no-cycle": "error",
+    
+    "unicorn/filename-case": ["error", {"case": "kebabCase"}]
+  },
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "pedantic": "off",
+    "perf": "warn",
+    "style": "warn"
+  },
+  "ignorePatterns": [
+    "dist/",
+    "node_modules/",
+    "build/",
+    "*.js",
+    "legacy/"
+  ],
+  "files": [
+    "**/*.{ts,tsx}"
+  ]
+}
