@@ -4,269 +4,88 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-This is a dotfiles repository that manages personal Unix system configurations through symbolic links. The repository is currently transitioning from Bash scripts to a TypeScript implementation for improved maintainability and testing.
+A dotfiles management system written in TypeScript/Bun that creates symbolic links between configuration files and their system locations. Supports backups, restoration, and merging of MCP server configurations.
 
-## Current Implementation Status
-
-### ✅ TypeScript Implementation (New - Primary)
-The repository now has a complete TypeScript implementation that provides feature parity with the legacy Bash scripts:
-
-- **Runtime**: Bun (ALWAYS use Bun, never npm/pnpm)
-- **Package Manager**: Bun (`bun add`, `bun install`, `bun run`)
-- **Linting**: OXC (`bun run lint`) - 0 errors, warnings are acceptable for magic numbers in tests
-- **Testing**: Vitest (`bun run test`) - 72 tests, all passing
-- **Type Checking**: TypeScript (`bun run typecheck`) - 0 errors
-
-### 🔄 Migration Status
-- ✅ Core functionality implemented in TypeScript
-- ✅ All legacy features ported
-- ✅ Comprehensive test coverage
-- ⚠️ Legacy Bash scripts still available in `legacy/` directory
-- 🎯 Next: Production testing and gradual transition
-
-## TypeScript Architecture
-
-### Core Modules (`src/core/`)
-
-#### SymlinkManager (`symlink-manager.ts`)
-- `createSymlink(source, target, force, dryRun)` - Creates individual symlinks
-- `createMultipleSymlinks(mappings[], options)` - Batch symlink creation
-- `checkSymlinkStatus(target, source)` - Verifies symlink integrity
-- Supports three mapping types: `file`, `directory`, `selective`
-
-#### BackupManager (`backup-manager.ts`)
-- `createBackup(paths[], dryRun)` - Creates timestamped backups
-- `listBackups()` - Returns BackupInfo[] with metadata
-- `restoreBackup(name, targetPaths?, dryRun)` - Restores from backup
-- `cleanOldBackups(dryRun)` - Removes old backups based on keepLast setting
-- Timestamp format: `YYYY-MM-DDTHH-MM-SS`
-
-#### MCPMerger (`mcp-merger.ts`)
-- `merge(dryRun)` - Merges mcpServers configuration
-- `backup(dryRun)` - Creates backup of target file
-- Special handling for `.claude.json` files
-- Prevents duplicate backups
-
-#### ConfigManager (`config-manager.ts`)
-- `loadConfig(path?)` - Loads configuration from JSON
-- `validateConfig(config)` - Validates configuration schema
-- Default configuration fallback
-
-### CLI Commands (`src/commands/`)
+## Development Commands
 
 ```bash
-# Install command
-bun run src/index.ts install [options]
-  --config, -c    # Custom config file path
-  --dry-run, -d   # Preview changes without applying
-  --force, -f     # Overwrite existing files
-  --verbose, -v   # Detailed output
+# Install dependencies
+bun install
 
-# Restore command  
-bun run src/index.ts restore [options]
-  --backup, -b    # Specific backup name
-  --interactive, -i # Interactive selection mode
-  --partial, -p   # Restore specific paths only
-  --dry-run, -d   # Preview restore
-  --verbose, -v   # Detailed output
+# Run tests (72 tests across 7 files)
+bun test
+bun test tests/core/symlink-manager.test.ts  # Run single test file
 
-# List command
-bun run src/index.ts list [options]
-  --config, -c    # Custom config file
-  --verbose, -v   # Show detailed status
-```
+# Linting and formatting
+bun run lint       # Run oxlint
+bun run lint:fix   # Auto-fix lint issues
 
-### Configuration (`config/dotfiles.json`)
-
-```json
-{
-  "mappings": [
-    {
-      "source": "./shell/.bashrc",
-      "target": "~/.bashrc",
-      "type": "file"
-    },
-    {
-      "source": "./config",
-      "target": "~/.config", 
-      "type": "directory"
-    },
-    {
-      "source": "./claude/.claude",
-      "target": "~/.claude",
-      "type": "selective",
-      "files": ["agents/", "commands/", "CLAUDE.md", "settings.json", "statusline.sh"]
-    }
-  ],
-  "backup": {
-    "directory": "~/.dotfiles_backup",
-    "keepLast": 5
-  },
-  "mcp": {
-    "sourceFile": "./claude/dot_claude.json",
-    "targetFile": "~/.claude.json",
-    "mergeKey": "mcpServers",
-    "backupDir": "~/.dotfiles_backup"
-  }
-}
-```
-
-## Development Workflow
-
-### Running Tests
-```bash
-# Run all tests
-bun run test
-
-# Run specific test file
-bun test tests/core/backup-manager.test.ts
-
-# Run with coverage
-bun test --coverage
-```
-
-### Code Quality Checks
-```bash
-# Run linter (oxlint)
-bun run lint
-
-# Auto-fix lint issues
-bun run lint:fix
-
-# Type checking
+# Type checking (using tsgo --noEmit)
 bun run typecheck
 
-# Run all checks
-bun run lint && bun run test && bun run typecheck
+# Pre-commit check (runs lint, typecheck, and tests)
+bun run prepare
+
+# Development/manual execution
+bun run src/index.ts install --dry-run  # Preview installation
+bun run src/index.ts restore            # Restore from backup
+bun run src/index.ts list --verbose     # List symlinks with status
 ```
 
-### Common Development Tasks
+## High-Level Architecture
 
-#### Adding a New Dotfile Configuration
-1. Add mapping to `config/dotfiles.json`:
-```json
-{
-  "source": "./path/to/file",
-  "target": "~/target/path",
-  "type": "file"
-}
-```
-2. Test: `bun run src/index.ts install --dry-run`
-3. Apply: `bun run src/index.ts install`
+The application follows a modular architecture with clear separation between CLI commands, core business logic, and utilities. All modules use ESM imports and are strongly typed with TypeScript.
 
-#### Implementing New Features
-1. Write tests first in `tests/` directory
-2. Implement feature in appropriate module
-3. Ensure all checks pass: `bun run lint && bun run test && bun run typecheck`
-4. Update this documentation
+### Command Flow
+1. **CLI Entry** (`src/index.ts`) → Parses command using Gunshi CLI framework
+2. **Command Handler** (`src/commands/*.ts`) → Orchestrates core modules
+3. **Core Modules** (`src/core/*.ts`) → Executes business logic
+4. **Utils** (`src/utils/*.ts`) → Provides cross-cutting functionality
 
-## Known Issues and TODOs
+### Core Module Responsibilities
 
-### Current Limitations
-- [ ] Optional directory linking not yet implemented (e.g., Fish config conditional)
-- [ ] File preview in restore command limited (legacy shows 20 files)
-- [ ] No progress bar for large operations
+- **ConfigManager**: Loads and validates `config/dotfiles.json`. Handles default fallbacks and configuration schema validation.
+- **SymlinkManager**: Creates symlinks with support for three mapping types:
+  - `file`: Direct file-to-file symlink
+  - `directory`: Entire directory symlink  
+  - `selective`: Cherry-pick specific files from a directory with optional permissions
+- **BackupManager**: Creates timestamped backups (format: `YYYY-MM-DDTHH-MM-SS`) in `~/.dotfiles_backup`. Manages retention policy (keepLast setting).
+- **MCPMerger**: Merges `mcpServers` configuration from `claude/dot_claude.json` to `~/.claude.json`. Prevents duplicate entries and handles backup creation.
 
-### Future Enhancements
-- [ ] Add `--json` output format for programmatic use
-- [ ] Implement `diff` command to show changes before install
-- [ ] Add `status` command for comprehensive system state
-- [ ] Create GitHub Actions for CI/CD
-- [ ] Add performance benchmarks
-- [ ] Implement configuration validation CLI tool
+### Configuration Structure (`config/dotfiles.json`)
 
-## Migration from Legacy
+The main configuration file uses three types of mappings:
+- **file**: Single file symlink (`"type": "file"`)
+- **directory**: Entire directory symlink (`"type": "directory"`)  
+- **selective**: Specific files from a directory (`"type": "selective"` with `"include": []` array and optional `"permissions": {}`)
 
-### For Users
+MCP configuration merging is handled separately via the `mcp` key, which specifies source/target files and the merge key (`mcpServers`).
+
+## Key Implementation Notes
+
+### Binary Execution
+The `bin/` directory contains executable wrappers that import the TypeScript source directly:
 ```bash
-# Use TypeScript version
-bun run src/index.ts install
-
-# Or use compiled version (if available)
-./install-ts.sh
-
-# Legacy still available
-./legacy/install.sh
+#!/usr/bin/env bun
+import "../src/index.ts";
 ```
+These are symlinked to `~/.local/bin/` for global access.
 
-### For Contributors
-1. All new features should be implemented in TypeScript
-2. Legacy Bash scripts are frozen (no new features)
-3. Bug fixes should be applied to TypeScript version only
-4. Test coverage must be maintained above 80%
+### Testing Strategy
+- Tests use temporary directories created with `mkdtemp` for isolation
+- Each test cleans up its temporary files
+- Mock filesystem operations are avoided in favor of real file operations in temp directories
 
-## Type Definitions
+### Error Handling Pattern
+Commands use consistent error handling with colored output:
+- Success: Green checkmarks with `chalk.green`
+- Warnings: Yellow warnings with `chalk.yellow`
+- Errors: Red errors with `chalk.red`
+- Verbose mode provides detailed operation logs
 
-Key types are defined in `src/types/config.ts`:
-
-```typescript
-interface FileMapping {
-  source: string;
-  target: string;
-  type: "file" | "directory" | "selective";
-  files?: string[];  // For selective type
-  permissions?: string | { [key: string]: string };
-}
-
-interface BackupInfo {
-  name: string;
-  path: string;
-  date: Date;
-}
-
-interface SymlinkStatus {
-  exists: boolean;
-  isSymlink: boolean;
-  pointsToCorrectTarget?: boolean;
-  targetExists?: boolean;
-}
-```
-
-## Security Considerations
-
-### Files That Must Never Be Committed
-- `config/gh/` - GitHub CLI OAuth tokens
-- `*_token*`, `credentials*`, `secrets*` - Any credential files
-- `.env`, `.envrc` - Environment variables
-- `*.key`, `*.pem` - Cryptographic keys
-
-### MCP Configuration Security
-- Source: `claude/dot_claude.json` (safe to commit - no secrets)
-- Target: `~/.claude.json` (contains API keys - never commit)
-- Merge only touches `mcpServers` key, preserving credentials
-
-## Repository Structure
-
-```
-dotfiles/
-├── src/                # TypeScript source code
-│   ├── index.ts       # CLI entry point
-│   ├── commands/      # CLI command implementations
-│   ├── core/          # Core business logic
-│   ├── utils/         # Utility functions
-│   └── types/         # TypeScript type definitions
-├── tests/             # Test files (mirrors src/ structure)
-├── config/            # Configuration files
-│   └── dotfiles.json  # Main configuration
-├── legacy/            # Original Bash scripts (frozen)
-├── shell/             # Shell configurations
-├── git/               # Git configuration
-├── claude/            # Claude CLI configuration
-├── research/          # Technical research documents
-├── package.json       # Node.js dependencies
-├── tsconfig.json      # TypeScript configuration
-├── vitest.config.ts   # Test configuration
-├── .oxlintrc.json     # Linter configuration
-└── CLAUDE.md          # This file
-```
-
-## Contact and Support
-
-For issues or questions about the TypeScript implementation:
-1. Check existing tests for usage examples
-2. Review type definitions for API contracts
-3. Run with `--verbose` flag for debugging
-4. Check legacy implementation for expected behavior
-
----
-*Last updated: 2025-01-09 - TypeScript implementation complete with full test coverage*
+### MCP Server Merging
+The MCPMerger handles special logic for `.claude.json`:
+1. Reads existing target file or creates new one
+2. Merges `mcpServers` arrays, preventing duplicates
+3. Creates backup before modifying target
+4. Preserves all other keys in target file (API keys, settings)
