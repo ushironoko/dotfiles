@@ -157,7 +157,6 @@ case ":$PATH:" in
 esac
 # pnpm end
 
-alias claude="/home/ushironoko/.claude/local/claude"
 
 # bun
 export BUN_INSTALL="$HOME/.bun"
