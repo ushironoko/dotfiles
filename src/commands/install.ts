@@ -1,10 +1,10 @@
 import { define } from "gunshi";
-import { BackupManager } from "../core/backup-manager";
-import { ConfigManager } from "../core/config-manager";
-import { MCPMerger } from "../core/mcp-merger";
-import { SymlinkManager } from "../core/symlink-manager";
+import { createBackupManager } from "../core/backup-manager";
+import { createConfigManager } from "../core/config-manager";
+import { createMCPMerger } from "../core/mcp-merger";
+import { createSymlinkManager } from "../core/symlink-manager";
 import { fileExists, isSymlink } from "../utils/fs";
-import { Logger } from "../utils/logger";
+import { createLogger } from "../utils/logger";
 
 const NO_PATHS_TO_BACKUP = 0;
 const EXIT_FAILURE = 1;
@@ -41,16 +41,16 @@ export const installCommand = define({
   run: async (ctx) => {
     const { dryRun, force, verbose, config } = ctx.values;
 
-    const logger = new Logger(verbose, dryRun);
+    const logger = createLogger(verbose, dryRun);
     
     try {
       logger.info("Starting dotfiles installation...");
 
-      const configManager = new ConfigManager(config);
+      const configManager = createConfigManager(config);
       await configManager.load();
 
       const backupConfig = configManager.getBackupConfig();
-      const backupManager = new BackupManager(logger, backupConfig);
+      const backupManager = createBackupManager(logger, backupConfig);
 
       const mappings = configManager.getMappings();
       const targetPaths = mappings.map(m => m.target);
@@ -67,7 +67,7 @@ export const installCommand = define({
         await backupManager.createBackup(pathsToBackup, dryRun);
       }
 
-      const symlinkManager = new SymlinkManager(logger);
+      const symlinkManager = createSymlinkManager(logger);
       
       logger.info("Creating symlinks...");
       for (const mapping of mappings) {
@@ -77,7 +77,7 @@ export const installCommand = define({
       const mcpConfig = configManager.getMCPConfig();
       if (mcpConfig) {
         logger.info("Merging MCP server configuration...");
-        const mcpMerger = new MCPMerger(logger, mcpConfig);
+        const mcpMerger = createMCPMerger(logger, mcpConfig);
         await mcpMerger.merge(dryRun);
       }
 

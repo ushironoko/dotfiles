@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, jest, spyOn } from "bun:test";
-import { Logger } from "../../src/utils/logger";
+import { createLogger } from "../../src/utils/logger";
 
 const FIRST_CALL_INDEX = 0;
 
-describe("Logger", () => {
+describe("createLogger", () => {
   beforeEach(() => {
     spyOn(console, "log").mockImplementation(() => {});
     spyOn(console, "error").mockImplementation(() => {});
@@ -15,7 +15,7 @@ describe("Logger", () => {
   });
 
   it("should log info messages", () => {
-    const logger = new Logger(false, false);
+    const logger = createLogger(false, false);
     logger.info("test message");
 
     expect(console.log).toHaveBeenCalled();
@@ -24,7 +24,7 @@ describe("Logger", () => {
   });
 
   it("should prefix dry-run messages", () => {
-    const logger = new Logger(false, true);
+    const logger = createLogger(false, true);
     logger.info("test message");
 
     expect(console.log).toHaveBeenCalled();
@@ -34,17 +34,17 @@ describe("Logger", () => {
   });
 
   it("should log debug messages only in verbose mode", () => {
-    const logger = new Logger(false, false);
+    const logger = createLogger(false, false);
     logger.debug("debug message");
     expect(console.log).not.toHaveBeenCalled();
 
-    const verboseLogger = new Logger(true, false);
+    const verboseLogger = createLogger(true, false);
     verboseLogger.debug("debug message");
     expect(console.log).toHaveBeenCalled();
   });
 
   it("should log error messages", () => {
-    const logger = new Logger(false, false);
+    const logger = createLogger(false, false);
     logger.error("error message");
 
     expect(console.error).toHaveBeenCalled();
@@ -53,7 +53,7 @@ describe("Logger", () => {
   });
 
   it("should log warning messages", () => {
-    const logger = new Logger(false, false);
+    const logger = createLogger(false, false);
     logger.warn("warning message");
 
     expect(console.warn).toHaveBeenCalled();
@@ -62,7 +62,7 @@ describe("Logger", () => {
   });
 
   it("should prefix action messages in dry-run mode", () => {
-    const logger = new Logger(false, true);
+    const logger = createLogger(false, true);
     logger.action("Creating", "file.txt");
 
     expect(console.log).toHaveBeenCalled();

@@ -13,43 +13,16 @@ import { expandPath, getRelativePath } from "../utils/paths";
 const SLICE_START = 0;
 const TIMESTAMP_LENGTH = 19;
 
-export class BackupManager {
-  private logger: Logger;
-  private config: BackupConfig;
-
-  constructor(logger: Logger, config: BackupConfig) {
-    this.logger = logger;
-    this.config = config;
-  }
-
-  async createBackup(paths: string[], dryRun = false): Promise<string> {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(SLICE_START, TIMESTAMP_LENGTH);
-    const backupDir = join(this.config.directory, timestamp);
-    
-    this.logger.info(`Creating backup in ${backupDir}`);
-    
-    if (!dryRun) {
-      await ensureDir(backupDir);
-    }
-
-    for (const path of paths) {
-      await this.backupFile(path, backupDir, dryRun);
-    }
-
-    await this.cleanOldBackups(dryRun);
-    
-    return timestamp;
-  }
-
-  private async backupFile(
+export const createBackupManager = (logger: Logger, config: BackupConfig) => {
+  const backupFile = async (
     sourcePath: string, 
     backupDir: string,
     dryRun: boolean
-  ): Promise<void> {
+  ): Promise<void> => {
     const expandedSource = expandPath(sourcePath);
     
     if (!(await fileExists(expandedSource))) {
-      this.logger.debug(`Skipping backup - file not found: ${expandedSource}`);
+      logger.debug(`Skipping backup - file not found: ${expandedSource}`);
       return;
     }
 
@@ -57,15 +30,34 @@ export class BackupManager {
     const relativePath = getRelativePath(expandedSource, homePath);
     const backupPath = join(backupDir, relativePath);
 
-    this.logger.action("Backing up", `${expandedSource} -> ${backupPath}`);
+    logger.action("Backing up", `${expandedSource} -> ${backupPath}`);
     
     if (!dryRun) {
       await copyRecursive(expandedSource, backupPath);
     }
-  }
+  };
 
-  async listBackups(): Promise<BackupInfo[]> {
-    const backupBaseDir = expandPath(this.config.directory);
+  const getBackupFiles = async (backupDir: string, basePath = ""): Promise<string[]> => {
+    const fullPath = join(backupDir, basePath);
+    const entries = await readdir(fullPath, { withFileTypes: true });
+    const files: string[] = [];
+
+    for (const entry of entries) {
+      const entryPath = join(basePath, entry.name);
+      
+      if (entry.isDirectory()) {
+        const subFiles = await getBackupFiles(backupDir, entryPath);
+        files.push(...subFiles);
+      } else {
+        files.push(entryPath);
+      }
+    }
+
+    return files;
+  };
+
+  const listBackups = async (): Promise<BackupInfo[]> => {
+    const backupBaseDir = expandPath(config.directory);
     
     if (!(await fileExists(backupBaseDir))) {
       return [];
@@ -94,23 +86,58 @@ export class BackupManager {
     backups.sort((a, b) => b.date.getTime() - a.date.getTime());
 
     return backups;
-  }
+  };
 
-  async restoreBackup(
+  const cleanOldBackups = async (dryRun = false): Promise<void> => {
+    const backups = await listBackups();
+    
+    if (config.keepLast && backups.length > config.keepLast) {
+      const toDelete = backups.slice(config.keepLast);
+      
+      for (const backup of toDelete) {
+        logger.action("Removing old backup", backup.name);
+        
+        if (!dryRun) {
+          await removeRecursive(backup.path);
+        }
+      }
+    }
+  };
+
+  const createBackup = async (paths: string[], dryRun = false): Promise<string> => {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(SLICE_START, TIMESTAMP_LENGTH);
+    const backupDir = join(config.directory, timestamp);
+    
+    logger.info(`Creating backup in ${backupDir}`);
+    
+    if (!dryRun) {
+      await ensureDir(backupDir);
+    }
+
+    for (const path of paths) {
+      await backupFile(path, backupDir, dryRun);
+    }
+
+    await cleanOldBackups(dryRun);
+    
+    return timestamp;
+  };
+
+  const restoreBackup = async (
     backupName: string,
     targetPaths?: string[],
     dryRun = false
-  ): Promise<void> {
-    const backupDir = join(this.config.directory, backupName);
+  ): Promise<void> => {
+    const backupDir = join(config.directory, backupName);
     const expandedBackupDir = expandPath(backupDir);
 
     if (!(await fileExists(expandedBackupDir))) {
       throw new Error(`Backup not found: ${backupName}`);
     }
 
-    this.logger.info(`Restoring from backup: ${backupName}`);
+    logger.info(`Restoring from backup: ${backupName}`);
     
-    const files = await this.getBackupFiles(expandedBackupDir);
+    const files = await getBackupFiles(expandedBackupDir);
     
     for (const file of files) {
       if (targetPaths) {
@@ -134,7 +161,7 @@ export class BackupManager {
         ? `/${file}` 
         : join(expandPath("~"), file);
 
-      this.logger.action("Restoring", `${file} -> ${targetPath}`);
+      logger.action("Restoring", `${file} -> ${targetPath}`);
       
       if (!dryRun) {
         await ensureDir(dirname(targetPath));
@@ -142,45 +169,20 @@ export class BackupManager {
       }
     }
 
-    this.logger.success("Restore completed");
-  }
+    logger.success("Restore completed");
+  };
 
-  private async getBackupFiles(backupDir: string, basePath = ""): Promise<string[]> {
-    const fullPath = join(backupDir, basePath);
-    const entries = await readdir(fullPath, { withFileTypes: true });
-    const files: string[] = [];
+  const getBackupDirectory = (): string => {
+    return config.directory;
+  };
 
-    for (const entry of entries) {
-      const entryPath = join(basePath, entry.name);
-      
-      if (entry.isDirectory()) {
-        const subFiles = await this.getBackupFiles(backupDir, entryPath);
-        files.push(...subFiles);
-      } else {
-        files.push(entryPath);
-      }
-    }
+  return {
+    createBackup,
+    listBackups,
+    restoreBackup,
+    cleanOldBackups,
+    getBackupDirectory,
+  };
+};
 
-    return files;
-  }
-
-  async cleanOldBackups(dryRun = false): Promise<void> {
-    const backups = await this.listBackups();
-    
-    if (this.config.keepLast && backups.length > this.config.keepLast) {
-      const toDelete = backups.slice(this.config.keepLast);
-      
-      for (const backup of toDelete) {
-        this.logger.action("Removing old backup", backup.name);
-        
-        if (!dryRun) {
-          await removeRecursive(backup.path);
-        }
-      }
-    }
-  }
-
-  getBackupDirectory(): string {
-    return this.config.directory;
-  }
-}
+export type BackupManager = ReturnType<typeof createBackupManager>;

@@ -1,8 +1,8 @@
 import { createInterface } from "readline";
 import { define } from "gunshi";
-import { BackupManager } from "../core/backup-manager";
-import { ConfigManager } from "../core/config-manager";
-import { Logger } from "../utils/logger";
+import { createBackupManager } from "../core/backup-manager";
+import { createConfigManager } from "../core/config-manager";
+import { createLogger } from "../utils/logger";
 
 const NO_BACKUPS_FOUND = 0;
 const EXIT_FAILURE = 1;
@@ -65,17 +65,17 @@ export const restoreCommand = define({
   run: async (ctx) => {
     const { backup, interactive, partial, dryRun, verbose, config } = ctx.values;
 
-    const logger = new Logger(verbose, dryRun);
+    const logger = createLogger(verbose, dryRun);
     let rl: ReturnType<typeof createInterface> | undefined;
     
     try {
       logger.info("Starting dotfiles restoration...");
 
-      const configManager = new ConfigManager(config);
+      const configManager = createConfigManager(config);
       await configManager.load();
 
       const backupConfig = configManager.getBackupConfig();
-      const backupManager = new BackupManager(logger, backupConfig);
+      const backupManager = createBackupManager(logger, backupConfig);
 
       let selectedBackup = backup;
 

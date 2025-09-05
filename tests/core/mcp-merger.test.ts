@@ -2,21 +2,21 @@ import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { promises as fs } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { MCPMerger } from "../../src/core/mcp-merger";
-import { Logger } from "../../src/utils/logger";
+import { createMCPMerger, type MCPMerger } from "../../src/core/mcp-merger";
+import { createLogger } from "../../src/utils/logger";
 import { fileExists } from "../../src/utils/fs";
 
 describe("MCPMerger", () => {
   let testDir: string;
   let merger: MCPMerger;
-  let logger: Logger;
+  let logger: ReturnType<typeof createLogger>;
 
   beforeEach(async () => {
     testDir = join(tmpdir(), `mcp-test-${Date.now()}`);
     await fs.mkdir(testDir, { recursive: true });
     
-    logger = new Logger(false, false);
-    merger = new MCPMerger(logger, {
+    logger = createLogger(false, false);
+    merger = createMCPMerger(logger, {
       sourceFile: join(testDir, "source.json"),
       targetFile: join(testDir, "target.json"),
       backupDir: join(testDir, "backup"),

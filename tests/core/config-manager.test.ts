@@ -1,7 +1,7 @@
 import { mkdir, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { ConfigManager } from "../../src/core/config-manager";
+import { createConfigManager } from "../../src/core/config-manager";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 
 const SINGLE_MAPPING = 1;
@@ -39,7 +39,7 @@ describe("ConfigManager", () => {
 
     await writeFile(configPath, JSON.stringify(config));
 
-    const manager = new ConfigManager(configPath);
+    const manager = createConfigManager(configPath);
     await manager.load();
 
     const mappings = manager.getMappings();
@@ -58,7 +58,7 @@ describe("ConfigManager", () => {
 
     await writeFile(configPath, JSON.stringify(invalidConfig));
 
-    const manager = new ConfigManager(configPath);
+    const manager = createConfigManager(configPath);
     await expect(manager.load()).rejects.toThrow("Invalid config: mappings must be an array");
   });
 
@@ -78,7 +78,7 @@ describe("ConfigManager", () => {
 
     await writeFile(configPath, JSON.stringify(invalidConfig));
 
-    const manager = new ConfigManager(configPath);
+    const manager = createConfigManager(configPath);
     await expect(manager.load()).rejects.toThrow("Invalid mapping: source and target are required");
   });
 
@@ -98,7 +98,7 @@ describe("ConfigManager", () => {
 
     await writeFile(configPath, JSON.stringify(config));
 
-    const manager = new ConfigManager(configPath);
+    const manager = createConfigManager(configPath);
     await manager.load();
 
     const mappings = manager.getMappings();

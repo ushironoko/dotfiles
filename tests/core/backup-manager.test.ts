@@ -2,8 +2,8 @@ import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { promises as fs } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { BackupManager } from "../../src/core/backup-manager";
-import { Logger } from "../../src/utils/logger";
+import { createBackupManager, type BackupManager } from "../../src/core/backup-manager";
+import { createLogger } from "../../src/utils/logger";
 import { fileExists } from "../../src/utils/fs";
 
 describe("BackupManager", () => {
@@ -11,7 +11,7 @@ describe("BackupManager", () => {
   let sourceDir: string;
   let backupDir: string;
   let manager: BackupManager;
-  let logger: Logger;
+  let logger: ReturnType<typeof createLogger>;
 
   beforeEach(async () => {
     testDir = join(tmpdir(), `backup-test-${Date.now()}`);
@@ -21,8 +21,8 @@ describe("BackupManager", () => {
     await fs.mkdir(sourceDir, { recursive: true });
     await fs.mkdir(backupDir, { recursive: true });
     
-    logger = new Logger(false, false);
-    manager = new BackupManager(logger, { 
+    logger = createLogger(false, false);
+    manager = createBackupManager(logger, { 
       directory: backupDir,
       keepLast: 3,
     });

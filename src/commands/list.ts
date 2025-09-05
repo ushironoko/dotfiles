@@ -1,8 +1,8 @@
 import chalk from "chalk";
 import { define } from "gunshi";
-import { ConfigManager } from "../core/config-manager";
+import { createConfigManager } from "../core/config-manager";
 import { fileExists, isSymlink } from "../utils/fs";
-import { Logger } from "../utils/logger";
+import { createLogger } from "../utils/logger";
 import { expandPath } from "../utils/paths";
 
 const EXIT_FAILURE = 1;
@@ -27,10 +27,10 @@ export const listCommand = define({
   run: async (ctx) => {
     const { config, verbose } = ctx.values;
 
-    const logger = new Logger(verbose, false);
+    const logger = createLogger(verbose, false);
     
     try {
-      const configManager = new ConfigManager(config);
+      const configManager = createConfigManager(config);
       await configManager.load();
 
       const mappings = configManager.getMappings();

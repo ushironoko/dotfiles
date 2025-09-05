@@ -12,54 +12,64 @@ export enum LogLevel {
   DEBUG = LOG_LEVEL_DEBUG,
 }
 
-export class Logger {
-  private level: LogLevel;
-  private isDryRun: boolean;
+// ファクトリー関数：Loggerを作成
+export const createLogger = (verbose = false, dryRun = false) => {
+  let level = verbose ? LogLevel.DEBUG : LogLevel.INFO;
+  let isDryRun = dryRun;
 
-  constructor(verbose = false, dryRun = false) {
-    this.level = verbose ? LogLevel.DEBUG : LogLevel.INFO;
-    this.isDryRun = dryRun;
-  }
-
-  error(message: string): void {
-    if (this.level >= LogLevel.ERROR) {
+  const error = (message: string): void => {
+    if (level >= LogLevel.ERROR) {
       console.error(chalk.red("✗"), message);
     }
-  }
+  };
 
-  warn(message: string): void {
-    if (this.level >= LogLevel.WARN) {
+  const warn = (message: string): void => {
+    if (level >= LogLevel.WARN) {
       console.warn(chalk.yellow("⚠"), message);
     }
-  }
+  };
 
-  info(message: string): void {
-    if (this.level >= LogLevel.INFO) {
-      const prefix = this.isDryRun ? chalk.blue("[DRY RUN] ") : "";
+  const info = (message: string): void => {
+    if (level >= LogLevel.INFO) {
+      const prefix = isDryRun ? chalk.blue("[DRY RUN] ") : "";
       console.log(chalk.green("✓"), prefix + message);
     }
-  }
+  };
 
-  debug(message: string): void {
-    if (this.level >= LogLevel.DEBUG) {
+  const debug = (message: string): void => {
+    if (level >= LogLevel.DEBUG) {
       console.log(chalk.gray("→"), message);
     }
-  }
+  };
 
-  success(message: string): void {
+  const success = (message: string): void => {
     console.log(chalk.green.bold("✓"), chalk.green(message));
-  }
+  };
 
-  action(action: string, detail: string): void {
-    const prefix = this.isDryRun ? chalk.blue("[DRY RUN] ") : "";
-    console.log(chalk.cyan("→"), prefix + chalk.bold(action), detail);
-  }
+  const action = (actionName: string, detail: string): void => {
+    const prefix = isDryRun ? chalk.blue("[DRY RUN] ") : "";
+    console.log(chalk.cyan("→"), prefix + chalk.bold(actionName), detail);
+  };
 
-  setVerbose(verbose: boolean): void {
-    this.level = verbose ? LogLevel.DEBUG : LogLevel.INFO;
-  }
+  const setVerbose = (newVerbose: boolean): void => {
+    level = newVerbose ? LogLevel.DEBUG : LogLevel.INFO;
+  };
 
-  setDryRun(dryRun: boolean): void {
-    this.isDryRun = dryRun;
-  }
-}
+  const setDryRun = (newDryRun: boolean): void => {
+    isDryRun = newDryRun;
+  };
+
+  return {
+    error,
+    warn,
+    info,
+    debug,
+    success,
+    action,
+    setVerbose,
+    setDryRun,
+  };
+};
+
+// 型エクスポート
+export type Logger = ReturnType<typeof createLogger>;

@@ -3,98 +3,117 @@ import { BackupConfig, DotfilesConfig, FileMapping, MCPConfig } from "../types/c
 import { expandPath } from "../utils/paths";
 import { fileExists } from "../utils/fs";
 
-export class ConfigManager {
-  private config: DotfilesConfig | undefined;
-  private configPath: string;
+const DEFAULT_KEEP_LAST = 10;
 
-  constructor(configPath = "./config/dotfiles.json") {
-    this.configPath = expandPath(configPath);
+// 純粋関数：設定の検証
+export const validateConfig = (config: unknown): config is DotfilesConfig => {
+  const c = config as DotfilesConfig;
+  
+  if (!c.mappings || !Array.isArray(c.mappings)) {
+    throw new Error("Invalid config: mappings must be an array");
   }
 
-  async load(): Promise<void> {
-    if (!(await fileExists(this.configPath))) {
-      throw new Error(`Configuration file not found: ${this.configPath}`);
+  for (const mapping of c.mappings) {
+    if (!mapping.source || !mapping.target) {
+      throw new Error("Invalid mapping: source and target are required");
     }
 
-    const content = await readFile(this.configPath, "utf8");
-    this.config = JSON.parse(content);
-    this.validateConfig();
+    if (!["file", "directory", "selective"].includes(mapping.type)) {
+      throw new Error(`Invalid mapping type: ${mapping.type}`);
+    }
+
+    if ("selective" === mapping.type && !mapping.include) {
+      throw new Error("Selective mapping requires 'include' array");
+    }
   }
 
-  private validateConfig(): void {
-    if (!this.config) {
+  if (!c.backup || !c.backup.directory) {
+    throw new Error("Invalid config: backup.directory is required");
+  }
+  
+  return true;
+};
+
+// 純粋関数：マッピングのパスを展開
+export const expandMappings = (mappings: FileMapping[]): FileMapping[] =>
+  mappings.map(mapping => ({
+    ...mapping,
+    source: expandPath(mapping.source),
+    target: expandPath(mapping.target),
+  }));
+
+// 純粋関数：バックアップ設定の正規化
+export const normalizeBackupConfig = (config: BackupConfig): BackupConfig => ({
+  ...config,
+  compress: config.compress || false,
+  directory: expandPath(config.directory),
+  keepLast: config.keepLast || DEFAULT_KEEP_LAST,
+});
+
+// 純粋関数：MCP設定のパスを展開
+export const expandMCPConfig = (config: MCPConfig): MCPConfig => ({
+  ...config,
+  sourceFile: expandPath(config.sourceFile),
+  targetFile: expandPath(config.targetFile),
+});
+
+// ファクトリー関数：ConfigManagerを作成
+export const createConfigManager = (configPath = "./config/dotfiles.json") => {
+  let config: DotfilesConfig | undefined;
+  const expandedPath = expandPath(configPath);
+
+  const load = async (): Promise<void> => {
+    if (!(await fileExists(expandedPath))) {
+      throw new Error(`Configuration file not found: ${expandedPath}`);
+    }
+
+    const content = await readFile(expandedPath, "utf8");
+    const parsed = JSON.parse(content);
+    if (!validateConfig(parsed)) {
+      throw new Error("Invalid configuration");
+    }
+    config = parsed;
+  };
+
+  const getMappings = (): FileMapping[] => {
+    if (!config) {
       throw new Error("Configuration not loaded");
     }
+    return expandMappings(config.mappings);
+  };
 
-    if (!this.config.mappings || !Array.isArray(this.config.mappings)) {
-      throw new Error("Invalid config: mappings must be an array");
-    }
-
-    for (const mapping of this.config.mappings) {
-      if (!mapping.source || !mapping.target) {
-        throw new Error("Invalid mapping: source and target are required");
-      }
-
-      if (!["file", "directory", "selective"].includes(mapping.type)) {
-        throw new Error(`Invalid mapping type: ${mapping.type}`);
-      }
-
-      if ("selective" === mapping.type && !mapping.include) {
-        throw new Error("Selective mapping requires 'include' array");
-      }
-    }
-
-    if (!this.config.backup || !this.config.backup.directory) {
-      throw new Error("Invalid config: backup.directory is required");
-    }
-  }
-
-  getMappings(): FileMapping[] {
-    if (!this.config) {
+  const getBackupConfig = (): BackupConfig => {
+    if (!config) {
       throw new Error("Configuration not loaded");
     }
+    return normalizeBackupConfig(config.backup);
+  };
 
-    return this.config.mappings.map(mapping => ({
-      ...mapping,
-      source: expandPath(mapping.source),
-      target: expandPath(mapping.target),
-    }));
-  }
-
-  getBackupConfig(): BackupConfig {
-    if (!this.config) {
+  const getMCPConfig = (): MCPConfig | undefined => {
+    if (!config) {
       throw new Error("Configuration not loaded");
     }
-
-    const DEFAULT_KEEP_LAST = 10;
-    return {
-      ...this.config.backup,
-      compress: this.config.backup.compress || false,
-      directory: expandPath(this.config.backup.directory),
-      keepLast: this.config.backup.keepLast || DEFAULT_KEEP_LAST,
-    };
-  }
-
-  getMCPConfig(): MCPConfig | undefined {
-    if (!this.config) {
-      throw new Error("Configuration not loaded");
-    }
-
-    if (!this.config.mcp) {
+    
+    if (!config.mcp) {
       return undefined;
     }
+    
+    return expandMCPConfig(config.mcp);
+  };
 
-    return {
-      ...this.config.mcp,
-      sourceFile: expandPath(this.config.mcp.sourceFile),
-      targetFile: expandPath(this.config.mcp.targetFile),
-    };
-  }
-
-  getConfig(): DotfilesConfig {
-    if (!this.config) {
+  const getConfig = (): DotfilesConfig => {
+    if (!config) {
       throw new Error("Configuration not loaded");
     }
-    return this.config;
-  }
-}
+    return config;
+  };
+
+  return {
+    load,
+    getMappings,
+    getBackupConfig,
+    getMCPConfig,
+    getConfig,
+  };
+};
+

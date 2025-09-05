@@ -2,16 +2,16 @@ import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { promises as fs } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { SymlinkManager } from "../../src/core/symlink-manager";
-import { Logger } from "../../src/utils/logger";
+import { createSymlinkManager } from "../../src/core/symlink-manager";
+import { createLogger } from "../../src/utils/logger";
 import { fileExists } from "../../src/utils/fs";
 
 describe("SymlinkManager", () => {
   let testDir: string;
   let sourceDir: string;
   let targetDir: string;
-  let manager: SymlinkManager;
-  let logger: Logger;
+  let manager: ReturnType<typeof createSymlinkManager>;
+  let logger: ReturnType<typeof createLogger>;
 
   beforeEach(async () => {
     testDir = join(tmpdir(), `symlink-test-${Date.now()}`);
@@ -21,8 +21,8 @@ describe("SymlinkManager", () => {
     await fs.mkdir(sourceDir, { recursive: true });
     await fs.mkdir(targetDir, { recursive: true });
     
-    logger = new Logger(false, false);
-    manager = new SymlinkManager(logger);
+    logger = createLogger(false, false);
+    manager = createSymlinkManager(logger);
   });
 
   afterEach(async () => {
@@ -112,7 +112,7 @@ describe("SymlinkManager", () => {
       await fs.writeFile(mappings[0].source, "content1");
       await fs.writeFile(mappings[1].source, "content2");
       
-      await manager.createMultipleSymlinks(mappings, false);
+      await manager.createMultipleSymlinks(mappings, { force: false });
       
       for (const mapping of mappings) {
         const stats = await fs.lstat(mapping.target);
@@ -136,7 +136,7 @@ describe("SymlinkManager", () => {
         files: ["file1.txt", "file2.txt"],
       };
       
-      await manager.createMultipleSymlinks([mapping], false);
+      await manager.createMultipleSymlinks([mapping], { force: false });
       
       expect(await fileExists(join(targetSubDir, "file1.txt"))).toBe(true);
       expect(await fileExists(join(targetSubDir, "file2.txt"))).toBe(true);
@@ -155,7 +155,7 @@ describe("SymlinkManager", () => {
         permissions: "755",
       };
       
-      await manager.createMultipleSymlinks([mapping], false);
+      await manager.createMultipleSymlinks([mapping], { force: false });
       
       const stats = await fs.stat(targetFile);
       const mode = (stats.mode & 0o777).toString(8);
