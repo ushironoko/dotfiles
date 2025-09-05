@@ -53,6 +53,18 @@ These remain local only:
 ### MCP Server Configuration
 The `claude/dot_claude.json` file contains MCP server definitions that are merged into `~/.claude.json` during installation. This allows tracking MCP configurations without exposing the full `.claude.json` file with API keys.
 
+## TypeScript Migration Research
+
+The repository includes research for migrating the Bash scripts to TypeScript:
+- `research/typescript-migration-tools.md` - Comprehensive research on OXC (linter/formatter) and Gunshi (CLI framework)
+- `research/queries.md` - Gistdex query patterns for searching indexed documentation
+
+Key technology choices for migration:
+- **Runtime**: Bun for fast TypeScript execution
+- **Linting**: OXC (oxlint) - 50-100x faster than ESLint
+- **CLI Framework**: Gunshi with `define` function for type-safe commands
+- **Testing**: Vitest for unit tests
+
 ## Security Guidelines
 
 ### Files That Must Never Be Committed
@@ -122,6 +134,9 @@ dotfiles/
 │   ├── git/           # Git config dir
 │   ├── mise/          # Mise tool configuration
 │   └── starship.toml  # Starship prompt
+├── research/          # TypeScript migration research
+│   ├── typescript-migration-tools.md
+│   └── queries.md
 ├── install.sh          # Main installation script
 ├── restore.sh          # Backup restoration script
 └── CLAUDE.md          # This file
