@@ -1,0 +1,28 @@
+{
+  "name": "dotfiles",
+  "version": "2.0.0",
+  "description": "Personal dotfiles management tool",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir=dist --target=bun",
+    "test": "bun test",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "typecheck": "tsgo --noEmit",
+    "prepare": "bun run lint && bun run typecheck && bun test",
+    "install:local": "bun link"
+  },
+  "dependencies": {
+    "gunshi": "0.26.3",
+    "chalk": "5.3.0"
+  },
+  "devDependencies": {
+    "@types/bun": "1.2.2",
+    "@types/node": "22.10.6",
+    "@typescript/native-preview": "^7.0.0-dev.20250904.1",
+    "oxlint": "0.15.2"
+  }
+}

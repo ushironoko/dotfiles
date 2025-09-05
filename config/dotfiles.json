@@ -1,0 +1,63 @@
+{
+  "mappings": [
+    {
+      "source": "./shell/.bashrc",
+      "target": "~/.bashrc",
+      "type": "file"
+    },
+    {
+      "source": "./shell/.profile",
+      "target": "~/.profile",
+      "type": "file"
+    },
+    {
+      "source": "./shell/.zshrc",
+      "target": "~/.zshrc",
+      "type": "file"
+    },
+    {
+      "source": "./git/.gitconfig",
+      "target": "~/.gitconfig",
+      "type": "file"
+    },
+    {
+      "source": "./claude/.claude",
+      "target": "~/.claude",
+      "type": "selective",
+      "include": ["agents", "commands", "CLAUDE.md", "settings.json", "statusline.sh"],
+      "permissions": {
+        "statusline.sh": "755"
+      }
+    },
+    {
+      "source": "./config/fish",
+      "target": "~/.config/fish",
+      "type": "directory"
+    },
+    {
+      "source": "./config/git",
+      "target": "~/.config/git",
+      "type": "directory"
+    },
+    {
+      "source": "./config/starship.toml",
+      "target": "~/.config/starship.toml",
+      "type": "file"
+    },
+    {
+      "source": "./config/mise",
+      "target": "~/.config/mise",
+      "type": "directory"
+    }
+  ],
+  "backup": {
+    "directory": "~/.dotfiles_backup",
+    "keepLast": 10,
+    "compress": false
+  },
+  "mcp": {
+    "sourceFile": "./claude/dot_claude.json",
+    "targetFile": "~/.claude.json",
+    "mergeKey": "mcpServers"
+  }
+}

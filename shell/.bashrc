@@ -8,24 +8,38 @@ case $- in
       *) return;;
 esac
 
+# History configuration (enhanced)
 # don't put duplicate lines or lines starting with space in the history.
-# See bash(1) for more options
-HISTCONTROL=ignoreboth
+HISTCONTROL=ignoreboth:erasedups  # Remove duplicates from history
+HISTTIMEFORMAT="%F %T "           # Add timestamps to history
 
 # append to the history file, don't overwrite it
 shopt -s histappend
 
-# for setting history length see HISTSIZE and HISTFILESIZE in bash(1)
-HISTSIZE=1000
-HISTFILESIZE=2000
+# Increase history size
+HISTSIZE=10000
+HISTFILESIZE=10000
+
+# Ignore common commands in history
+HISTIGNORE="ls:ll:la:l:cd:cd -:pwd:exit:date:* --help:history:clear:c"
 
 # check the window size after each command and, if necessary,
 # update the values of LINES and COLUMNS.
 shopt -s checkwinsize
 
-# If set, the pattern "**" used in a pathname expansion context will
-# match all files and zero or more directories and subdirectories.
-#shopt -s globstar
+# Directory navigation settings
+shopt -s autocd      # Type directory name to cd into it
+shopt -s cdspell     # Autocorrect typos in cd commands
+shopt -s dirspell    # Attempt spelling correction on directory names during completion
+shopt -s cdable_vars # Allow cd to variables containing directory paths
+
+# Set CDPATH for quick navigation to common directories
+export CDPATH=".:~:~/dev:~/projects"
+
+# Enhanced globbing
+shopt -s globstar    # ** matches all files and zero or more directories/subdirectories
+shopt -s dotglob     # Include dotfiles in globbing
+shopt -s nocaseglob  # Case-insensitive globbing
 
 # make less more friendly for non-text input files, see lesspipe(1)
 [ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
@@ -100,6 +114,15 @@ if [ -f ~/.bash_aliases ]; then
     . ~/.bash_aliases
 fi
 
+# Enhanced completion settings
+shopt -s nocasematch    # Case-insensitive pattern matching
+shopt -s extglob        # Extended pattern matching
+bind "set completion-ignore-case on"     # Case-insensitive completion
+bind "set show-all-if-ambiguous on"      # Show all matches immediately
+bind "set mark-symlinked-directories on" # Add trailing slash to symlinked dirs
+bind "set colored-stats on"              # Color completion based on file type
+bind "set visible-stats on"              # Show file type indicators in completion
+
 # enable programmable completion features (you don't need to enable
 # this, if it's already enabled in /etc/bash.bashrc and /etc/profile
 # sources /etc/bash.bashrc).
@@ -110,6 +133,11 @@ if ! shopt -oq posix; then
     . /etc/bash_completion
   fi
 fi
+
+# Additional useful options
+shopt -s cmdhist        # Save multi-line commands as one history entry
+shopt -s lithist        # Preserve newlines in multi-line commands
+shopt -s no_empty_cmd_completion  # Don't tab-complete on empty line
 
 export PATH=$PATH:'/mnt/c/Users/ushironoko/AppData/Local/Programs/Microsoft VS Code/bin'
 
@@ -164,3 +192,6 @@ export PATH="$BUN_INSTALL/bin:$PATH"
 
 # direnv hook
 eval "$(direnv hook bash)"
+
+# starship
+eval "$(starship init bash)"
