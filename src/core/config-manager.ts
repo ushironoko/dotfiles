@@ -63,7 +63,7 @@ export const expandMCPConfig = (config: MCPConfig): MCPConfig => ({
 });
 
 // ファクトリー関数：ConfigManagerを作成
-export const createConfigManager = (configPath = "./config/dotfiles.json") => {
+export const createConfigManager = (configPath = "./dotfiles.json") => {
   let config: DotfilesConfig | undefined;
   const expandedPath = expandPath(configPath);
 

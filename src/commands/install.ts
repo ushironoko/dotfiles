@@ -14,7 +14,7 @@ export const installCommand = define({
   description: "Install dotfiles by creating symlinks",
   args: {
     config: {
-      default: "./config/dotfiles.json",
+      default: "./dotfiles.json",
       description: "Path to config file",
       short: "c",
       type: "string",

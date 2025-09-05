@@ -354,7 +354,7 @@ const mainCommand = define({
       type: "string",
       short: "c",
       description: "Path to config file",
-      default: "./config/dotfiles.json",
+      default: "./dotfiles.json",
     },
     verbose: {
       type: "boolean",

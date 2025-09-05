@@ -13,7 +13,7 @@ export const listCommand = define({
   description: "List managed dotfiles and their status",
   args: {
     config: {
-      default: "./config/dotfiles.json",
+      default: "./dotfiles.json",
       description: "Path to config file",
       short: "c",
       type: "string",

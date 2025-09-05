@@ -35,7 +35,7 @@ export const restoreCommand = define({
       type: "string",
     },
     config: {
-      default: "./config/dotfiles.json",
+      default: "./dotfiles.json",
       description: "Path to config file",
       short: "c",
       type: "string",
