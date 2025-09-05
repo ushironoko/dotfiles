@@ -1,6 +1,7 @@
 # TypeScript Migration Tools Research
 
 ## 目次
+
 1. [OXC (Oxidation Compiler) - Linter & Formatter](#oxc-oxidation-compiler---linter--formatter)
 2. [Gunshi - CLI Framework](#gunshi---cli-framework)
 3. [統合例: Dotfiles管理ツール](#統合例-dotfiles管理ツール)
@@ -10,9 +11,11 @@
 ## OXC (Oxidation Compiler) - Linter & Formatter
 
 ### 概要
+
 OXC (Oxidation Compiler) は、Rustで書かれた高性能なJavaScript/TypeScriptツールセットです。2024年に1.0安定版がリリースされ、ESLintより50-100倍高速な動作を実現しています。
 
 ### 主な特徴
+
 - **高速性**: ESLintより50-100倍高速、CPUコア数でスケール
 - **TypeScriptサポート**: `.ts`, `.mts`, `.cts`, `.tsx`ファイルを完全サポート
 - **570以上のルール**: ESLint、TypeScript-ESLint、各種プラグインから移植
@@ -36,26 +39,22 @@ bun add -D oxlint-tsgolint@latest
 
 ```json
 {
-  "plugins": [
-    "typescript",
-    "import",
-    "unicorn"
-  ],
+  "plugins": ["typescript", "import", "unicorn"],
   "rules": {
     "no-unused-vars": "warn",
     "no-undef": "error",
-    
+
     // TypeScript専用ルール
     "typescript/no-explicit-any": "error",
     "typescript/no-unused-vars": "warn",
     "typescript/explicit-function-return-type": "off",
     "typescript/no-non-null-assertion": "warn",
-    
+
     // インポート関連
     "import/no-cycle": "error",
-    
+
     // ファイル名規則
-    "unicorn/filename-case": ["error", {"case": "kebabCase"}]
+    "unicorn/filename-case": ["error", { "case": "kebabCase" }]
   },
   "categories": {
     "correctness": "error",
@@ -64,11 +63,7 @@ bun add -D oxlint-tsgolint@latest
     "perf": "warn",
     "style": "warn"
   },
-  "ignorePatterns": [
-    "dist/",
-    "node_modules/",
-    "build/"
-  ],
+  "ignorePatterns": ["dist/", "node_modules/", "build/"],
   "files": [
     "**/*.{ts,tsx}",
     {
@@ -120,9 +115,11 @@ bunx oxlint --deny-warnings
 ## Gunshi - CLI Framework
 
 ### 概要
+
 Gunshiは、TypeScript向けの型安全なCLIフレームワークです。宣言的な設定、コンポーザブルなサブコマンド、自動的なヘルプ生成が特徴です。
 
 ### 主な特徴
+
 - **完全なTypeScriptサポート**: 型安全な引数パース
 - **宣言的設定**: コマンドの構造を宣言的に定義
 - **コンポーザブル**: サブコマンドの柔軟な組み合わせ
@@ -146,32 +143,32 @@ bun add -D @types/node
 
 ```typescript
 // src/cli.ts
-import { cli } from 'gunshi';
+import { cli } from "gunshi";
 
 await cli(process.argv.slice(2), {
-  name: 'mycli',
-  version: '1.0.0',
-  description: 'My CLI tool',
+  name: "mycli",
+  version: "1.0.0",
+  description: "My CLI tool",
   args: {
-    name: { 
-      type: 'string', 
-      short: 'n', 
-      description: 'Name to greet',
-      required: false 
+    name: {
+      type: "string",
+      short: "n",
+      description: "Name to greet",
+      required: false,
     },
-    verbose: { 
-      type: 'boolean', 
-      short: 'v', 
-      description: 'Verbose output' 
-    }
+    verbose: {
+      type: "boolean",
+      short: "v",
+      description: "Verbose output",
+    },
   },
   run: (ctx) => {
-    const { name = 'World', verbose } = ctx.values;
+    const { name = "World", verbose } = ctx.values;
     if (verbose) {
-      console.log('Verbose mode enabled');
+      console.log("Verbose mode enabled");
     }
     console.log(`Hello, ${name}!`);
-  }
+  },
 });
 ```
 
@@ -179,32 +176,32 @@ await cli(process.argv.slice(2), {
 
 ```typescript
 // src/cli.ts - 推奨パターン
-import { cli, define } from 'gunshi';
+import { cli, define } from "gunshi";
 
 // define関数を使うと型推論が自動的に行われる
 const command = define({
-  name: 'mycli',
-  version: '1.0.0',
-  description: 'My CLI tool',
+  name: "mycli",
+  version: "1.0.0",
+  description: "My CLI tool",
   args: {
-    name: { 
-      type: 'string', 
-      short: 'n', 
-      description: 'Name to greet'
+    name: {
+      type: "string",
+      short: "n",
+      description: "Name to greet",
       // defaultがないため: string | undefined
     },
     age: {
-      type: 'number',
-      short: 'a', 
-      description: 'Your age',
-      default: 30  // defaultがあるため: number (常に値を持つ)
+      type: "number",
+      short: "a",
+      description: "Your age",
+      default: 30, // defaultがあるため: number (常に値を持つ)
     },
-    verbose: { 
-      type: 'boolean', 
-      short: 'v', 
-      description: 'Verbose output'
+    verbose: {
+      type: "boolean",
+      short: "v",
+      description: "Verbose output",
       // booleanは常にboolean型（--verbose: true, --no-verbose: false, 省略: false）
-    }
+    },
   },
   run: (ctx) => {
     // ctx.valuesは完全に型付けされる！
@@ -213,23 +210,24 @@ const command = define({
     // - name: string | undefined
     // - age: number
     // - verbose: boolean
-    
-    let greeting = `Hello, ${name || 'stranger'}!`;
+
+    let greeting = `Hello, ${name || "stranger"}!`;
     greeting += ` You are ${age} years old.`;
-    
+
     console.log(greeting);
-    
+
     if (verbose) {
-      console.log('Verbose mode enabled.');
-      console.log('Parsed values:', ctx.values);
+      console.log("Verbose mode enabled.");
+      console.log("Parsed values:", ctx.values);
     }
-  }
+  },
 });
 
 await cli(process.argv.slice(2), command);
 ```
 
 **define関数の利点:**
+
 - `Command`や`CommandContext`などの型のインポート不要
 - `ctx`パラメータが自動的に正しい型を取得
 - `ctx.values.optionName`でIDEの自動補完とコンパイル時型チェック
@@ -241,98 +239,98 @@ await cli(process.argv.slice(2), command);
 
 ```typescript
 // src/commands/install.ts
-import { define } from 'gunshi';
+import { define } from "gunshi";
 
 export const installCommand = define({
-  name: 'install',
-  description: 'Install dotfiles',
+  name: "install",
+  description: "Install dotfiles",
   args: {
     dryRun: {
-      type: 'boolean',
-      short: 'd',
-      description: 'Perform a dry run without making changes',
-      default: false
+      type: "boolean",
+      short: "d",
+      description: "Perform a dry run without making changes",
+      default: false,
     },
     verbose: {
-      type: 'boolean',
-      short: 'v',
-      description: 'Verbose output',
-      default: false
+      type: "boolean",
+      short: "v",
+      description: "Verbose output",
+      default: false,
     },
     force: {
-      type: 'boolean',
-      short: 'f',
-      description: 'Force overwrite existing files',
-      default: false
-    }
+      type: "boolean",
+      short: "f",
+      description: "Force overwrite existing files",
+      default: false,
+    },
   },
   run: async (ctx) => {
     // 型推論により、すべてboolean型として認識される
     const { dryRun, verbose, force } = ctx.values;
-    
+
     if (dryRun) {
-      console.log('🔍 Dry run mode - no changes will be made');
+      console.log("🔍 Dry run mode - no changes will be made");
     }
-    
+
     if (verbose) {
-      console.log('Configuration:', ctx.values);
+      console.log("Configuration:", ctx.values);
     }
-    
+
     // インストールロジック
-    console.log('Installing dotfiles...');
-    
+    console.log("Installing dotfiles...");
+
     if (force) {
-      console.log('Force mode: overwriting existing files');
+      console.log("Force mode: overwriting existing files");
     }
-  }
+  },
 });
 ```
 
 ```typescript
 // src/commands/restore.ts
-import { define } from 'gunshi';
+import { define } from "gunshi";
 
 export const restoreCommand = define({
-  name: 'restore',
-  description: 'Restore from backup',
+  name: "restore",
+  description: "Restore from backup",
   args: {
     backup: {
-      type: 'string',
-      short: 'b',
-      description: 'Backup timestamp or path'
+      type: "string",
+      short: "b",
+      description: "Backup timestamp or path",
       // string | undefined
     },
     interactive: {
-      type: 'boolean',
-      short: 'i',
-      description: 'Interactive mode',
-      default: true  // boolean (常にtrue/false)
+      type: "boolean",
+      short: "i",
+      description: "Interactive mode",
+      default: true, // boolean (常にtrue/false)
     },
     partial: {
-      type: 'string',
+      type: "string",
       multiple: true,
-      short: 'p',
-      description: 'Restore specific files only'
+      short: "p",
+      description: "Restore specific files only",
       // string[] | undefined
-    }
+    },
   },
   run: async (ctx) => {
     // 型が自動推論される
     const { backup, interactive, partial } = ctx.values;
-    
+
     if (backup) {
       console.log(`Restoring from backup: ${backup}`);
     }
-    
+
     if (interactive) {
-      console.log('Running in interactive mode...');
+      console.log("Running in interactive mode...");
       // 対話的選択のロジック
     }
-    
+
     if (partial && partial.length > 0) {
-      console.log('Partial restore:', partial);
+      console.log("Partial restore:", partial);
     }
-  }
+  },
 });
 ```
 
@@ -340,45 +338,42 @@ export const restoreCommand = define({
 
 ```typescript
 // src/index.ts - define関数を使った完全型安全な実装
-import { cli, define } from 'gunshi';
-import { installCommand } from './commands/install';
-import { restoreCommand } from './commands/restore';
+import { cli, define } from "gunshi";
+import { installCommand } from "./commands/install";
+import { restoreCommand } from "./commands/restore";
 
 // メインコマンドもdefineで定義
 const mainCommand = define({
-  name: 'dotfiles',
-  version: '2.0.0',
-  description: 'Dotfiles management tool',
-  commands: [
-    installCommand,
-    restoreCommand
-  ],
+  name: "dotfiles",
+  version: "2.0.0",
+  description: "Dotfiles management tool",
+  commands: [installCommand, restoreCommand],
   // グローバルオプション
   args: {
     config: {
-      type: 'string',
-      short: 'c',
-      description: 'Path to config file',
-      default: './config/dotfiles.json'
+      type: "string",
+      short: "c",
+      description: "Path to config file",
+      default: "./config/dotfiles.json",
     },
     verbose: {
-      type: 'boolean',
-      short: 'v',
-      description: 'Verbose output for all commands'
-    }
+      type: "boolean",
+      short: "v",
+      description: "Verbose output for all commands",
+    },
   },
   // デフォルトアクション（コマンドが指定されない場合）
   run: (ctx) => {
     // ctx.valuesは型付けされている
     const { config, verbose } = ctx.values;
-    
+
     if (verbose) {
       console.log(`Using config: ${config}`);
     }
-    
-    console.log('Dotfiles Manager v2.0.0');
-    console.log('Use --help for available commands');
-  }
+
+    console.log("Dotfiles Manager v2.0.0");
+    console.log("Use --help for available commands");
+  },
 });
 
 async function main() {
@@ -469,7 +464,7 @@ export interface DotfilesConfig {
 export interface FileMapping {
   source: string;
   target: string;
-  type: 'file' | 'directory' | 'selective';
+  type: "file" | "directory" | "selective";
   include?: string[];
   exclude?: string[];
   permissions?: Record<string, string>;
@@ -493,43 +488,43 @@ export interface SpecialHandler {
 
 ```typescript
 // src/core/config.ts
-import { readFile } from 'fs/promises';
-import { DotfilesConfig } from '../types/config';
-import { expandPath } from '../utils/paths';
+import { readFile } from "fs/promises";
+import { DotfilesConfig } from "../types/config";
+import { expandPath } from "../utils/paths";
 
 export class ConfigManager {
   private config: DotfilesConfig;
-  
+
   async load(path: string): Promise<void> {
-    const content = await readFile(path, 'utf-8');
+    const content = await readFile(path, "utf-8");
     this.config = JSON.parse(content);
     this.validateConfig();
   }
-  
+
   private validateConfig(): void {
     if (!this.config.mappings || !Array.isArray(this.config.mappings)) {
-      throw new Error('Invalid config: mappings must be an array');
+      throw new Error("Invalid config: mappings must be an array");
     }
-    
+
     for (const mapping of this.config.mappings) {
       if (!mapping.source || !mapping.target) {
-        throw new Error('Invalid mapping: source and target are required');
+        throw new Error("Invalid mapping: source and target are required");
       }
     }
   }
-  
+
   getMappings(): FileMapping[] {
-    return this.config.mappings.map(m => ({
+    return this.config.mappings.map((m) => ({
       ...m,
       source: expandPath(m.source),
-      target: expandPath(m.target)
+      target: expandPath(m.target),
     }));
   }
-  
+
   getBackupConfig(): BackupConfig {
     return {
       ...this.config.backup,
-      directory: expandPath(this.config.backup.directory)
+      directory: expandPath(this.config.backup.directory),
     };
   }
 }
@@ -537,23 +532,27 @@ export class ConfigManager {
 
 ```typescript
 // src/core/symlink.ts
-import { symlink, unlink, stat, mkdir } from 'fs/promises';
-import { dirname } from 'path';
-import { Logger } from '../utils/logger';
+import { symlink, unlink, stat, mkdir } from "fs/promises";
+import { dirname } from "path";
+import { Logger } from "../utils/logger";
 
 export class SymlinkManager {
   constructor(private logger: Logger) {}
-  
-  async createSymlink(source: string, target: string, options?: {
-    dryRun?: boolean;
-    force?: boolean;
-  }): Promise<void> {
+
+  async createSymlink(
+    source: string,
+    target: string,
+    options?: {
+      dryRun?: boolean;
+      force?: boolean;
+    },
+  ): Promise<void> {
     const { dryRun = false, force = false } = options || {};
-    
+
     // ターゲットディレクトリの作成
     const targetDir = dirname(target);
     await mkdir(targetDir, { recursive: true });
-    
+
     // 既存ファイルのチェック
     try {
       const stats = await stat(target);
@@ -567,28 +566,31 @@ export class SymlinkManager {
         }
       }
     } catch (err: any) {
-      if (err.code !== 'ENOENT') {
+      if (err.code !== "ENOENT") {
         throw err;
       }
     }
-    
+
     // シンボリックリンクの作成
     this.logger.info(`Creating symlink: ${source} -> ${target}`);
     if (!dryRun) {
       await symlink(source, target);
     }
   }
-  
-  async removeSymlink(target: string, options?: {
-    dryRun?: boolean;
-  }): Promise<void> {
+
+  async removeSymlink(
+    target: string,
+    options?: {
+      dryRun?: boolean;
+    },
+  ): Promise<void> {
     const { dryRun = false } = options || {};
-    
+
     const stats = await stat(target);
     if (!stats.isSymbolicLink()) {
       throw new Error(`Not a symlink: ${target}`);
     }
-    
+
     this.logger.info(`Removing symlink: ${target}`);
     if (!dryRun) {
       await unlink(target);
@@ -664,18 +666,21 @@ export class SymlinkManager {
 ## まとめ
 
 ### OXC (oxlint) の利点
+
 1. **超高速**: ESLintの50-100倍の速度
 2. **ゼロコンフィグ**: デフォルトで有用な設定
 3. **TypeScript完全対応**: 型認識リンティング（プレビュー）
 4. **段階的移行**: ESLintとの併用が可能
 
 ### Gunshi の利点
+
 1. **型安全**: TypeScriptファーストの設計
 2. **宣言的**: 直感的なコマンド定義
 3. **拡張性**: サブコマンドの柔軟な組み合わせ
 4. **Bun対応**: 高速な実行環境での動作
 
 ### 推奨される開発フロー
+
 1. Bunをランタイムとして使用
 2. OXCでリンティング・フォーマット
 3. Gunshiで型安全なCLI構築

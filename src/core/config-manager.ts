@@ -1,5 +1,10 @@
 import { readFile } from "fs/promises";
-import { BackupConfig, DotfilesConfig, FileMapping, MCPConfig } from "../types/config";
+import {
+  BackupConfig,
+  DotfilesConfig,
+  FileMapping,
+  MCPConfig,
+} from "../types/config";
 import { expandPath } from "../utils/paths";
 import { fileExists } from "../utils/fs";
 
@@ -8,7 +13,7 @@ const DEFAULT_KEEP_LAST = 10;
 // 純粋関数：設定の検証
 export const validateConfig = (config: unknown): config is DotfilesConfig => {
   const c = config as DotfilesConfig;
-  
+
   if (!c.mappings || !Array.isArray(c.mappings)) {
     throw new Error("Invalid config: mappings must be an array");
   }
@@ -30,13 +35,13 @@ export const validateConfig = (config: unknown): config is DotfilesConfig => {
   if (!c.backup || !c.backup.directory) {
     throw new Error("Invalid config: backup.directory is required");
   }
-  
+
   return true;
 };
 
 // 純粋関数：マッピングのパスを展開
 export const expandMappings = (mappings: FileMapping[]): FileMapping[] =>
-  mappings.map(mapping => ({
+  mappings.map((mapping) => ({
     ...mapping,
     source: expandPath(mapping.source),
     target: expandPath(mapping.target),
@@ -93,11 +98,11 @@ export const createConfigManager = (configPath = "./config/dotfiles.json") => {
     if (!config) {
       throw new Error("Configuration not loaded");
     }
-    
+
     if (!config.mcp) {
       return undefined;
     }
-    
+
     return expandMCPConfig(config.mcp);
   };
 
@@ -116,4 +121,3 @@ export const createConfigManager = (configPath = "./config/dotfiles.json") => {
     getConfig,
   };
 };
-

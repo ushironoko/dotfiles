@@ -68,9 +68,9 @@ describe("fs utilities", () => {
       const srcFile = join(testDir, "source.txt");
       const destFile = join(testDir, "dest.txt");
       await fs.writeFile(srcFile, "content");
-      
+
       await copyRecursive(srcFile, destFile);
-      
+
       const content = await fs.readFile(destFile, "utf8");
       expect(content).toBe("content");
     });
@@ -78,13 +78,13 @@ describe("fs utilities", () => {
     it("should copy directory recursively", async () => {
       const srcDir = join(testDir, "src");
       const destDir = join(testDir, "dest");
-      
+
       await fs.mkdir(join(srcDir, "sub"), { recursive: true });
       await fs.writeFile(join(srcDir, "file1.txt"), "file1");
       await fs.writeFile(join(srcDir, "sub", "file2.txt"), "file2");
-      
+
       await copyRecursive(srcDir, destDir);
-      
+
       expect(await fileExists(join(destDir, "file1.txt"))).toBe(true);
       expect(await fileExists(join(destDir, "sub", "file2.txt"))).toBe(true);
     });
@@ -92,7 +92,7 @@ describe("fs utilities", () => {
     it("should throw error for non-existent source", async () => {
       const srcFile = join(testDir, "non-existent.txt");
       const destFile = join(testDir, "dest.txt");
-      
+
       await expect(copyRecursive(srcFile, destFile)).rejects.toThrow();
     });
   });
@@ -101,9 +101,9 @@ describe("fs utilities", () => {
     it("should remove single file", async () => {
       const filePath = join(testDir, "file.txt");
       await fs.writeFile(filePath, "content");
-      
+
       await removeRecursive(filePath);
-      
+
       expect(await fileExists(filePath)).toBe(false);
     });
 
@@ -111,9 +111,9 @@ describe("fs utilities", () => {
       const dirPath = join(testDir, "dir");
       await fs.mkdir(join(dirPath, "sub"), { recursive: true });
       await fs.writeFile(join(dirPath, "file.txt"), "content");
-      
+
       await removeRecursive(dirPath);
-      
+
       expect(await fileExists(dirPath)).toBe(false);
     });
 
@@ -130,14 +130,14 @@ describe("fs utilities", () => {
       const linkPath = join(testDir, "link.txt");
       await fs.writeFile(targetFile, "content");
       await fs.symlink(targetFile, linkPath);
-      
+
       expect(await isSymlink(linkPath)).toBe(true);
     });
 
     it("should return false for regular file", async () => {
       const filePath = join(testDir, "regular.txt");
       await fs.writeFile(filePath, "content");
-      
+
       expect(await isSymlink(filePath)).toBe(false);
     });
 
@@ -152,23 +152,23 @@ describe("fs utilities", () => {
       await fs.writeFile(join(testDir, "file1.txt"), "content1");
       await fs.writeFile(join(testDir, "file2.txt"), "content2");
       await fs.mkdir(join(testDir, "subdir"));
-      
+
       const entries = await readDir(testDir);
-      
+
       expect(entries).toHaveLength(3);
-      const names = entries.map(e => e.name).sort();
+      const names = entries.map((e) => e.name).sort();
       expect(names).toEqual(["file1.txt", "file2.txt", "subdir"]);
     });
 
     it("should include file type information", async () => {
       await fs.writeFile(join(testDir, "file.txt"), "content");
       await fs.mkdir(join(testDir, "dir"));
-      
+
       const entries = await readDir(testDir);
-      
-      const fileEntry = entries.find(e => "file.txt" === e.name);
-      const dirEntry = entries.find(e => "dir" === e.name);
-      
+
+      const fileEntry = entries.find((e) => "file.txt" === e.name);
+      const dirEntry = entries.find((e) => "dir" === e.name);
+
       expect(fileEntry?.isFile()).toBe(true);
       expect(fileEntry?.isDirectory()).toBe(false);
       expect(dirEntry?.isDirectory()).toBe(true);

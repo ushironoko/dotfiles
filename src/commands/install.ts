@@ -42,7 +42,7 @@ export const installCommand = define({
     const { dryRun, force, verbose, config } = ctx.values;
 
     const logger = createLogger(verbose, dryRun);
-    
+
     try {
       logger.info("Starting dotfiles installation...");
 
@@ -53,11 +53,11 @@ export const installCommand = define({
       const backupManager = createBackupManager(logger, backupConfig);
 
       const mappings = configManager.getMappings();
-      const targetPaths = mappings.map(m => m.target);
+      const targetPaths = mappings.map((m) => m.target);
 
       const pathsToBackup = [];
       for (const path of targetPaths) {
-        if (await fileExists(path) && !(await isSymlink(path))) {
+        if ((await fileExists(path)) && !(await isSymlink(path))) {
           pathsToBackup.push(path);
         }
       }
@@ -68,10 +68,14 @@ export const installCommand = define({
       }
 
       const symlinkManager = createSymlinkManager(logger);
-      
+
       logger.info("Creating symlinks...");
       for (const mapping of mappings) {
-        await symlinkManager.createFromMapping(mapping, { dryRun, force, verbose });
+        await symlinkManager.createFromMapping(mapping, {
+          dryRun,
+          force,
+          verbose,
+        });
       }
 
       const mcpConfig = configManager.getMCPConfig();
@@ -82,7 +86,7 @@ export const installCommand = define({
       }
 
       logger.success("Dotfiles installation complete!");
-      
+
       if (dryRun) {
         logger.info("This was a dry run - no changes were made");
       } else {

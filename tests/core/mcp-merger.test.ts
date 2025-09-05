@@ -14,7 +14,7 @@ describe("MCPMerger", () => {
   beforeEach(async () => {
     testDir = join(tmpdir(), `mcp-test-${Date.now()}`);
     await fs.mkdir(testDir, { recursive: true });
-    
+
     logger = createLogger(false, false);
     merger = createMCPMerger(logger, {
       sourceFile: join(testDir, "source.json"),
@@ -36,28 +36,31 @@ describe("MCPMerger", () => {
           server2: { command: "cmd2" },
         },
       };
-      
+
       const targetData = {
         existingKey: "value",
         mcpServers: {
           oldServer: { command: "old" },
         },
       };
-      
+
       await fs.writeFile(
         join(testDir, "source.json"),
-        JSON.stringify(sourceData, undefined, 2)
+        JSON.stringify(sourceData, undefined, 2),
       );
       await fs.writeFile(
         join(testDir, "target.json"),
-        JSON.stringify(targetData, undefined, 2)
+        JSON.stringify(targetData, undefined, 2),
       );
-      
+
       await merger.merge();
-      
-      const resultContent = await fs.readFile(join(testDir, "target.json"), "utf8");
+
+      const resultContent = await fs.readFile(
+        join(testDir, "target.json"),
+        "utf8",
+      );
       const result = JSON.parse(resultContent);
-      
+
       expect(result.existingKey).toBe("value");
       expect(result.mcpServers).toEqual(sourceData.mcpServers);
     });
@@ -68,19 +71,22 @@ describe("MCPMerger", () => {
           server1: { command: "cmd1" },
         },
       };
-      
+
       await fs.writeFile(
         join(testDir, "source.json"),
-        JSON.stringify(sourceData, undefined, 2)
+        JSON.stringify(sourceData, undefined, 2),
       );
-      
+
       await merger.merge();
-      
+
       expect(await fileExists(join(testDir, "target.json"))).toBe(true);
-      
-      const resultContent = await fs.readFile(join(testDir, "target.json"), "utf8");
+
+      const resultContent = await fs.readFile(
+        join(testDir, "target.json"),
+        "utf8",
+      );
       const result = JSON.parse(resultContent);
-      
+
       expect(result.mcpServers).toEqual(sourceData.mcpServers);
     });
 
@@ -88,17 +94,20 @@ describe("MCPMerger", () => {
       const targetData = {
         existingKey: "value",
       };
-      
+
       await fs.writeFile(
         join(testDir, "target.json"),
-        JSON.stringify(targetData, undefined, 2)
+        JSON.stringify(targetData, undefined, 2),
       );
-      
+
       await merger.merge();
-      
-      const resultContent = await fs.readFile(join(testDir, "target.json"), "utf8");
+
+      const resultContent = await fs.readFile(
+        join(testDir, "target.json"),
+        "utf8",
+      );
       const result = JSON.parse(resultContent);
-      
+
       expect(result).toEqual(targetData);
     });
 
@@ -106,35 +115,38 @@ describe("MCPMerger", () => {
       const sourceData = {
         otherKey: "value",
       };
-      
+
       const targetData = {
         existingKey: "value",
         mcpServers: {
           oldServer: { command: "old" },
         },
       };
-      
+
       await fs.writeFile(
         join(testDir, "source.json"),
-        JSON.stringify(sourceData, undefined, 2)
+        JSON.stringify(sourceData, undefined, 2),
       );
       await fs.writeFile(
         join(testDir, "target.json"),
-        JSON.stringify(targetData, undefined, 2)
+        JSON.stringify(targetData, undefined, 2),
       );
-      
+
       await merger.merge();
-      
-      const resultContent = await fs.readFile(join(testDir, "target.json"), "utf8");
+
+      const resultContent = await fs.readFile(
+        join(testDir, "target.json"),
+        "utf8",
+      );
       const result = JSON.parse(resultContent);
-      
+
       expect(result).toEqual(targetData);
     });
 
     it("should handle malformed JSON gracefully", async () => {
       await fs.writeFile(join(testDir, "source.json"), "{ invalid json }");
       await fs.writeFile(join(testDir, "target.json"), "{}");
-      
+
       const result = await merger.merge();
       expect(result).toBeUndefined();
     });
@@ -145,27 +157,30 @@ describe("MCPMerger", () => {
           server1: { command: "cmd1" },
         },
       };
-      
+
       const targetData = {
         mcpServers: {
           oldServer: { command: "old" },
         },
       };
-      
+
       await fs.writeFile(
         join(testDir, "source.json"),
-        JSON.stringify(sourceData, undefined, 2)
+        JSON.stringify(sourceData, undefined, 2),
       );
       await fs.writeFile(
         join(testDir, "target.json"),
-        JSON.stringify(targetData, undefined, 2)
+        JSON.stringify(targetData, undefined, 2),
       );
-      
+
       await merger.merge(true);
-      
-      const resultContent = await fs.readFile(join(testDir, "target.json"), "utf8");
+
+      const resultContent = await fs.readFile(
+        join(testDir, "target.json"),
+        "utf8",
+      );
       const result = JSON.parse(resultContent);
-      
+
       expect(result.mcpServers).toEqual(targetData.mcpServers);
     });
   });
@@ -175,51 +190,51 @@ describe("MCPMerger", () => {
       const targetData = {
         existingKey: "value",
       };
-      
+
       await fs.mkdir(join(testDir, "backup"), { recursive: true });
       await fs.writeFile(
         join(testDir, "target.json"),
-        JSON.stringify(targetData, undefined, 2)
+        JSON.stringify(targetData, undefined, 2),
       );
-      
+
       await merger.backup();
-      
+
       const backupFiles = await fs.readdir(join(testDir, "backup"));
       expect(backupFiles).toHaveLength(1);
       expect(backupFiles[0]).toMatch(/^\.claude\.json\.\d+$/);
-      
+
       const backupContent = await fs.readFile(
         join(testDir, "backup", backupFiles[0]),
-        "utf8"
+        "utf8",
       );
       const backup = JSON.parse(backupContent);
-      
+
       expect(backup).toEqual(targetData);
     });
 
     it("should skip backup if target doesn't exist", async () => {
       await fs.mkdir(join(testDir, "backup"), { recursive: true });
-      
+
       await merger.backup();
-      
+
       const backupFiles = await fs.readdir(join(testDir, "backup"));
       expect(backupFiles).toHaveLength(0);
     });
 
     it("should skip backup if backup already exists", async () => {
       const targetData = { key: "value" };
-      
+
       await fs.mkdir(join(testDir, "backup"), { recursive: true });
       await fs.writeFile(
         join(testDir, "target.json"),
-        JSON.stringify(targetData, undefined, 2)
+        JSON.stringify(targetData, undefined, 2),
       );
-      
+
       // Create first backup
       await merger.backup();
       const files1 = await fs.readdir(join(testDir, "backup"));
       expect(files1).toHaveLength(1);
-      
+
       // Try to create another backup (should skip)
       await merger.backup();
       const files2 = await fs.readdir(join(testDir, "backup"));
@@ -228,15 +243,15 @@ describe("MCPMerger", () => {
 
     it("should handle dry run mode", async () => {
       const targetData = { key: "value" };
-      
+
       await fs.mkdir(join(testDir, "backup"), { recursive: true });
       await fs.writeFile(
         join(testDir, "target.json"),
-        JSON.stringify(targetData, undefined, 2)
+        JSON.stringify(targetData, undefined, 2),
       );
-      
+
       await merger.backup(true);
-      
+
       const backupFiles = await fs.readdir(join(testDir, "backup"));
       expect(backupFiles).toHaveLength(0);
     });
@@ -249,41 +264,44 @@ describe("MCPMerger", () => {
           newServer: { command: "new" },
         },
       };
-      
+
       const targetData = {
         existingKey: "value",
         mcpServers: {
           oldServer: { command: "old" },
         },
       };
-      
+
       await fs.mkdir(join(testDir, "backup"), { recursive: true });
       await fs.writeFile(
         join(testDir, "source.json"),
-        JSON.stringify(sourceData, undefined, 2)
+        JSON.stringify(sourceData, undefined, 2),
       );
       await fs.writeFile(
         join(testDir, "target.json"),
-        JSON.stringify(targetData, undefined, 2)
+        JSON.stringify(targetData, undefined, 2),
       );
-      
+
       // First backup, then merge
       await merger.backup();
       await merger.merge();
-      
+
       // Check backup was created
       const backupFiles = await fs.readdir(join(testDir, "backup"));
       expect(backupFiles).toHaveLength(1);
-      
+
       const backupContent = await fs.readFile(
         join(testDir, "backup", backupFiles[0]),
-        "utf8"
+        "utf8",
       );
       const backup = JSON.parse(backupContent);
       expect(backup).toEqual(targetData);
-      
+
       // Check merge was successful
-      const resultContent = await fs.readFile(join(testDir, "target.json"), "utf8");
+      const resultContent = await fs.readFile(
+        join(testDir, "target.json"),
+        "utf8",
+      );
       const result = JSON.parse(resultContent);
       expect(result.existingKey).toBe("value");
       expect(result.mcpServers).toEqual(sourceData.mcpServers);

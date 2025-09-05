@@ -10,9 +10,10 @@
     "build": "bun build src/index.ts --outdir=dist --target=bun",
     "test": "bun test",
     "lint": "oxlint",
+    "format": "prettier --write .",
     "lint:fix": "oxlint --fix",
     "typecheck": "tsgo --noEmit",
-    "prepare": "bun run lint && bun run typecheck && bun test",
+    "prepare": "bun run format && bun run lint && bun run typecheck && bun test",
     "install:local": "bun link"
   },
   "dependencies": {
@@ -20,9 +21,11 @@
     "chalk": "5.3.0"
   },
   "devDependencies": {
+    "@prettier/plugin-oxc": "latest",
     "@types/bun": "1.2.2",
     "@types/node": "22.10.6",
-    "@typescript/native-preview": "^7.0.0-dev.20250904.1",
-    "oxlint": "0.15.2"
+    "@typescript/native-preview": "7.0.0-dev.20250904.1",
+    "oxlint": "0.15.2",
+    "prettier": "latest"
   }
 }

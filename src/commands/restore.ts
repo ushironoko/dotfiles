@@ -16,7 +16,10 @@ function createReadlineInterface() {
   });
 }
 
-function prompt(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
+function prompt(
+  rl: ReturnType<typeof createInterface>,
+  question: string,
+): Promise<string> {
   return new Promise((resolve) => {
     rl.question(question, resolve);
   });
@@ -63,11 +66,12 @@ export const restoreCommand = define({
     },
   },
   run: async (ctx) => {
-    const { backup, interactive, partial, dryRun, verbose, config } = ctx.values;
+    const { backup, interactive, partial, dryRun, verbose, config } =
+      ctx.values;
 
     const logger = createLogger(verbose, dryRun);
     let rl: ReturnType<typeof createInterface> | undefined;
-    
+
     try {
       logger.info("Starting dotfiles restoration...");
 
@@ -82,7 +86,7 @@ export const restoreCommand = define({
       if (!selectedBackup && interactive) {
         rl = createReadlineInterface();
         const backups = await backupManager.listBackups();
-        
+
         if (backups.length === NO_BACKUPS_FOUND) {
           logger.error("No backups found");
           process.exit(EXIT_FAILURE);
@@ -90,12 +94,17 @@ export const restoreCommand = define({
 
         logger.info("Available backups:");
         backups.forEach((b, index) => {
-          const date = b.name.replace(/T/g, " ").replace(/-/g, SLASH_COUNT_THRESHOLD > index ? "/" : ":");
+          const date = b.name
+            .replace(/T/g, " ")
+            .replace(/-/g, SLASH_COUNT_THRESHOLD > index ? "/" : ":");
           console.log(`  [${index + INDEX_OFFSET}] ${date}`);
         });
 
-        const selection = await prompt(rl, "\nSelect backup number (or 'q' to quit): ");
-        
+        const selection = await prompt(
+          rl,
+          "\nSelect backup number (or 'q' to quit): ",
+        );
+
         if ("q" === selection || "Q" === selection) {
           logger.info("Restoration cancelled");
           rl.close();
@@ -125,9 +134,12 @@ export const restoreCommand = define({
       if (interactive && rl) {
         logger.info(`Selected backup: ${selectedBackup}`);
         logger.warn("WARNING: This will overwrite existing files!");
-        
-        const confirm = await prompt(rl, "Are you sure you want to restore? (y/N): ");
-        
+
+        const confirm = await prompt(
+          rl,
+          "Are you sure you want to restore? (y/N): ",
+        );
+
         if ("y" !== confirm.toLowerCase()) {
           logger.info("Restoration cancelled");
           rl.close();
@@ -136,9 +148,9 @@ export const restoreCommand = define({
       }
 
       await backupManager.restoreBackup(selectedBackup, partial, dryRun);
-      
+
       logger.success("Restoration complete!");
-      
+
       if (dryRun) {
         logger.info("This was a dry run - no changes were made");
       }

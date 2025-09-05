@@ -1,24 +1,23 @@
 import { chmod, lstat, readlink } from "fs/promises";
 import { join, resolve, dirname } from "path";
 import { FileMapping, SymlinkOptions, SymlinkStatus } from "../types/config";
-import { 
+import {
   fileExists,
   createSymlink as fsCreateSymlink,
   removeSymlink as fsRemoveSymlink,
   isSymlink,
-  removeRecursive
+  removeRecursive,
 } from "../utils/fs";
 import { Logger } from "../utils/logger";
 import { expandPath } from "../utils/paths";
 
 // ファクトリー関数：SymlinkManagerを作成
 export const createSymlinkManager = (logger: Logger) => {
-  
   const createSymlink = async (
-    source: string, 
-    target: string, 
+    source: string,
+    target: string,
     force: boolean,
-    dryRun = false
+    dryRun = false,
   ): Promise<void> => {
     const expandedSource = expandPath(source);
     const expandedTarget = expandPath(target);
@@ -36,12 +35,17 @@ export const createSymlinkManager = (logger: Logger) => {
         }
       } else {
         if (force) {
-          logger.action("Removing", `existing file/directory: ${expandedTarget}`);
+          logger.action(
+            "Removing",
+            `existing file/directory: ${expandedTarget}`,
+          );
           if (!dryRun) {
             await removeRecursive(expandedTarget);
           }
         } else {
-          logger.warn(`Target already exists and is not a symlink: ${expandedTarget}`);
+          logger.warn(
+            `Target already exists and is not a symlink: ${expandedTarget}`,
+          );
           return;
         }
       }
@@ -56,11 +60,11 @@ export const createSymlinkManager = (logger: Logger) => {
   const applyFilePermission = async (
     filePath: string,
     permission: string,
-    dryRun: boolean
+    dryRun: boolean,
   ): Promise<void> => {
     const expandedPath = expandPath(filePath);
     logger.action("Setting permissions", `${permission} on ${expandedPath}`);
-    
+
     if (!dryRun) {
       const OCTAL_BASE = 8;
       await chmod(expandedPath, parseInt(permission, OCTAL_BASE));
@@ -69,7 +73,7 @@ export const createSymlinkManager = (logger: Logger) => {
 
   const applyPermissions = async (
     mapping: FileMapping,
-    dryRun: boolean
+    dryRun: boolean,
   ): Promise<void> => {
     if (!mapping.permissions || "string" === typeof mapping.permissions) {
       return;
@@ -83,7 +87,7 @@ export const createSymlinkManager = (logger: Logger) => {
 
   const createSelectiveSymlinks = async (
     mapping: FileMapping,
-    options: SymlinkOptions
+    options: SymlinkOptions,
   ): Promise<void> => {
     const items = mapping.include || mapping.files;
     if (!items) {
@@ -98,22 +102,26 @@ export const createSymlinkManager = (logger: Logger) => {
     for (const item of items) {
       const sourcePath = join(mapping.source, item);
       const targetPath = join(mapping.target, item);
-      
+
       await createSymlink(sourcePath, targetPath, force, dryRun);
-      
-      if (mapping.permissions && "object" === typeof mapping.permissions && mapping.permissions[item]) {
+
+      if (
+        mapping.permissions &&
+        "object" === typeof mapping.permissions &&
+        mapping.permissions[item]
+      ) {
         await applyFilePermission(
-          targetPath, 
-          mapping.permissions[item], 
-          dryRun
+          targetPath,
+          mapping.permissions[item],
+          dryRun,
         );
       }
     }
   };
 
   const createFromMapping = async (
-    mapping: FileMapping, 
-    options: SymlinkOptions = {}
+    mapping: FileMapping,
+    options: SymlinkOptions = {},
   ): Promise<void> => {
     const { dryRun = false, force = false } = options;
 
@@ -121,10 +129,14 @@ export const createSymlinkManager = (logger: Logger) => {
       await createSelectiveSymlinks(mapping, options);
     } else {
       await createSymlink(mapping.source, mapping.target, force, dryRun);
-      
+
       if (mapping.permissions) {
         if ("string" === typeof mapping.permissions) {
-          await applyFilePermission(mapping.target, mapping.permissions, dryRun);
+          await applyFilePermission(
+            mapping.target,
+            mapping.permissions,
+            dryRun,
+          );
         } else {
           await applyPermissions(mapping, dryRun);
         }
@@ -134,7 +146,7 @@ export const createSymlinkManager = (logger: Logger) => {
 
   const createMultipleSymlinks = async (
     mappings: FileMapping[],
-    options: SymlinkOptions = {}
+    options: SymlinkOptions = {},
   ): Promise<void> => {
     for (const mapping of mappings) {
       await createFromMapping(mapping, options);
@@ -142,15 +154,15 @@ export const createSymlinkManager = (logger: Logger) => {
   };
 
   const checkSymlinkStatus = async (
-    target: string, 
-    expectedSource?: string
+    target: string,
+    expectedSource?: string,
   ): Promise<SymlinkStatus> => {
     const expandedTarget = expandPath(target);
-    
+
     // lstatを使用してシンボリックリンク自体の存在を確認
     try {
       const stats = await lstat(expandedTarget);
-      
+
       if (!stats.isSymbolicLink()) {
         return { exists: true, isSymlink: false };
       }
@@ -163,9 +175,12 @@ export const createSymlinkManager = (logger: Logger) => {
         return { exists: true, isSymlink: true, targetExists };
       }
 
-      const expandedSource = resolve(dirname(expandedTarget), expandPath(expectedSource));
+      const expandedSource = resolve(
+        dirname(expandedTarget),
+        expandPath(expectedSource),
+      );
       const pointsToCorrectTarget = targetPath === expandedSource;
-      
+
       return {
         exists: true,
         isSymlink: true,

@@ -1,11 +1,11 @@
 import { readdir } from "fs/promises";
 import { join, dirname } from "path";
 import { BackupConfig, BackupInfo } from "../types/config";
-import { 
+import {
   copyRecursive,
   ensureDir,
-  fileExists, 
-  removeRecursive 
+  fileExists,
+  removeRecursive,
 } from "../utils/fs";
 import { Logger } from "../utils/logger";
 import { expandPath, getRelativePath } from "../utils/paths";
@@ -15,12 +15,12 @@ const TIMESTAMP_LENGTH = 19;
 
 export const createBackupManager = (logger: Logger, config: BackupConfig) => {
   const backupFile = async (
-    sourcePath: string, 
+    sourcePath: string,
     backupDir: string,
-    dryRun: boolean
+    dryRun: boolean,
   ): Promise<void> => {
     const expandedSource = expandPath(sourcePath);
-    
+
     if (!(await fileExists(expandedSource))) {
       logger.debug(`Skipping backup - file not found: ${expandedSource}`);
       return;
@@ -31,20 +31,23 @@ export const createBackupManager = (logger: Logger, config: BackupConfig) => {
     const backupPath = join(backupDir, relativePath);
 
     logger.action("Backing up", `${expandedSource} -> ${backupPath}`);
-    
+
     if (!dryRun) {
       await copyRecursive(expandedSource, backupPath);
     }
   };
 
-  const getBackupFiles = async (backupDir: string, basePath = ""): Promise<string[]> => {
+  const getBackupFiles = async (
+    backupDir: string,
+    basePath = "",
+  ): Promise<string[]> => {
     const fullPath = join(backupDir, basePath);
     const entries = await readdir(fullPath, { withFileTypes: true });
     const files: string[] = [];
 
     for (const entry of entries) {
       const entryPath = join(basePath, entry.name);
-      
+
       if (entry.isDirectory()) {
         const subFiles = await getBackupFiles(backupDir, entryPath);
         files.push(...subFiles);
@@ -58,22 +61,25 @@ export const createBackupManager = (logger: Logger, config: BackupConfig) => {
 
   const listBackups = async (): Promise<BackupInfo[]> => {
     const backupBaseDir = expandPath(config.directory);
-    
+
     if (!(await fileExists(backupBaseDir))) {
       return [];
     }
 
     const entries = await readdir(backupBaseDir, { withFileTypes: true });
     const backups: BackupInfo[] = [];
-    
+
     for (const entry of entries) {
       if (entry.isDirectory()) {
         const backupPath = join(backupBaseDir, entry.name);
-        
+
         // Parse date from directory name (format: 2024-01-01T10-00-00)
-        const dateStr = entry.name.replace(/T(\d{2})-(\d{2})-(\d{2})$/, "T$1:$2:$3");
+        const dateStr = entry.name.replace(
+          /T(\d{2})-(\d{2})-(\d{2})$/,
+          "T$1:$2:$3",
+        );
         const date = new Date(dateStr);
-        
+
         backups.push({
           name: entry.name,
           path: backupPath,
@@ -81,7 +87,7 @@ export const createBackupManager = (logger: Logger, config: BackupConfig) => {
         });
       }
     }
-    
+
     // Sort by date, most recent first
     backups.sort((a, b) => b.date.getTime() - a.date.getTime());
 
@@ -90,13 +96,13 @@ export const createBackupManager = (logger: Logger, config: BackupConfig) => {
 
   const cleanOldBackups = async (dryRun = false): Promise<void> => {
     const backups = await listBackups();
-    
+
     if (config.keepLast && backups.length > config.keepLast) {
       const toDelete = backups.slice(config.keepLast);
-      
+
       for (const backup of toDelete) {
         logger.action("Removing old backup", backup.name);
-        
+
         if (!dryRun) {
           await removeRecursive(backup.path);
         }
@@ -104,12 +110,18 @@ export const createBackupManager = (logger: Logger, config: BackupConfig) => {
     }
   };
 
-  const createBackup = async (paths: string[], dryRun = false): Promise<string> => {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(SLICE_START, TIMESTAMP_LENGTH);
+  const createBackup = async (
+    paths: string[],
+    dryRun = false,
+  ): Promise<string> => {
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .slice(SLICE_START, TIMESTAMP_LENGTH);
     const backupDir = join(config.directory, timestamp);
-    
+
     logger.info(`Creating backup in ${backupDir}`);
-    
+
     if (!dryRun) {
       await ensureDir(backupDir);
     }
@@ -119,14 +131,14 @@ export const createBackupManager = (logger: Logger, config: BackupConfig) => {
     }
 
     await cleanOldBackups(dryRun);
-    
+
     return timestamp;
   };
 
   const restoreBackup = async (
     backupName: string,
     targetPaths?: string[],
-    dryRun = false
+    dryRun = false,
   ): Promise<void> => {
     const backupDir = join(config.directory, backupName);
     const expandedBackupDir = expandPath(backupDir);
@@ -136,19 +148,27 @@ export const createBackupManager = (logger: Logger, config: BackupConfig) => {
     }
 
     logger.info(`Restoring from backup: ${backupName}`);
-    
+
     const files = await getBackupFiles(expandedBackupDir);
-    
+
     for (const file of files) {
       if (targetPaths) {
-        const fullFilePath = file.startsWith("tmp/") || file.startsWith("var/") || file.startsWith("usr/") || file.startsWith("home/") || file.startsWith("opt/") 
-          ? `/${file}` 
-          : join(expandPath("~"), file);
-        
-        const shouldInclude = targetPaths.some(path => 
-          fullFilePath === path || fullFilePath.includes(path) || file.includes(path)
+        const fullFilePath =
+          file.startsWith("tmp/") ||
+          file.startsWith("var/") ||
+          file.startsWith("usr/") ||
+          file.startsWith("home/") ||
+          file.startsWith("opt/")
+            ? `/${file}`
+            : join(expandPath("~"), file);
+
+        const shouldInclude = targetPaths.some(
+          (path) =>
+            fullFilePath === path ||
+            fullFilePath.includes(path) ||
+            file.includes(path),
         );
-        
+
         if (!shouldInclude) {
           continue;
         }
@@ -157,12 +177,17 @@ export const createBackupManager = (logger: Logger, config: BackupConfig) => {
       const sourcePath = join(expandedBackupDir, file);
       // If file starts with known temp/absolute prefix, restore to original location
       // Otherwise, restore relative to home
-      const targetPath = file.startsWith("tmp/") || file.startsWith("var/") || file.startsWith("usr/") || file.startsWith("home/") || file.startsWith("opt/") 
-        ? `/${file}` 
-        : join(expandPath("~"), file);
+      const targetPath =
+        file.startsWith("tmp/") ||
+        file.startsWith("var/") ||
+        file.startsWith("usr/") ||
+        file.startsWith("home/") ||
+        file.startsWith("opt/")
+          ? `/${file}`
+          : join(expandPath("~"), file);
 
       logger.action("Restoring", `${file} -> ${targetPath}`);
-      
+
       if (!dryRun) {
         await ensureDir(dirname(targetPath));
         await copyRecursive(sourcePath, targetPath);

@@ -22,12 +22,20 @@ if ("install" === command) {
   console.log(chalk.bold.cyan("\nDotfiles Manager v2.0.0"));
   console.log(chalk.gray("Personal configuration management tool\n"));
   console.log("Available commands:");
-  console.log("  " + chalk.cyan("install") + "  - Install dotfiles by creating symlinks");
+  console.log(
+    "  " + chalk.cyan("install") + "  - Install dotfiles by creating symlinks",
+  );
   console.log("  " + chalk.cyan("restore") + "  - Restore from a backup");
-  console.log("  " + chalk.cyan("list") + "     - List managed dotfiles and their status");
+  console.log(
+    "  " + chalk.cyan("list") + "     - List managed dotfiles and their status",
+  );
   console.log("\nUsage: " + chalk.yellow("dotfiles <command> [options]"));
-  console.log("       " + chalk.yellow("dotfiles <command> --help") + " for command options");
-  
+  console.log(
+    "       " +
+      chalk.yellow("dotfiles <command> --help") +
+      " for command options",
+  );
+
   if (command && "--help" !== command && "-h" !== command) {
     console.log("\n" + chalk.red(`Unknown command: ${command}`));
     const EXIT_CODE_ERROR = 1;

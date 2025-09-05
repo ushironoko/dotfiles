@@ -56,6 +56,7 @@
   - プロジェクトがモノレポをサポートする場合は、`src` ディレクトリの代わりに `packages` ディレクトリを作成できる
 
 # 画像について
+
 - **MUST** ファイルを指定するときに、Windowsの形式のパスはubuntuのマウントディレクトリのパスに変換してください
   - 例: "C:\Users\user1\Pictures\test.jpg" を "/mnt/c/user1/Pictures/test.jpg" へ変換
 

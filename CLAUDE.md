@@ -37,6 +37,7 @@ bun run src/index.ts list --verbose     # List symlinks with status
 The application follows a modular architecture with clear separation between CLI commands, core business logic, and utilities. All modules use ESM imports and are strongly typed with TypeScript.
 
 ### Command Flow
+
 1. **CLI Entry** (`src/index.ts`) → Parses command using Gunshi CLI framework
 2. **Command Handler** (`src/commands/*.ts`) → Orchestrates core modules
 3. **Core Modules** (`src/core/*.ts`) → Executes business logic
@@ -47,7 +48,7 @@ The application follows a modular architecture with clear separation between CLI
 - **ConfigManager**: Loads and validates `config/dotfiles.json`. Handles default fallbacks and configuration schema validation.
 - **SymlinkManager**: Creates symlinks with support for three mapping types:
   - `file`: Direct file-to-file symlink
-  - `directory`: Entire directory symlink  
+  - `directory`: Entire directory symlink
   - `selective`: Cherry-pick specific files from a directory with optional permissions
 - **BackupManager**: Creates timestamped backups (format: `YYYY-MM-DDTHH-MM-SS`) in `~/.dotfiles_backup`. Manages retention policy (keepLast setting).
 - **MCPMerger**: Merges `mcpServers` configuration from `claude/dot_claude.json` to `~/.claude.json`. Prevents duplicate entries and handles backup creation.
@@ -55,8 +56,9 @@ The application follows a modular architecture with clear separation between CLI
 ### Configuration Structure (`config/dotfiles.json`)
 
 The main configuration file uses three types of mappings:
+
 - **file**: Single file symlink (`"type": "file"`)
-- **directory**: Entire directory symlink (`"type": "directory"`)  
+- **directory**: Entire directory symlink (`"type": "directory"`)
 - **selective**: Specific files from a directory (`"type": "selective"` with `"include": []` array and optional `"permissions": {}`)
 
 MCP configuration merging is handled separately via the `mcp` key, which specifies source/target files and the merge key (`mcpServers`).
@@ -64,27 +66,35 @@ MCP configuration merging is handled separately via the `mcp` key, which specifi
 ## Key Implementation Notes
 
 ### Binary Execution
+
 The `bin/` directory contains executable wrappers that import the TypeScript source directly:
+
 ```bash
 #!/usr/bin/env bun
 import "../src/index.ts";
 ```
+
 These are symlinked to `~/.local/bin/` for global access.
 
 ### Testing Strategy
+
 - Tests use temporary directories created with `mkdtemp` for isolation
 - Each test cleans up its temporary files
 - Mock filesystem operations are avoided in favor of real file operations in temp directories
 
 ### Error Handling Pattern
+
 Commands use consistent error handling with colored output:
+
 - Success: Green checkmarks with `chalk.green`
 - Warnings: Yellow warnings with `chalk.yellow`
 - Errors: Red errors with `chalk.red`
 - Verbose mode provides detailed operation logs
 
 ### MCP Server Merging
+
 The MCPMerger handles special logic for `.claude.json`:
+
 1. Reads existing target file or creates new one
 2. Merges `mcpServers` arrays, preventing duplicates
 3. Creates backup before modifying target

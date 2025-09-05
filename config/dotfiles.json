@@ -24,15 +24,16 @@
       "source": "./claude/.claude",
       "target": "~/.claude",
       "type": "selective",
-      "include": ["agents", "commands", "CLAUDE.md", "settings.json", "statusline.sh"],
+      "include": [
+        "agents",
+        "commands",
+        "CLAUDE.md",
+        "settings.json",
+        "statusline.sh"
+      ],
       "permissions": {
         "statusline.sh": "755"
       }
-    },
-    {
-      "source": "./config/fish",
-      "target": "~/.config/fish",
-      "type": "directory"
     },
     {
       "source": "./config/git",

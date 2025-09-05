@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, jest, spyOn } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+  spyOn,
+} from "bun:test";
 import { createLogger } from "../../src/utils/logger";
 
 const FIRST_CALL_INDEX = 0;
@@ -19,7 +27,8 @@ describe("createLogger", () => {
     logger.info("test message");
 
     expect(console.log).toHaveBeenCalled();
-    const call = (console.log as unknown as { mock: { calls: string[][] } }).mock.calls[FIRST_CALL_INDEX];
+    const call = (console.log as unknown as { mock: { calls: string[][] } })
+      .mock.calls[FIRST_CALL_INDEX];
     expect(call.join(" ")).toContain("test message");
   });
 
@@ -28,7 +37,8 @@ describe("createLogger", () => {
     logger.info("test message");
 
     expect(console.log).toHaveBeenCalled();
-    const call = (console.log as unknown as { mock: { calls: string[][] } }).mock.calls[FIRST_CALL_INDEX];
+    const call = (console.log as unknown as { mock: { calls: string[][] } })
+      .mock.calls[FIRST_CALL_INDEX];
     expect(call.join(" ")).toContain("[DRY RUN]");
     expect(call.join(" ")).toContain("test message");
   });
@@ -48,7 +58,8 @@ describe("createLogger", () => {
     logger.error("error message");
 
     expect(console.error).toHaveBeenCalled();
-    const call = (console.error as unknown as { mock: { calls: string[][] } }).mock.calls[FIRST_CALL_INDEX];
+    const call = (console.error as unknown as { mock: { calls: string[][] } })
+      .mock.calls[FIRST_CALL_INDEX];
     expect(call.join(" ")).toContain("error message");
   });
 
@@ -57,7 +68,8 @@ describe("createLogger", () => {
     logger.warn("warning message");
 
     expect(console.warn).toHaveBeenCalled();
-    const call = (console.warn as unknown as { mock: { calls: string[][] } }).mock.calls[FIRST_CALL_INDEX];
+    const call = (console.warn as unknown as { mock: { calls: string[][] } })
+      .mock.calls[FIRST_CALL_INDEX];
     expect(call.join(" ")).toContain("warning message");
   });
 
@@ -66,7 +78,8 @@ describe("createLogger", () => {
     logger.action("Creating", "file.txt");
 
     expect(console.log).toHaveBeenCalled();
-    const call = (console.log as unknown as { mock: { calls: string[][] } }).mock.calls[FIRST_CALL_INDEX];
+    const call = (console.log as unknown as { mock: { calls: string[][] } })
+      .mock.calls[FIRST_CALL_INDEX];
     expect(call.join(" ")).toContain("[DRY RUN]");
     expect(call.join(" ")).toContain("Creating");
     expect(call.join(" ")).toContain("file.txt");

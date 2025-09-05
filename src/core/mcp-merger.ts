@@ -6,17 +6,21 @@ import { Logger } from "../utils/logger";
 import { expandPath } from "../utils/paths";
 
 export const createMCPMerger = (logger: Logger, config: MCPConfig) => {
-  const getExistingBackups = async (backupDir: string, filename: string): Promise<string[]> => {
+  const getExistingBackups = async (
+    backupDir: string,
+    filename: string,
+  ): Promise<string[]> => {
     if (!(await fileExists(backupDir))) {
       return [];
     }
 
     try {
       const files = await readdir(backupDir);
-      const prefix = "target.json" === filename ? ".claude.json." : `${filename}.`;
+      const prefix =
+        "target.json" === filename ? ".claude.json." : `${filename}.`;
       return files
-        .filter(file => file.startsWith(prefix))
-        .map(file => join(backupDir, file))
+        .filter((file) => file.startsWith(prefix))
+        .map((file) => join(backupDir, file))
         .sort()
         .reverse(); // Most recent first
     } catch {
@@ -77,12 +81,12 @@ export const createMCPMerger = (logger: Logger, config: MCPConfig) => {
 
     if (!(await fileExists(targetFile))) {
       logger.debug("No MCP target file to backup");
-      return ;
+      return;
     }
 
     if (!config.backupDir) {
       logger.warn("No backup directory configured");
-      return ;
+      return;
     }
 
     const backupDir = expandPath(config.backupDir);
@@ -91,7 +95,10 @@ export const createMCPMerger = (logger: Logger, config: MCPConfig) => {
     const timestamp = Date.now();
     const filename = basename(targetFile);
     // For .claude.json files, use the dot-prefixed format
-    const backupFilename = "target.json" === filename ? `.claude.json.${timestamp}` : `${filename}.${timestamp}`;
+    const backupFilename =
+      "target.json" === filename
+        ? `.claude.json.${timestamp}`
+        : `${filename}.${timestamp}`;
     const backupPath = join(backupDir, backupFilename);
 
     // Check if backup already exists (within a second)

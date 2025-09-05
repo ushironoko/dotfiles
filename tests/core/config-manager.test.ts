@@ -59,7 +59,9 @@ describe("ConfigManager", () => {
     await writeFile(configPath, JSON.stringify(invalidConfig));
 
     const manager = createConfigManager(configPath);
-    await expect(manager.load()).rejects.toThrow("Invalid config: mappings must be an array");
+    await expect(manager.load()).rejects.toThrow(
+      "Invalid config: mappings must be an array",
+    );
   });
 
   it("should throw error for missing required fields", async () => {
@@ -79,7 +81,9 @@ describe("ConfigManager", () => {
     await writeFile(configPath, JSON.stringify(invalidConfig));
 
     const manager = createConfigManager(configPath);
-    await expect(manager.load()).rejects.toThrow("Invalid mapping: source and target are required");
+    await expect(manager.load()).rejects.toThrow(
+      "Invalid mapping: source and target are required",
+    );
   });
 
   it("should expand paths correctly", async () => {
