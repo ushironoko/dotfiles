@@ -141,6 +141,9 @@ shopt -s no_empty_cmd_completion  # Don't tab-complete on empty line
 
 export PATH=$PATH:'/mnt/c/Users/ushironoko/AppData/Local/Programs/Microsoft VS Code/bin'
 
+# Add local bin to PATH
+export PATH="$HOME/.local/bin:$PATH"
+
 #more alias
 alias ..="cd .."
 alias ...="cd ../.."
