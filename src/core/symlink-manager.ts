@@ -92,6 +92,9 @@ export const createSymlinkManager = (logger: Logger) => {
 
     const { dryRun = false, force = false } = options;
 
+    logger.info(`Processing selective symlinks for ${mapping.target}`);
+    logger.debug(`  Files to link: ${items.join(", ")}`);
+
     for (const item of items) {
       const sourcePath = join(mapping.source, item);
       const targetPath = join(mapping.target, item);
