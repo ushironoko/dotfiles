@@ -1,8 +1,8 @@
 import { mkdir, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { ConfigManager } from "@/core/config-manager";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ConfigManager } from "../../src/core/config-manager";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 
 const SINGLE_MAPPING = 1;
 const FIRST_MAPPING_INDEX = 0;
@@ -102,7 +102,8 @@ describe("ConfigManager", () => {
     await manager.load();
 
     const mappings = manager.getMappings();
-    expect(mappings[FIRST_MAPPING_INDEX].target).toContain("/home/");
+    const homeDir = process.env.HOME || "";
+    expect(mappings[FIRST_MAPPING_INDEX].target).toBe(`${homeDir}/.bashrc`);
     expect(mappings[FIRST_MAPPING_INDEX].target).not.toContain("~");
   });
 });

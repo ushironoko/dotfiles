@@ -1,7 +1,7 @@
 import { homedir } from "os";
 import { dirname } from "path";
-import { describe, expect, it } from "vitest";
-import { ensureParentDir, expandPath, getRelativePath } from "@/utils/paths";
+import { describe, expect, it } from "bun:test";
+import { ensureParentDir, expandPath, getRelativePath } from "../../src/utils/paths";
 
 describe("paths utilities", () => {
   describe("expandPath", () => {

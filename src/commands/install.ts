@@ -1,10 +1,10 @@
 import { define } from "gunshi";
-import { BackupManager } from "@/core/backup-manager";
-import { ConfigManager } from "@/core/config-manager";
-import { MCPMerger } from "@/core/mcp-merger";
-import { SymlinkManager } from "@/core/symlink-manager";
-import { fileExists, isSymlink } from "@/utils/fs";
-import { Logger } from "@/utils/logger";
+import { BackupManager } from "../core/backup-manager";
+import { ConfigManager } from "../core/config-manager";
+import { MCPMerger } from "../core/mcp-merger";
+import { SymlinkManager } from "../core/symlink-manager";
+import { fileExists, isSymlink } from "../utils/fs";
+import { Logger } from "../utils/logger";
 
 const NO_PATHS_TO_BACKUP = 0;
 const EXIT_FAILURE = 1;

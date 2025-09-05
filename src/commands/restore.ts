@@ -1,8 +1,8 @@
 import { createInterface } from "readline";
 import { define } from "gunshi";
-import { BackupManager } from "@/core/backup-manager";
-import { ConfigManager } from "@/core/config-manager";
-import { Logger } from "@/utils/logger";
+import { BackupManager } from "../core/backup-manager";
+import { ConfigManager } from "../core/config-manager";
+import { Logger } from "../utils/logger";
 
 const NO_BACKUPS_FOUND = 0;
 const EXIT_FAILURE = 1;

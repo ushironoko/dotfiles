@@ -1,15 +1,15 @@
 import { chmod, lstat, readlink } from "fs/promises";
 import { join, resolve, dirname } from "path";
-import { FileMapping, SymlinkOptions, SymlinkStatus } from "@/types/config";
+import { FileMapping, SymlinkOptions, SymlinkStatus } from "../types/config";
 import { 
   fileExists,
   createSymlink as fsCreateSymlink,
   removeSymlink as fsRemoveSymlink,
   isSymlink,
   removeRecursive
-} from "@/utils/fs";
-import { Logger } from "@/utils/logger";
-import { expandPath } from "@/utils/paths";
+} from "../utils/fs";
+import { Logger } from "../utils/logger";
+import { expandPath } from "../utils/paths";
 
 export class SymlinkManager {
   private logger: Logger;

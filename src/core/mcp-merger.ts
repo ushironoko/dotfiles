@@ -1,9 +1,9 @@
 import { readFile, writeFile } from "fs/promises";
 import { basename, join } from "path";
-import { MCPConfig } from "@/types/config";
-import { fileExists, ensureDir } from "@/utils/fs";
-import { Logger } from "@/utils/logger";
-import { expandPath } from "@/utils/paths";
+import { MCPConfig } from "../types/config";
+import { fileExists, ensureDir } from "../utils/fs";
+import { Logger } from "../utils/logger";
+import { expandPath } from "../utils/paths";
 
 export class MCPMerger {
   private logger: Logger;

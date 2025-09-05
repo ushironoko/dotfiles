@@ -1,17 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Logger } from "@/utils/logger";
+import { afterEach, beforeEach, describe, expect, it, jest, spyOn } from "bun:test";
+import { Logger } from "../../src/utils/logger";
 
 const FIRST_CALL_INDEX = 0;
 
 describe("Logger", () => {
   beforeEach(() => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+    spyOn(console, "log").mockImplementation(() => {});
+    spyOn(console, "error").mockImplementation(() => {});
+    spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    jest.restoreAllMocks();
   });
 
   it("should log info messages", () => {

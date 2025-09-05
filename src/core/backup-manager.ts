@@ -1,14 +1,14 @@
 import { readdir } from "fs/promises";
 import { join, dirname } from "path";
-import { BackupConfig, BackupInfo } from "@/types/config";
+import { BackupConfig, BackupInfo } from "../types/config";
 import { 
   copyRecursive,
   ensureDir,
   fileExists, 
   removeRecursive 
-} from "@/utils/fs";
-import { Logger } from "@/utils/logger";
-import { expandPath, getRelativePath } from "@/utils/paths";
+} from "../utils/fs";
+import { Logger } from "../utils/logger";
+import { expandPath, getRelativePath } from "../utils/paths";
 
 const SLICE_START = 0;
 const TIMESTAMP_LENGTH = 19;

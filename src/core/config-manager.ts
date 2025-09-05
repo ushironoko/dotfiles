@@ -1,7 +1,7 @@
 import { readFile } from "fs/promises";
-import { BackupConfig, DotfilesConfig, FileMapping, MCPConfig } from "@/types/config";
-import { expandPath } from "@/utils/paths";
-import { fileExists } from "@/utils/fs";
+import { BackupConfig, DotfilesConfig, FileMapping, MCPConfig } from "../types/config";
+import { expandPath } from "../utils/paths";
+import { fileExists } from "../utils/fs";
 
 export class ConfigManager {
   private config: DotfilesConfig | undefined;

@@ -8,11 +8,11 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "bun build src/index.ts --outdir=dist --target=bun",
-    "test": "vitest run",
+    "test": "bun test",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
-    "typecheck": "tsc --noEmit",
-    "prepare": "bun run lint && bun run typecheck && bun run test",
+    "typecheck": "tsgo --noEmit",
+    "prepare": "bun run lint && bun run typecheck && bun test",
     "install:local": "bun link"
   },
   "dependencies": {
@@ -22,8 +22,7 @@
   "devDependencies": {
     "@types/bun": "1.2.2",
     "@types/node": "22.10.6",
-    "oxlint": "0.15.2",
-    "typescript": "5.7.3",
-    "vitest": "3.2.4"
+    "@typescript/native-preview": "^7.0.0-dev.20250904.1",
+    "oxlint": "0.15.2"
   }
 }

@@ -1,10 +1,10 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { promises as fs } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { MCPMerger } from "@/core/mcp-merger";
-import { Logger } from "@/utils/logger";
-import { fileExists } from "@/utils/fs";
+import { MCPMerger } from "../../src/core/mcp-merger";
+import { Logger } from "../../src/utils/logger";
+import { fileExists } from "../../src/utils/fs";
 
 describe("MCPMerger", () => {
   let testDir: string;
@@ -135,7 +135,8 @@ describe("MCPMerger", () => {
       await fs.writeFile(join(testDir, "source.json"), "{ invalid json }");
       await fs.writeFile(join(testDir, "target.json"), "{}");
       
-      await expect(merger.merge()).resolves.not.toThrow();
+      const result = await merger.merge();
+      expect(result).toBeUndefined();
     });
 
     it("should handle dry run mode", async () => {

@@ -1,10 +1,10 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { promises as fs } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { BackupManager } from "@/core/backup-manager";
-import { Logger } from "@/utils/logger";
-import { fileExists } from "@/utils/fs";
+import { BackupManager } from "../../src/core/backup-manager";
+import { Logger } from "../../src/utils/logger";
+import { fileExists } from "../../src/utils/fs";
 
 describe("BackupManager", () => {
   let testDir: string;

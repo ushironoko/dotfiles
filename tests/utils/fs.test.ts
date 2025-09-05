@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { promises as fs } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -9,7 +9,7 @@ import {
   removeRecursive,
   isSymlink,
   readDir,
-} from "@/utils/fs";
+} from "../../src/utils/fs";
 
 describe("fs utilities", () => {
   let testDir: string;
@@ -51,7 +51,8 @@ describe("fs utilities", () => {
     it("should not throw if directory already exists", async () => {
       const newDir = join(testDir, "existing-dir");
       await fs.mkdir(newDir);
-      await expect(ensureDir(newDir)).resolves.not.toThrow();
+      await ensureDir(newDir);
+      expect(await fileExists(newDir)).toBe(true);
     });
 
     it("should create nested directories", async () => {
@@ -118,7 +119,8 @@ describe("fs utilities", () => {
 
     it("should not throw for non-existent path", async () => {
       const nonExistentPath = join(testDir, "non-existent");
-      await expect(removeRecursive(nonExistentPath)).resolves.not.toThrow();
+      await removeRecursive(nonExistentPath);
+      expect(await fileExists(nonExistentPath)).toBe(false);
     });
   });
 

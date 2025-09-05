@@ -13,11 +13,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "types": ["bun-types", "node"],
-    "paths": {
-      "@/*": ["./src/*"]
-    },
-    "rootDir": ".",
-    "baseUrl": "."
+    "rootDir": "."
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "bin/**/*.ts"],
   "exclude": ["node_modules", "dist"]

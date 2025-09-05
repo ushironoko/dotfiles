@@ -1,9 +1,9 @@
 import chalk from "chalk";
 import { define } from "gunshi";
-import { ConfigManager } from "@/core/config-manager";
-import { fileExists, isSymlink } from "@/utils/fs";
-import { Logger } from "@/utils/logger";
-import { expandPath } from "@/utils/paths";
+import { ConfigManager } from "../core/config-manager";
+import { fileExists, isSymlink } from "../utils/fs";
+import { Logger } from "../utils/logger";
+import { expandPath } from "../utils/paths";
 
 const EXIT_FAILURE = 1;
 
