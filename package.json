@@ -12,6 +12,7 @@
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "typecheck": "tsc --noEmit",
+    "prepare": "bun run lint && bun run typecheck && bun run test",
     "install:local": "bun link"
   },
   "dependencies": {
