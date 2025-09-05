@@ -4,16 +4,34 @@
 # This script creates symbolic links from the home directory to the dotfiles repository
 
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKUP_DIR="$HOME/.dotfiles_backup/$(date +%Y%m%d_%H%M%S)"
 
 echo "Installing dotfiles from $DOTFILES_DIR..."
 
-# Function to create symlink
+# Create backup directory
+if [ ! -d "$BACKUP_DIR" ]; then
+    mkdir -p "$BACKUP_DIR"
+    echo "Created backup directory: $BACKUP_DIR"
+fi
+
+# Function to create symlink with backup
 create_symlink() {
     local source="$1"
     local target="$2"
     
     # Create parent directory if it doesn't exist
     mkdir -p "$(dirname "$target")"
+    
+    # Backup existing file/directory if it exists and is not a symlink
+    if [ -e "$target" ] && [ ! -L "$target" ]; then
+        echo "Backing up existing $target to $BACKUP_DIR"
+        # Calculate relative path from HOME for backup structure
+        local relative_path="${target#$HOME/}"
+        local backup_path="$BACKUP_DIR/$relative_path"
+        mkdir -p "$(dirname "$backup_path")"
+        cp -r "$target" "$backup_path"
+        echo "  Backed up to $backup_path"
+    fi
     
     # Remove existing file/directory if it exists
     if [ -e "$target" ] || [ -L "$target" ]; then
