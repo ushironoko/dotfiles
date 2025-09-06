@@ -1,66 +1,213 @@
-# Development Workflow
+# PROJECT CONTEXT
 
-- When proceeding with development, the following workflow must be adhered to:
-  - Task List Creation
-    - Always break down goals into issues, create task lists based on them, prioritize, and tackle them accordingly
-- Follow Test-Driven Development as recommended by t_wada
-  - Run tests, and when tests pass, execute lint, format, and type check for static analysis
-  - When all tests and static analysis pass, commit to git in meaningful units
-- When a task list item is completed, check it off the list and update it, then proceed to the next task
-- Use subagents for specific tasks
-  - Use test subagent for creating and running unit tests
-  - Use git subagent for git operations
-  - Use benchmark subagent for running benchmarks
-  - Use similarity subagent for refactoring
+## Language & Runtime
+- **Language**: TypeScript (ESM modules only)
+- **Runtime**: Node.js / Bun
+- **Package Manager**: Detected by lock file (pnpm/bun)
 
-# Coding Guidelines
+## Testing & Quality
+- **Test Framework**: Vitest
+- **Linter/Formatter**: BiomeJS (default settings)
+- **Type Checker**: tsc
 
-- For TypeScript projects, the following rules must be adhered to:
-  - Use pnpm as the package management tool
-  - Always install npm modules with specific version numbers for the latest version
-    - Avoid notations like `module@latest` or `module@^5.0.0`, and explicitly specify like `module@5.5.1`
-    - Avoid PreRelease versions and select stable versions
-  - Minimize reliance on npm modules; use language features when possible
-    - For example, for use cases that can be covered by language features like lodash's `values`, use language features as much as possible
-  - Use ESM for module resolution, not CommonJS module resolution
-  - Prohibit `Class`; prioritize functional programming as much as possible
-  - Prohibit creation of `.d.ts` files
-    - When global types need to be exposed, create a type definition .ts file without module import/export and use `declare global`
-    - Generally rely on file scope and module resolution for type definitions, avoiding global type definitions
-  - Use `biomejs/biome` for linting
-    - Read the documentation carefully and avoid customizing rules; use default settings as much as possible
-    - When linting, write a `lint` script in npm scripts and execute that npm script
-  - Use `biomejs/biome` for formatting
-    - Read the documentation carefully and avoid customizing rules; use default settings as much as possible
-    - When formatting, write a `format` script in npm scripts and execute that npm script
-    - Always use 2 spaces for indentation
-    - Prioritize double quotes
-    - Use semicolons without relying on automatic semicolon insertion
-  - Use vitest for testing
-    - Test files should be created at the same level as the module file being tested, with the naming convention filename.test.ts
-    - When testing, write a `test` script in npm scripts and execute that npm script
-  - Use tsc for type checking
-    - When type checking, write a `tsc` script in npm scripts and execute that npm script
-  - Use Node.js as the runtime environment
-    - When Node.js version reference is needed, refer to the `.node-version` file created by the user in the project root and follow it
-  - When directly executing TypeScript files, use Node.js features like `node index.ts`
-    - If execution fails, use `privatenumber/tsx` for execution
-  - Error Handling
-    - Write asynchronous operations with await/catch pattern and always handle exceptions in catch clauses
-    - Write synchronous operations with try/catch pattern, handle errors in catch clauses as much as possible, and complete user feedback
-      - If exceptions cannot be handled on the spot, they may be thrown, but always propagate error information using the cause option of Error instances
-      - Meaninglessly suppressing error information is prohibited
-- For project structure, the following rules must be adhered to:
-  - Only allow creation of various configuration files, `src` directory, `scripts` directory, `lib` directory, `bin` directory, `docs` directory, `templates` directory, and `tests` directory in the project root
-  - Under the src directory, you may freely create a directory structure suitable for the project
-  - When the project supports monorepo, a `packages` directory can be created instead of the `src` directory
+## Architecture Principles
+- Functional programming (NO classes)
+- File-scoped types (NO .d.ts files)
+- Language features over libraries
 
-# About Images
+---
 
-- **MUST** When specifying files, convert Windows-format paths to Ubuntu mount directory paths
-  - Example: Convert "C:\Users\user1\Pictures\test.jpg" to "/mnt/c/user1/Pictures/test.jpg"
+# MUST: Critical Constraints
 
-# Prohibitions
+## Absolute Requirements
+- **ALWAYS** check for lock files and use the appropriate package manager:
+  - If `pnpm-lock.yaml` exists → use `pnpm`
+  - If `bun.lockb` exists → use `bun`
+  - For new projects → prefer `pnpm`
+- **ALWAYS** specify exact versions: `module@5.5.1` (NOT `^5.0.0` or `@latest`)
+- **ALWAYS** handle errors with try/catch or await/catch
+- **ALWAYS** use ESM imports (NO CommonJS)
+- **NEVER** use classes - use functions and objects
+- **NEVER** create `.d.ts` files
+- **NEVER** suppress errors without handling
 
-- When deleting files or directories, do not execute without permission. Always ask for permission
-- Do not edit content within blocks starting with `###readonly` and ending with `###readonlyend` that exist in CLAUDE.md. Only read them as instructions for the user's project
+## Before ANY Commit
+**ALWAYS**
+
+```bash
+# Required checks (in order):
+1. bun run format    # Code formatted
+2. bun run lint      # No lint errors
+3. bun run typecheck # No type errors
+4. bun test          # All tests must pass
+```
+
+## Permission Required
+- **ASK** before deleting files or directories
+- **ASK** before major architectural changes
+- **PRESERVE** content between `###readonly` and `###readonlyend` markers
+
+---
+
+# SHOULD: Best Practices
+
+## Development Workflow
+
+### Task Management
+1. **Create task list** - Break down goals into actionable items
+2. **Prioritize** - Order by importance and dependencies
+3. **Track progress** - Update status after each completion
+4. **Use subagents** when applicable:
+   - `git` → Git operations
+   - `benchmark` → Performance testing
+   - `similarity` → Refactoring
+
+### Test-Driven Development (TDD)
+```bash
+# Follow t_wada's TDD cycle:
+1. Write failing test
+2. Make it pass (minimal code)
+3. Refactor (keep tests green)
+4. Run quality checks
+5. Commit
+```
+
+## Code Style
+
+### TypeScript Conventions
+- **Prefer** built-in language features over libraries
+- **Use** async/await over callbacks/promises
+- **Export** named exports over default exports
+- **Type** everything explicitly (avoid `any`)
+
+### File Organization
+```
+project-root/
+├── src/          # Source code
+├── tests/        # Test files (*.test.ts)
+├── scripts/      # Build/utility scripts
+├── lib/          # Compiled output
+├── bin/          # Executables
+└── docs/         # Documentation
+```
+
+### Error Handling Pattern
+```typescript
+// Async operations
+try {
+  const result = await operation();
+} catch (error) {
+  // Handle with context
+  throw new Error('Operation failed', { cause: error });
+}
+
+// Sync operations
+try {
+  performAction();
+} catch (error) {
+  console.error('Action failed:', error);
+  // Provide user feedback
+}
+```
+
+---
+
+# WORKFLOWS
+
+## Starting New Task
+```bash
+# 1. Understand requirements
+# 2. Create task list
+# 3. Set up test file
+# 4. Implement with TDD
+# 5. Run quality checks
+```
+
+## Installing Dependencies
+```bash
+# Detect package manager from lock file
+# If pnpm-lock.yaml exists:
+pnpm info <package>
+pnpm add <package>@1.2.3
+
+# If bun.lockb exists:
+bun info <package>
+bun add <package>@1.2.3
+
+# Always use exact versions
+# Avoid pre-release versions
+```
+
+## Running Quality Checks
+```bash
+# Individual checks
+bun test                    # Run tests
+bun run lint               # Check code style
+bun run format             # Format code
+bun run typecheck          # Check types
+
+# Pre-commit check (all-in-one)
+bun run prepare
+```
+
+---
+
+# TOOLS CONFIGURATION
+
+## Package.json Scripts
+```json
+{
+  "scripts": {
+    "test": "vitest",
+    "lint": "biome check",
+    "format": "biome format --write",
+    "typecheck": "tsc --noEmit",
+    "prepare": "bun run format && bun run lint && bun run typecheck && bun test"
+  }
+}
+```
+
+## BiomeJS Settings
+- **Indentation**: 2 spaces
+- **Quotes**: Double quotes
+- **Semicolons**: Always
+- **Config**: Use defaults (minimal customization)
+
+## Vitest Configuration
+- **Test files**: `*.test.ts` (same directory as source)
+- **Coverage**: Optional but recommended
+- **Watch mode**: Use for TDD
+
+## TypeScript Configuration
+- **Module**: ESNext
+- **Target**: Based on Node.js version in `.node-version`
+- **Strict**: true
+- **No emit**: For type checking only
+
+---
+
+# SPECIAL CASES
+
+## Windows Path Conversion
+When handling file paths from Windows:
+```bash
+# Convert Windows path
+"C:\Users\user1\Pictures\test.jpg"
+# To WSL/Ubuntu mount path
+"/mnt/c/Users/user1/Pictures/test.jpg"
+```
+
+## Monorepo Support
+For monorepo projects:
+- Use `packages/` instead of `src/`
+- Configure workspaces (pnpm-workspace.yaml or bun workspace)
+- Share configs at root level
+
+## Direct TypeScript Execution
+```bash
+# Try Bun runtime first
+bun --bun index.ts
+
+# If fails, use tsx
+pnpm dlx tsx index.ts
+```
