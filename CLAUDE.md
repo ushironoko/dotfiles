@@ -96,12 +96,12 @@ Commands use consistent error handling with colored output:
 
 ### MCP Server Merging
 
-The MCPMerger handles special logic for `.claude.json`:
+The MCPMerger handles special logic for `.claude.json` using `defu` for deep object merging:
 
 1. Reads existing target file or creates new one
-2. Merges `mcpServers` arrays, preventing duplicates
+2. Uses `defu` to deeply merge `mcpServers` arrays, preventing duplicates through custom array merging logic
 3. Creates backup before modifying target
-4. Preserves all other keys in target file (API keys, settings)
+4. Preserves all other keys in target file (API keys, settings) through `defu`'s non-destructive merge behavior
 
 ## Research and Documentation
 
