@@ -1,8 +1,98 @@
+# User information
 [user]
 	name = ushironoko
 	email = apple19940820@gmail.com
+
+# Core settings
 [core]
 	editor = vim
+	# Use ~/.config/git/ignore for global gitignore (Git default location)
+	excludesfile = ~/.config/git/ignore
+
+# GitHub credential helper
 [credential "https://github.com"]
 	helper = 
 	helper = !/usr/bin/gh auth git-credential
+
+# ============================================================
+# Git Core Developers' Recommended Settings
+# Based on: https://blog.gitbutler.com/how-git-core-devs-configure-git
+# ============================================================
+
+# --- Clearly Makes Git Better ---
+
+# Better list display
+[column]
+	ui = auto                    # Display lists in column format
+
+# Better branch listing
+[branch]
+	sort = -committerdate        # Sort branches by most recent commit (not alphabetical)
+
+# Better tag listing
+[tag]
+	sort = version:refname       # Sort tags as version numbers (0.5.101 before 0.5.1000)
+
+# Default branch name for new repositories
+[init]
+	defaultBranch = main         # Set default branch name (avoids warning on git init)
+
+# Better diff
+[diff]
+	algorithm = histogram        # More intelligent diff algorithm than myers (1986)
+	colorMoved = plain          # Highlight moved code in different colors
+	mnemonicPrefix = true       # Use i/ (index), w/ (working) instead of a/b in headers
+	renames = true              # Detect file renames
+
+# Better push
+[push]
+	default = simple            # Default since Git 2.0
+	autoSetupRemote = true      # Auto set upstream (no more --set-upstream needed!)
+	followTags = true           # Push annotated tags along with commits
+
+# Better fetch
+[fetch]
+	prune = true               # Remove local refs for deleted remote branches
+	pruneTags = true           # Remove local tags for deleted remote tags
+	all = true                 # Fetch from all remotes
+
+# --- Why the Hell Not? ---
+
+# Command typo correction
+[help]
+	autocorrect = prompt       # Suggest correct command on typos
+
+# Verbose commits
+[commit]
+	verbose = true            # Show diff in commit message editor
+
+# Reuse recorded resolution
+[rerere]
+	enabled = true            # Record conflict resolutions
+	autoupdate = true         # Automatically apply recorded resolutions
+
+# Better rebase
+[rebase]
+	autoSquash = true         # Auto process fixup! and squash! commits
+	autoStash = true          # Auto stash before rebase
+	updateRefs = true         # Move stacked refs together
+
+# ============================================================
+# Optional Settings (uncomment to enable)
+# ============================================================
+
+# --- A Matter of Taste ---
+
+# Better merge conflicts (shows common ancestor)
+# [merge]
+# 	conflictstyle = zdiff3    # For Git 2.35+
+# 	# conflictstyle = diff3    # For Git < 2.35
+
+# Prefer rebase over merge for pull
+# [pull]
+# 	rebase = true            # Use rebase instead of merge on pull
+
+# File system monitoring (for large repos)
+# [core]
+# 	fsmonitor = true         # Monitor file changes (speeds up git status)
+# 	untrackedCache = true    # Cache untracked files

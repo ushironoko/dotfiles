@@ -1,1 +1,33 @@
+# ============================================================
+# Global Git Ignore Patterns
+# Location: ~/.config/git/ignore (Git default location)
+# ============================================================
+
+# --- Claude ---
 **/.claude/settings.local.json
+
+# --- macOS ---
+.DS_Store
+
+# VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+.history/
+*.vsix
+
+# --- Environment ---
+.env
+.env.local
+.env.*.local
+.envrc
+
+# --- Backup files ---
+*.bak
+*.backup
+
+# --- Node.js ---
+node_modules/
