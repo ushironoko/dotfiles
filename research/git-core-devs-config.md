@@ -15,6 +15,7 @@ Git コア開発者たちが実際に使用している Git 設定と、デフ�
 これらの設定はデメリットがほぼなく、Git の使い勝手を明確に向上させる。
 
 #### ブランチ表示の改善
+
 ```ini
 [column]
     ui = auto                    # カラム形式で表示
@@ -23,18 +24,21 @@ Git コア開発者たちが実際に使用している Git 設定と、デフ�
 ```
 
 #### タグ表示の改善
+
 ```ini
 [tag]
     sort = version:refname       # バージョン番号として適切にソート（0.5.101 が 0.5.1000 の前に来る）
 ```
 
 #### デフォルトブランチ名
+
 ```ini
 [init]
     defaultBranch = main         # 新規リポジトリのデフォルトブランチ名
 ```
 
 #### より良い diff
+
 ```ini
 [diff]
     algorithm = histogram        # Myers (1986年) より新しく賢いアルゴリズム
@@ -44,6 +48,7 @@ Git コア開発者たちが実際に使用している Git 設定と、デフ�
 ```
 
 #### より良い push
+
 ```ini
 [push]
     default = simple            # Git 2.0 以降のデフォルト
@@ -52,6 +57,7 @@ Git コア開発者たちが実際に使用している Git 設定と、デフ�
 ```
 
 #### より良い fetch
+
 ```ini
 [fetch]
     prune = true               # サーバーから削除されたブランチをローカルでも削除
@@ -64,18 +70,21 @@ Git コア開発者たちが実際に使用している Git 設定と、デフ�
 害はなく、時々役立つ設定。
 
 #### 自動修正プロンプト
+
 ```ini
 [help]
     autocorrect = prompt       # タイプミスしたコマンドを推測して実行を提案
 ```
 
 #### コミット時に diff を表示
+
 ```ini
 [commit]
     verbose = true            # コミットメッセージ作成時に diff を表示
 ```
 
 #### 競合解決の再利用
+
 ```ini
 [rerere]
     enabled = true            # 解決済みの競合を記録
@@ -83,12 +92,14 @@ Git コア開発者たちが実際に使用している Git 設定と、デフ�
 ```
 
 #### グローバル ignore ファイル
+
 ```ini
 [core]
     excludesfile = ~/.gitignore  # グローバルな .gitignore
 ```
 
 #### より良い rebase
+
 ```ini
 [rebase]
     autoSquash = true         # fixup! や squash! コミットを自動的に処理
@@ -101,6 +112,7 @@ Git コア開発者たちが実際に使用している Git 設定と、デフ�
 人によって好みが分かれる設定。
 
 #### マージ競合の表示方法
+
 ```ini
 [merge]
     conflictstyle = zdiff3    # 競合マーカーにベース（共通祖先）も表示
@@ -108,12 +120,14 @@ Git コア開発者たちが実際に使用している Git 設定と、デフ�
 ```
 
 #### pull の動作
+
 ```ini
 [pull]
     rebase = true            # pull 時に merge ではなく rebase を使用
 ```
 
 #### ファイルシステムモニター（大規模リポジトリ向け）
+
 ```ini
 [core]
     fsmonitor = true         # ファイル変更を監視（git status を高速化）

@@ -31,6 +31,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path | select(endswith(\".js\") or endswith(\".ts\"))' | ~/.claude/hooks/pre_tool_use/coding_cycle.sh",
+            "timeout": 10
+          }
+        ]
       }
     ]
   },
