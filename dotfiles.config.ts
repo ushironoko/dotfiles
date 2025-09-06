@@ -57,16 +57,6 @@ export default defineConfig({
       target: "~/.local/bin/dotfiles",
       type: "file",
     },
-    {
-      source: "./bin/dotfiles-install",
-      target: "~/.local/bin/dotfiles-install",
-      type: "file",
-    },
-    {
-      source: "./bin/dotfiles-restore",
-      target: "~/.local/bin/dotfiles-restore",
-      type: "file",
-    },
   ],
   backup: {
     directory: "~/.dotfiles_backup",

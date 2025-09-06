@@ -1,5 +1,0 @@
-#!/usr/bin/env bun
-import "../src/index.ts";
-
-// Pass restore command directly
-process.argv.splice(2, 0, "restore");
