@@ -11,7 +11,7 @@ import {
 import { Logger } from "../utils/logger";
 import { expandPath } from "../utils/paths";
 
-// ファクトリー関数：SymlinkManagerを作成
+// SymlinkManagerを作成
 export const createSymlinkManager = (logger: Logger) => {
   const createSymlink = async (
     source: string,

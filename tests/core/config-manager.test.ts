@@ -15,7 +15,7 @@ describe("ConfigManager", () => {
   beforeEach(async () => {
     tempDir = join(tmpdir(), `test-${Date.now()}`);
     await mkdir(tempDir, { recursive: true });
-    configPath = join(tempDir, "dotfiles.json");
+    configPath = join(tempDir, "dotfiles.config.json");
   });
 
   afterEach(async () => {
@@ -39,8 +39,7 @@ describe("ConfigManager", () => {
 
     await writeFile(configPath, JSON.stringify(config));
 
-    const manager = createConfigManager(configPath);
-    await manager.load();
+    const manager = await createConfigManager(tempDir);
 
     const mappings = manager.getMappings();
     expect(mappings).toHaveLength(SINGLE_MAPPING);
@@ -58,8 +57,8 @@ describe("ConfigManager", () => {
 
     await writeFile(configPath, JSON.stringify(invalidConfig));
 
-    const manager = createConfigManager(configPath);
-    await expect(manager.load()).rejects.toThrow(
+    // createConfigManager自体がエラーを投げる
+    await expect(createConfigManager(tempDir)).rejects.toThrow(
       "Invalid config: mappings must be an array",
     );
   });
@@ -80,8 +79,7 @@ describe("ConfigManager", () => {
 
     await writeFile(configPath, JSON.stringify(invalidConfig));
 
-    const manager = createConfigManager(configPath);
-    await expect(manager.load()).rejects.toThrow(
+    await expect(createConfigManager(tempDir)).rejects.toThrow(
       "Invalid mapping: source and target are required",
     );
   });
@@ -102,8 +100,7 @@ describe("ConfigManager", () => {
 
     await writeFile(configPath, JSON.stringify(config));
 
-    const manager = createConfigManager(configPath);
-    await manager.load();
+    const manager = await createConfigManager(tempDir);
 
     const mappings = manager.getMappings();
     const homeDir = process.env.HOME || "";

@@ -2,6 +2,15 @@ export interface DotfilesConfig {
   mappings: FileMapping[];
   backup: BackupConfig;
   mcp?: MCPConfig;
+  // Environment-specific overrides
+  $development?: Partial<DotfilesConfig>;
+  $production?: Partial<DotfilesConfig>;
+  $test?: Partial<DotfilesConfig>;
+}
+
+// Helper function for type-safe config definition
+export function defineConfig(config: DotfilesConfig): DotfilesConfig {
+  return config;
 }
 
 export interface FileMapping {

@@ -12,7 +12,7 @@ export enum LogLevel {
   DEBUG = LOG_LEVEL_DEBUG,
 }
 
-// ファクトリー関数：Loggerを作成
+// Loggerを作成
 export const createLogger = (verbose = false, dryRun = false) => {
   let level = verbose ? LogLevel.DEBUG : LogLevel.INFO;
   let isDryRun = dryRun;

@@ -13,8 +13,8 @@ export const listCommand = define({
   description: "List managed dotfiles and their status",
   args: {
     config: {
-      default: "./dotfiles.json",
-      description: "Path to config file",
+      default: "./",
+      description: "Path to config directory or file",
       short: "c",
       type: "string",
     },
@@ -31,8 +31,7 @@ export const listCommand = define({
     const logger = createLogger(verbose, false);
 
     try {
-      const configManager = createConfigManager(config);
-      await configManager.load();
+      const configManager = await createConfigManager(config);
 
       const mappings = configManager.getMappings();
 

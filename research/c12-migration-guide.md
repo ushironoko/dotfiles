@@ -7,6 +7,7 @@ c12 (pronounced /siːtwelv/, like c-twelve) is a smart configuration loader from
 ## Key Features
 
 ### Supported File Formats
+
 - `.js`, `.mjs`, `.cjs` - JavaScript modules
 - `.ts`, `.mts`, `.cts` - TypeScript modules (via unjs/jiti)
 - `.json`, `.jsonc`, `.json5` - JSON variants
@@ -14,6 +15,7 @@ c12 (pronounced /siːtwelv/, like c-twelve) is a smart configuration loader from
 - `.toml` - TOML configuration
 
 ### Core Capabilities
+
 1. **Multi-format Support**: Load configurations from various file formats
 2. **Configuration Merging**: Deep merge with unjs/defu
 3. **Environment-specific Configs**: Support for `$test`, `$development`, `$production` keys
@@ -45,16 +47,17 @@ const { config } = await loadConfig({
 });
 
 // With all return values
-const { 
-  config,      // Resolved configuration object
-  configFile,  // Path to the loaded config file
-  layers       // Array of extended configuration layers
+const {
+  config, // Resolved configuration object
+  configFile, // Path to the loaded config file
+  layers, // Array of extended configuration layers
 } = await loadConfig({});
 ```
 
 ### Configuration File Names
 
 For a configuration with `name: "dotfiles"`, c12 will look for:
+
 1. `dotfiles.config.ts` / `.js` / `.mjs` / `.cjs`
 2. `dotfiles.config.json` / `.jsonc` / `.json5`
 3. `dotfiles.config.yaml` / `.yml`
@@ -93,27 +96,27 @@ export default defineConfig({
     {
       source: "./shell/.bashrc",
       target: "~/.bashrc",
-      type: "file"
-    }
+      type: "file",
+    },
   ],
   backup: {
     directory: "~/.dotfiles_backup",
     keepLast: 10,
-    compress: false
+    compress: false,
   },
-  
+
   // Environment-specific overrides
   $development: {
     backup: {
-      keepLast: 20 // Keep more backups in development
-    }
+      keepLast: 20, // Keep more backups in development
+    },
   },
-  
+
   $production: {
     backup: {
-      compress: true // Enable compression in production
-    }
-  }
+      compress: true, // Enable compression in production
+    },
+  },
 });
 ```
 
@@ -124,24 +127,24 @@ export default defineConfig({
 ```typescript
 export default {
   logLevel: "info", // Default
-  
+
   $test: {
-    logLevel: "silent"
+    logLevel: "silent",
   },
-  
+
   $development: {
-    logLevel: "debug"
+    logLevel: "debug",
   },
-  
+
   $production: {
-    logLevel: "error"
+    logLevel: "error",
   },
-  
+
   $env: {
     staging: {
-      logLevel: "warning"
-    }
-  }
+      logLevel: "warning",
+    },
+  },
 };
 ```
 
@@ -151,18 +154,15 @@ export default {
 export default {
   // Extend from local file
   extends: "./base.config",
-  
+
   // Or extend from remote repository
   extends: "github:username/repo/config",
-  
+
   // Or multiple sources
-  extends: [
-    "./base.config",
-    "./override.config"
-  ],
-  
+  extends: ["./base.config", "./override.config"],
+
   // Your config values
-  custom: "value"
+  custom: "value",
 };
 ```
 
@@ -173,16 +173,16 @@ import { watchConfig } from "c12";
 
 const config = await watchConfig({
   name: "dotfiles",
-  
+
   onWatch: ({ type, path }) => {
     console.log(`Config ${type} at ${path}`);
   },
-  
+
   acceptHMR: ({ oldConfig, newConfig }) => {
     // Compare configs and return true to accept HMR
     // Return false to trigger full reload
     return JSON.stringify(oldConfig) === JSON.stringify(newConfig);
-  }
+  },
 });
 
 // Later, unwatch
@@ -195,31 +195,31 @@ config.unwatch();
 interface LoadConfigOptions {
   // Working directory (default: process.cwd())
   cwd?: string;
-  
+
   // Configuration name (default: "config")
   name?: string;
-  
+
   // Config file name without extension
   configFile?: string;
-  
+
   // RC file name (default: ".{name}rc")
   rcFile?: string | false;
-  
+
   // Load from package.json (default: true)
   packageJson?: boolean | string;
-  
+
   // Global RC file (default: true)
   globalRc?: boolean;
-  
+
   // Environment name (default: process.env.NODE_ENV)
   envName?: string;
-  
+
   // Default configuration
   defaults?: any;
-  
+
   // Override configuration
   overrides?: any;
-  
+
   // Merge function
   merge?: (a: any, b: any) => any;
 }
@@ -228,6 +228,7 @@ interface LoadConfigOptions {
 ## Configuration Priority
 
 From lowest to highest priority:
+
 1. Default configuration (`defaults` option)
 2. Config from `package.json`
 3. Global RC file (`~/.{name}rc`)
@@ -286,20 +287,21 @@ export default defineConfig({
     {
       source: "./shell/.bashrc",
       target: "~/.bashrc",
-      type: "file" // Type checked
-    }
+      type: "file", // Type checked
+    },
   ],
   backup: {
     directory: "~/.dotfiles_backup",
     keepLast: 10,
-    compress: false
-  }
+    compress: false,
+  },
 });
 ```
 
 ## Migration Steps
 
 1. **Install c12**
+
    ```bash
    bun add c12
    ```
@@ -314,9 +316,10 @@ export default defineConfig({
    - Add type safety with `defineConfig`
 
 4. **Update ConfigManager**
+
    ```typescript
    import { loadConfig } from "c12";
-   
+
    export const createConfigManager = async (configPath?: string) => {
      const { config } = await loadConfig<DotfilesConfig>({
        name: "dotfiles",
@@ -324,11 +327,11 @@ export default defineConfig({
        defaults: {
          backup: {
            keepLast: 10,
-           compress: false
-         }
-       }
+           compress: false,
+         },
+       },
      });
-     
+
      return {
        getConfig: () => config,
        getMappings: () => expandMappings(config.mappings),
@@ -355,6 +358,7 @@ export default defineConfig({
 ## Ecosystem Integration
 
 c12 is used by major projects in the UnJS ecosystem:
+
 - Nuxt
 - Nitro
 - Prisma

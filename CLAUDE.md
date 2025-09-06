@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-A dotfiles management system written in TypeScript/Bun that creates symbolic links between configuration files and their system locations. Supports backups, restoration, and merging of MCP server configurations.
+A dotfiles management system written in TypeScript/Bun that creates symbolic links between configuration files and their system locations. Uses c12 for configuration loading with TypeScript support, environment-specific overrides, and type safety. Supports backups, restoration, and merging of MCP server configurations.
 
 ## Development Commands
 
@@ -30,6 +30,9 @@ bun run prepare
 bun run src/index.ts install --dry-run  # Preview installation
 bun run src/index.ts restore            # Restore from backup
 bun run src/index.ts list --verbose     # List symlinks with status
+
+# Run with environment-specific config
+NODE_ENV=development bun run src/index.ts list
 ```
 
 ## High-Level Architecture
@@ -45,7 +48,7 @@ The application follows a modular architecture with clear separation between CLI
 
 ### Core Module Responsibilities
 
-- **ConfigManager**: Loads and validates `dotfiles.json`. Handles default fallbacks and configuration schema validation.
+- **ConfigManager**: Loads and validates configuration using c12. Supports TypeScript config files with type safety and environment-specific overrides.
 - **SymlinkManager**: Creates symlinks with support for three mapping types:
   - `file`: Direct file-to-file symlink
   - `directory`: Entire directory symlink
@@ -53,9 +56,9 @@ The application follows a modular architecture with clear separation between CLI
 - **BackupManager**: Creates timestamped backups (format: `YYYY-MM-DDTHH-MM-SS`) in `~/.dotfiles_backup`. Manages retention policy (keepLast setting).
 - **MCPMerger**: Merges `mcpServers` configuration from `claude/dot_claude.json` to `~/.claude.json`. Prevents duplicate entries and handles backup creation.
 
-### Configuration Structure (`dotfiles.json`)
+### Configuration Structure (`dotfiles.config.ts`)
 
-The main configuration file uses three types of mappings:
+The main configuration file uses TypeScript with the `defineConfig` helper for type safety. It supports three types of mappings:
 
 - **file**: Single file symlink (`"type": "file"`)
 - **directory**: Entire directory symlink (`"type": "directory"`)
@@ -105,6 +108,7 @@ The MCPMerger handles special logic for `.claude.json`:
 ### Research Directory
 
 The `research/` directory contains technical investigation results and migration guides. These documents are:
+
 - Indexed in gistdex for searchable access via MCP
 - Available for querying through the gistdex MCP server
 - Used to store architectural decisions and technology evaluations
@@ -112,11 +116,13 @@ The `research/` directory contains technical investigation results and migration
 ### Gistdex Integration
 
 The project uses gistdex MCP for knowledge management:
+
 - **queries.md**: Contains example queries for efficiently searching indexed documentation
 - **Research documents**: Automatically indexed for semantic search
 - **Access method**: Use `mcp__gistdex__gistdex_query` to retrieve indexed information
 
 Example queries:
+
 ```
 # Search for c12 configuration migration information
 c12 migration JSON to TypeScript

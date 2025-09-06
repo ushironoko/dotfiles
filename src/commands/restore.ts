@@ -35,8 +35,8 @@ export const restoreCommand = define({
       type: "string",
     },
     config: {
-      default: "./dotfiles.json",
-      description: "Path to config file",
+      default: "./",
+      description: "Path to config directory or file",
       short: "c",
       type: "string",
     },
@@ -75,8 +75,7 @@ export const restoreCommand = define({
     try {
       logger.info("Starting dotfiles restoration...");
 
-      const configManager = createConfigManager(config);
-      await configManager.load();
+      const configManager = await createConfigManager(config);
 
       const backupConfig = configManager.getBackupConfig();
       const backupManager = createBackupManager(logger, backupConfig);

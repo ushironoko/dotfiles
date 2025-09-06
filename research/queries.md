@@ -5,6 +5,7 @@
 ## インデックス済みファイル
 
 - `typescript-migration-tools.md` - TypeScript移行ツールの調査結果
+- `c12-migration-guide.md` - c12設定ローダーのマイグレーションガイド
 
 ## クエリパターン
 
@@ -45,6 +46,72 @@ query: "oxlint ignorePatterns files"
 ```
 query: "eslint-plugin-oxlint migration"
 query: "oxlint ESLint併用"
+```
+
+### c12 Configuration Loader 関連
+
+#### 基本概念
+
+```
+query: "c12 configuration loader UnJS"
+query: "c12 loadConfig TypeScript support"
+query: "c12 smart configuration multiple formats"
+```
+
+#### インストールとセットアップ
+
+```
+query: "c12 bun add installation"
+query: "c12 dotfiles.config.ts migration"
+query: "c12 defineConfig helper function"
+```
+
+#### 設定ファイル形式
+
+```
+query: "c12 supported formats .ts .json .yaml .toml"
+query: "c12 config file priority dotfiles.config"
+query: "c12 package.json configuration loading"
+```
+
+#### 環境別設定
+
+```
+query: "c12 $development $production $test environment"
+query: "c12 NODE_ENV environment overrides"
+query: "c12 $env staging custom environments"
+```
+
+#### API使用方法
+
+```
+query: "c12 loadConfig options cwd name defaults"
+query: "c12 watchConfig onWatch acceptHMR"
+query: "c12 configuration merging defu deep merge"
+```
+
+#### 高度な機能
+
+```
+query: "c12 extends GitHub GitLab remote config"
+query: "c12 configuration layers priority"
+query: "c12 HMR hot module replacement watch"
+```
+
+#### TypeScript統合
+
+```
+query: "c12 TypeScript DotfilesConfig interface"
+query: "c12 defineConfig type safety IntelliSense"
+query: "c12 loadConfig generic types validation"
+```
+
+#### マイグレーション
+
+```
+query: "c12 migration JSON to TypeScript dotfiles"
+query: "c12 createConfigManager async await"
+query: "c12 dotfiles.json dotfiles.config.ts"
 ```
 
 ### Gunshi CLI Framework 関連
@@ -162,11 +229,24 @@ const oxcConfig = await query({
   rerank: true,
 });
 
+// c12の環境別設定について調べる
+const c12EnvConfig = await query({
+  query: "c12 $development $production environment overrides",
+  k: 5,
+  rerank: true,
+});
+
 // Gunshiのサブコマンド実装を調べる
 const gunshiSubcommands = await query({
   query: "Gunshi sub-commands Command interface",
   k: 3,
   hybrid: true,
+});
+
+// c12マイグレーションの手順を調べる
+const c12Migration = await query({
+  query: "c12 migration dotfiles.json dotfiles.config.ts TypeScript",
+  full: true,
 });
 
 // 特定の実装パターンを探す

@@ -1,4 +1,4 @@
-import { readFile } from "fs/promises";
+import { loadConfig } from "c12";
 import {
   BackupConfig,
   DotfilesConfig,
@@ -6,11 +6,10 @@ import {
   MCPConfig,
 } from "../types/config";
 import { expandPath } from "../utils/paths";
-import { fileExists } from "../utils/fs";
 
 const DEFAULT_KEEP_LAST = 10;
 
-// 純粋関数：設定の検証
+// 設定の検証
 export const validateConfig = (config: unknown): config is DotfilesConfig => {
   const c = config as DotfilesConfig;
 
@@ -39,7 +38,7 @@ export const validateConfig = (config: unknown): config is DotfilesConfig => {
   return true;
 };
 
-// 純粋関数：マッピングのパスを展開
+// マッピングのパスを展開
 export const expandMappings = (mappings: FileMapping[]): FileMapping[] =>
   mappings.map((mapping) => ({
     ...mapping,
@@ -47,7 +46,7 @@ export const expandMappings = (mappings: FileMapping[]): FileMapping[] =>
     target: expandPath(mapping.target),
   }));
 
-// 純粋関数：バックアップ設定の正規化
+// バックアップ設定の正規化
 export const normalizeBackupConfig = (config: BackupConfig): BackupConfig => ({
   ...config,
   compress: config.compress || false,
@@ -55,66 +54,56 @@ export const normalizeBackupConfig = (config: BackupConfig): BackupConfig => ({
   keepLast: config.keepLast || DEFAULT_KEEP_LAST,
 });
 
-// 純粋関数：MCP設定のパスを展開
+// MCP設定のパスを展開
 export const expandMCPConfig = (config: MCPConfig): MCPConfig => ({
   ...config,
   sourceFile: expandPath(config.sourceFile),
   targetFile: expandPath(config.targetFile),
 });
 
-// ファクトリー関数：ConfigManagerを作成
-export const createConfigManager = (configPath = "./dotfiles.json") => {
-  let config: DotfilesConfig | undefined;
-  const expandedPath = expandPath(configPath);
+// ConfigManagerを作成
+export const createConfigManager = async (configPath?: string) => {
+  // configファイルを読み込み
+  const { config: loadedConfig } = await loadConfig<DotfilesConfig>({
+    name: "dotfiles",
+    cwd: configPath ? expandPath(configPath) : process.cwd(),
+    defaults: {
+      mappings: [], // デフォルトは空配列
+      backup: {
+        directory: "~/.dotfiles_backup",
+        keepLast: DEFAULT_KEEP_LAST,
+        compress: false,
+      },
+    },
+  });
 
-  const load = async (): Promise<void> => {
-    if (!(await fileExists(expandedPath))) {
-      throw new Error(`Configuration file not found: ${expandedPath}`);
-    }
+  // 検証
+  if (!validateConfig(loadedConfig)) {
+    throw new Error("Invalid configuration");
+  }
 
-    const content = await readFile(expandedPath, "utf8");
-    const parsed = JSON.parse(content);
-    if (!validateConfig(parsed)) {
-      throw new Error("Invalid configuration");
-    }
-    config = parsed;
-  };
+  const config = loadedConfig;
 
   const getMappings = (): FileMapping[] => {
-    if (!config) {
-      throw new Error("Configuration not loaded");
-    }
     return expandMappings(config.mappings);
   };
 
   const getBackupConfig = (): BackupConfig => {
-    if (!config) {
-      throw new Error("Configuration not loaded");
-    }
     return normalizeBackupConfig(config.backup);
   };
 
   const getMCPConfig = (): MCPConfig | undefined => {
-    if (!config) {
-      throw new Error("Configuration not loaded");
-    }
-
     if (!config.mcp) {
       return undefined;
     }
-
     return expandMCPConfig(config.mcp);
   };
 
   const getConfig = (): DotfilesConfig => {
-    if (!config) {
-      throw new Error("Configuration not loaded");
-    }
     return config;
   };
 
   return {
-    load,
     getMappings,
     getBackupConfig,
     getMCPConfig,
