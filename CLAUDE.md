@@ -89,10 +89,10 @@ These are symlinked to `~/.local/bin/` for global access.
 
 Commands use consistent error handling with colored output:
 
-- Success: Green checkmarks with `chalk.green`
-- Warnings: Yellow warnings with `chalk.yellow`
-- Errors: Red errors with `chalk.red`
-- Verbose mode provides detailed operation logs
+- Success: Green checkmarks with consola success messages
+- Warnings: Yellow warnings with consola warn messages
+- Errors: Red errors with consola error messages
+- Verbose mode provides detailed operation logs (level 4)
 
 ### MCP Server Merging
 

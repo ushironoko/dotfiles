@@ -7,10 +7,12 @@ This is a personal dotfiles management tool written in TypeScript that manages U
 - **Runtime**: Bun for fast TypeScript execution
 - **Language**: TypeScript with ESM modules
 - **CLI Framework**: Gunshi (0.26.3) for type-safe command definitions
-- **Testing**: Vitest (3.2.4) for unit testing
+- **Testing**: Bun test framework
 - **Linting**: OXC (oxlint 0.15.2) - high performance linter
-- **Type Checking**: TypeScript compiler (5.7.3)
-- **Utilities**: chalk for terminal colors
+- **Type Checking**: TypeScript compiler (tsgo)
+- **Logging**: consola (3.2.3) for terminal output
+- **Configuration**: c12 (3.2.0) for smart config loading
+- **Object Merging**: defu (6.1.4) for deep object merging
 
 ## Key Features
 - Symbolic link management with backup functionality

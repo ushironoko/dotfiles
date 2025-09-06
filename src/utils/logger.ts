@@ -1,58 +1,40 @@
-import chalk from "chalk";
+import { createConsola } from "consola";
+import { colors } from "consola/utils";
 
-const LOG_LEVEL_ERROR = 0;
-const LOG_LEVEL_WARN = 1;
-const LOG_LEVEL_INFO = 2;
-const LOG_LEVEL_DEBUG = 3;
-
-export enum LogLevel {
-  ERROR = LOG_LEVEL_ERROR,
-  WARN = LOG_LEVEL_WARN,
-  INFO = LOG_LEVEL_INFO,
-  DEBUG = LOG_LEVEL_DEBUG,
-}
-
-// Loggerを作成
 export const createLogger = (verbose = false, dryRun = false) => {
-  let level = verbose ? LogLevel.DEBUG : LogLevel.INFO;
   let isDryRun = dryRun;
 
-  const error = (message: string): void => {
-    if (level >= LogLevel.ERROR) {
-      console.error(chalk.red("✗"), message);
-    }
+  const consola = createConsola({
+    level: verbose ? 4 : 3,
+    formatOptions: {
+      date: false,
+      colors: true,
+    },
+  });
+
+  const wrapWithDryRun = (fn: Function) => {
+    return (...args: unknown[]) => {
+      if (isDryRun) {
+        fn(colors.blue("[DRY RUN]"), ...args);
+      } else {
+        fn(...args);
+      }
+    };
   };
 
-  const warn = (message: string): void => {
-    if (level >= LogLevel.WARN) {
-      console.warn(chalk.yellow("⚠"), message);
-    }
-  };
-
-  const info = (message: string): void => {
-    if (level >= LogLevel.INFO) {
-      const prefix = isDryRun ? chalk.blue("[DRY RUN] ") : "";
-      console.log(chalk.green("✓"), prefix + message);
-    }
-  };
-
-  const debug = (message: string): void => {
-    if (level >= LogLevel.DEBUG) {
-      console.log(chalk.gray("→"), message);
-    }
-  };
-
-  const success = (message: string): void => {
-    console.log(chalk.green.bold("✓"), chalk.green(message));
-  };
+  const error = consola.error.bind(consola);
+  const warn = consola.warn.bind(consola);
+  const info = wrapWithDryRun(consola.info.bind(consola));
+  const debug = consola.debug.bind(consola);
+  const success = wrapWithDryRun(consola.success.bind(consola));
 
   const action = (actionName: string, detail: string): void => {
-    const prefix = isDryRun ? chalk.blue("[DRY RUN] ") : "";
-    console.log(chalk.cyan("→"), prefix + chalk.bold(actionName), detail);
+    const prefix = isDryRun ? colors.blue("[DRY RUN] ") : "";
+    consola.log(colors.cyan("→"), prefix + colors.bold(actionName), detail);
   };
 
   const setVerbose = (newVerbose: boolean): void => {
-    level = newVerbose ? LogLevel.DEBUG : LogLevel.INFO;
+    consola.level = newVerbose ? 4 : 3;
   };
 
   const setDryRun = (newDryRun: boolean): void => {
@@ -71,5 +53,4 @@ export const createLogger = (verbose = false, dryRun = false) => {
   };
 };
 
-// 型エクスポート
 export type Logger = ReturnType<typeof createLogger>;

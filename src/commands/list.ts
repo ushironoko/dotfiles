@@ -1,5 +1,5 @@
-import chalk from "chalk";
 import { define } from "gunshi";
+import { colors } from "consola/utils";
 import { createConfigManager } from "../core/config-manager.js";
 import { fileExists, isSymlink } from "../utils/fs.js";
 import { createLogger } from "../utils/logger.js";
@@ -35,7 +35,7 @@ export const listCommand = define({
 
       const mappings = configManager.getMappings();
 
-      console.log(chalk.bold("\nManaged Dotfiles:\n"));
+      console.log(colors.bold("\nManaged Dotfiles:\n"));
 
       // Group mappings by parent directory
       const groupedMappings = new Map<
@@ -48,214 +48,190 @@ export const listCommand = define({
           permissions?: string;
         }>
       >();
-      const processedPaths = new Set<string>();
-
-      // First pass: identify directories with multiple file mappings
-      const dirCounts = new Map<string, number>();
-      for (const mapping of mappings) {
-        if ("file" === mapping.type) {
-          const dir = dirname(mapping.target);
-          dirCounts.set(dir, (dirCounts.get(dir) || 0) + 1);
-        }
-      }
 
       for (const mapping of mappings) {
-        // For selective type, process individual files
-        if ("selective" === mapping.type && mapping.include) {
-          const parentDir = mapping.target;
+        const targetPath = expandPath(mapping.target);
+        let parentDir = dirname(targetPath);
+
+        // For selective mappings, group by target directory
+        if ("selective" === mapping.type && Array.isArray(mapping.include)) {
+          parentDir = targetPath; // Use the target directory itself
+          for (const file of mapping.include) {
+            const fullTarget = join(targetPath, file);
+            const fullSource = join(expandPath(mapping.source), file);
+
+            let status = "missing";
+            const exists = await fileExists(fullTarget);
+            if (exists) {
+              const symlink = await isSymlink(fullTarget);
+              status = symlink ? "linked" : "exists";
+            }
+
+            // Check for permissions
+            let permissions = undefined;
+            if (
+              mapping.permissions &&
+              typeof mapping.permissions === "object"
+            ) {
+              permissions = mapping.permissions[file];
+            }
+
+            if (!groupedMappings.has(parentDir)) {
+              groupedMappings.set(parentDir, []);
+            }
+
+            groupedMappings.get(parentDir)?.push({
+              path: fullTarget,
+              source: fullSource,
+              type: "selective-file",
+              status,
+              permissions,
+            });
+          }
+        } else {
+          // For regular file and directory mappings
+          const exists = await fileExists(targetPath);
+          let status = "missing";
+          if (exists) {
+            const symlink = await isSymlink(targetPath);
+            status = symlink ? "linked" : "exists";
+          }
+
           if (!groupedMappings.has(parentDir)) {
             groupedMappings.set(parentDir, []);
           }
 
-          for (const file of mapping.include) {
-            const targetPath = join(expandPath(mapping.target), file);
-            const exists = await fileExists(targetPath);
-            const isLink = exists && (await isSymlink(targetPath));
-
-            let status = "";
-            if (!exists) {
-              status = "✗";
-            } else if (isLink) {
-              status = "✓";
-            } else {
-              status = "⚠";
-            }
-
-            let perms: string | undefined;
-            if (
-              mapping.permissions &&
-              "object" === typeof mapping.permissions &&
-              mapping.permissions[file]
-            ) {
-              perms = mapping.permissions[file] as string;
-            }
-
-            groupedMappings.get(parentDir)?.push({
-              path: file,
-              source: join(mapping.source, file),
-              type: "selective",
-              status,
-              permissions: perms,
-            });
-          }
-          processedPaths.add(mapping.target);
-        } else if ("file" === mapping.type) {
-          const dir = dirname(mapping.target);
-          const fileName = basename(mapping.target);
-
-          // Group files if there are multiple in the same directory
-          if (1 < (dirCounts.get(dir) || 0)) {
-            if (!groupedMappings.has(dir)) {
-              groupedMappings.set(dir, []);
-            }
-
-            const targetPath = expandPath(mapping.target);
-            const exists = await fileExists(targetPath);
-            const isLink = exists && (await isSymlink(targetPath));
-
-            let status = "";
-            if (!exists) {
-              status = "✗";
-            } else if (isLink) {
-              status = "✓";
-            } else {
-              status = "⚠";
-            }
-
-            groupedMappings.get(dir)?.push({
-              path: fileName,
-              source: mapping.source,
-              type: mapping.type,
-              status,
-            });
-            processedPaths.add(mapping.target);
-          } else {
-            // Single file, add as standalone
-            const targetPath = expandPath(mapping.target);
-            const exists = await fileExists(targetPath);
-            const isLink = exists && (await isSymlink(targetPath));
-
-            let status = "";
-            if (!exists) {
-              status = "✗";
-            } else if (isLink) {
-              status = "✓";
-            } else {
-              status = "⚠";
-            }
-
-            groupedMappings.set(mapping.target, [
-              {
-                path: "",
-                source: mapping.source,
-                type: mapping.type,
-                status,
-              },
-            ]);
-            processedPaths.add(mapping.target);
-          }
-        } else {
-          // For directory type
-          const targetPath = expandPath(mapping.target);
-          const exists = await fileExists(targetPath);
-          const isLink = exists && (await isSymlink(targetPath));
-
-          let status = "";
-          if (!exists) {
-            status = "✗";
-          } else if (isLink) {
-            status = "✓";
-          } else {
-            status = "⚠";
-          }
-
-          // Add as standalone entry
-          groupedMappings.set(mapping.target, [
-            {
-              path: "",
-              source: mapping.source,
-              type: mapping.type,
-              status,
-            },
-          ]);
-          processedPaths.add(mapping.target);
+          groupedMappings.get(parentDir)?.push({
+            path: targetPath,
+            source: expandPath(mapping.source),
+            type: mapping.type,
+            status,
+          });
         }
       }
 
-      // Display grouped mappings
-      for (const [parent, files] of groupedMappings) {
-        if (1 === files.length && "" === files[0].path) {
-          // Single file or directory mapping
-          const file = files[0];
-          let statusColor = "";
-          if ("✗" === file.status) {
-            statusColor = chalk.red("✗ Not installed");
-          } else if ("✓" === file.status) {
-            statusColor = chalk.green("✓ Linked");
-          } else {
-            statusColor = chalk.yellow("⚠ File exists (not symlink)");
-          }
+      // Sort parent directories
+      const sortedParents = Array.from(groupedMappings.keys()).sort();
 
-          console.log(`${statusColor} ${chalk.cyan(parent)}`);
+      for (const [index, parent] of sortedParents.entries()) {
+        const items = groupedMappings.get(parent) ?? [];
 
+        // Tree-like display
+        if (index > 0) {
+          console.log(""); // Add spacing between groups
+        }
+
+        // For selective mappings
+        if (items.length > 0 && "selective-file" === items[0]?.type) {
+          const parentStatus = await fileExists(parent);
           if (verbose) {
-            console.log(`  Source: ${file.source}`);
-            console.log(`  Type: ${file.type}`);
-            console.log();
+            console.log(
+              parentStatus
+                ? colors.green(
+                    `✓ Processing selective symlinks for ${colors.cyan(parent)}`,
+                  )
+                : colors.red(
+                    `✗ Parent directory missing: ${colors.cyan(parent)}`,
+                  ),
+            );
+          } else {
+            console.log(colors.cyan(parent));
           }
-        } else {
-          // Directory with multiple files (tree display)
-          console.log(chalk.cyan(parent));
 
-          for (let i = 0; i < files.length; i++) {
-            const file = files[i];
-            const isLast = i === files.length - 1;
+          // Display files with tree structure
+          for (const [itemIndex, item] of items.entries()) {
+            const isLast = itemIndex === items.length - 1;
             const prefix = isLast ? "└── " : "├── ";
+            const name = basename(item.path);
 
             let statusIcon = "";
-            if ("✗" === file.status) {
-              statusIcon = chalk.red("✗");
-            } else if ("✓" === file.status) {
-              statusIcon = chalk.green("✓");
+            if ("missing" === item.status) {
+              statusIcon = colors.red("✗");
+            } else if ("linked" === item.status) {
+              statusIcon = colors.green("✓");
             } else {
-              statusIcon = chalk.yellow("⚠");
+              statusIcon = colors.yellow("⚠");
             }
 
-            console.log(`${prefix}${statusIcon} ${file.path}`);
+            console.log(`${prefix}${statusIcon} ${name}`);
 
             if (verbose) {
-              const indent = isLast ? "    " : "│   ";
-              console.log(`${indent}  Source: ${file.source}`);
-              if (file.permissions) {
-                console.log(`${indent}  Permissions: ${file.permissions}`);
+              const detailPrefix = isLast ? "      " : "│     ";
+              console.log(`${detailPrefix}Source: ${item.source}`);
+              if (item.permissions) {
+                console.log(`${detailPrefix}Permissions: ${item.permissions}`);
               }
             }
           }
-
+        } else {
+          // For regular file and directory mappings
           if (verbose) {
-            console.log();
+            // Verbose mode: show full status
+            for (const item of items) {
+              let statusColor;
+              if ("missing" === item.status) {
+                statusColor = colors.red("✗ Not installed");
+              } else if ("linked" === item.status) {
+                statusColor = colors.green("✓ Linked");
+              } else {
+                statusColor = colors.yellow("⚠ File exists (not symlink)");
+              }
+
+              console.log(`${statusColor} ${colors.cyan(parent)}`);
+              console.log(`  Source: ${item.source}`);
+              console.log(`  Type: ${item.type}`);
+              console.log("");
+            }
+          } else {
+            // Non-verbose mode: tree view
+            console.log(colors.cyan(parent));
+
+            // Sort items for consistent display
+            items.sort((a, b) => a.path.localeCompare(b.path));
+
+            for (const [itemIndex, item] of items.entries()) {
+              const isLast = itemIndex === items.length - 1;
+              const prefix = isLast ? "└── " : "├── ";
+              const name = basename(item.path);
+
+              let statusIcon = "";
+              if ("missing" === item.status) {
+                statusIcon = colors.red("✗");
+              } else if ("linked" === item.status) {
+                statusIcon = colors.green("✓");
+              } else {
+                statusIcon = colors.yellow("⚠");
+              }
+
+              console.log(`${prefix}${statusIcon} ${name}`);
+
+              if (verbose) {
+                const detailPrefix = isLast ? "      " : "│     ";
+                console.log(`${detailPrefix}Source: ${item.source}`);
+              }
+            }
           }
         }
       }
 
+      // Display MCP configuration status if present
       const mcpConfig = configManager.getMCPConfig();
       if (mcpConfig) {
-        console.log(chalk.bold("\nMCP Configuration:"));
-        const targetExists = await fileExists(expandPath(mcpConfig.targetFile));
+        console.log("");
+        console.log(colors.bold("\nMCP Configuration:"));
+        const targetExists = await fileExists(mcpConfig.targetFile);
         const status = targetExists
-          ? chalk.green("✓ Target exists")
-          : chalk.red("✗ Target missing");
+          ? colors.green("✓ Target exists")
+          : colors.red("✗ Target missing");
 
-        console.log(`${status} ${chalk.cyan(mcpConfig.targetFile)}`);
+        console.log(`${status} ${colors.cyan(mcpConfig.targetFile)}`);
         if (verbose) {
           console.log(`  Source: ${mcpConfig.sourceFile}`);
           console.log(`  Merge key: ${mcpConfig.mergeKey}`);
         }
       }
     } catch (error) {
-      if (error instanceof Error) {
-        logger.error(`Failed to list dotfiles: ${error.message}`);
-      }
+      logger.error(`Failed to list dotfiles: ${error}`);
       process.exit(EXIT_FAILURE);
     }
   },

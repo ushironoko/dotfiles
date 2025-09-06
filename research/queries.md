@@ -7,7 +7,6 @@
 - `typescript-migration-tools.md` - TypeScript移行ツールの調査結果
 - `c12-migration-guide.md` - c12設定ローダーのマイグレーションガイド
 - `defu-integration.md` - defuライブラリを使用したMCPサーバー設定マージの実装ガイド
-- `consola-migration.md` - consolaログライブラリへの移行ガイド
 
 ## クエリパターン
 
@@ -236,116 +235,6 @@ query: "defu MCPMerger update existing"
 query: "defu test updates migration"
 ```
 
-### Consola Logger 関連
-
-#### 基本概念
-
-```
-query: "consola elegant console wrapper UnJS"
-query: "consola fancy output fallback minimal"
-query: "consola pluggable reporters custom"
-```
-
-#### インストールとセットアップ
-
-```
-query: "consola pnpm bun installation"
-query: "consola createConsola options level"
-query: "consola ESM CommonJS import"
-```
-
-#### ログメソッド
-
-```
-query: "consola error warn info debug success"
-query: "consola log types preset styles"
-query: "consola.box message display"
-```
-
-#### ログレベル
-
-```
-query: "consola log level 0 1 2 3 4 5"
-query: "consola CONSOLA_LEVEL environment"
-query: "consola verbose debug trace silent"
-```
-
-#### DRY RUNサポート
-
-```
-query: "consola DRY RUN custom reporter"
-query: "consola withDefaults prefix"
-query: "consola reporter log object modification"
-```
-
-#### プロンプト機能
-
-```
-query: "consola prompt text confirm select multiselect"
-query: "consola prompt cancel strategy default undefined"
-query: "consola clack interactive prompt"
-```
-
-#### カスタムレポーター
-
-```
-query: "consola custom reporter log interface"
-query: "consola reporter JSON output"
-query: "consola addReporter removeReporter setReporters"
-```
-
-#### タグ/スコープ
-
-```
-query: "consola withTag withScope scoped logger"
-query: "consola tag prefix output format"
-```
-
-#### テスト統合
-
-```
-query: "consola mockTypes vitest jest"
-query: "consola test mock calls expect"
-query: "consola wrapAll restoreAll test"
-```
-
-#### バンドルサイズ最適化
-
-```
-query: "consola basic browser core build"
-query: "consola 80% bundle size reduction"
-query: "consola minimal reporter fallback"
-```
-
-#### 移行マッピング
-
-```
-query: "consola migration chalk console.log"
-query: "consola createLogger verbose dryRun"
-query: "consola Logger type compatibility"
-```
-
-#### actionメソッド互換実装
-
-```
-query: "consola action method cyan bold"
-query: "consola withAction extension custom"
-```
-
-#### Pause/Resume機能
-
-```
-query: "consola pauseLogs resumeLogs enqueue"
-query: "consola global pause resume"
-```
-
-#### stdout/stderr リダイレクト
-
-```
-query: "consola wrapConsole restoreConsole"
-query: "consola wrapStd restoreStd stdout stderr"
-```
-
 ### 統合例・実装パターン
 
 #### プロジェクト構造
@@ -446,19 +335,6 @@ const gunshiSubcommands = await query({
 // c12マイグレーションの手順を調べる
 const c12Migration = await query({
   query: "c12 migration dotfiles.json dotfiles.config.ts TypeScript",
-  full: true,
-});
-
-// consolaへの移行手順を調べる
-const consolaMigration = await query({
-  query: "consola migration createLogger chalk DRY RUN",
-  k: 5,
-  rerank: true,
-});
-
-// consolaのカスタムレポーター実装を調べる
-const consolaReporter = await query({
-  query: "consola custom reporter DRY RUN prefix",
   full: true,
 });
 
