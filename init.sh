@@ -57,7 +57,7 @@ if [ -n "$MISE_JUST_INSTALLED" ]; then
 fi
 
 # Install mise-managed tools (including bun)
-echo "📦 Installing mise-managed tools (bun, node, starship, etc.)..."
+echo "📦 Installing mise-managed tools..."
 mise install || true  # Continue even if some tools fail to install
 
 echo ""
