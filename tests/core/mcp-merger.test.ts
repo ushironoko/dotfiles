@@ -257,6 +257,130 @@ describe("MCPMerger", () => {
     });
   });
 
+  describe("defu integration", () => {
+    it("should handle nested object properties in mcpServers", async () => {
+      const sourceData = {
+        mcpServers: {
+          server1: {
+            command: "cmd1",
+            args: ["--arg1", "--arg2"],
+            env: { NODE_ENV: "production" },
+          },
+        },
+      };
+
+      const targetData = {
+        existingKey: "value",
+        apiKey: "secret123",
+        mcpServers: {
+          oldServer: {
+            command: "old",
+            env: { PATH: "/usr/local/bin" },
+          },
+        },
+      };
+
+      await fs.writeFile(
+        join(testDir, "source.json"),
+        JSON.stringify(sourceData, undefined, 2),
+      );
+      await fs.writeFile(
+        join(testDir, "target.json"),
+        JSON.stringify(targetData, undefined, 2),
+      );
+
+      await merger.merge();
+
+      const resultContent = await fs.readFile(
+        join(testDir, "target.json"),
+        "utf8",
+      );
+      const result = JSON.parse(resultContent);
+
+      // Should preserve other keys
+      expect(result.existingKey).toBe("value");
+      expect(result.apiKey).toBe("secret123");
+      // Should replace mcpServers entirely (not merge)
+      expect(result.mcpServers).toEqual(sourceData.mcpServers);
+      expect(result.mcpServers.oldServer).toBeUndefined();
+    });
+
+    it("should handle array-style mcpServers with deduplication", async () => {
+      // Test for future compatibility when mcpServers might be an array
+      const sourceData = {
+        mcpServers: [
+          { name: "server1", command: "cmd1" },
+          { name: "server2", command: "cmd2" },
+        ],
+      };
+
+      const targetData = {
+        mcpServers: [
+          { name: "server1", command: "old-cmd1" }, // Duplicate name
+          { name: "server3", command: "cmd3" },
+        ],
+      };
+
+      await fs.writeFile(
+        join(testDir, "source.json"),
+        JSON.stringify(sourceData, undefined, 2),
+      );
+      await fs.writeFile(
+        join(testDir, "target.json"),
+        JSON.stringify(targetData, undefined, 2),
+      );
+
+      await merger.merge();
+
+      const resultContent = await fs.readFile(
+        join(testDir, "target.json"),
+        "utf8",
+      );
+      const result = JSON.parse(resultContent);
+
+      // Should have merged arrays with deduplication
+      expect(result.mcpServers).toHaveLength(3);
+      expect(result.mcpServers).toEqual([
+        { name: "server1", command: "old-cmd1" }, // Existing kept
+        { name: "server3", command: "cmd3" }, // Existing kept
+        { name: "server2", command: "cmd2" }, // New added
+      ]);
+    });
+
+    it("should handle mixed data types gracefully", async () => {
+      const sourceData = {
+        mcpServers: {
+          server1: { command: "cmd1" },
+        },
+      };
+
+      // Target has array instead of object
+      const targetData = {
+        mcpServers: ["some", "array", "data"],
+      };
+
+      await fs.writeFile(
+        join(testDir, "source.json"),
+        JSON.stringify(sourceData, undefined, 2),
+      );
+      await fs.writeFile(
+        join(testDir, "target.json"),
+        JSON.stringify(targetData, undefined, 2),
+      );
+
+      await merger.merge();
+
+      const resultContent = await fs.readFile(
+        join(testDir, "target.json"),
+        "utf8",
+      );
+      const result = JSON.parse(resultContent);
+
+      // Should replace with source data when types don't match
+      expect(result.mcpServers).toEqual(sourceData.mcpServers);
+    });
+  });
+
   describe("integration", () => {
     it("should backup and merge in sequence", async () => {
       const sourceData = {

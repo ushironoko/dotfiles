@@ -1,11 +1,76 @@
 import { readFile, writeFile, readdir } from "fs/promises";
 import { basename, join } from "path";
-import { MCPConfig } from "../types/config";
-import { fileExists, ensureDir } from "../utils/fs";
-import { Logger } from "../utils/logger";
-import { expandPath } from "../utils/paths";
+import { createDefu } from "defu";
+import { MCPConfig } from "../types/config.js";
+import { fileExists, ensureDir } from "../utils/fs.js";
+import { Logger } from "../utils/logger.js";
+import { expandPath } from "../utils/paths.js";
+
+// Type definitions for MCP data structures
+interface MCPServerObject {
+  command: string;
+  args?: string[];
+  env?: { [key: string]: string };
+  type?: string;
+}
+
+interface MCPServersObject {
+  [key: string]: MCPServerObject;
+}
+
+type MCPServersArray = {
+  name?: string;
+  command?: string;
+  args?: string[];
+  env?: { [key: string]: string };
+}[];
+
+interface MCPConfigData {
+  mcpServers?: MCPServersObject | MCPServersArray;
+  [key: string]: unknown;
+}
 
 export const createMCPMerger = (logger: Logger, config: MCPConfig) => {
+  // Custom merge function for MCP configurations
+  // Using generic function to satisfy defu's Merger type requirements
+  const mergeMCPConfig = createDefu(
+    <T extends MCPConfigData>(obj: T, key: keyof T, value: T[keyof T]) => {
+      // Handle mcpServers merging with proper type guards
+      if (
+        key === config.mergeKey &&
+        null !== value &&
+        undefined !== value &&
+        "object" === typeof value
+      ) {
+        // For object-style mcpServers (current implementation) - replace entirely
+        if (!Array.isArray(value)) {
+          // Replace the entire mcpServers object rather than merging
+          obj[key] = value;
+          return true;
+        }
+
+        // For array-style mcpServers (future compatibility)
+        if (Array.isArray(obj[key]) && Array.isArray(value)) {
+          const existingServers = obj[key] as MCPServersArray;
+          const newServers = value as MCPServersArray;
+
+          // Prevent duplicates based on name or command property
+          const existingIdentifiers = new Set(
+            existingServers.map((server) => server.name || server.command),
+          );
+
+          const uniqueNewServers = newServers.filter(
+            (server) => !existingIdentifiers.has(server.name || server.command),
+          );
+
+          // TypeScript requires explicit type assertion here due to generic constraints
+          obj["mcpServers"] = [...existingServers, ...uniqueNewServers];
+          return true;
+        }
+      }
+      return false;
+    },
+  );
   const getExistingBackups = async (
     backupDir: string,
     filename: string,
@@ -53,7 +118,7 @@ export const createMCPMerger = (logger: Logger, config: MCPConfig) => {
         return;
       }
 
-      let targetData: { [key: string]: unknown } = {};
+      let targetData: MCPConfigData = {};
       if (await fileExists(targetFile)) {
         const targetContent = await readFile(targetFile, "utf8");
         targetData = JSON.parse(targetContent);
@@ -61,10 +126,13 @@ export const createMCPMerger = (logger: Logger, config: MCPConfig) => {
         logger.info(`Creating target file: ${targetFile}`);
       }
 
-      targetData[config.mergeKey] = sourceData[config.mergeKey];
+      const mergedData = mergeMCPConfig(
+        { [config.mergeKey]: sourceData[config.mergeKey] },
+        targetData,
+      );
 
       const JSON_INDENT = 2;
-      const updatedContent = JSON.stringify(targetData, undefined, JSON_INDENT);
+      const updatedContent = JSON.stringify(mergedData, undefined, JSON_INDENT);
       await writeFile(targetFile, updatedContent, "utf8");
 
       logger.success("MCP servers configuration merged successfully");

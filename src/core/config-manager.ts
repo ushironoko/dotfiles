@@ -1,11 +1,11 @@
 import { loadConfig } from "c12";
-import {
+import type {
   BackupConfig,
   DotfilesConfig,
   FileMapping,
   MCPConfig,
-} from "../types/config";
-import { expandPath } from "../utils/paths";
+} from "../types/config.js";
+import { expandPath } from "../utils/paths.js";
 
 const DEFAULT_KEEP_LAST = 10;
 

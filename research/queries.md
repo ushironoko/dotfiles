@@ -6,6 +6,7 @@
 
 - `typescript-migration-tools.md` - TypeScript移行ツールの調査結果
 - `c12-migration-guide.md` - c12設定ローダーのマイグレーションガイド
+- `defu-integration.md` - defuライブラリを使用したMCPサーバー設定マージの実装ガイド
 
 ## クエリパターン
 
@@ -144,6 +145,94 @@ query: "Gunshi globalOptions ctx.values"
 ```
 query: "Gunshi type-safe argument parsing"
 query: "Gunshi TypeScript interface Command"
+```
+
+### defu Library 関連
+
+#### 基本概念
+
+```
+query: "defu UnJS recursive merge objects"
+query: "defu assign default properties lightweight"
+query: "defu object merging configuration"
+```
+
+#### インストールとセットアップ
+
+```
+query: "defu bun add installation"
+query: "defu import usage basic example"
+```
+
+#### API メソッド
+
+```
+query: "defu createDefu custom merger"
+query: "defuFn function handling defaults"
+query: "defuArrayFn array function processing"
+```
+
+#### 配列処理
+
+```
+query: "defu array concatenation behavior"
+query: "defu array merge limitations recursive"
+query: "defu array objects lodash.merge comparison"
+```
+
+#### MCPサーバーマージ実装
+
+```
+query: "defu MCP server configuration merge"
+query: "defu mcpServers duplicate prevention"
+query: "defu createDefu custom merge strategy MCP"
+```
+
+#### カスタムマージ戦略
+
+```
+query: "defu createDefu customMerger function"
+query: "defu merge strategy return true false"
+query: "defu custom logic mcpServers array"
+```
+
+#### セキュリティと型安全性
+
+```
+query: "defu __proto__ constructor security"
+query: "defu TypeScript type utility"
+query: "defu object pollution prevention"
+```
+
+#### パフォーマンスと比較
+
+```
+query: "defu 2.3kB gzipped lightweight"
+query: "defu vs lodash.merge performance"
+query: "defu vs deepmerge comparison"
+```
+
+#### 実装パターン
+
+```
+query: "defu MCPMerger class integration"
+query: "defu backup before merge"
+query: "defu validation after merge"
+```
+
+#### エラーハンドリング
+
+```
+query: "defu error handling try catch"
+query: "defu fallback merge failure"
+```
+
+#### マイグレーション計画
+
+```
+query: "defu migration phases implementation"
+query: "defu MCPMerger update existing"
+query: "defu test updates migration"
 ```
 
 ### 統合例・実装パターン

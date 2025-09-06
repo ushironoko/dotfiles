@@ -10,7 +10,7 @@ import {
   unlink,
 } from "fs/promises";
 import { dirname, join } from "path";
-import { expandPath } from "./paths";
+import { expandPath } from "./paths.js";
 
 export async function fileExists(path: string): Promise<boolean> {
   try {

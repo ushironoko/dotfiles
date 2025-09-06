@@ -1,6 +1,6 @@
 import { chmod, lstat, readlink } from "fs/promises";
 import { join, resolve, dirname } from "path";
-import { FileMapping, SymlinkOptions, SymlinkStatus } from "../types/config";
+import { FileMapping, SymlinkOptions, SymlinkStatus } from "../types/config.js";
 import {
   fileExists,
   createSymlink as fsCreateSymlink,
