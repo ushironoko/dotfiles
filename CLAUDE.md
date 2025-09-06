@@ -23,7 +23,7 @@ bun run lint:fix   # Auto-fix lint issues
 # Type checking (using tsgo --noEmit)
 bun run typecheck
 
-# Pre-commit check (runs lint, typecheck, and tests)
+# Pre-commit check (runs format, lint, typecheck, and tests)
 bun run prepare
 
 # Development/manual execution
