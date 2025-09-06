@@ -27,5 +27,5 @@ dotfiles list       # List managed files
 
 - Creates symbolic links from your dotfiles to system locations
 - Backs up existing files before replacing them
-- Merges MCP server configurations for Claude CLI
+- Merges MCP server configurations for `~/.claude.json`
 - Manages shell configs, git settings, and various tool configurations
