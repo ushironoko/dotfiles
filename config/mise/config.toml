@@ -5,6 +5,7 @@ ni = "23.2.0"
 pnpm = "latest"
 rust = "latest"
 uv = "latest"
+bun = "latest"
 
 [settings]
 experimental = true

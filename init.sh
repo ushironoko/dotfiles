@@ -1,25 +1,12 @@
 #!/bin/bash
 
 # Dotfiles initial setup script
-# This script installs Bun (if needed) and runs the initial dotfiles installation
+# This script installs mise and mise-managed tools, then runs the initial dotfiles installation
 
 set -e
 
 echo "🚀 Dotfiles Initial Setup"
 echo ""
-
-# Check if bun is installed
-if ! command -v bun &> /dev/null; then
-    echo "📦 Bun is not installed. Installing Bun..."
-    curl -fsSL https://bun.sh/install | bash
-    
-    # Add bun to current shell session
-    export BUN_INSTALL="$HOME/.bun"
-    export PATH="$BUN_INSTALL/bin:$PATH"
-    
-    echo "✅ Bun installed successfully"
-    echo ""
-fi
 
 # Check if mise is installed
 if ! command -v mise &> /dev/null; then
@@ -42,6 +29,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Change to script directory
 cd "$SCRIPT_DIR"
 
+# Check for existing Bun installation outside of mise
+if [[ -d "$HOME/.bun" ]]; then
+    echo "⚠️  Existing Bun installation detected at ~/.bun"
+    echo "   To use mise-managed Bun, please remove it first:"
+    echo ""
+    echo "   rm -rf ~/.bun"
+    echo ""
+    echo "   Then re-run this script."
+    echo ""
+    echo "   Note: Your shell config may also contain Bun-related PATH exports that should be removed."
+    exit 1
+fi
+
 # Run mise doctor to verify installation
 echo "🔍 Verifying mise installation..."
 mise doctor || true  # Continue even if doctor reports warnings
@@ -52,18 +52,30 @@ if [ -n "$MISE_JUST_INSTALLED" ]; then
     echo "⚠️  mise was just installed. Please restart your shell or run:"
     echo "   exec \$SHELL"
     echo ""
-    echo "Then re-run this script to continue with mise tool installation."
+    echo "Then re-run this script to continue with tool installation."
     exit 0
 fi
 
-# Install mise-managed tools
-echo "📦 Installing mise-managed tools..."
+# Install mise-managed tools (including bun)
+echo "📦 Installing mise-managed tools (bun, node, starship, etc.)..."
 mise install || true  # Continue even if some tools fail to install
 
 echo ""
 
-# Install dependencies
-echo "📦 Installing dependencies..."
+# Add mise shims to PATH for current session
+export PATH="$HOME/.local/share/mise/shims:$PATH"
+
+# Verify bun is available
+if ! command -v bun &> /dev/null; then
+    echo "❌ Bun installation failed or not available in PATH"
+    echo "   Please check 'mise ls' and ensure bun is installed"
+    exit 1
+fi
+
+echo "✅ Bun is available at: $(which bun)"
+
+# Install Node.js dependencies using mise-managed bun
+echo "📦 Installing Node.js dependencies..."
 bun install
 
 # Run the installation
