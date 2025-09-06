@@ -1,66 +1,66 @@
-# 開発の進め方
+# Development Workflow
 
-- 開発を進める際には、以下の流れを遵守する必要があります
-  - タスクリストの作成
-    - 常に目標を分解して issue 化し、それを元にタスクリストを作成して優先順位をつけて取り組みます
-- t_wada の推奨するテスト駆動開発を遵守する
-  - テストを実行し、テストがパスしたら lint、format、type check を実行して静的検査を行う
-  - テストや静的検査がすべてパスしたら、意味のある単位で git に commit する
-- タスクリストの項目をクリアしたら、リストにチェックを入れて更新し、次のタスクを着手する
-- 特定のタスクは subagent を用いる
-  - ユニットテストの作成、実行は test subagent を用いる
-  - git の操作は git subagent を用いる
-  - ベンチマークの実行には benchmark subagent を用いる
-  - リファクタリングには similarity subagent を用いる
+- When proceeding with development, the following workflow must be adhered to:
+  - Task List Creation
+    - Always break down goals into issues, create task lists based on them, prioritize, and tackle them accordingly
+- Follow Test-Driven Development as recommended by t_wada
+  - Run tests, and when tests pass, execute lint, format, and type check for static analysis
+  - When all tests and static analysis pass, commit to git in meaningful units
+- When a task list item is completed, check it off the list and update it, then proceed to the next task
+- Use subagents for specific tasks
+  - Use test subagent for creating and running unit tests
+  - Use git subagent for git operations
+  - Use benchmark subagent for running benchmarks
+  - Use similarity subagent for refactoring
 
-# コーディングについて
+# Coding Guidelines
 
-- TypeScript を用いたプロジェクトにおいては、以下のルールを遵守する必要があります
-  - パッケージ管理ツールには pnpm を利用すること
-  - npm module は常に最新のバージョンを番号指定してインストールすること
-    - `module@latest` や `module@^5.0.0` のような記述は避け、`module@5.5.1`のように明示的に指定すること
-    - PreRelease なバージョンは避け、安定したバージョンを選択すること
-  - なるべく npm module に頼らず、言語機能で表現可能なことは言語機能を用いて記述すること
-    - 例えば `lodash` の `values` ような、言語機能でカバーできるユースケースでは、可能な限り言語機能を用いて記述する
-  - esm によるモジュール解決を行い、commonjs によるモジュール解決は行わないこと
-  - `Class` を禁止し、可能な限り関数による記述を優先すること
-  - `.d.ts` ファイルの作成の禁止
-    - global に型を公開する必要がある場合は、モジュールの import/export を含まない型定義用の.ts ファイルを作成し、`declare global` を用いて記述すること
-    - そもそもなるべくファイルスコープとモジュール解決に頼った型定義を行い、global な型定義は控えること
-  - lint には `biomejs/biome` を用いること
-    - ドキュメントをよく読み、ルールのカスタムは避けてなるべくデフォルトの設定のみで済ませること
-    - lint をする際は、npm scripts に `lint` というスクリプトを記述し、その npm scripts を実行して行うこと
-  - format には `biomejs/biome` を用いること
-    - ドキュメントをよく読み、ルールのカスタムは避けてなるべくデフォルトの設定のみで済ませること
-    - format をする際は、npm scripts に `format` というスクリプトを記述し、その npm scripts を実行して行うこと
-    - インデントは常に 2 スペースのタブを用いる
-    - ダブルクォーテーションを優先する
-    - auto semicolon insertion に頼らず、セミコロンを用いる
-  - test には vitest を用いること
-    - テストファイルは可能な限り、テスト対象のモジュールを含むファイルと同じ階層に、そのファイル名.test.ts という命名で作成すること
-    - test をする際は、npm scripts に `test` というスクリプトを記述し、その npm scripts を実行して行うこと
-  - type check には tsc を用いること
-    - type check をする際は、npm scripts に `tsc` というスクリプトを記述し、その npm scripts を実行して行うこと
-  - 実行環境は Node.js を用いること
-    - Node.js のバージョン参照が必要な場合は、ユーザーが作成するプロジェクトルートの `.node-version` ファイルを参照し、それに従うこと
-  - TypeScript ファイルを直接実行する必要がある際は、`node index.ts` のように Node.js の機能を用いて実行すること
-    - もし実行ができなかった場合は、`privatenumber/tsx` を用いて実行すること
-  - エラーハンドリングについて
-    - 非同期処理は await/catch パターンで記述し、必ず catch 句で例外を処理すること
-    - 同期処理は try/catch パターンで記述し、可能な限り catch 句中でエラーを処理し、ユーザーフィードバックを完結させること
-      - 例外をその場で処理できない場合は throw しても良いが、必ず Error インスタンスの cause オプションでエラー情報を伝播すること
-      - 無意味に error 情報を握りつぶすことは禁止
-- プロジェクト構造において、以下のルールを遵守する必要があります
-  - プロジェクトルートには各種設定ファイル、`src` ディレクトリ、`scripts` ディレクトリ、`lib` ディレクトリ、`bin` ディレクトリ、`docs` ディレクトリ、`templates` ディレクトリ、`tests` ディレクトリの作成のみを許可する
-  - src ディレクトリの配下は、そのプロジェクトに適したディレクトリ構造を考え、自由に作成しても良い
-  - プロジェクトがモノレポをサポートする場合は、`src` ディレクトリの代わりに `packages` ディレクトリを作成できる
+- For TypeScript projects, the following rules must be adhered to:
+  - Use pnpm as the package management tool
+  - Always install npm modules with specific version numbers for the latest version
+    - Avoid notations like `module@latest` or `module@^5.0.0`, and explicitly specify like `module@5.5.1`
+    - Avoid PreRelease versions and select stable versions
+  - Minimize reliance on npm modules; use language features when possible
+    - For example, for use cases that can be covered by language features like lodash's `values`, use language features as much as possible
+  - Use ESM for module resolution, not CommonJS module resolution
+  - Prohibit `Class`; prioritize functional programming as much as possible
+  - Prohibit creation of `.d.ts` files
+    - When global types need to be exposed, create a type definition .ts file without module import/export and use `declare global`
+    - Generally rely on file scope and module resolution for type definitions, avoiding global type definitions
+  - Use `biomejs/biome` for linting
+    - Read the documentation carefully and avoid customizing rules; use default settings as much as possible
+    - When linting, write a `lint` script in npm scripts and execute that npm script
+  - Use `biomejs/biome` for formatting
+    - Read the documentation carefully and avoid customizing rules; use default settings as much as possible
+    - When formatting, write a `format` script in npm scripts and execute that npm script
+    - Always use 2 spaces for indentation
+    - Prioritize double quotes
+    - Use semicolons without relying on automatic semicolon insertion
+  - Use vitest for testing
+    - Test files should be created at the same level as the module file being tested, with the naming convention filename.test.ts
+    - When testing, write a `test` script in npm scripts and execute that npm script
+  - Use tsc for type checking
+    - When type checking, write a `tsc` script in npm scripts and execute that npm script
+  - Use Node.js as the runtime environment
+    - When Node.js version reference is needed, refer to the `.node-version` file created by the user in the project root and follow it
+  - When directly executing TypeScript files, use Node.js features like `node index.ts`
+    - If execution fails, use `privatenumber/tsx` for execution
+  - Error Handling
+    - Write asynchronous operations with await/catch pattern and always handle exceptions in catch clauses
+    - Write synchronous operations with try/catch pattern, handle errors in catch clauses as much as possible, and complete user feedback
+      - If exceptions cannot be handled on the spot, they may be thrown, but always propagate error information using the cause option of Error instances
+      - Meaninglessly suppressing error information is prohibited
+- For project structure, the following rules must be adhered to:
+  - Only allow creation of various configuration files, `src` directory, `scripts` directory, `lib` directory, `bin` directory, `docs` directory, `templates` directory, and `tests` directory in the project root
+  - Under the src directory, you may freely create a directory structure suitable for the project
+  - When the project supports monorepo, a `packages` directory can be created instead of the `src` directory
 
-# 画像について
+# About Images
 
-- **MUST** ファイルを指定するときに、Windowsの形式のパスはubuntuのマウントディレクトリのパスに変換してください
-  - 例: "C:\Users\user1\Pictures\test.jpg" を "/mnt/c/user1/Pictures/test.jpg" へ変換
+- **MUST** When specifying files, convert Windows-format paths to Ubuntu mount directory paths
+  - Example: Convert "C:\Users\user1\Pictures\test.jpg" to "/mnt/c/user1/Pictures/test.jpg"
 
-# 禁止事項
+# Prohibitions
 
-- ファイルやディレクトリを削除する場合、勝手に実行してはならない。かならず許可を求める
-- CLAUDE.md に存在する、`###readonly` から始まり、`###readonlyend` で終わるブロックの中身は編集してはならない。ユーザーのプロジェクトに対する指示として、読み取りだけ行う
+- When deleting files or directories, do not execute without permission. Always ask for permission
+- Do not edit content within blocks starting with `###readonly` and ending with `###readonlyend` that exist in CLAUDE.md. Only read them as instructions for the user's project
