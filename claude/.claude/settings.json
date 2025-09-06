@@ -21,6 +21,20 @@
     ],
     "deny": ["Bash(curl:*)"]
   },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "WebSearch|WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/pre_tool_use/no_default_web_fetch.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
   "model": "opus",
   "statusLine": {
     "type": "command",

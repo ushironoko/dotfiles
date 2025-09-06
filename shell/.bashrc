@@ -181,9 +181,9 @@ esac
 # pnpm end
 
 
-# bun
-export BUN_INSTALL="$HOME/.bun"
-export PATH="$BUN_INSTALL/bin:$PATH"
+# bun (managed by mise - path is added via mise shims)
+# export BUN_INSTALL="$HOME/.bun"
+# export PATH="$BUN_INSTALL/bin:$PATH"
 
 # direnv hook
 eval "$(direnv hook bash)"

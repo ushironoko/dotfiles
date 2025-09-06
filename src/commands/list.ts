@@ -71,7 +71,7 @@ export const listCommand = define({
             let permissions = undefined;
             if (
               mapping.permissions &&
-              typeof mapping.permissions === "object"
+              "object" === typeof mapping.permissions
             ) {
               permissions = mapping.permissions[file];
             }
@@ -111,18 +111,18 @@ export const listCommand = define({
       }
 
       // Sort parent directories
-      const sortedParents = Array.from(groupedMappings.keys()).sort();
+      const sortedParents = [...groupedMappings.keys()].sort();
 
       for (const [index, parent] of sortedParents.entries()) {
         const items = groupedMappings.get(parent) ?? [];
 
         // Tree-like display
-        if (index > 0) {
+        if (0 < index) {
           console.log(""); // Add spacing between groups
         }
 
         // For selective mappings
-        if (items.length > 0 && "selective-file" === items[0]?.type) {
+        if (0 < items.length && "selective-file" === items[0]?.type) {
           const parentStatus = await fileExists(parent);
           if (verbose) {
             console.log(

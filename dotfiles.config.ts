@@ -29,12 +29,14 @@ export default defineConfig({
       include: [
         "agents",
         "commands",
+        "hooks",
         "CLAUDE.md",
         "settings.json",
         "statusline.sh",
       ],
       permissions: {
         "statusline.sh": "755",
+        "hooks/pre_tool_use/no_default_web_fetch.sh": "755",
       },
     },
     {
