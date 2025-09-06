@@ -11,16 +11,13 @@
       "Bash(bun:*)",
       "Bash(find:*)",
       "Bash(gh:*)",
-      "WebFetch(domain:*)",
       "Read(~/.bashrc)",
       "Read(~/.zshrc)",
-      "mcp__serena__list_dir",
-      "mcp__serena__replace_regex",
-      "mcp__serena__find_symbol",
-      "mcp__serena__search_for_pattern",
-      "mcp__serena__think_about_whether_you_are_done",
-      "mcp__serena__check_onboarding_performed",
-      "mcp__serena__get_symbols_overview"
+      "Bash(chmod:*)",
+      "mcp__gistdex",
+      "mcp__gemini-google-search",
+      "mcp__readability",
+      "mcp__serena"
     ],
     "deny": ["Bash(curl:*)"]
   },
