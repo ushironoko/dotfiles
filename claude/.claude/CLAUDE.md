@@ -1,16 +1,19 @@
 # PROJECT CONTEXT
 
 ## Language & Runtime
+
 - **Language**: TypeScript (ESM modules only)
 - **Runtime**: Node.js / Bun
 - **Package Manager**: Detected by lock file (pnpm/bun)
 
 ## Testing & Quality
+
 - **Test Framework**: Vitest
 - **Linter/Formatter**: BiomeJS (default settings)
 - **Type Checker**: tsc
 
 ## Architecture Principles
+
 - Functional programming (NO classes)
 - File-scoped types (NO .d.ts files)
 - Language features over libraries
@@ -20,6 +23,7 @@
 # MUST: Critical Constraints
 
 ## Absolute Requirements
+
 - **ALWAYS** check for lock files and use the appropriate package manager:
   - If `pnpm-lock.yaml` exists → use `pnpm`
   - If `bun.lockb` exists → use `bun`
@@ -32,6 +36,7 @@
 - **NEVER** suppress errors without handling
 
 ## Before ANY Commit
+
 **ALWAYS**
 
 ```bash
@@ -43,6 +48,7 @@
 ```
 
 ## Permission Required
+
 - **ASK** before deleting files or directories
 - **ASK** before major architectural changes
 - **PRESERVE** content between `###readonly` and `###readonlyend` markers
@@ -54,6 +60,7 @@
 ## Development Workflow
 
 ### Task Management
+
 1. **Create task list** - Break down goals into actionable items
 2. **Prioritize** - Order by importance and dependencies
 3. **Track progress** - Update status after each completion
@@ -63,6 +70,7 @@
    - `similarity` → Refactoring
 
 ### Test-Driven Development (TDD)
+
 ```bash
 # Follow t_wada's TDD cycle:
 1. Write failing test
@@ -75,12 +83,14 @@
 ## Code Style
 
 ### TypeScript Conventions
+
 - **Prefer** built-in language features over libraries
 - **Use** async/await over callbacks/promises
 - **Export** named exports over default exports
 - **Type** everything explicitly (avoid `any`)
 
 ### File Organization
+
 ```
 project-root/
 ├── src/          # Source code
@@ -92,20 +102,21 @@ project-root/
 ```
 
 ### Error Handling Pattern
+
 ```typescript
 // Async operations
 try {
   const result = await operation();
 } catch (error) {
   // Handle with context
-  throw new Error('Operation failed', { cause: error });
+  throw new Error("Operation failed", { cause: error });
 }
 
 // Sync operations
 try {
   performAction();
 } catch (error) {
-  console.error('Action failed:', error);
+  console.error("Action failed:", error);
   // Provide user feedback
 }
 ```
@@ -115,6 +126,7 @@ try {
 # WORKFLOWS
 
 ## Starting New Task
+
 ```bash
 # 1. Understand requirements
 # 2. Create task list
@@ -124,6 +136,7 @@ try {
 ```
 
 ## Installing Dependencies
+
 ```bash
 # Detect package manager from lock file
 # If pnpm-lock.yaml exists:
@@ -139,6 +152,7 @@ bun add <package>@1.2.3
 ```
 
 ## Running Quality Checks
+
 ```bash
 # Individual checks
 bun test                    # Run tests
@@ -155,6 +169,7 @@ bun run prepare
 # TOOLS CONFIGURATION
 
 ## Package.json Scripts
+
 ```json
 {
   "scripts": {
@@ -168,17 +183,20 @@ bun run prepare
 ```
 
 ## BiomeJS Settings
+
 - **Indentation**: 2 spaces
 - **Quotes**: Double quotes
 - **Semicolons**: Always
 - **Config**: Use defaults (minimal customization)
 
 ## Vitest Configuration
+
 - **Test files**: `*.test.ts` (same directory as source)
 - **Coverage**: Optional but recommended
 - **Watch mode**: Use for TDD
 
 ## TypeScript Configuration
+
 - **Module**: ESNext
 - **Target**: Based on Node.js version in `.node-version`
 - **Strict**: true
@@ -189,7 +207,9 @@ bun run prepare
 # SPECIAL CASES
 
 ## Windows Path Conversion
+
 When handling file paths from Windows:
+
 ```bash
 # Convert Windows path
 "C:\Users\user1\Pictures\test.jpg"
@@ -198,12 +218,15 @@ When handling file paths from Windows:
 ```
 
 ## Monorepo Support
+
 For monorepo projects:
+
 - Use `packages/` instead of `src/`
 - Configure workspaces (pnpm-workspace.yaml or bun workspace)
 - Share configs at root level
 
 ## Direct TypeScript Execution
+
 ```bash
 # Try Bun runtime first
 bun --bun index.ts

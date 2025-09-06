@@ -4,6 +4,7 @@ starship = "latest"
 ni = "23.2.0"
 pnpm = "latest"
 rust = "latest"
+uv = "latest"
 
 [settings]
 experimental = true

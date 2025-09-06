@@ -97,10 +97,9 @@ if [ -f "/usr/local/bin/brew" ]; then
   eval "$(/usr/local/bin/brew shellenv)"
 fi
 
-# mise (formerly rtx) - universal version manager
-if command -v mise &> /dev/null; then
-  eval "$(mise activate zsh)"
-fi
+# mise - universal version manager
+# Always activate mise to ensure shims are in PATH
+eval "$(mise activate zsh)"
 
 # direnv hook
 if command -v direnv &> /dev/null; then
@@ -113,11 +112,10 @@ export PATH="$PATH:/Applications/Visual Studio Code.app/Contents/Resources/app/b
 # Local bin
 export PATH="$HOME/.local/bin:$PATH"
 
-# Load local environment if exists
-[ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
 
 # Load additional zsh configurations if exists
 [ -f "$HOME/.zshrc.local" ] && . "$HOME/.zshrc.local"
 
 # Starship prompt
+# Initialize starship after mise is activated
 eval "$(starship init zsh)"

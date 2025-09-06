@@ -178,14 +178,6 @@ case ":$PATH:" in
   *) export PATH="$PNPM_HOME:$PATH" ;;
 esac
 
-. "$HOME/.local/bin/env"
-
-# pnpm
-export PNPM_HOME="/home/ushironoko/.local/share/pnpm"
-case ":$PATH:" in
-  *":$PNPM_HOME:"*) ;;
-  *) export PATH="$PNPM_HOME:$PATH" ;;
-esac
 # pnpm end
 
 
@@ -197,4 +189,8 @@ export PATH="$BUN_INSTALL/bin:$PATH"
 eval "$(direnv hook bash)"
 
 # starship
+# Initialize mise for managing development tools
+eval "$(mise activate bash)"
+
+# Initialize starship prompt
 eval "$(starship init bash)"
