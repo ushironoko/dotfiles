@@ -18,6 +18,10 @@
 - File-scoped types (NO .d.ts files)
 - Language features over libraries
 
+## User Communications
+
+- Only use Japanese. User is Japanese.
+
 ---
 
 # MUST: Critical Constraints
