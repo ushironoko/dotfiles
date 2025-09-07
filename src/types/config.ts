@@ -68,4 +68,5 @@ export interface InstallOptions {
   force?: boolean;
   verbose?: boolean;
   config?: string;
+  select?: boolean;
 }

@@ -7,6 +7,7 @@
 - `typescript-migration-tools.md` - TypeScript移行ツールの調査結果
 - `c12-migration-guide.md` - c12設定ローダーのマイグレーションガイド
 - `defu-integration.md` - defuライブラリを使用したMCPサーバー設定マージの実装ガイド
+- `clack-prompts.md` - @clack/promptsライブラリを使用した対話型CLIの実装ガイド
 
 ## クエリパターン
 
@@ -233,6 +234,84 @@ defu fallback merge failure
 defu migration phases implementation
 defu MCPMerger update existing
 defu test updates migration
+```
+
+### @clack/prompts 関連
+
+#### 基本概念
+
+```
+@clack/prompts interactive CLI TypeScript
+clack multiselect group confirmation
+clack spinner tasks progress
+```
+
+#### インストールとセットアップ
+
+```
+@clack/prompts bun installation
+clack prompts intro outro session
+```
+
+#### コンポーネント
+
+```
+clack text input validation placeholder
+clack confirm boolean yes no
+clack select options label hint
+clack multiselect multiple required initialValues
+```
+
+#### グループ化と対話型フロー
+
+```
+clack group onCancel results reference
+clack prompts group interactive flow
+@clack/prompts multiselect dotfiles mapping
+```
+
+#### キャンセル処理
+
+```
+clack isCancel cancel CTRL+C handling
+clack prompts error handling validation
+```
+
+#### スピナーとタスク
+
+```
+clack spinner start stop message
+clack tasks parallel execution progress
+```
+
+#### ログとストリーミング
+
+```
+clack log info success warn error
+clack stream generator async iterator
+```
+
+#### 型定義とTypeScript
+
+```
+@clack/prompts TypeScript types generic
+clack ConfirmOptions TextOptions SelectOptions
+```
+
+#### 実装パターン
+
+```
+clack dotfiles install --select interactive
+clack prompts multiselect file mapping selection
+clack group validation error handling
+```
+
+#### ベストプラクティス
+
+```
+clack best practices validation cancel
+clack user friendly messages hints
+clack async error handling spinner
 ```
 
 ### 統合例・実装パターン

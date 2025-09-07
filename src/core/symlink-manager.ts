@@ -193,11 +193,59 @@ export const createSymlinkManager = (logger: Logger) => {
     }
   };
 
+  const removeSymlink = async (
+    target: string,
+    dryRun = false,
+  ): Promise<void> => {
+    const expandedTarget = expandPath(target);
+
+    if (await isSymlink(expandedTarget)) {
+      logger.action("Removing", `symlink: ${expandedTarget}`);
+      if (!dryRun) {
+        await fsRemoveSymlink(expandedTarget);
+      }
+    } else if (await fileExists(expandedTarget)) {
+      logger.warn(`Target is not a symlink: ${expandedTarget}`);
+    } else {
+      logger.warn(`Target does not exist: ${expandedTarget}`);
+    }
+  };
+
+  const removeFromMapping = async (
+    mapping: FileMapping,
+    dryRun = false,
+  ): Promise<void> => {
+    const expandedTarget = expandPath(mapping.target);
+
+    if ("selective" === mapping.type && mapping.include) {
+      // Remove selective symlinks
+      for (const file of mapping.include) {
+        const targetFile = join(expandedTarget, file);
+        await removeSymlink(targetFile, dryRun);
+      }
+    } else {
+      // Remove regular symlink
+      await removeSymlink(expandedTarget, dryRun);
+    }
+  };
+
+  const removeMultipleSymlinks = async (
+    mappings: FileMapping[],
+    dryRun = false,
+  ): Promise<void> => {
+    for (const mapping of mappings) {
+      await removeFromMapping(mapping, dryRun);
+    }
+  };
+
   return {
     createSymlink,
     createFromMapping,
     createMultipleSymlinks,
     checkSymlinkStatus,
+    removeSymlink,
+    removeFromMapping,
+    removeMultipleSymlinks,
   };
 };
 

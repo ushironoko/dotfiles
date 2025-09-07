@@ -17,6 +17,7 @@
     "install:local": "bun link"
   },
   "dependencies": {
+    "@clack/prompts": "0.11.0",
     "c12": "3.2.0",
     "consola": "3.2.3",
     "defu": "6.1.4",
@@ -28,6 +29,7 @@
     "@types/node": "22.10.6",
     "@typescript/native-preview": "7.0.0-dev.20250904.1",
     "oxlint": "0.15.2",
-    "prettier": "latest"
+    "prettier": "latest",
+    "vitest": "^3.2.4"
   }
 }
