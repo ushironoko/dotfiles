@@ -12,7 +12,7 @@
     "lint": "oxlint",
     "format": "prettier --write .",
     "lint:fix": "oxlint --fix",
-    "typecheck": "tsgo --noEmit",
+    "tsc": "tsgo --noEmit",
     "prepare": "bun run format && bun run lint && bun run typecheck && bun test",
     "install:local": "bun link"
   },

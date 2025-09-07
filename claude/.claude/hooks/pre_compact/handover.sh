@@ -4,5 +4,5 @@ if [ -f ./HANDOVER.md ]; then
   exit 0
 fi
 
-echo "Before compressing your context, record all your project progress, remaining tasks, and user instructions in ./HANDOVER.md , which will be loaded in your next session and used to continue your tasks."  1>&2
+echo "REQUIRED ACTION: You MUST create ./HANDOVER.md NOW with the following: 1) Current project status, 2) Pending tasks, 3) Important context. This file is REQUIRED for compact to proceed. CREATE THE FILE IMMEDIATELY using the Write tool."  1>&2
 exit 2
