@@ -44,6 +44,30 @@
           }
         ]
       }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/pre_compact/handover.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "start|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session_start/takeover.sh",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   },
   "model": "opus",

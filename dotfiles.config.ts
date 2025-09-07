@@ -38,6 +38,8 @@ export default defineConfig({
         "statusline.sh": "755",
         "hooks/pre_tool_use/no_default_web_fetch.sh": "755",
         "hooks/post_tool_use/coding_cycle.sh": "755",
+        "hooks/pre_compact/handover.sh": "755",
+        "hooks/session_start/takeover.sh": "755",
       },
     },
     {
