@@ -5,6 +5,7 @@ import { join } from "path";
 import { createSymlinkManager } from "../../src/core/symlink-manager";
 import { createLogger } from "../../src/utils/logger";
 import { fileExists } from "../../src/utils/fs";
+import type { FileMapping } from "../../src/types/config";
 
 describe("SymlinkManager", () => {
   let testDir: string;
@@ -214,6 +215,53 @@ describe("SymlinkManager", () => {
 
       expect(status.exists).toBe(false);
       expect(status.isSymlink).toBe(false);
+    });
+  });
+
+  describe("selective symlinks with permissions", () => {
+    it("should apply permissions to source files in selective mapping", async () => {
+      const configDir = join(sourceDir, "config");
+      await fs.mkdir(configDir, { recursive: true });
+
+      const scriptFile = join(configDir, "script.sh");
+      await fs.writeFile(scriptFile, "#!/bin/bash\necho 'test'");
+
+      const normalFile = join(configDir, "config.txt");
+      await fs.writeFile(normalFile, "config content");
+
+      const mapping: FileMapping = {
+        source: configDir,
+        target: join(targetDir, "config"),
+        type: "selective",
+        include: ["script.sh", "config.txt"],
+        permissions: {
+          "script.sh": "755",
+        },
+      };
+
+      await manager.createFromMapping(mapping);
+
+      // Check source file permissions (should be executable)
+      const scriptStats = await fs.stat(scriptFile);
+      const scriptMode = (scriptStats.mode & 0o777).toString(8);
+      expect(scriptMode).toBe("755");
+
+      // Check that normal file remains unchanged (permissions may vary based on umask)
+      const normalStats = await fs.stat(normalFile);
+      const normalMode = (normalStats.mode & 0o777).toString(8);
+      // Normal file should not have execute permissions
+      expect(normalMode).toMatch(/^6[46][46]$/);
+
+      // Verify symlinks were created
+      const targetScriptFile = join(targetDir, "config", "script.sh");
+      const targetNormalFile = join(targetDir, "config", "config.txt");
+
+      expect(
+        await fs.lstat(targetScriptFile).then((s) => s.isSymbolicLink()),
+      ).toBe(true);
+      expect(
+        await fs.lstat(targetNormalFile).then((s) => s.isSymbolicLink()),
+      ).toBe(true);
     });
   });
 });

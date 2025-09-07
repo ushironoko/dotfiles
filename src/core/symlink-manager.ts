@@ -103,19 +103,20 @@ export const createSymlinkManager = (logger: Logger) => {
       const sourcePath = join(mapping.source, item);
       const targetPath = join(mapping.target, item);
 
-      await createSymlink(sourcePath, targetPath, force, dryRun);
-
+      // Apply permissions to source file before creating symlink
       if (
         mapping.permissions &&
         "object" === typeof mapping.permissions &&
         mapping.permissions[item]
       ) {
         await applyFilePermission(
-          targetPath,
+          sourcePath,
           mapping.permissions[item],
           dryRun,
         );
       }
+
+      await createSymlink(sourcePath, targetPath, force, dryRun);
     }
   };
 
