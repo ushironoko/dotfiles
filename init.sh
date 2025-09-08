@@ -29,19 +29,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Change to script directory
 cd "$SCRIPT_DIR"
 
-# Check for existing Bun installation outside of mise
-if [[ -d "$HOME/.bun" ]]; then
-    echo "⚠️  Existing Bun installation detected at ~/.bun"
-    echo "   To use mise-managed Bun, please remove it first:"
-    echo ""
-    echo "   rm -rf ~/.bun"
-    echo ""
-    echo "   Then re-run this script."
-    echo ""
-    echo "   Note: Your shell config may also contain Bun-related PATH exports that should be removed."
-    exit 1
-fi
-
 # Run mise doctor to verify installation
 echo "🔍 Verifying mise installation..."
 mise doctor || true  # Continue even if doctor reports warnings
@@ -64,6 +51,16 @@ echo ""
 
 # Add mise shims to PATH for current session
 export PATH="$HOME/.local/share/mise/shims:$PATH"
+
+# Check for existing Bun installation outside of mise
+if [[ -d "$HOME/.bun" ]]; then
+    echo "⚠️  Existing Bun installation detected at ~/.bun"
+    echo "   This may conflict with mise-managed Bun."
+    echo "   Consider removing it with: rm -rf ~/.bun"
+    echo "   Also check your shell config for Bun-related PATH exports."
+    echo ""
+    # Continue with warning instead of exiting
+fi
 
 # Verify bun is available
 if ! command -v bun &> /dev/null; then
