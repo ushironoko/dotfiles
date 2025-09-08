@@ -47,7 +47,7 @@
 # Required checks (in order):
 1. bun run format    # Code formatted
 2. bun run lint      # No lint errors
-3. bun run typecheck # No type errors
+3. bun run tsc # No type errors
 4. bun test          # All tests must pass
 ```
 
@@ -162,7 +162,7 @@ bun add <package>@1.2.3
 bun test                    # Run tests
 bun run lint               # Check code style
 bun run format             # Format code
-bun run typecheck          # Check types
+bun run tsc          # Check types
 
 # Pre-commit check (all-in-one)
 bun run prepare
@@ -180,8 +180,8 @@ bun run prepare
     "test": "vitest",
     "lint": "biome check",
     "format": "biome format --write",
-    "typecheck": "tsc --noEmit",
-    "prepare": "bun run format && bun run lint && bun run typecheck && bun test"
+    "tsc": "tsc --noEmit",
+    "prepare": "bun run format && bun run lint && bun run tsc && bun test"
   }
 }
 ```
