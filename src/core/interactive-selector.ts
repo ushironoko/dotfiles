@@ -45,82 +45,86 @@ const groupMappingsByType = (mappings: FileMapping[]) => {
   return grouped;
 };
 
+const buildFileOptions = (mappings: FileMapping[]): MappingOption[] => {
+  return mappings.map((mapping, index) => {
+    const option = formatMapping(mapping);
+    if (0 === index) {
+      return { ...option, label: `[Files] ${option.label}` };
+    }
+    return option;
+  });
+};
+
+const buildDirectoryOptions = (mappings: FileMapping[]): MappingOption[] => {
+  return mappings.map((mapping, index) => {
+    const option = formatMapping(mapping);
+    if (0 === index) {
+      return { ...option, label: `[Directories] ${option.label}` };
+    }
+    return option;
+  });
+};
+
+const buildSelectiveOptions = (mappings: FileMapping[]): MappingOption[] => {
+  const result: MappingOption[] = [];
+
+  mappings.forEach((mapping, index) => {
+    const headerLabel =
+      0 === index ? `[Selective] ${mapping.target}` : `${mapping.target}`;
+
+    if (mapping.include && 0 < mapping.include.length) {
+      mapping.include.forEach((file, fileIndex) => {
+        const label =
+          0 === fileIndex ? `${headerLabel}\n  └─ ${file}` : `  └─ ${file}`;
+
+        result.push({
+          value: `${mapping.source}:${mapping.target}:${file}`,
+          label,
+          parentMapping: mapping,
+          fileName: file,
+        });
+      });
+    }
+  });
+
+  return result;
+};
+
+const buildOptionsWithLabels = (grouped: {
+  [key: string]: FileMapping[];
+}): MappingOption[] => {
+  const result: MappingOption[] = [];
+
+  if (0 < grouped.file.length) {
+    result.push(...buildFileOptions(grouped.file));
+  }
+
+  if (0 < grouped.directory.length) {
+    result.push(...buildDirectoryOptions(grouped.directory));
+  }
+
+  if (0 < grouped.selective.length) {
+    result.push(...buildSelectiveOptions(grouped.selective));
+  }
+
+  return result;
+};
+
 interface SelectionResult {
   selected: FileMapping[];
   deselected: FileMapping[];
 }
 
-export const selectMappings = async (
+const detectExistingSymlinks = async (
+  optionsWithLabels: MappingOption[],
   mappings: FileMapping[],
-  logger: Logger,
-): Promise<SelectionResult | undefined> => {
-  intro("Select files to create/remove symbolic links");
-
-  const grouped = groupMappingsByType(mappings);
-
-  // Build options with group labels
-  const buildOptionsWithLabels = (): (MappingOption & { group?: string })[] => {
-    const result: (MappingOption & { group?: string })[] = [];
-
-    // Files
-    if (0 < grouped.file.length) {
-      grouped.file.forEach((mapping, index) => {
-        const option = formatMapping(mapping);
-        if (0 === index) {
-          result.push({ ...option, label: `[Files] ${option.label}` });
-        } else {
-          result.push(option);
-        }
-      });
-    }
-
-    // Directories
-    if (0 < grouped.directory.length) {
-      grouped.directory.forEach((mapping, index) => {
-        const option = formatMapping(mapping);
-        if (0 === index) {
-          result.push({ ...option, label: `[Directories] ${option.label}` });
-        } else {
-          result.push(option);
-        }
-      });
-    }
-
-    // Selective - expand individual files only (no parent selection)
-    if (0 < grouped.selective.length) {
-      grouped.selective.forEach((mapping, index) => {
-        // Add header label (non-selectable)
-        const headerLabel =
-          0 === index ? `[Selective] ${mapping.target}` : `${mapping.target}`;
-
-        // Add individual files for selective mapping
-        if (mapping.include && 0 < mapping.include.length) {
-          mapping.include.forEach((file, fileIndex) => {
-            const label =
-              0 === fileIndex ? `${headerLabel}\n  └─ ${file}` : `  └─ ${file}`;
-
-            result.push({
-              value: `${mapping.source}:${mapping.target}:${file}`,
-              label,
-              parentMapping: mapping,
-              fileName: file,
-            });
-          });
-        }
-      });
-    }
-
-    return result;
-  };
-
-  const optionsWithLabels = buildOptionsWithLabels();
-
-  // Check existing symlinks to determine initial selection
+): Promise<string[]> => {
   const { isSymlink } = await import("../utils/fs.js");
   const { expandPath } = await import("../utils/paths.js");
   const { join } = await import("path");
 
   const initialValues: string[] = [];
+
   for (const option of optionsWithLabels) {
     const parts = option.value.split(":");
 
@@ -147,36 +151,13 @@ export const selectMappings = async (
     }
   }
 
-  logger.debug(`Found ${initialValues.length} existing symlinks`);
+  return initialValues;
+};
 
-  const selected = await multiselect({
-    message: "Select items to install (Space: toggle, Enter: confirm)",
-    options: optionsWithLabels,
-    required: false,
-    initialValues,
-  });
-
-  if (isCancel(selected)) {
-    cancel("Operation cancelled");
-    return undefined;
-  }
-
-  const selectedValues = selected as string[];
-
-  if (0 === selectedValues.length) {
-    const confirmEmpty = await confirm({
-      message: "Nothing selected. Continue anyway?",
-    });
-
-    if (isCancel(confirmEmpty) || !confirmEmpty) {
-      cancel("Operation cancelled");
-      return undefined;
-    }
-
-    return { selected: [], deselected: mappings };
-  }
-
-  // 選択されたマッピングを復元
+const processSelectedValues = (
+  selectedValues: string[],
+  mappings: FileMapping[],
+): FileMapping[] => {
   const selectedMappings: FileMapping[] = [];
   const selectiveMap = new Map<string, Set<string>>();
 
@@ -185,7 +166,7 @@ export const selectMappings = async (
     const parts = value.split(":");
 
     if (3 === parts.length) {
-      // Individual file from selective mapping (no more __parent__ handling)
+      // Individual file from selective mapping
       const key = `${parts[0]}:${parts[1]}`;
       if (!selectiveMap.has(key)) {
         selectiveMap.set(key, new Set());
@@ -243,7 +224,14 @@ export const selectMappings = async (
     }
   }
 
-  // Find deselected mappings (existing symlinks that were not selected)
+  return selectedMappings;
+};
+
+const findDeselectedMappings = (
+  initialValues: string[],
+  selectedValues: string[],
+  mappings: FileMapping[],
+): FileMapping[] => {
   const deselectedMappings: FileMapping[] = [];
   const selectedValueSet = new Set(selectedValues);
 
@@ -290,6 +278,60 @@ export const selectMappings = async (
       }
     }
   }
+
+  return deselectedMappings;
+};
+
+export const selectMappings = async (
+  mappings: FileMapping[],
+  logger: Logger,
+): Promise<SelectionResult | undefined> => {
+  intro("Select files to create/remove symbolic links");
+
+  const grouped = groupMappingsByType(mappings);
+  const optionsWithLabels = buildOptionsWithLabels(grouped);
+
+  // Check existing symlinks to determine initial selection
+  const initialValues = await detectExistingSymlinks(
+    optionsWithLabels,
+    mappings,
+  );
+  logger.debug(`Found ${initialValues.length} existing symlinks`);
+
+  const selected = await multiselect({
+    message: "Select items to install (Space: toggle, Enter: confirm)",
+    options: optionsWithLabels,
+    required: false,
+    initialValues,
+  });
+
+  if (isCancel(selected)) {
+    cancel("Operation cancelled");
+    return undefined;
+  }
+
+  const selectedValues = selected as string[];
+
+  if (0 === selectedValues.length) {
+    const confirmEmpty = await confirm({
+      message: "Nothing selected. Continue anyway?",
+    });
+
+    if (isCancel(confirmEmpty) || !confirmEmpty) {
+      cancel("Operation cancelled");
+      return undefined;
+    }
+
+    return { selected: [], deselected: mappings };
+  }
+
+  // Process selection results
+  const selectedMappings = processSelectedValues(selectedValues, mappings);
+  const deselectedMappings = findDeselectedMappings(
+    initialValues,
+    selectedValues,
+    mappings,
+  );
 
   outro(
     `${selectedMappings.length} items selected, ${deselectedMappings.length} items deselected`,
