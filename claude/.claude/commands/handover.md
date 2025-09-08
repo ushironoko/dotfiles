@@ -1,147 +1,248 @@
-# Save Session Context
+# Save Session Handover
 
-Create or update HANDOVER.md for comprehensive session continuity.
+Save comprehensive session context to Serena memory for seamless continuation.
 
 ## Instructions
 
-1. Check if HANDOVER.md exists in the project root
-2. If it exists and has `read: false`, update that entry to `read: true`
-3. Create a new handover entry with YAML frontmatter:
+1. **Thoroughly collect all session information:**
+   - Session metadata (timestamp, duration, working directory, git branch)
+   - Main objectives, accomplishments, and progress percentage
+   - Complete TodoWrite task list with exact statuses
+   - All files touched (created/modified/deleted/reviewed) with line counts
+   - Technical decisions with rationale
+   - Full command history with outputs/results
+   - User preferences, instructions, and communication patterns
+   - All errors, warnings, and edge cases encountered
+   - Detailed next steps with time estimates
 
-```yaml
----
-created: [current timestamp in ISO 8601 format]
-read: false
-session_id: [generate unique session ID like session_YYYYMMDD_HHMMSS]
----
-```
+2. **Format with clear hierarchy and visual indicators:**
+   - 🔴 Critical/Blocking issues requiring immediate attention
+   - 🟡 Important/Warning items that need consideration
+   - 🟢 Info/Success completed items and achievements
+   - 🔵 Note/Reference for context and documentation
+   - 🟣 Discovery/Learning for new insights
+   - ⚡ Performance/Optimization notes
+   - 🔒 Security considerations
 
-## Required Sections (include ALL):
+3. **Save to Serena memory:**
+   - Use `mcp__serena__write_memory` with memory name "handover"
+   - Include session ID for tracking: `session_YYYYMMDD_HHMMSS`
 
-### 1. Environment & Setup
+## Required Sections (ALL must be included)
 
-- Working directory path
-- Git branch and status
-- Runtime versions (Bun/Node.js)
-- Recent package installations or updates
+### 1. Session Metadata
+
+- **Session ID**: Unique identifier
+- **Started**: ISO 8601 timestamp
+- **Duration**: Time spent
+- **Working Directory**: Full path
+- **Git Status**: Branch, uncommitted changes, remote status
+- **Environment**: OS, runtime versions, tool versions
 
 ### 2. Session Summary
 
-- Main objectives of this session
-- Key accomplishments
-- Time spent on major tasks
+- **Primary Goal**: What user wanted to achieve
+- **Achievement Level**: Percentage complete with breakdown
+- **Key Accomplishments**: Bullet list with impact
+- **Session Type**: Feature/Bug/Refactor/Research/Documentation
 
-### 3. Current Tasks (from TodoWrite)
+### 3. Task Management (TodoWrite Export)
 
-- Export complete TodoWrite list with statuses
-- Include task descriptions and current state
-- Note any blocked or pending tasks
+- **Completed Tasks**: Full list with completion times
+- **In Progress**: Current task with percentage complete
+- **Pending**: Queued tasks with priority levels
+- **Blocked**: Tasks with blocking reasons
+- **Deferred**: Tasks postponed with reasons
 
-### 4. Files Modified/Reviewed
+### 4. File Operations
 
-- List all files that were:
-  - Created
-  - Modified
-  - Deleted
-  - Extensively reviewed/analyzed
-- Include brief description of changes
+#### Created Files
 
-### 5. Commands Executed
+- Path, purpose, line count, key content
 
-- Important commands run during session
-- Test results (if any)
-- Build/lint/typecheck outcomes
+#### Modified Files
 
-### 6. Technical Context
+- Path, changes summary, diff stats (+/- lines)
+- Before/after key sections for context
 
-- Architecture decisions made
-- Patterns or conventions discovered
-- Dependencies added/removed
-- Configuration changes
+#### Deleted Files
 
-### 7. Unresolved Issues
+- Path, reason for deletion, content summary if relevant
 
-- Error messages not yet resolved
-- Warnings that need attention
-- Technical debt identified
-- Questions for next session
+#### Reviewed Files
 
-### 8. Important Discoveries
+- Path, purpose of review, key findings
 
-- Key insights about the codebase
-- Useful patterns found
-- Performance considerations noted
-- Security concerns identified
+### 5. Technical Context
 
-### 9. Next Session Priorities
+#### Architecture Decisions
 
-- Immediate tasks to continue
-- Recommended order of operations
-- Prerequisites or blockers to address
-- Estimated time for completion
+- Decision, rationale, alternatives considered, impact
 
-### 10. Additional Notes
+#### Dependencies
 
-- User preferences discovered
-- Communication style notes
-- Project-specific conventions
-- Useful resources or documentation links
+- Added: package@version, purpose, size impact
+- Updated: from→to version, breaking changes
+- Removed: package, replacement strategy
 
-## Format Guidelines:
+#### Configuration Changes
 
-- Use clear hierarchical structure with markdown headers
-- Include code blocks for commands/errors
-- Use emoji indicators for priority:
-  - 🔴 Critical/Blocking
-  - 🟡 Important/Warning
-  - 🟢 Info/Success
-  - 🔵 Note/Reference
-- Keep descriptions concise but complete
-- Include file paths as `path/to/file.ext`
+- File, setting, old→new value, reason
 
-## Example Entry Structure:
+#### Code Patterns
 
-```markdown
----
-created: 2025-01-07T15:30:00Z
-read: false
-session_id: session_20250107_153000
----
+- Patterns discovered/implemented
+- Conventions followed/established
+- Anti-patterns avoided
 
-# Session Handover - session_20250107_153000
+### 6. Command History
 
-## Environment & Setup
+#### Git Operations
 
-- **Working Directory**: `/home/user/dev/project`
-- **Git Branch**: `feature/handover-improvements`
-- **Bun Version**: 1.1.42
-- **Uncommitted Changes**: 3 files modified, 1 untracked
-
-## Session Summary
-
-**Duration**: ~2 hours
-**Main Goal**: Improve handover/takeover workflow
-**Result**: Successfully implemented enhanced handover system
-
-## Current Tasks
-
-### In Progress
-
-- 🟡 Implementing structured takeover display (70% complete)
-  - Script updated but needs testing
-
-### Completed
-
-- ✅ Updated handover command documentation
-- ✅ Added detailed template structure
-
-### Pending
-
-- ⏳ Test the new takeover workflow
-- ⏳ Commit changes after testing
-
-[... continue with all sections ...]
+```bash
+# Include full commands with outputs
+git status
+git diff
+git log --oneline -5
 ```
 
-Save the new entry at the top of HANDOVER.md (prepend, not append).
-After creation, display confirmation with entry summary.
+#### Build/Test/Lint
+
+```bash
+# Include results and any failures
+bun test
+bun run lint
+bun run typecheck
+```
+
+#### System Commands
+
+```bash
+# File operations, searches, etc.
+```
+
+### 7. User Context
+
+#### Communication Preferences
+
+- Language, tone, detail level
+- Response format preferences
+
+#### Project-Specific Instructions
+
+- Special requirements
+- Conventions to follow
+- Tools to use/avoid
+
+#### Discovered Preferences
+
+- Workflow patterns
+- Decision criteria
+- Quality standards
+
+### 8. Issues & Resolutions
+
+#### Resolved Issues
+
+- Issue, root cause, solution, prevention
+
+#### Unresolved Issues
+
+- 🔴 Blocking issues with error details
+- 🟡 Warnings with context
+- 🔵 Questions for clarification
+
+#### Edge Cases
+
+- Scenario, handling, future considerations
+
+### 9. Performance & Optimization
+
+- Bottlenecks identified
+- Optimizations applied
+- Metrics (before/after)
+- Further optimization opportunities
+
+### 10. Security Considerations
+
+- Vulnerabilities addressed
+- Secrets handling
+- Permission changes
+- Security best practices applied
+
+### 11. Learning & Discoveries
+
+- New tools/techniques learned
+- Codebase insights
+- Documentation gaps found
+- Improvement suggestions
+
+### 12. Next Session Roadmap
+
+#### Immediate Priorities (Next 30 min)
+
+1. Task, estimated time, prerequisites
+
+#### Short-term Goals (Next session)
+
+- Goals with success criteria
+
+#### Long-term Considerations
+
+- Technical debt items
+- Refactoring opportunities
+- Feature enhancements
+
+#### Prerequisites & Blockers
+
+- External dependencies
+- User decisions needed
+- Technical limitations
+
+### 13. Session Artifacts
+
+- Test results location
+- Log files generated
+- Documentation created
+- Screenshots/diagrams paths
+
+### 14. Rollback Information
+
+- How to undo changes if needed
+- Backup locations
+- Recovery procedures
+
+## Output Format Example
+
+```markdown
+# Session Handover - session_20250108_143000
+
+## 1. Session Metadata
+
+- **Session ID**: session_20250108_143000
+- **Started**: 2025-01-08T14:30:00Z
+- **Duration**: 2h 15m
+- **Working Directory**: /home/user/dev/project
+- **Git Status**: main branch, 3 files modified, ahead by 2 commits
+- **Environment**: Ubuntu 22.04, Bun 1.1.42, Node 20.x
+
+## 2. Session Summary
+
+- **Primary Goal**: Migrate handover system to Serena memory
+- **Achievement Level**: 85% complete
+  - ✅ File migration (100%)
+  - ✅ Command updates (100%)
+  - 🟡 Testing (50%)
+  - ⏳ Documentation (70%)
+    ...
+```
+
+## Notes
+
+- Be exhaustive - better to have too much information than too little
+- Include actual command outputs, not just commands
+- Preserve exact error messages and stack traces
+- Note any assumptions made during the session
+- This will overwrite existing handover.md in memories (and reset read status)
+- Use /takeover command to read the saved handover (automatically marks as read)
+- New handover creation resets any previous read markers

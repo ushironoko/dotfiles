@@ -44,18 +44,6 @@
           }
         ]
       }
-    ],
-    "SessionStart": [
-      {
-        "matcher": "start|resume|clear|compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.claude/hooks/session_start/takeover.sh",
-            "timeout": 30
-          }
-        ]
-      }
     ]
   },
   "model": "opus",
