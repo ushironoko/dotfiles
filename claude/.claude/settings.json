@@ -17,8 +17,7 @@
       "mcp__gemini-google-search",
       "mcp__readability",
       "mcp__hitl",
-      "mcp__serena",
-      "Write(**)"
+      "mcp__serena"
     ],
     "deny": ["Bash(curl:*)"]
   },
