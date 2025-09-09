@@ -35,3 +35,5 @@ tmp/
 *.tmp
 *.bak
 *.backup
+
+_research/

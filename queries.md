@@ -2,13 +2,6 @@
 
 このファイルは、gistdexでインデックスされたドキュメントを効率的にクエリするための参照ガイドです。
 
-## インデックス済みファイル
-
-- `typescript-migration-tools.md` - TypeScript移行ツールの調査結果
-- `c12-migration-guide.md` - c12設定ローダーのマイグレーションガイド
-- `defu-integration.md` - defuライブラリを使用したMCPサーバー設定マージの実装ガイド
-- `clack-prompts.md` - @clack/promptsライブラリを使用した対話型CLIの実装ガイド
-
 ## クエリパターン
 
 ### OXC (oxlint) 関連
