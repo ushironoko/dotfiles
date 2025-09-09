@@ -273,3 +273,8 @@ eval "$(mise activate bash)"
 
 # Initialize starship prompt
 eval "$(starship init bash)"
+
+# Interactive directory navigation with fzf
+if [ -f "$HOME/ghq/github.com/ushironoko/dotfiles/scripts/fcd" ]; then
+  source "$HOME/ghq/github.com/ushironoko/dotfiles/scripts/fcd"
+fi
