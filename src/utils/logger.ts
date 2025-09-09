@@ -12,15 +12,15 @@ export const createLogger = (verbose = false, dryRun = false) => {
     },
   });
 
-  const wrapWithDryRun = (fn: Function) => {
-    return (...args: unknown[]) => {
+  const wrapWithDryRun =
+    (fn: Function) =>
+    (...args: unknown[]) => {
       if (isDryRun) {
         fn(colors.blue("[DRY RUN]"), ...args);
       } else {
         fn(...args);
       }
     };
-  };
 
   const error = consola.error.bind(consola);
   const warn = consola.warn.bind(consola);

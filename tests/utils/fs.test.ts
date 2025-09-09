@@ -166,8 +166,8 @@ describe("fs utilities", () => {
 
       const entries = await readDir(testDir);
 
-      const fileEntry = entries.find((e) => "file.txt" === e.name);
-      const dirEntry = entries.find((e) => "dir" === e.name);
+      const fileEntry = entries.find((e) => e.name === "file.txt");
+      const dirEntry = entries.find((e) => e.name === "dir");
 
       expect(fileEntry?.isFile()).toBe(true);
       expect(fileEntry?.isDirectory()).toBe(false);

@@ -4,7 +4,7 @@ import type { FileMapping } from "../types/config.js";
 import type { Logger } from "../utils/logger.js";
 import { expandPath } from "../utils/paths.js";
 
-export const applyFilePermission = async (
+const applyFilePermission = async (
   filePath: string,
   permission: string,
   dryRun: boolean,
@@ -19,12 +19,12 @@ export const applyFilePermission = async (
   }
 };
 
-export const applyPermissions = async (
+const applyPermissions = async (
   mapping: FileMapping,
   dryRun: boolean,
   logger: Logger,
 ): Promise<void> => {
-  if (!mapping.permissions || "string" === typeof mapping.permissions) {
+  if (!mapping.permissions || typeof mapping.permissions === "string") {
     return;
   }
 
@@ -33,3 +33,5 @@ export const applyPermissions = async (
     await applyFilePermission(targetPath, permission, dryRun, logger);
   }
 };
+
+export { applyFilePermission, applyPermissions };

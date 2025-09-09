@@ -29,7 +29,7 @@ export const createSymlinkManager = (logger: Logger) => {
       // Apply permissions to source file before creating symlink
       if (
         mapping.permissions &&
-        "object" === typeof mapping.permissions &&
+        typeof mapping.permissions === "object" &&
         mapping.permissions[item]
       ) {
         await applyFilePermission(
@@ -50,7 +50,7 @@ export const createSymlinkManager = (logger: Logger) => {
   ): Promise<void> => {
     const { dryRun = false, force = false } = options;
 
-    if ("selective" === mapping.type) {
+    if (mapping.type === "selective") {
       await createSelectiveSymlinks(mapping, options);
     } else {
       await createSymlink(
@@ -62,7 +62,7 @@ export const createSymlinkManager = (logger: Logger) => {
       );
 
       if (mapping.permissions) {
-        if ("string" === typeof mapping.permissions) {
+        if (typeof mapping.permissions === "string") {
           await applyFilePermission(
             mapping.target,
             mapping.permissions,
@@ -98,7 +98,7 @@ export const createSymlinkManager = (logger: Logger) => {
   ): Promise<void> => {
     const expandedTarget = expandPath(mapping.target);
 
-    if ("selective" === mapping.type && mapping.include) {
+    if (mapping.type === "selective" && mapping.include) {
       // Remove selective symlinks
       for (const file of mapping.include) {
         const targetFile = join(expandedTarget, file);

@@ -11,11 +11,11 @@ const COMMAND_INDEX = 0;
 const command = args[COMMAND_INDEX];
 
 // If a valid command is provided, run it directly
-if ("install" === command) {
+if (command === "install") {
   await cli(args, installCommand);
-} else if ("restore" === command) {
+} else if (command === "restore") {
   await cli(args, restoreCommand);
-} else if ("list" === command) {
+} else if (command === "list") {
   await cli(args, listCommand);
 } else {
   // Show help if no command or unknown command
@@ -23,23 +23,19 @@ if ("install" === command) {
   console.log(colors.gray("Personal configuration management tool\n"));
   console.log("Available commands:");
   console.log(
-    "  " + colors.cyan("install") + "  - Install dotfiles by creating symlinks",
+    `  ${colors.cyan("install")}  - Install dotfiles by creating symlinks`,
   );
-  console.log("  " + colors.cyan("restore") + "  - Restore from a backup");
+  console.log(`  ${colors.cyan("restore")}  - Restore from a backup`);
   console.log(
-    "  " +
-      colors.cyan("list") +
-      "     - List managed dotfiles and their status",
+    `  ${colors.cyan("list")}     - List managed dotfiles and their status`,
   );
-  console.log("\nUsage: " + colors.yellow("dotfiles <command> [options]"));
+  console.log(`\nUsage: ${colors.yellow("dotfiles <command> [options]")}`);
   console.log(
-    "       " +
-      colors.yellow("dotfiles <command> --help") +
-      " for command options",
+    `       ${colors.yellow("dotfiles <command> --help")} for command options`,
   );
 
-  if (command && "--help" !== command && "-h" !== command) {
-    console.log("\n" + colors.red(`Unknown command: ${command}`));
+  if (command && command !== "--help" && command !== "-h") {
+    console.log(`\n${colors.red(`Unknown command: ${command}`)}`);
     const EXIT_CODE_ERROR = 1;
     process.exit(EXIT_CODE_ERROR);
   }

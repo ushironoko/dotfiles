@@ -8,7 +8,7 @@ import {
 import type { Logger } from "../utils/logger.js";
 import { expandPath } from "../utils/paths.js";
 
-export const createSymlink = async (
+const createSymlink = async (
   source: string,
   target: string,
   force: boolean,
@@ -50,7 +50,7 @@ export const createSymlink = async (
   }
 };
 
-export const removeSymlink = async (
+const removeSymlink = async (
   target: string,
   logger: Logger,
   dryRun = false,
@@ -68,3 +68,5 @@ export const removeSymlink = async (
     logger.warn(`Target does not exist: ${expandedTarget}`);
   }
 };
+
+export { createSymlink, removeSymlink };

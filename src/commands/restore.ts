@@ -9,23 +9,23 @@ const EXIT_FAILURE = 1;
 const INDEX_OFFSET = 1;
 const SLASH_COUNT_THRESHOLD = 3;
 
-function createReadlineInterface() {
+const createReadlineInterface = () => {
   return createInterface({
     input: process.stdin,
     output: process.stdout,
   });
-}
+};
 
-function prompt(
+const prompt = (
   rl: ReturnType<typeof createInterface>,
   question: string,
-): Promise<string> {
+): Promise<string> => {
   return new Promise((resolve) => {
     rl.question(question, resolve);
   });
-}
+};
 
-export const restoreCommand = define({
+const restoreCommand = define({
   name: "restore",
   description: "Restore from a backup",
   args: {
@@ -70,7 +70,7 @@ export const restoreCommand = define({
       ctx.values;
 
     const logger = createLogger(verbose, dryRun);
-    let rl: ReturnType<typeof createInterface> | undefined;
+    let rl: ReturnType<typeof createInterface> | undefined = undefined;
 
     try {
       logger.info("Starting dotfiles restoration...");
@@ -92,8 +92,8 @@ export const restoreCommand = define({
         }
 
         logger.info("Available backups:");
-        backups.forEach((b, index) => {
-          const date = b.name
+        backups.forEach((backup, index) => {
+          const date = backup.name
             .replace(/T/g, " ")
             .replace(/-/g, SLASH_COUNT_THRESHOLD > index ? "/" : ":");
           console.log(`  [${index + INDEX_OFFSET}] ${date}`);
@@ -104,7 +104,7 @@ export const restoreCommand = define({
           "\nSelect backup number (or 'q' to quit): ",
         );
 
-        if ("q" === selection || "Q" === selection) {
+        if (selection === "q" || selection === "Q") {
           logger.info("Restoration cancelled");
           rl.close();
           return;
@@ -122,7 +122,9 @@ export const restoreCommand = define({
 
       if (!selectedBackup) {
         logger.error("No backup specified");
-        if (rl) rl.close();
+        if (rl) {
+          rl.close();
+        }
         process.exit(EXIT_FAILURE);
       }
 
@@ -139,7 +141,7 @@ export const restoreCommand = define({
           "Are you sure you want to restore? (y/N): ",
         );
 
-        if ("y" !== confirm.toLowerCase()) {
+        if (confirm.toLowerCase() !== "y") {
           logger.info("Restoration cancelled");
           rl.close();
           return;
@@ -164,3 +166,5 @@ export const restoreCommand = define({
     }
   },
 });
+
+export { restoreCommand };

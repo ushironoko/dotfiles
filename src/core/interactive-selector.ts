@@ -18,9 +18,9 @@ interface MappingOption {
 }
 
 const formatMapping = (mapping: FileMapping): MappingOption => {
-  const typeLabel = "selective" === mapping.type ? "selective" : mapping.type;
+  const typeLabel = mapping.type === "selective" ? "selective" : mapping.type;
   const hint =
-    "selective" === mapping.type && mapping.include
+    mapping.type === "selective" && mapping.include
       ? `${mapping.include.length} files`
       : undefined;
 
@@ -48,7 +48,7 @@ const groupMappingsByType = (mappings: FileMapping[]) => {
 const buildFileOptions = (mappings: FileMapping[]): MappingOption[] => {
   return mappings.map((mapping, index) => {
     const option = formatMapping(mapping);
-    if (0 === index) {
+    if (index === 0) {
       return { ...option, label: `[Files] ${option.label}` };
     }
     return option;
@@ -58,7 +58,7 @@ const buildFileOptions = (mappings: FileMapping[]): MappingOption[] => {
 const buildDirectoryOptions = (mappings: FileMapping[]): MappingOption[] => {
   return mappings.map((mapping, index) => {
     const option = formatMapping(mapping);
-    if (0 === index) {
+    if (index === 0) {
       return { ...option, label: `[Directories] ${option.label}` };
     }
     return option;
@@ -70,12 +70,12 @@ const buildSelectiveOptions = (mappings: FileMapping[]): MappingOption[] => {
 
   mappings.forEach((mapping, index) => {
     const headerLabel =
-      0 === index ? `[Selective] ${mapping.target}` : `${mapping.target}`;
+      index === 0 ? `[Selective] ${mapping.target}` : `${mapping.target}`;
 
-    if (mapping.include && 0 < mapping.include.length) {
+    if (mapping.include && mapping.include.length > 0) {
       mapping.include.forEach((file, fileIndex) => {
         const label =
-          0 === fileIndex ? `${headerLabel}\n  └─ ${file}` : `  └─ ${file}`;
+          fileIndex === 0 ? `${headerLabel}\n  └─ ${file}` : `  └─ ${file}`;
 
         result.push({
           value: `${mapping.source}:${mapping.target}:${file}`,
@@ -95,15 +95,15 @@ const buildOptionsWithLabels = (grouped: {
 }): MappingOption[] => {
   const result: MappingOption[] = [];
 
-  if (0 < grouped.file.length) {
+  if (grouped.file.length > 0) {
     result.push(...buildFileOptions(grouped.file));
   }
 
-  if (0 < grouped.directory.length) {
+  if (grouped.directory.length > 0) {
     result.push(...buildDirectoryOptions(grouped.directory));
   }
 
-  if (0 < grouped.selective.length) {
+  if (grouped.selective.length > 0) {
     result.push(...buildSelectiveOptions(grouped.selective));
   }
 
@@ -128,13 +128,13 @@ const detectExistingSymlinks = async (
   for (const option of optionsWithLabels) {
     const parts = option.value.split(":");
 
-    if (3 === parts.length) {
+    if (parts.length === 3) {
       // Individual file from selective mapping
       const mapping = mappings.find(
         (m) =>
           m.source === parts[0] &&
           m.target === parts[1] &&
-          "selective" === m.type,
+          m.type === "selective",
       );
       if (mapping) {
         const targetPath = join(expandPath(mapping.target), parts[2]);
@@ -142,7 +142,7 @@ const detectExistingSymlinks = async (
           initialValues.push(option.value);
         }
       }
-    } else if (2 === parts.length) {
+    } else if (parts.length === 2) {
       // Regular file or directory mapping
       const targetPath = expandPath(parts[1]);
       if (await isSymlink(targetPath)) {
@@ -165,7 +165,7 @@ const processSelectedValues = (
   for (const value of selectedValues) {
     const parts = value.split(":");
 
-    if (3 === parts.length) {
+    if (parts.length === 3) {
       // Individual file from selective mapping
       const key = `${parts[0]}:${parts[1]}`;
       if (!selectiveMap.has(key)) {
@@ -175,13 +175,13 @@ const processSelectedValues = (
       if (fileSet) {
         fileSet.add(parts[2]);
       }
-    } else if (2 === parts.length) {
+    } else if (parts.length === 2) {
       // File or directory mapping
       const mapping = mappings.find(
         (m) =>
           m.source === parts[0] &&
           m.target === parts[1] &&
-          "selective" !== m.type,
+          m.type !== "selective",
       );
       if (mapping) {
         selectedMappings.push(mapping);
@@ -194,7 +194,7 @@ const processSelectedValues = (
     const [source, target] = key.split(":");
     const originalMapping = mappings.find(
       (m) =>
-        m.source === source && m.target === target && "selective" === m.type,
+        m.source === source && m.target === target && m.type === "selective",
     );
 
     if (originalMapping) {
@@ -207,7 +207,7 @@ const processSelectedValues = (
       // Filter permissions if necessary
       if (
         originalMapping.permissions &&
-        "object" === typeof originalMapping.permissions
+        typeof originalMapping.permissions === "object"
       ) {
         const filteredPermissions: { [key: string]: string } = {};
         for (const file of selectedFiles) {
@@ -215,7 +215,7 @@ const processSelectedValues = (
             filteredPermissions[file] = originalMapping.permissions[file];
           }
         }
-        if (0 < Object.keys(filteredPermissions).length) {
+        if (Object.keys(filteredPermissions).length > 0) {
           newMapping.permissions = filteredPermissions;
         }
       }
@@ -240,13 +240,13 @@ const findDeselectedMappings = (
     if (!selectedValueSet.has(initialValue)) {
       const parts = initialValue.split(":");
 
-      if (3 === parts.length) {
+      if (parts.length === 3) {
         // Individual file from selective mapping was deselected
         const mapping = mappings.find(
           (m) =>
             m.source === parts[0] &&
             m.target === parts[1] &&
-            "selective" === m.type,
+            m.type === "selective",
         );
         if (mapping) {
           // Check if this file needs to be added to deselected
@@ -264,13 +264,13 @@ const findDeselectedMappings = (
             });
           }
         }
-      } else if (2 === parts.length) {
+      } else if (parts.length === 2) {
         // Regular file or directory mapping was deselected
         const mapping = mappings.find(
           (m) =>
             m.source === parts[0] &&
             m.target === parts[1] &&
-            "selective" !== m.type,
+            m.type !== "selective",
         );
         if (mapping) {
           deselectedMappings.push(mapping);
@@ -312,7 +312,7 @@ export const selectMappings = async (
 
   const selectedValues = selected as string[];
 
-  if (0 === selectedValues.length) {
+  if (selectedValues.length === 0) {
     const confirmEmpty = await confirm({
       message: "Nothing selected. Continue anyway?",
     });
@@ -347,24 +347,24 @@ export const confirmMappingSelection = async (
   const selectedGrouped = groupMappingsByType(result.selected);
   const deselectedGrouped = groupMappingsByType(result.deselected);
 
-  if (0 < result.selected.length) {
+  if (result.selected.length > 0) {
     logger.info("Items to install:");
 
-    if (0 < selectedGrouped.file.length) {
+    if (selectedGrouped.file.length > 0) {
       logger.info(`  Files: ${selectedGrouped.file.length}`);
       for (const mapping of selectedGrouped.file) {
         logger.info(`    + ${mapping.target}`);
       }
     }
 
-    if (0 < selectedGrouped.directory.length) {
+    if (selectedGrouped.directory.length > 0) {
       logger.info(`  Directories: ${selectedGrouped.directory.length}`);
       for (const mapping of selectedGrouped.directory) {
         logger.info(`    + ${mapping.target}`);
       }
     }
 
-    if (0 < selectedGrouped.selective.length) {
+    if (selectedGrouped.selective.length > 0) {
       logger.info(`  Selective: ${selectedGrouped.selective.length}`);
       for (const mapping of selectedGrouped.selective) {
         const fileCount = mapping.include?.length || 0;
@@ -373,24 +373,24 @@ export const confirmMappingSelection = async (
     }
   }
 
-  if (0 < result.deselected.length) {
+  if (result.deselected.length > 0) {
     logger.info("Items to remove:");
 
-    if (0 < deselectedGrouped.file.length) {
+    if (deselectedGrouped.file.length > 0) {
       logger.info(`  Files: ${deselectedGrouped.file.length}`);
       for (const mapping of deselectedGrouped.file) {
         logger.info(`    - ${mapping.target}`);
       }
     }
 
-    if (0 < deselectedGrouped.directory.length) {
+    if (deselectedGrouped.directory.length > 0) {
       logger.info(`  Directories: ${deselectedGrouped.directory.length}`);
       for (const mapping of deselectedGrouped.directory) {
         logger.info(`    - ${mapping.target}`);
       }
     }
 
-    if (0 < deselectedGrouped.selective.length) {
+    if (deselectedGrouped.selective.length > 0) {
       logger.info(`  Selective: ${deselectedGrouped.selective.length}`);
       for (const mapping of deselectedGrouped.selective) {
         const fileCount = mapping.include?.length || 0;

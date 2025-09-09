@@ -38,9 +38,9 @@ export const createMCPMerger = (logger: Logger, config: MCPConfig) => {
       // Handle mcpServers merging with proper type guards
       if (
         key === config.mergeKey &&
-        null !== value &&
-        undefined !== value &&
-        "object" === typeof value
+        value !== null &&
+        value !== undefined &&
+        typeof value === "object"
       ) {
         // For object-style mcpServers (current implementation) - replace entirely
         if (!Array.isArray(value)) {
@@ -82,7 +82,7 @@ export const createMCPMerger = (logger: Logger, config: MCPConfig) => {
     try {
       const files = await readdir(backupDir);
       const prefix =
-        "target.json" === filename ? ".claude.json." : `${filename}.`;
+        filename === "target.json" ? ".claude.json." : `${filename}.`;
       return files
         .filter((file) => file.startsWith(prefix))
         .map((file) => join(backupDir, file))
@@ -164,14 +164,14 @@ export const createMCPMerger = (logger: Logger, config: MCPConfig) => {
     const filename = basename(targetFile);
     // For .claude.json files, use the dot-prefixed format
     const backupFilename =
-      "target.json" === filename
+      filename === "target.json"
         ? `.claude.json.${timestamp}`
         : `${filename}.${timestamp}`;
     const backupPath = join(backupDir, backupFilename);
 
     // Check if backup already exists (within a second)
     const existingBackups = await getExistingBackups(backupDir, filename);
-    if (0 < existingBackups.length) {
+    if (existingBackups.length > 0) {
       logger.debug("Backup already exists, skipping");
       return existingBackups[0];
     }

@@ -8,7 +8,7 @@ import { join, dirname, basename } from "node:path";
 
 const EXIT_FAILURE = 1;
 
-export const listCommand = define({
+const listCommand = define({
   name: "list",
   description: "List managed dotfiles and their status",
   args: {
@@ -40,13 +40,13 @@ export const listCommand = define({
       // Group mappings by parent directory
       const groupedMappings = new Map<
         string,
-        Array<{
+        {
           path: string;
           source: string;
           type: string;
           status: string;
           permissions?: string;
-        }>
+        }[]
       >();
 
       for (const mapping of mappings) {
@@ -54,7 +54,7 @@ export const listCommand = define({
         let parentDir = dirname(targetPath);
 
         // For selective mappings, group by target directory
-        if ("selective" === mapping.type && Array.isArray(mapping.include)) {
+        if (mapping.type === "selective" && Array.isArray(mapping.include)) {
           parentDir = targetPath; // Use the target directory itself
           for (const file of mapping.include) {
             const fullTarget = join(targetPath, file);
@@ -71,7 +71,7 @@ export const listCommand = define({
             let permissions = undefined;
             if (
               mapping.permissions &&
-              "object" === typeof mapping.permissions
+              typeof mapping.permissions === "object"
             ) {
               permissions = mapping.permissions[file];
             }
@@ -117,12 +117,12 @@ export const listCommand = define({
         const items = groupedMappings.get(parent) ?? [];
 
         // Tree-like display
-        if (0 < index) {
+        if (index > 0) {
           console.log(""); // Add spacing between groups
         }
 
         // For selective mappings
-        if (0 < items.length && "selective-file" === items[0]?.type) {
+        if (items.length > 0 && items[0]?.type === "selective-file") {
           const parentStatus = await fileExists(parent);
           if (verbose) {
             console.log(
@@ -145,9 +145,9 @@ export const listCommand = define({
             const name = basename(item.path);
 
             let statusIcon = "";
-            if ("missing" === item.status) {
+            if (item.status === "missing") {
               statusIcon = colors.red("✗");
-            } else if ("linked" === item.status) {
+            } else if (item.status === "linked") {
               statusIcon = colors.green("✓");
             } else {
               statusIcon = colors.yellow("⚠");
@@ -169,9 +169,9 @@ export const listCommand = define({
             // Verbose mode: show full status
             for (const item of items) {
               let statusColor;
-              if ("missing" === item.status) {
+              if (item.status === "missing") {
                 statusColor = colors.red("✗ Not installed");
-              } else if ("linked" === item.status) {
+              } else if (item.status === "linked") {
                 statusColor = colors.green("✓ Linked");
               } else {
                 statusColor = colors.yellow("⚠ File exists (not symlink)");
@@ -195,9 +195,9 @@ export const listCommand = define({
               const name = basename(item.path);
 
               let statusIcon = "";
-              if ("missing" === item.status) {
+              if (item.status === "missing") {
                 statusIcon = colors.red("✗");
-              } else if ("linked" === item.status) {
+              } else if (item.status === "linked") {
                 statusIcon = colors.green("✓");
               } else {
                 statusIcon = colors.yellow("⚠");
@@ -236,3 +236,5 @@ export const listCommand = define({
     }
   },
 });
+
+export { listCommand };

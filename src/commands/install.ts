@@ -14,7 +14,7 @@ import { createLogger } from "../utils/logger.js";
 const NO_PATHS_TO_BACKUP = 0;
 const EXIT_FAILURE = 1;
 
-export const installCommand = define({
+const installCommand = define({
   name: "install",
   description: "Install dotfiles by creating symlinks",
   args: {
@@ -68,21 +68,21 @@ export const installCommand = define({
       let deselectedMappings: FileMapping[] = [];
       if (select) {
         const result = await selectMappings(mappings, logger);
-        if (undefined === result) {
+        if (result === undefined) {
           // キャンセルされた
           process.exit(EXIT_FAILURE);
         }
         mappings = result.selected;
         deselectedMappings = result.deselected;
 
-        if (0 < mappings.length || 0 < deselectedMappings.length) {
+        if (mappings.length > 0 || deselectedMappings.length > 0) {
           const confirmed = await confirmMappingSelection(result, logger);
           if (!confirmed) {
             process.exit(EXIT_FAILURE);
           }
         }
       }
-      const targetPaths = mappings.map((m) => m.target);
+      const targetPaths = mappings.map((mapping) => mapping.target);
 
       const pathsToBackup = [];
       for (const path of targetPaths) {
@@ -91,7 +91,7 @@ export const installCommand = define({
         }
       }
 
-      if (NO_PATHS_TO_BACKUP < pathsToBackup.length) {
+      if (pathsToBackup.length > NO_PATHS_TO_BACKUP) {
         logger.info("Creating backup of existing files...");
         await backupManager.createBackup(pathsToBackup, dryRun);
       }
@@ -99,13 +99,13 @@ export const installCommand = define({
       const symlinkManager = createSymlinkManager(logger);
 
       // Remove deselected symlinks first
-      if (0 < deselectedMappings.length) {
+      if (deselectedMappings.length > 0) {
         logger.info("Removing deselected symlinks...");
         await symlinkManager.removeMultipleSymlinks(deselectedMappings, dryRun);
       }
 
       // Create selected symlinks
-      if (0 < mappings.length) {
+      if (mappings.length > 0) {
         logger.info("Creating symlinks...");
         for (const mapping of mappings) {
           await symlinkManager.createFromMapping(mapping, {
@@ -140,3 +140,5 @@ export const installCommand = define({
     }
   },
 });
+
+export { installCommand };

@@ -12,17 +12,24 @@
     "no-ternary": "off",
     "sort-keys": "off",
     "sort-imports": "off",
+    "no-magic-numbers": "off",
+    "max-params": "off",
+    "init-declarations": "off",
+    "id-length": "off",
+    "arrow-body-style": "off",
+    "curly": "off",
 
     "typescript/no-explicit-any": "error",
     "typescript/no-unused-vars": "warn",
     "typescript/explicit-function-return-type": "off",
     "typescript/no-non-null-assertion": "warn",
+    "typescript/consistent-type-imports": "off",
+    "typescript/consistent-indexed-object-style": "off",
 
     "import/no-cycle": "error",
-
-    "no-magic-numbers": "off",
-
-    "max-params": "off",
+    "import/prefer-default-export": "off",
+    "import/group-exports": "off",
+    "import/consistent-type-specifier-style": "off",
 
     "unicorn/filename-case": ["error", { "case": "kebabCase" }]
   },
@@ -33,6 +40,6 @@
     "perf": "warn",
     "style": "warn"
   },
-  "ignorePatterns": ["dist/", "node_modules/", "build/", "*.js", "legacy/"],
+  "ignorePatterns": ["dist/", "node_modules/", "build/", "*.js"],
   "files": ["**/*.{ts,tsx}"]
 }

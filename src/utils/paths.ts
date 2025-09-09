@@ -1,14 +1,14 @@
 import { dirname, resolve } from "path";
 import { homedir } from "os";
 
-export function expandPath(path: string): string {
+const expandPath = (path: string): string => {
   if (path.startsWith("~")) {
     return path.replace(/^~/, homedir());
   }
   return resolve(path);
-}
+};
 
-export function getRelativePath(fullPath: string, basePath: string): string {
+const getRelativePath = (fullPath: string, basePath: string): string => {
   const expanded = expandPath(fullPath);
   const base = expandPath(basePath);
 
@@ -18,14 +18,14 @@ export function getRelativePath(fullPath: string, basePath: string): string {
   }
 
   return expanded;
-}
+};
 
-export function ensureParentDir(path: string): string {
-  return dirname(expandPath(path));
-}
+const ensureParentDir = (path: string): string => dirname(expandPath(path));
 
-export function getDotfilesDir(): string {
+const getDotfilesDir = (): string => {
   const currentFileUrl = import.meta.url;
   const currentFilePath = currentFileUrl.replace("file://", "");
   return resolve(dirname(currentFilePath), "../..");
-}
+};
+
+export { expandPath, getRelativePath, ensureParentDir, getDotfilesDir };

@@ -26,7 +26,7 @@ export const validateConfig = (config: unknown): config is DotfilesConfig => {
       throw new Error(`Invalid mapping type: ${mapping.type}`);
     }
 
-    if ("selective" === mapping.type && !mapping.include) {
+    if (mapping.type === "selective" && !mapping.include) {
       throw new Error("Selective mapping requires 'include' array");
     }
   }
