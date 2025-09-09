@@ -77,6 +77,60 @@ gget-search() { [ $# -eq 0 ] && echo "Usage: gget-search <query>" && return 1; l
 ghnew() { [ $# -eq 0 ] && echo "Usage: ghnew <name> [--public|--private]" && return 1; gh repo create "$@" && ghq get "https://github.com/$(gh api user --jq .login)/$1" && cd "$(ghq root)/github.com/$(gh api user --jq .login)/$1"; }
 grm() { local r=$(ghq list | fzf --height 40% --reverse); [ -n "$r" ] && echo "Remove $(ghq root)/$r? [y/N]" && read -r a && [ "$a" = "y" ] && rm -rf "$(ghq root)/$r" && echo "Removed"; }
 
+# Git branch cleanup with safety checks
+gclean() {
+  # Fetch latest remote state
+  git fetch --prune
+  
+  # Get current branch
+  local current_branch=$(git branch --show-current)
+  
+  # Get all local branches that don't exist on remote
+  local branches=$(git branch -vv | grep ': gone]' | awk '{print $1}' | grep -v "^*")
+  
+  if [ -z "$branches" ]; then
+    echo "No branches to clean up"
+    return 0
+  fi
+  
+  # Filter out branches with unmerged commits
+  local safe_branches=""
+  for branch in $branches; do
+    if git cherry main "$branch" | grep -q "^+"; then
+      echo "Skipping $branch (has unmerged commits)"
+    else
+      safe_branches="$safe_branches$branch\n"
+    fi
+  done
+  
+  if [ -z "$safe_branches" ]; then
+    echo "No safe branches to clean up"
+    return 0
+  fi
+  
+  # Use fzf for selection (multi-select enabled)
+  local selected=$(echo -e "$safe_branches" | fzf --multi --height 40% --reverse \
+    --header "Select branches to delete (TAB to select multiple, ENTER to confirm)")
+  
+  if [ -z "$selected" ]; then
+    echo "No branches selected"
+    return 0
+  fi
+  
+  # Confirmation
+  echo "Will delete the following branches:"
+  echo "$selected"
+  echo -n "Continue? [y/N]: "
+  read -r confirm
+  
+  if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+    echo "$selected" | xargs -r git branch -d
+    echo "Branches deleted successfully"
+  else
+    echo "Cancelled"
+  fi
+}
+
 # Show ghq commands help
 ghq-help() {
   echo "ghq/fzf commands:"
@@ -88,6 +142,7 @@ ghq-help() {
   echo "  gget-search - Search and clone from GitHub"
   echo "  ghnew       - Create new GitHub repo and clone"
   echo "  grm         - Remove repository (interactive)"
+  echo "  gclean      - Clean up local branches not on remote (interactive)"
   echo ""
   echo "Use 'type <command>' to see the function definition"
 }
