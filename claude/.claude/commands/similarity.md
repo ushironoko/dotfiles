@@ -4,7 +4,7 @@ Launch the similarity sub agent to perform comprehensive code similarity analysi
 
 The sub agent will:
 
-1. Run similarity-ts with various options to detect duplicate code patterns
+1. Run similarity with various options to detect duplicate code patterns
 2. Analyze similar functions, types, and code structures
 3. Provide detailed refactoring recommendations
 4. Check both source and test directories
