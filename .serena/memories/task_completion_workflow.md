@@ -15,7 +15,7 @@ After implementing changes, run in this order:
 bun run test
 
 # 2. Type checking
-bun run typecheck
+bun run tsc
 
 # 3. Linting
 bun run lint

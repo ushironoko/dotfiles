@@ -14,7 +14,7 @@ bun run test
 vitest
 
 # Type checking
-bun run typecheck
+bun run tsc
 # or with tsc directly
 tsc --noEmit
 

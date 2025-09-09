@@ -112,7 +112,7 @@ git log --oneline -5
 # Include results and any failures
 bun test
 bun run lint
-bun run typecheck
+bun run tsc
 ```
 
 #### System Commands

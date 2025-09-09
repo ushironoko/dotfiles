@@ -21,7 +21,7 @@ bun run lint       # Run oxlint
 bun run lint:fix   # Auto-fix lint issues
 
 # Type checking (using tsgo --noEmit)
-bun run typecheck
+bun run tsc
 
 # Pre-commit check (runs format, lint, typecheck, and tests)
 bun run prepare

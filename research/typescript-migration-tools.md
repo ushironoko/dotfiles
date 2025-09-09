@@ -616,7 +616,7 @@ export class SymlinkManager {
     "test": "vitest",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
-    "typecheck": "tsc --noEmit",
+    "tsc": "tsgo --noEmit",
     "format": "oxlint --fix",
     "build": "bun build src/index.ts --outdir=dist --target=bun"
   },
