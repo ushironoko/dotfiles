@@ -98,7 +98,7 @@ detect_files = ["requirements.txt", "pyproject.toml", "Pipfile", ".python-versio
 
 # Direnv module - shows if direnv is active
 [direnv]
-format = "[\\[$symbol$state\\]]($style) "
+format = "[\\[$symbol $allowed\\]]($style) "
 symbol = "direnv"
 style = "bold cyan"
 disabled = false
