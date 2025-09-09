@@ -198,3 +198,8 @@ export PATH="$HOME/.local/bin:$PATH"
 # Starship prompt
 # Initialize starship after mise is activated
 eval "$(starship init zsh)"
+
+# Interactive directory navigation with fzf
+if [ -f "$HOME/ghq/github.com/ushironoko/dotfiles/scripts/fcd" ]; then
+  source "$HOME/ghq/github.com/ushironoko/dotfiles/scripts/fcd"
+fi
