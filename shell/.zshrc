@@ -62,8 +62,6 @@ alias dc="docker-compose"
 # Package manager aliases
 alias px="pnpm dlx"
 alias p="pnpm"
-alias npx="px"
-alias npm="p"
 
 # Deno aliases
 alias dccc="deno run -A jsr:@mizchi/ccdiscord"

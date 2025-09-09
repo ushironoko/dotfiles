@@ -162,8 +162,6 @@ alias g="git"
 alias dc="docker-compose"
 alias px="pnpm dlx"
 alias p="pnpm"
-alias npx="px"
-alias npm="p"
 alias dccc="deno run -A jsr:@mizchi/ccdiscord"
 
 export NVM_DIR="$HOME/.nvm"
