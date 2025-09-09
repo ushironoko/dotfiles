@@ -66,6 +66,32 @@ alias p="pnpm"
 # Deno aliases
 alias dccc="deno run -A jsr:@mizchi/ccdiscord"
 
+# ghq/fzf function aliases (use 'type <name>' or 'which <name>' to see definition)
+# These are functions, not aliases, but behave similarly
+gls() { ghq list; }
+gcd() { local r=$(ghq list | fzf --height 40% --reverse); [ -n "$r" ] && cd "$(ghq root)/$r"; }
+ghcd() { local r=$(ghq list | grep github.com | fzf --height 40% --reverse); [ -n "$r" ] && cd "$(ghq root)/$r"; }
+ghcode() { local r=$(ghq list | fzf --height 40% --reverse); [ -n "$r" ] && code "$(ghq root)/$r"; }
+gget() { [ $# -eq 0 ] && ghq get "https://github.com/$(gh repo list --limit 1000 --json nameWithOwner --jq '.[].nameWithOwner' | fzf --height 40% --reverse --preview "gh repo view {}")" || ghq get "$@"; }
+gget-search() { [ $# -eq 0 ] && echo "Usage: gget-search <query>" && return 1; local r=$(gh search repos "$*" --limit 30 --json fullName,description,stargazersCount | jq -r '.[] | [.fullName, .description // ""] | @tsv' | column -t -s $'\t' | fzf --height 40% --reverse --with-nth 1,2 | awk '{print $1}'); [ -n "$r" ] && ghq get "https://github.com/$r"; }
+ghnew() { [ $# -eq 0 ] && echo "Usage: ghnew <name> [--public|--private]" && return 1; gh repo create "$@" && ghq get "https://github.com/$(gh api user --jq .login)/$1" && cd "$(ghq root)/github.com/$(gh api user --jq .login)/$1"; }
+grm() { local r=$(ghq list | fzf --height 40% --reverse); [ -n "$r" ] && echo "Remove $(ghq root)/$r? [y/N]" && read -r a && [ "$a" = "y" ] && rm -rf "$(ghq root)/$r" && echo "Removed"; }
+
+# Show ghq commands help
+ghq-help() {
+  echo "ghq/fzf commands:"
+  echo "  gls         - List all repositories"
+  echo "  gcd         - Change directory to repository (interactive)"
+  echo "  ghcd        - Change directory to GitHub repository (interactive)"
+  echo "  ghcode      - Open repository in VS Code (interactive)"
+  echo "  gget        - Clone repository (no args: your repos, with args: any repo)"
+  echo "  gget-search - Search and clone from GitHub"
+  echo "  ghnew       - Create new GitHub repo and clone"
+  echo "  grm         - Remove repository (interactive)"
+  echo ""
+  echo "Use 'type <command>' to see the function definition"
+}
+
 # Node Version Manager
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"

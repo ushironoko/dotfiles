@@ -56,6 +56,11 @@ export default defineConfig({
       type: "directory",
     },
     {
+      source: "./config/ghq",
+      target: "~/.config/ghq",
+      type: "directory",
+    },
+    {
       source: "./bin/dotfiles",
       target: "~/.local/bin/dotfiles",
       type: "file",
