@@ -8,6 +8,8 @@ uv = "latest"
 bun = "latest"
 jq = "latest"
 deno = "latest"
+fzf = "latest"
+ghq = "latest"
 
 [settings]
 experimental = true
