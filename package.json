@@ -29,6 +29,6 @@
     "@typescript/native-preview": "7.0.0-dev.20250908.1",
     "oxlint": "1.14.0",
     "prettier": "latest",
-    "vitest": "^3.2.4"
+    "vitest": "3.2.4"
   }
 }
