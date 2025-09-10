@@ -30,7 +30,7 @@ Windows = "🪟"
 
 # Directory module - current working directory
 [directory]
-truncation_length = 3
+truncation_length = 10
 truncate_to_repo = false
 format = "[$path]($style) "
 style = "bold cyan"
