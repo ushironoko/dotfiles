@@ -223,7 +223,6 @@ if [[ -n "$BASH_VERSION" ]]; then
   export -f fcd
   export -f gls
   export -f gcd
-  export -f ghcd
   export -f ghcode
   export -f gget
   export -f gget-search
