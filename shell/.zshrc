@@ -66,86 +66,10 @@ alias p="pnpm"
 # Deno aliases
 alias dccc="deno run -A jsr:@mizchi/ccdiscord"
 
-# ghq/fzf function aliases (use 'type <name>' or 'which <name>' to see definition)
-# These are functions, not aliases, but behave similarly
-gls() { ghq list; }
-gcd() { local r=$(ghq list | fzf --height 40% --reverse); [ -n "$r" ] && cd "$(ghq root)/$r"; }
-ghcd() { local r=$(ghq list | grep github.com | fzf --height 40% --reverse); [ -n "$r" ] && cd "$(ghq root)/$r"; }
-ghcode() { local r=$(ghq list | fzf --height 40% --reverse); [ -n "$r" ] && code "$(ghq root)/$r"; }
-gget() { [ $# -eq 0 ] && ghq get "https://github.com/$(gh repo list --limit 1000 --json nameWithOwner --jq '.[].nameWithOwner' | fzf --height 40% --reverse --preview "gh repo view {}")" || ghq get "$@"; }
-gget-search() { [ $# -eq 0 ] && echo "Usage: gget-search <query>" && return 1; local r=$(gh search repos "$*" --limit 30 --json fullName,description,stargazersCount | jq -r '.[] | [.fullName, .description // ""] | @tsv' | column -t -s $'\t' | fzf --height 40% --reverse --with-nth 1,2 | awk '{print $1}'); [ -n "$r" ] && ghq get "https://github.com/$r"; }
-ghnew() { [ $# -eq 0 ] && echo "Usage: ghnew <name> [--public|--private]" && return 1; gh repo create "$@" && ghq get "https://github.com/$(gh api user --jq .login)/$1" && cd "$(ghq root)/github.com/$(gh api user --jq .login)/$1"; }
-grm() { local r=$(ghq list | fzf --height 40% --reverse); [ -n "$r" ] && echo "Remove $(ghq root)/$r? [y/N]" && read -r a && [ "$a" = "y" ] && rm -rf "$(ghq root)/$r" && echo "Removed"; }
-
-# Git branch cleanup with safety checks
-gclean() {
-  # Fetch latest remote state
-  git fetch --prune
-  
-  # Get current branch
-  local current_branch=$(git branch --show-current)
-  
-  # Get all local branches that don't exist on remote
-  local branches=$(git branch -vv | grep ': gone]' | awk '{print $1}' | grep -v "^*")
-  
-  if [ -z "$branches" ]; then
-    echo "No branches to clean up"
-    return 0
-  fi
-  
-  # Filter out branches with unmerged commits
-  local safe_branches=""
-  for branch in $branches; do
-    if git cherry main "$branch" | grep -q "^+"; then
-      echo "Skipping $branch (has unmerged commits)"
-    else
-      safe_branches="$safe_branches$branch\n"
-    fi
-  done
-  
-  if [ -z "$safe_branches" ]; then
-    echo "No safe branches to clean up"
-    return 0
-  fi
-  
-  # Use fzf for selection (multi-select enabled)
-  local selected=$(echo -e "$safe_branches" | fzf --multi --height 40% --reverse \
-    --header "Select branches to delete (TAB to select multiple, ENTER to confirm)")
-  
-  if [ -z "$selected" ]; then
-    echo "No branches selected"
-    return 0
-  fi
-  
-  # Confirmation
-  echo "Will delete the following branches:"
-  echo "$selected"
-  echo -n "Continue? [y/N]: "
-  read -r confirm
-  
-  if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
-    echo "$selected" | xargs -r git branch -d
-    echo "Branches deleted successfully"
-  else
-    echo "Cancelled"
-  fi
-}
-
-# Show ghq commands help
-ghq-help() {
-  echo "ghq/fzf commands:"
-  echo "  gls         - List all repositories"
-  echo "  gcd         - Change directory to repository (interactive)"
-  echo "  ghcd        - Change directory to GitHub repository (interactive)"
-  echo "  ghcode      - Open repository in VS Code (interactive)"
-  echo "  gget        - Clone repository (no args: your repos, with args: any repo)"
-  echo "  gget-search - Search and clone from GitHub"
-  echo "  ghnew       - Create new GitHub repo and clone"
-  echo "  grm         - Remove repository (interactive)"
-  echo "  gclean      - Clean up local branches not on remote (interactive)"
-  echo ""
-  echo "Use 'type <command>' to see the function definition"
-}
+# Interactive functions (fzf-based)
+# Load ghq/fzf functions and fcd from shared file
+[ -f "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/interactive.sh" ] && \
+  source "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/interactive.sh"
 
 # Node Version Manager
 export NVM_DIR="$HOME/.nvm"
@@ -199,7 +123,4 @@ export PATH="$HOME/.local/bin:$PATH"
 # Initialize starship after mise is activated
 eval "$(starship init zsh)"
 
-# Interactive directory navigation with fzf
-if [ -f "$HOME/ghq/github.com/ushironoko/dotfiles/scripts/fcd" ]; then
-  source "$HOME/ghq/github.com/ushironoko/dotfiles/scripts/fcd"
-fi
+# Note: fcd is now included in shell/functions/interactive.sh
