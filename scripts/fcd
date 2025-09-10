@@ -56,11 +56,21 @@ fcd() {
     selected=$(echo -e "$dirs_string" | sed '/^$/d' | fzf \
       --height 80% \
       --reverse \
-      --header "📍 Current: $current_path (ESC to cancel)" \
+      --layout=reverse-list \
+      --header "$current_path" \
       --preview "$preview_cmd" \
-      --preview-window right:50% \
+      --preview-window "down,40%,wrap" \
       --bind "esc:abort" \
-      --prompt "Navigate > ")
+      --bind "ctrl-/:toggle-preview" \
+      --bind "ctrl-l:clear-query" \
+      --prompt "Search/Navigate > " \
+      --ansi \
+      --info=inline \
+      --cycle \
+      --marker "▶" \
+      --pointer "▶" \
+      --algo=v2
+      )
     
     # Handle selection
     if [[ -z "$selected" ]]; then
@@ -69,7 +79,7 @@ fcd() {
     elif [[ "$selected" == "cd" ]]; then
       # Change to the current virtual path
       cd "$current_path" || return 1
-      echo "Changed directory to: $current_path"
+      echo "cd: $current_path"
       return 0
     elif [[ "$selected" == "../" ]]; then
       # Navigate to parent
