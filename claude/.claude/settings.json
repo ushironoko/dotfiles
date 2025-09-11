@@ -9,6 +9,7 @@
       "Bash(find:*)",
       "Bash(git:*)",
       "Bash(gh:*)",
+      "Bash(mise:*)",
       "Read(**)",
       "Read(~/.bashrc)",
       "Read(~/.zshrc)",
