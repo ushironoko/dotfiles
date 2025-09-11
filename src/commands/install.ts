@@ -1,4 +1,3 @@
-import { define } from "gunshi";
 import { createBackupManager } from "../core/backup-manager.js";
 import { createConfigManager } from "../core/config-manager.js";
 import {
@@ -7,52 +6,33 @@ import {
 } from "../core/interactive-selector.js";
 import { createMCPMerger } from "../core/mcp-merger.js";
 import { createSymlinkManager } from "../core/symlink-manager.js";
+import {
+  EXIT_FAILURE,
+  dryRunArg,
+  forceArg,
+  selectArg,
+} from "../types/command.js";
 import type { FileMapping } from "../types/config.js";
 import { fileExists, isSymlink } from "../utils/fs.js";
-import { createLogger } from "../utils/logger.js";
+import {
+  defineCommandWithBase,
+  createCommandContext,
+} from "../utils/command-helpers.js";
 
 const NO_PATHS_TO_BACKUP = 0;
-const EXIT_FAILURE = 1;
 
-const installCommand = define({
+const installCommand = defineCommandWithBase({
   name: "install",
   description: "Install dotfiles by creating symlinks",
-  args: {
-    config: {
-      default: "./",
-      description: "Path to config directory or file",
-      short: "c",
-      type: "string",
-    },
-    dryRun: {
-      default: false,
-      description: "Perform a dry run without making changes",
-      short: "d",
-      type: "boolean",
-    },
-    force: {
-      default: false,
-      description: "Force overwrite existing files",
-      short: "f",
-      type: "boolean",
-    },
-    select: {
-      default: false,
-      description: "Interactively select which files to install",
-      short: "s",
-      type: "boolean",
-    },
-    verbose: {
-      default: false,
-      description: "Verbose output",
-      short: "v",
-      type: "boolean",
-    },
+  additionalArgs: {
+    ...dryRunArg,
+    ...forceArg,
+    ...selectArg,
   },
   run: async (ctx) => {
     const { dryRun, force, verbose, config, select } = ctx.values;
 
-    const logger = createLogger(verbose, dryRun);
+    const { logger } = createCommandContext({ verbose, dryRun });
 
     try {
       logger.info("Starting dotfiles installation...");

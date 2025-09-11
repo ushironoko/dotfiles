@@ -1,11 +1,13 @@
 import { createInterface } from "readline";
-import { define } from "gunshi";
 import { createBackupManager } from "../core/backup-manager.js";
 import { createConfigManager } from "../core/config-manager.js";
-import { createLogger } from "../utils/logger.js";
+import {
+  defineCommandWithBase,
+  createCommandContext,
+} from "../utils/command-helpers.js";
+import { EXIT_FAILURE, dryRunArg, interactiveArg } from "../types/command.js";
 
 const NO_BACKUPS_FOUND = 0;
-const EXIT_FAILURE = 1;
 const INDEX_OFFSET = 1;
 const SLASH_COUNT_THRESHOLD = 3;
 
@@ -25,51 +27,29 @@ const prompt = (
   });
 };
 
-const restoreCommand = define({
+const restoreCommand = defineCommandWithBase({
   name: "restore",
   description: "Restore from a backup",
-  args: {
+  additionalArgs: {
     backup: {
       description: "Backup timestamp or path",
       short: "b",
       type: "string",
     },
-    config: {
-      default: "./",
-      description: "Path to config directory or file",
-      short: "c",
-      type: "string",
-    },
-    dryRun: {
-      default: false,
-      description: "Perform a dry run without making changes",
-      short: "d",
-      type: "boolean",
-    },
-    interactive: {
-      default: true,
-      description: "Interactive mode",
-      short: "i",
-      type: "boolean",
-    },
+    ...dryRunArg,
+    ...interactiveArg,
     partial: {
       description: "Restore specific files only",
       multiple: true,
       short: "p",
       type: "string",
     },
-    verbose: {
-      default: false,
-      description: "Verbose output",
-      short: "v",
-      type: "boolean",
-    },
   },
   run: async (ctx) => {
     const { backup, interactive, partial, dryRun, verbose, config } =
       ctx.values;
 
-    const logger = createLogger(verbose, dryRun);
+    const { logger } = createCommandContext({ verbose, dryRun });
     let rl: ReturnType<typeof createInterface> | undefined = undefined;
 
     try {

@@ -1,34 +1,22 @@
-import { define } from "gunshi";
 import { colors } from "consola/utils";
 import { createConfigManager } from "../core/config-manager.js";
 import { fileExists, isSymlink } from "../utils/fs.js";
-import { createLogger } from "../utils/logger.js";
+import {
+  defineCommandWithBase,
+  createCommandContext,
+} from "../utils/command-helpers.js";
 import { expandPath } from "../utils/paths.js";
 import { join, dirname, basename } from "node:path";
+import { EXIT_FAILURE } from "../types/command.js";
 
-const EXIT_FAILURE = 1;
-
-const listCommand = define({
+const listCommand = defineCommandWithBase({
   name: "list",
   description: "List managed dotfiles and their status",
-  args: {
-    config: {
-      default: "./",
-      description: "Path to config directory or file",
-      short: "c",
-      type: "string",
-    },
-    verbose: {
-      default: false,
-      description: "Show detailed information",
-      short: "v",
-      type: "boolean",
-    },
-  },
+  additionalArgs: {},
   run: async (ctx) => {
     const { config, verbose } = ctx.values;
 
-    const logger = createLogger(verbose, false);
+    const { logger } = createCommandContext({ verbose, dryRun: false });
 
     try {
       const configManager = await createConfigManager(config);

@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { cli } from "gunshi";
 import { colors } from "consola/utils";
+import { doctorCommand } from "./commands/doctor";
 import { installCommand } from "./commands/install";
 import { listCommand } from "./commands/list";
 import { restoreCommand } from "./commands/restore";
@@ -17,6 +18,8 @@ if (command === "install") {
   await cli(args, restoreCommand);
 } else if (command === "list") {
   await cli(args, listCommand);
+} else if (command === "doctor") {
+  await cli(args, doctorCommand);
 } else {
   // Show help if no command or unknown command
   console.log(colors.bold(colors.cyan("\nDotfiles Manager v2.0.0")));
@@ -28,6 +31,9 @@ if (command === "install") {
   console.log(`  ${colors.cyan("restore")}  - Restore from a backup`);
   console.log(
     `  ${colors.cyan("list")}     - List managed dotfiles and their status`,
+  );
+  console.log(
+    `  ${colors.cyan("doctor")}   - Diagnose environment and configuration issues`,
   );
   console.log(`\nUsage: ${colors.yellow("dotfiles <command> [options]")}`);
   console.log(
