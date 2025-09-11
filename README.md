@@ -5,16 +5,20 @@ ushironoko's dotfiles management system.
 ## Setup
 
 ```bash
-# Clone and setup
-ghq get ushironoko/dotfiles
-cd $(ghq root)/github.com/ushironoko/dotfiles
+# Initial setup
+git clone https://github.com/ushironoko/dotfiles.git
+cd dotfiles
 ./init.sh
 
-# Use dotfiles command
+# After setup, the dotfiles command is available:
 dotfiles install    # Install symlinks
 dotfiles list       # List managed files
 dotfiles restore    # Restore from backup
 dotfiles doctor     # Check environment
+
+# Future updates with ghq (after initial setup):
+ghq get ushironoko/dotfiles
+cd $(ghq root)/github.com/ushironoko/dotfiles
 ```
 
 ## Commands
