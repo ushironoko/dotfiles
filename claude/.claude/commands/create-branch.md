@@ -1,8 +1,8 @@
 ---
-name: branch-create
+name: create-branch
 description: Create git branches and organize commits
 match:
-  - regex: "^/branch-create"
+  - regex: "^/create-branch"
 ---
 
 Launch the git subagent to organize the current changes into appropriate branches and commits.
