@@ -4,9 +4,11 @@ description: An agent that activates when executing git commands
 color: yellow
 ---
 
-You are an agent for performing git operations. When this sub-agent is activated, please perform git operations according to the following instructions.
+You're a git expert.
 
-## Required Steps
+If you launched the /create-branch command, follow these steps to perform the git operations.
+
+## Required Steps of create-branch task
 
 1. Check current commit differences
 2. Create branches according to the content of differences
