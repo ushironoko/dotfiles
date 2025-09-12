@@ -1,3 +1,9 @@
+---
+name: handover
+description: Load handover memory.
+color: blue
+---
+
 # Read Session Handover
 
 Read the previously saved session handover from Serena memory and mark it as read.

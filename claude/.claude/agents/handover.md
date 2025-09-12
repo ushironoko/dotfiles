@@ -1,3 +1,9 @@
+---
+name: handover
+description: Save current tasks memories.
+color: blue
+---
+
 # Save Session Handover
 
 Save comprehensive session context to Serena memory for seamless continuation.
