@@ -22,6 +22,7 @@ If arguments are provided, parse them and create two files:
 ### Help Display:
 
 If no arguments or first argument is "help", display:
+
 ```
 Usage: /cmd-suba <agent-name> "<description>" ["<system-prompt>"]
 
@@ -35,10 +36,10 @@ Arguments:
 Examples:
   Basic:
     /cmd-suba test-runner "Run tests automatically"
-  
+
   With custom prompt:
     /cmd-suba code-reviewer "Review code" "You are an expert reviewer. Focus on security and performance."
-  
+
   Multi-line prompt:
     /cmd-suba debugger "Debug errors" "Expert debugger.
     1. Analyze errors
@@ -55,6 +56,7 @@ After creation, use /<agent-name> to invoke the sub-agent.
 ### Parsing Instructions:
 
 If valid arguments are provided, parse as follows:
+
 - First word: agent name (e.g., `test-runner`)
 - Text in first quotes: agent description
 - Text in second quotes (optional): system prompt
