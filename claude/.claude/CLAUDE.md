@@ -8,9 +8,9 @@
 
 ## Testing & Quality
 
-- **Test Framework**: Vitest
-- **Linter/Formatter**: BiomeJS (default settings)
-- **Type Checker**: tsc
+- **Test Framework**: Vitest / Bun test (built in runtime)
+- **Linter/Formatter**: BiomeJS (default settings) / OXCLint & Prettier
+- **Type Checker**: typescript-native (a.k.a tsgo: https://github.com/microsoft/typescript-go)
 
 ## Architecture Principles
 
@@ -20,7 +20,8 @@
 
 ## User Communications
 
-- Only use Japanese. User is Japanese.
+- **ALWAYS** Only use Japanese. User is Japanese.
+- **ALWAYS** Force yourself to write down your thoughts.
 
 ---
 
