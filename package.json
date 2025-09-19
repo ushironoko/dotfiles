@@ -13,7 +13,7 @@
     "format": "prettier --write .",
     "lint:fix": "oxlint --fix",
     "tsc": "tsgo --noEmit",
-    "prepare": "bun run format && bun run lint && bun run tsc && bun test",
+    "run-all": "bun run format && bun run lint && bun run tsc && bun test",
     "install:local": "bun link"
   },
   "dependencies": {
