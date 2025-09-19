@@ -210,8 +210,109 @@ ghq-help() {
   echo "  grm         - Remove repository (interactive)"
   echo "  gclean      - Clean up local branches not on remote (interactive)"
   echo "  fcd         - Interactive directory navigation with fzf"
+  echo "  ps          - Run package.json scripts with fzf (interactive)"
   echo ""
   echo "Use 'type <command>' to see the function definition"
+}
+
+# ============================================================================
+# PS - Package Scripts Runner
+# Interactive package.json scripts execution using fzf
+# ============================================================================
+
+ps() {
+  # Find package.json in current or parent directories
+  local pkg_dir="$PWD"
+  local pkg_json=""
+
+  while [[ "$pkg_dir" != "/" ]]; do
+    if [[ -f "$pkg_dir/package.json" ]]; then
+      pkg_json="$pkg_dir/package.json"
+      break
+    fi
+    pkg_dir=$(dirname "$pkg_dir")
+  done
+
+  if [[ -z "$pkg_json" ]]; then
+    echo "Error: No package.json found in current or parent directories"
+    return 1
+  fi
+
+  # Extract scripts from package.json
+  local scripts=$(jq -r '.scripts | to_entries | .[] | "\(.key):\(.value)"' "$pkg_json" 2>/dev/null)
+
+  if [[ -z "$scripts" ]]; then
+    echo "Error: No scripts found in package.json"
+    return 1
+  fi
+
+  # Detect package manager
+  local pkg_manager="npm"
+  local pkg_dir_base=$(dirname "$pkg_json")
+
+  if [[ -f "$pkg_dir_base/pnpm-lock.yaml" ]]; then
+    pkg_manager="pnpm"
+  elif [[ -f "$pkg_dir_base/bun.lockb" ]] || [[ -f "$pkg_dir_base/bun.lock" ]]; then
+    pkg_manager="bun"
+  elif [[ -f "$pkg_dir_base/yarn.lock" ]]; then
+    pkg_manager="yarn"
+  elif [[ -f "$pkg_dir_base/package-lock.json" ]]; then
+    pkg_manager="npm"
+  fi
+
+  # Setup preview command
+  local preview_cmd='
+    script_line={}
+    script_name="${script_line%%:*}"
+    script_cmd="${script_line#*:}"
+    pkg_manager="'"$pkg_manager"'"
+    pkg_dir="'"$pkg_dir_base"'"
+
+    echo "📦 Package Manager: $pkg_manager"
+    echo "📁 Directory: $pkg_dir"
+    echo ""
+    echo "🚀 Script: $script_name"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "$script_cmd"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Will execute: $pkg_manager run $script_name"
+  '
+
+  # Show fzf selector
+  local selected
+  selected=$(echo "$scripts" | fzf \
+    --height 60% \
+    --reverse \
+    --layout=reverse-list \
+    --header "Select script to run (in: $pkg_dir_base)" \
+    --preview "$preview_cmd" \
+    --preview-window "down,50%,wrap" \
+    --bind "esc:abort" \
+    --bind "ctrl-/:toggle-preview" \
+    --prompt "Script > " \
+    --ansi \
+    --info=inline \
+    --cycle \
+    --marker "▶" \
+    --pointer "▶"
+  )
+
+  # Handle selection
+  if [[ -z "$selected" ]]; then
+    return 0
+  fi
+
+  # Extract script name
+  local script_name="${selected%%:*}"
+
+  # Change to package.json directory and run the script
+  (
+    cd "$pkg_dir_base" || return 1
+    echo "🚀 Running: $pkg_manager run $script_name"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    $pkg_manager run "$script_name"
+  )
 }
 
 # ============================================================================
@@ -230,6 +331,7 @@ if [[ -n "$BASH_VERSION" ]]; then
   export -f grm
   export -f gclean
   export -f ghq-help
+  export -f ps
 elif [[ -n "$ZSH_VERSION" ]]; then
   # Running in zsh - no need to export
   :
