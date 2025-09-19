@@ -210,17 +210,17 @@ ghq-help() {
   echo "  grm         - Remove repository (interactive)"
   echo "  gclean      - Clean up local branches not on remote (interactive)"
   echo "  fcd         - Interactive directory navigation with fzf"
-  echo "  ps          - Run package.json scripts with fzf (interactive)"
+  echo "  ns          - Run package.json scripts with fzf (interactive)"
   echo ""
   echo "Use 'type <command>' to see the function definition"
 }
 
 # ============================================================================
-# PS - Package Scripts Runner
+# NS - NPM Package Scripts Runner
 # Interactive package.json scripts execution using fzf
 # ============================================================================
 
-ps() {
+ns() {
   # Find package.json in current or parent directories
   local pkg_dir="$PWD"
   local pkg_json=""
@@ -331,7 +331,7 @@ if [[ -n "$BASH_VERSION" ]]; then
   export -f grm
   export -f gclean
   export -f ghq-help
-  export -f ps
+  export -f ns
 elif [[ -n "$ZSH_VERSION" ]]; then
   # Running in zsh - no need to export
   :
