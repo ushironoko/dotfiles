@@ -238,8 +238,8 @@ ns() {
     return 1
   fi
 
-  # Extract scripts from package.json
-  local scripts=$(jq -r '.scripts | to_entries | .[] | "\(.key):\(.value)"' "$pkg_json" 2>/dev/null)
+  # Extract scripts from package.json (using | as separator to avoid conflicts with scripts like test:unit)
+  local scripts=$(jq -r '.scripts | to_entries | .[] | "\(.key)|\(.value)"' "$pkg_json" 2>/dev/null)
 
   if [[ -z "$scripts" ]]; then
     echo "Error: No scripts found in package.json"
@@ -263,8 +263,8 @@ ns() {
   # Setup preview command
   local preview_cmd='
     script_line={}
-    script_name="${script_line%%:*}"
-    script_cmd="${script_line#*:}"
+    script_name="${script_line%%|*}"
+    script_cmd="${script_line#*|}"
     pkg_manager="'"$pkg_manager"'"
     pkg_dir="'"$pkg_dir_base"'"
 
@@ -303,8 +303,8 @@ ns() {
     return 0
   fi
 
-  # Extract script name
-  local script_name="${selected%%:*}"
+  # Extract script name (using | separator)
+  local script_name="${selected%%|*}"
 
   # Change to package.json directory and run the script
   (
