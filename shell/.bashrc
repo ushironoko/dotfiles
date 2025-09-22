@@ -141,9 +141,6 @@ shopt -s no_empty_cmd_completion  # Don't tab-complete on empty line
 
 export PATH=$PATH:'/mnt/c/Users/ushironoko/AppData/Local/Programs/Microsoft VS Code/bin'
 
-# Add local bin to PATH
-export PATH="$HOME/.local/bin:$PATH"
-
 #more alias
 alias ..="cd .."
 alias ...="cd ../.."
@@ -169,19 +166,12 @@ alias dccc="deno run -A jsr:@mizchi/ccdiscord"
 [ -f "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/interactive.sh" ] && \
   source "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/interactive.sh"
 
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
-
 # pnpm
 export PNPM_HOME="/home/ushironoko/.local/share/pnpm"
 case ":$PATH:" in
   *":$PNPM_HOME:"*) ;;
   *) export PATH="$PNPM_HOME:$PATH" ;;
 esac
-
-# pnpm end
-
 
 # bun (managed by mise - path is added via mise shims)
 # export BUN_INSTALL="$HOME/.bun"
@@ -190,11 +180,8 @@ esac
 # direnv hook
 eval "$(direnv hook bash)"
 
-# starship
 # Initialize mise for managing development tools
 eval "$(mise activate bash)"
 
 # Initialize starship prompt
 eval "$(starship init bash)"
-
-# Note: fcd is now included in shell/functions/interactive.sh

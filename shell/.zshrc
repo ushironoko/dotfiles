@@ -71,13 +71,6 @@ alias dccc="deno run -A jsr:@mizchi/ccdiscord"
 [ -f "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/interactive.sh" ] && \
   source "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/interactive.sh"
 
-# Node Version Manager
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
-
-# Rust (managed by mise)
-
 # pnpm
 export PNPM_HOME="$HOME/Library/pnpm"
 case ":$PATH:" in
@@ -111,15 +104,9 @@ fi
 # VS Code
 export PATH="$PATH:/Applications/Visual Studio Code.app/Contents/Resources/app/bin"
 
-# Local bin
-export PATH="$HOME/.local/bin:$PATH"
-
-
 # Load additional zsh configurations if exists
 [ -f "$HOME/.zshrc.local" ] && . "$HOME/.zshrc.local"
 
 # Starship prompt
 # Initialize starship after mise is activated
 eval "$(starship init zsh)"
-
-# Note: fcd is now included in shell/functions/interactive.sh
