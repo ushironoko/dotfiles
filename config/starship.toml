@@ -88,14 +88,6 @@ style = "bold red"
 detect_files = ["Cargo.toml", "Cargo.lock"]
 detect_extensions = ["rs"]
 
-# Python module
-[python]
-format = "[$symbol$version]($style) "
-symbol = "🐍 "
-style = "bold blue"
-detect_extensions = ["py"]
-detect_files = ["requirements.txt", "pyproject.toml", "Pipfile", ".python-version"]
-
 # Direnv module - shows if direnv is active
 [direnv]
 format = "[\\[$symbol $allowed\\]]($style) "
