@@ -24,13 +24,24 @@ fcd() {
       dirs_string="${dirs_string}../\n"
     fi
     
-    # Add subdirectories
+    # Add subdirectories and symlinks
     if [[ -d "$current_path" ]]; then
       # Use find for compatibility with both shells
-      while IFS= read -r dir; do
-        local basename="${dir##*/}"
-        dirs_string="${dirs_string}${basename}/\n"
-      done < <(find "$current_path" -maxdepth 1 -type d ! -path "$current_path" 2>/dev/null | sort)
+      # Include both directories and symlinks that point to directories
+      while IFS= read -r item; do
+        local basename="${item##*/}"
+        # Check if it's a symlink that points to a directory
+        if [[ -L "$item" ]]; then
+          # Check if the symlink points to a directory
+          if [[ -d "$item" ]]; then
+            # Add symlink marker
+            dirs_string="${dirs_string}${basename}/ →\n"
+          fi
+        elif [[ -d "$item" ]]; then
+          # Regular directory
+          dirs_string="${dirs_string}${basename}/\n"
+        fi
+      done < <(find "$current_path" -maxdepth 1 \( -type d -o -type l \) ! -path "$current_path" 2>/dev/null | sort)
     fi
     
     # Setup preview command
@@ -47,8 +58,25 @@ fcd() {
         echo ""
         ls -la "$parent" 2>/dev/null | head -20
       else
-        target="$current_path/${selected%/}"
-        if [[ -d "$target" ]]; then
+        # Remove symlink marker if present
+        selected_clean="${selected% →}"
+        target="$current_path/${selected_clean%/}"
+        if [[ -L "$target" ]]; then
+          # Handle symlink
+          echo "🔗 Symlink: $target"
+          real_path=$(readlink -f "$target" 2>/dev/null)
+          if [[ -n "$real_path" ]]; then
+            echo "→ Target: $real_path"
+            if [[ -d "$real_path" ]]; then
+              echo ""
+              ls -la "$real_path" 2>/dev/null | head -20
+            else
+              echo "(Target is not accessible or not a directory)"
+            fi
+          else
+            echo "(Broken symlink)"
+          fi
+        elif [[ -d "$target" ]]; then
           echo "📁 Directory: $target"
           echo ""
           ls -la "$target" 2>/dev/null | head -20
@@ -90,8 +118,9 @@ fcd() {
       # Navigate to parent
       current_path=$(dirname "$current_path")
     else
-      # Navigate to subdirectory
-      current_path="$current_path/${selected%/}"
+      # Navigate to subdirectory (remove symlink marker if present)
+      selected_clean="${selected% →}"
+      current_path="$current_path/${selected_clean%/}"
       # Resolve symlinks and normalize path
       current_path=$(cd "$current_path" 2>/dev/null && pwd || echo "$current_path")
     fi
