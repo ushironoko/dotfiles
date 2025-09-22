@@ -254,7 +254,7 @@ For monorepo projects:
 
 ```bash
 # Try Bun runtime first
-bun --bun index.ts
+bunx --bun index.ts
 
 # If fails, use tsx
 pnpm dlx tsx index.ts
