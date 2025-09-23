@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre_tool_use/block_absolute_path_write.sh",
+            "command": "~/.claude/hooks/pre_tool_use/block_absolute_path_write.sh",
             "timeout": 5
           }
         ]
