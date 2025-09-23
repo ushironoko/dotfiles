@@ -227,6 +227,85 @@ gclean() {
   fi
 }
 
+# Git switch to remote branch with fzf
+gsw() {
+  # Fetch latest remote branches
+  git fetch --prune
+
+  # Get all remote branches (excluding HEAD)
+  # Remove 'origin/' prefix and trim whitespace
+  local branches=$(git branch -r | grep -v HEAD | sed 's/^[[:space:]]*//' | sed 's/origin\///' | sort -u)
+
+  if [ -z "$branches" ]; then
+    echo "No remote branches found"
+    return 1
+  fi
+
+  # Get current branch
+  local current_branch=$(git branch --show-current)
+
+  # Setup preview command
+  local preview_cmd='
+    branch={}
+    # Trim any whitespace
+    branch=$(echo "$branch" | sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
+
+    echo "🌿 Branch: $branch"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    # Show last 5 commits
+    git log --oneline --graph --decorate "origin/$branch" -n 5 2>/dev/null
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Show branch info
+    git log -1 --pretty=format:"Author: %an <%ae>%nDate:   %ad%nCommit: %H%n%nMessage:%n%s%n%b" "origin/$branch" 2>/dev/null
+  '
+
+  # Show fzf selector
+  local selected=$(echo "$branches" | fzf \
+    --height 80% \
+    --reverse \
+    --layout=reverse-list \
+    --header "Select branch to switch (current: $current_branch)" \
+    --preview "$preview_cmd" \
+    --preview-window "down,60%,wrap" \
+    --bind "esc:abort" \
+    --bind "ctrl-/:toggle-preview" \
+    --prompt "Branch > " \
+    --ansi \
+    --info=inline \
+    --cycle \
+    --marker "▶" \
+    --pointer "▶"
+  )
+
+  # Handle selection
+  if [ -z "$selected" ]; then
+    echo "No branch selected"
+    return 0
+  fi
+
+  # Clean up branch name - remove all whitespace
+  selected=$(echo "$selected" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+  # Debug output
+  echo "Selected branch: '$selected'"
+
+  # Check if branch exists locally
+  if git show-ref --verify --quiet "refs/heads/$selected"; then
+    # Branch exists locally, just switch
+    echo "Switching to existing local branch: $selected"
+    git switch "$selected"
+  else
+    # Create and switch to new branch tracking the remote
+    echo "Creating and switching to new branch: $selected (tracking origin/$selected)"
+    git switch -c "$selected" "origin/$selected"
+  fi
+}
+
 # Show ghq commands help
 ghq-help() {
   echo "ghq/fzf commands:"
@@ -238,6 +317,7 @@ ghq-help() {
   echo "  ghnew       - Create new GitHub repo and clone"
   echo "  grm         - Remove repository (interactive)"
   echo "  gclean      - Clean up local branches not on remote (interactive)"
+  echo "  gsw         - Switch to remote branch with fzf (interactive)"
   echo "  fcd         - Interactive directory navigation with fzf"
   echo "  ns          - Run package.json scripts with fzf (interactive)"
   echo ""
@@ -359,6 +439,7 @@ if [[ -n "$BASH_VERSION" ]]; then
   export -f ghnew
   export -f grm
   export -f gclean
+  export -f gsw
   export -f ghq-help
   export -f ns
 elif [[ -n "$ZSH_VERSION" ]]; then
