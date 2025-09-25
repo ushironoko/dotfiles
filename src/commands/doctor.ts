@@ -7,7 +7,8 @@ import { createConfigManager } from "../core/config-manager.js";
 import { fileExists, isSymlink } from "../utils/fs.js";
 import { expandPath as expandTilde } from "../utils/paths.js";
 import {
-  defineCommandWithBase,
+  define,
+  baseCommandArgs,
   createCommandContext,
 } from "../utils/command-helpers.js";
 
@@ -659,10 +660,11 @@ const runDiagnostics = async (
   return ctx.results;
 };
 
-const doctorCommand = defineCommandWithBase({
+const doctorCommand = define({
   name: "doctor",
   description: "Diagnose and fix common dotfiles environment issues",
-  additionalArgs: {
+  args: {
+    ...baseCommandArgs,
     fix: {
       default: false,
       description: "Attempt to automatically fix issues (not yet implemented)",

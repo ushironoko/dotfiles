@@ -3,7 +3,9 @@ import { homedir } from "os";
 
 const expandPath = (path: string): string => {
   if (path.startsWith("~")) {
-    return path.replace(/^~/, homedir());
+    // Use process.env.HOME if available (for testing), otherwise use homedir()
+    const home = process.env.HOME || homedir();
+    return path.replace(/^~/, home);
   }
   return resolve(path);
 };

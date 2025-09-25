@@ -2,7 +2,8 @@ import { createInterface } from "readline";
 import { createBackupManager } from "../core/backup-manager.js";
 import { createConfigManager } from "../core/config-manager.js";
 import {
-  defineCommandWithBase,
+  define,
+  baseCommandArgs,
   createCommandContext,
 } from "../utils/command-helpers.js";
 import { EXIT_FAILURE, dryRunArg, interactiveArg } from "../types/command.js";
@@ -27,10 +28,11 @@ const prompt = (
   });
 };
 
-const restoreCommand = defineCommandWithBase({
+const restoreCommand = define({
   name: "restore",
   description: "Restore from a backup",
-  additionalArgs: {
+  args: {
+    ...baseCommandArgs,
     backup: {
       description: "Backup timestamp or path",
       short: "b",

@@ -61,6 +61,11 @@ export default defineConfig({
       type: "directory",
     },
     {
+      source: "./config/mcpdoc",
+      target: "~/.config/mcpdoc",
+      type: "directory",
+    },
+    {
       source: "./bin/dotfiles",
       target: "~/.local/bin/dotfiles",
       type: "file",

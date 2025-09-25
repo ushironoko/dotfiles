@@ -53,6 +53,24 @@ Diagnoses environment issues.
 - `-c, --check <categories>`: Check specific areas (environment,conflicts,ghq,config,mcp)
 - `-v, --verbose`: Detailed diagnostics
 
+### `dotfiles mcpdoc`
+
+Manages MCPDoc documentation sources for llms.txt files.
+
+```bash
+# Add a documentation source
+dotfiles mcpdoc add "LangGraph" "https://langchain-ai.github.io/langgraph/llms.txt"
+
+# Remove a documentation source
+dotfiles mcpdoc remove "LangGraph"
+
+# List all documentation sources
+dotfiles mcpdoc list
+```
+
+- `--dry-run`: Preview changes without modifying files
+- `--verbose`: Show detailed output
+
 ## Troubleshooting
 
 Run `dotfiles doctor` to diagnose issues. Common fixes:

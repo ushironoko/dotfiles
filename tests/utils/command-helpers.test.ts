@@ -1,17 +1,19 @@
 import { describe, expect, it } from "bun:test";
 import {
-  defineCommandWithBase,
+  define,
+  baseCommandArgs,
   createCommandContext,
 } from "../../src/utils/command-helpers";
-import { baseCommandArgs, dryRunArg } from "../../src/types/command";
+import { dryRunArg } from "../../src/types/command";
 
 describe("command-helpers", () => {
-  describe("defineCommandWithBase", () => {
+  describe("define with baseCommandArgs", () => {
     it("should merge base args with custom args", () => {
-      const command = defineCommandWithBase({
+      const command = define({
         name: "test",
         description: "Test command",
-        additionalArgs: {
+        args: {
+          ...baseCommandArgs,
           ...dryRunArg,
           custom: {
             default: "value",
@@ -32,10 +34,12 @@ describe("command-helpers", () => {
     });
 
     it("should preserve command metadata", () => {
-      const command = defineCommandWithBase({
+      const command = define({
         name: "test",
         description: "Test command",
-        additionalArgs: {},
+        args: {
+          ...baseCommandArgs,
+        },
         run: async () => {},
       });
 

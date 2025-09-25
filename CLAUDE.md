@@ -31,6 +31,11 @@ bun run src/index.ts install --dry-run  # Preview installation
 bun run src/index.ts restore            # Restore from backup
 bun run src/index.ts list --verbose     # List symlinks with status
 
+# MCPDoc documentation management
+bun run src/index.ts mcpdoc add "LangGraph" "https://langchain-ai.github.io/langgraph/llms.txt"
+bun run src/index.ts mcpdoc remove "LangGraph"
+bun run src/index.ts mcpdoc list
+
 # Run with environment-specific config
 NODE_ENV=development bun run src/index.ts list
 ```

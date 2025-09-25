@@ -15,16 +15,18 @@ import {
 import type { FileMapping } from "../types/config.js";
 import { fileExists, isSymlink } from "../utils/fs.js";
 import {
-  defineCommandWithBase,
+  define,
+  baseCommandArgs,
   createCommandContext,
 } from "../utils/command-helpers.js";
 
 const NO_PATHS_TO_BACKUP = 0;
 
-const installCommand = defineCommandWithBase({
+const installCommand = define({
   name: "install",
   description: "Install dotfiles by creating symlinks",
-  additionalArgs: {
+  args: {
+    ...baseCommandArgs,
     ...dryRunArg,
     ...forceArg,
     ...selectArg,

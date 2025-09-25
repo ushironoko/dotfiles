@@ -2,17 +2,20 @@ import { colors } from "consola/utils";
 import { createConfigManager } from "../core/config-manager.js";
 import { fileExists, isSymlink } from "../utils/fs.js";
 import {
-  defineCommandWithBase,
+  define,
+  baseCommandArgs,
   createCommandContext,
 } from "../utils/command-helpers.js";
 import { expandPath } from "../utils/paths.js";
 import { join, dirname, basename } from "node:path";
 import { EXIT_FAILURE } from "../types/command.js";
 
-const listCommand = defineCommandWithBase({
+const listCommand = define({
   name: "list",
   description: "List managed dotfiles and their status",
-  additionalArgs: {},
+  args: {
+    ...baseCommandArgs,
+  },
   run: async (ctx) => {
     const { config, verbose } = ctx.values;
 

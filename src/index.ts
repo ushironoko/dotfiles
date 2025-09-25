@@ -4,6 +4,7 @@ import { colors } from "consola/utils";
 import { doctorCommand } from "./commands/doctor";
 import { installCommand } from "./commands/install";
 import { listCommand } from "./commands/list";
+import { mcpdocCommand } from "./commands/mcpdoc";
 import { restoreCommand } from "./commands/restore";
 
 const ARGV_SKIP_COUNT = 2;
@@ -20,6 +21,8 @@ if (command === "install") {
   await cli(args, listCommand);
 } else if (command === "doctor") {
   await cli(args, doctorCommand);
+} else if (command === "mcpdoc") {
+  await cli(args, mcpdocCommand);
 } else {
   // Show help if no command or unknown command
   console.log(colors.bold(colors.cyan("\nDotfiles Manager v2.0.0")));
@@ -34,6 +37,9 @@ if (command === "install") {
   );
   console.log(
     `  ${colors.cyan("doctor")}   - Diagnose environment and configuration issues`,
+  );
+  console.log(
+    `  ${colors.cyan("mcpdoc")}   - Manage mcpdoc documentation sources`,
   );
   console.log(`\nUsage: ${colors.yellow("dotfiles <command> [options]")}`);
   console.log(

@@ -37,3 +37,6 @@ tmp/
 *.backup
 
 _research/
+.gistdex/
+gistdex.db
+docs/

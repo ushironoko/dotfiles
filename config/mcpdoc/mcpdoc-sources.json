@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Gunshi",
+    "llms_txt": "https://gunshi.dev/llms.txt"
+  },
+  {
+    "name": "Gistdex",
+    "llms_txt": "https://gistdex.vercel.app/llms.txt"
+  }
+]
