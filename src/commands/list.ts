@@ -168,7 +168,7 @@ const listCommand = define({
                 statusColor = colors.yellow("⚠ File exists (not symlink)");
               }
 
-              console.log(`${statusColor} ${colors.cyan(parent)}`);
+              console.log(`${statusColor} ${colors.cyan(item.path)}`);
               console.log(`  Source: ${item.source}`);
               console.log(`  Type: ${item.type}`);
               console.log("");
