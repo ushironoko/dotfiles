@@ -22,5 +22,9 @@
   {
     "name": "Bun",
     "llms_txt": "https://bun.com/llms.txt"
+  },
+  {
+    "name": "Ollama",
+    "llms_txt": "https://docs.ollama.com/llms.txt"
   }
 ]
