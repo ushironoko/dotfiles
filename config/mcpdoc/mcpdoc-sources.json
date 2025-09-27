@@ -18,5 +18,9 @@
   {
     "name": "Tauri",
     "llms_txt": "https://v2.tauri.app/llms.txt"
+  },
+  {
+    "name": "Bun",
+    "llms_txt": "https://bun.com/llms.txt"
   }
 ]
