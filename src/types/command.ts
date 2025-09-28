@@ -56,7 +56,7 @@ export interface SelectArg {
 
 export const baseCommandArgs: BaseCommandArgs = {
   config: {
-    default: "./",
+    default: "", // Empty string means use dotfiles repository root
     description: "Path to config directory or file",
     short: "c",
     type: "string",

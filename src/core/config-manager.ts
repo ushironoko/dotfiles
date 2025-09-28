@@ -6,6 +6,7 @@ import type {
   MCPConfig,
 } from "../types/config.js";
 import { expandPath } from "../utils/paths.js";
+import { join } from "node:path";
 
 const DEFAULT_KEEP_LAST = 10;
 
@@ -39,10 +40,15 @@ export const validateConfig = (config: unknown): config is DotfilesConfig => {
 };
 
 // マッピングのパスを展開
-export const expandMappings = (mappings: FileMapping[]): FileMapping[] =>
+export const expandMappings = (
+  mappings: FileMapping[],
+  baseDir: string,
+): FileMapping[] =>
   mappings.map((mapping) => ({
     ...mapping,
-    source: expandPath(mapping.source),
+    source: mapping.source.startsWith("./")
+      ? join(baseDir, mapping.source.slice(2))
+      : expandPath(mapping.source),
     target: expandPath(mapping.target),
   }));
 
@@ -55,18 +61,42 @@ export const normalizeBackupConfig = (config: BackupConfig): BackupConfig => ({
 });
 
 // MCP設定のパスを展開
-export const expandMCPConfig = (config: MCPConfig): MCPConfig => ({
+export const expandMCPConfig = (
+  config: MCPConfig,
+  baseDir: string,
+): MCPConfig => ({
   ...config,
-  sourceFile: expandPath(config.sourceFile),
+  sourceFile: config.sourceFile.startsWith("./")
+    ? join(baseDir, config.sourceFile.slice(2))
+    : expandPath(config.sourceFile),
   targetFile: expandPath(config.targetFile),
 });
 
 // ConfigManagerを作成
-export const createConfigManager = async (configPath?: string) => {
+export const createConfigManager = async (configPath?: string | null) => {
+  // dotfilesレポジトリのルートディレクトリを取得
+  // bin/dotfiles経由で実行される場合を考慮
+  const getDotfilesRoot = () => {
+    // import.meta.urlを使用して現在のファイルパスを取得
+    const currentFile = new URL(import.meta.url).pathname;
+    // src/core/config-manager.ts から 2階層上がルートディレクトリ
+    const pathSegments = currentFile.split("/");
+    const rootIndex = pathSegments.lastIndexOf("src");
+    if (rootIndex > 0) {
+      return pathSegments.slice(0, rootIndex).join("/");
+    }
+    // フォールバック: /home/ushironoko/ghq/github.com/ushironoko/dotfiles
+    return expandPath("~/ghq/github.com/ushironoko/dotfiles");
+  };
+
   // configファイルを読み込み
+  // configPathが空、null、undefined、またはデフォルトの場合はレポジトリルートを使用
   const { config: loadedConfig } = await loadConfig<DotfilesConfig>({
     name: "dotfiles",
-    cwd: configPath ? expandPath(configPath) : process.cwd(),
+    cwd:
+      configPath && configPath !== "./" && configPath !== ""
+        ? expandPath(configPath)
+        : getDotfilesRoot(),
     defaults: {
       mappings: [], // デフォルトは空配列
       backup: {
@@ -85,7 +115,7 @@ export const createConfigManager = async (configPath?: string) => {
   const config = loadedConfig;
 
   const getMappings = (): FileMapping[] => {
-    return expandMappings(config.mappings);
+    return expandMappings(config.mappings, getDotfilesRoot());
   };
 
   const getBackupConfig = (): BackupConfig => {
@@ -96,7 +126,7 @@ export const createConfigManager = async (configPath?: string) => {
     if (!config.mcp) {
       return undefined;
     }
-    return expandMCPConfig(config.mcp);
+    return expandMCPConfig(config.mcp, getDotfilesRoot());
   };
 
   const getConfig = (): DotfilesConfig => {
