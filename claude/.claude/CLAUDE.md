@@ -39,6 +39,8 @@
 - **NEVER** use classes - use functions and objects
 - **NEVER** create `.d.ts` files
 - **NEVER** suppress errors without handling
+- **NEVER** commit to git until explicitly instructed by the user
+- **NEVER** run development server startup commands in any workflow
 
 ## Before ANY Commit
 
