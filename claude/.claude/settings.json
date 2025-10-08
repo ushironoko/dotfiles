@@ -23,18 +23,9 @@
     ],
     "deny": ["Bash(curl:*)"]
   },
+  "enableAllProjectMcpServers": true,
   "hooks": {
     "PreToolUse": [
-      {
-        "matcher": "WebSearch|WebFetch",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.claude/hooks/pre_tool_use/no_default_web_fetch.sh",
-            "timeout": 5
-          }
-        ]
-      },
       {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [
@@ -59,11 +50,10 @@
       }
     ]
   },
-  "model": "opus",
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh",
     "padding": 0
   },
-  "enableAllProjectMcpServers": true
+  "alwaysThinkingEnabled": true
 }
