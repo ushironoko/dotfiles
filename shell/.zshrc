@@ -92,6 +92,10 @@ if [ -f "/usr/local/bin/brew" ]; then
   eval "$(/usr/local/bin/brew shellenv)"
 fi
 
+if [ -d "$HOME/.local/bin" ] ; then
+    PATH="$HOME/.local/bin:$PATH"
+fi
+
 # mise - universal version manager
 # Always activate mise to ensure shims are in PATH
 eval "$(mise activate zsh)"
