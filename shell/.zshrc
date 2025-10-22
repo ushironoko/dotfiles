@@ -114,3 +114,9 @@ export PATH="$PATH:/Applications/Visual Studio Code.app/Contents/Resources/app/b
 # Starship prompt
 # Initialize starship after mise is activated
 eval "$(starship init zsh)"
+
+# The next line updates PATH for the Google Cloud SDK.
+if [ -f '/Users/ushironoko/google-cloud-sdk/path.zsh.inc' ]; then . '/Users/ushironoko/google-cloud-sdk/path.zsh.inc'; fi
+
+# The next line enables shell command completion for gcloud.
+if [ -f '/Users/ushironoko/google-cloud-sdk/completion.zsh.inc' ]; then . '/Users/ushironoko/google-cloud-sdk/completion.zsh.inc'; fi
