@@ -7,13 +7,6 @@
         "NODE_NO_WARNINGS": "1"
       }
     },
-    "gemini-google-search": {
-      "command": "npx",
-      "args": ["mcp-gemini-google-search"],
-      "env": {
-        "GEMINI_MODEL": "gemini-2.5-flash"
-      }
-    },
     "readability": {
       "command": "npx",
       "args": ["-y", "@mizchi/readability", "--mcp"]
@@ -34,16 +27,6 @@
         "false"
       ],
       "env": {}
-    },
-    "hitl": {
-      "command": "human-in-the-loop",
-      "args": [
-        "--discord-channel-id",
-        "${DISCORD_CHANNEL_ID}",
-        "--discord-user-id",
-        "${DISCORD_USER_ID}"
-      ],
-      "description": "install with `cargo install --git https://github.com/KOBA789/human-in-the-loop.git`"
     },
     "mcpdoc": {
       "command": "uvx",

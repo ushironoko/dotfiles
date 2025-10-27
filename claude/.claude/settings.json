@@ -13,11 +13,8 @@
       "Read(**)",
       "Read(~/.bashrc)",
       "Read(~/.zshrc)",
-      "Bash(chmod:*)",
       "mcp__gistdex",
-      "mcp__gemini-google-search",
       "mcp__readability",
-      "mcp__hitl",
       "mcp__serena",
       "mcp__mcpdoc"
     ],
