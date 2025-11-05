@@ -155,9 +155,9 @@ gget() {
 }
 
 # Search and clone from GitHub
-gget-search() { 
+gget-search() {
   [ $# -eq 0 ] && echo "Usage: gget-search <query>" && return 1
-  local r=$(gh search repos "$*" --limit 30 --json fullName,description,stargazersCount | jq -r '.[] | [.fullName, .description // ""] | @tsv' | column -t -s $'\t' | fzf --height 40% --reverse --with-nth 1,2 | awk '{print $1}')
+  local r=$(gh search repos "$*" --limit 30 --json fullName,description,stargazersCount | jq -r '.[] | .fullName' | fzf --height 40% --reverse --preview "gh repo view {}")
   [ -n "$r" ] && ghq get "https://github.com/$r"
 }
 

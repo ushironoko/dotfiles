@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/ushironoko/**)",
+      "WebSearch",
+      "Bash(ln:*)",
+      "Bash(for:*)",
+      "Bash(done)",
+      "Bash(readlink:*)",
+      "Bash(cat:*)",
+      "Bash(claude --version)",
+      "Bash(claude doctor)",
+      "Bash(./install.sh)",
+      "Bash(bun:*)",
+      "Bash(chmod:*)",
+      "Bash(./bin/dotfiles list:*)",
+      "Bash(./restore.sh:*)",
+      "Bash(./install-ts.sh:*)",
+      "Bash(./init.sh)",
+      "Bash(./bin/dotfiles install:*)",
+      "Bash(dotfiles install:*)",
+      "Bash(/home/ushironoko/.bun/bin/bun run src/index.ts install --dry-run)",
+      "Read(//usr/local/bin/**)",
+      "Bash(export PATH=\"$HOME/.bun/bin:$PATH\")",
+      "Bash(PATH=\"$HOME/.bun/bin:$HOME/.local/bin:$PATH\" dotfiles install --dry-run)",
+      "Bash(mise list:*)",
+      "Bash(mise which:*)",
+      "Bash(source ~/.bashrc)",
+      "Bash(/home/ushironoko/.local/share/mise/installs/bun/1.2.21/bin/bun run src/index.ts install --dry-run)",
+      "Bash(similarity-ts:*)",
+      "Bash(bash:*)",
+      "Bash(./scripts/migrate-to-ghq.sh:*)",
+      "Bash(do [ -d \"$dir/.git\" ])",
+      "Bash(starship:*)",
+      "Bash(dotfiles:*)",
+      "Bash(source:*)",
+      "mcp__mcpdoc__list_doc_sources",
+      "mcp__mcpdoc__fetch_docs"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

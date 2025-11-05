@@ -9,6 +9,7 @@ bun = "latest"
 jq = "latest"
 deno = "latest"
 fzf = "latest"
+gh = "latest"
 ghq = "latest"
 
 [settings]
