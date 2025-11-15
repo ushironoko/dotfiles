@@ -42,3 +42,5 @@ _.backup
 node_modules/
 
 .serena/
+
+**/.claude/settings.local.json

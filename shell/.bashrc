@@ -189,3 +189,9 @@ eval "$(mise activate bash)"
 
 # Initialize starship prompt
 eval "$(starship init bash)"
+
+# linux環境でgnome-keyringを起動
+if [ -z "$GNOME_KEYRING_CONTROL" ]; then
+  eval $(gnome-keyring-daemon --start --components=secrets)
+  export GNOME_KEYRING_CONTROL
+fi
