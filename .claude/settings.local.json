@@ -35,7 +35,12 @@
       "Bash(dotfiles:*)",
       "Bash(source:*)",
       "mcp__mcpdoc__list_doc_sources",
-      "mcp__mcpdoc__fetch_docs"
+      "mcp__mcpdoc__fetch_docs",
+      "Bash(./init.sh:*)",
+      "Bash(echo:*)",
+      "Bash(mise doctor:*)",
+      "Bash(/Users/ushironoko/.local/share/mise/installs/bun/1.3.2/bin/bun run src/index.ts list)",
+      "Bash(/Users/ushironoko/.local/share/mise/installs/bun/1.3.2/bin/bun run src/index.ts list --verbose)"
     ],
     "deny": [],
     "ask": []

@@ -73,13 +73,35 @@ dotfiles mcpdoc list
 
 ## Troubleshooting
 
+### Quick Diagnostics
+
+If you're having issues with the initial setup, run the diagnostic tool:
+
+```bash
+./init.sh --check
+```
+
+This will show:
+- Binary locations (mise, bun, node)
+- Command availability in PATH
+- mise installation status
+- Installed tools
+- Recommendations for fixing issues
+
+### Common Issues
+
 Run `dotfiles doctor` to diagnose issues. Common fixes:
 
 ```bash
+# If mise commands are not found after installation
+# Make sure ~/.local/bin is in your PATH and restart shell
+export PATH="$HOME/.local/bin:$PATH"
+exec $SHELL
+
 # Remove conflicting Bun installation
 rm -rf ~/.bun
 
-# Fix PATH
+# Fix PATH permanently
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 echo 'eval "$(mise activate bash)"' >> ~/.bashrc
 exec $SHELL
