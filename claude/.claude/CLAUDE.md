@@ -66,16 +66,6 @@
 
 ## Development Workflow
 
-### Task Management
-
-1. **Create task list** - Break down goals into actionable items
-2. **Prioritize** - Order by importance and dependencies
-3. **Track progress** - Update status after each completion
-4. **Use subagents** when applicable:
-   - `git` → Git operations
-   - `benchmark` → Performance testing
-   - `similarity` → Refactoring
-
 ### Test-Driven Development (TDD)
 
 ```bash
