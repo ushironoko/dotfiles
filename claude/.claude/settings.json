@@ -18,24 +18,10 @@
       "mcp__serena",
       "mcp__mcpdoc"
     ],
-    "deny": [
-      "Bash(curl:*)"
-    ]
+    "deny": ["Bash(curl:*)"]
   },
   "enableAllProjectMcpServers": true,
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.claude/hooks/pre_tool_use/block_absolute_path_write.sh",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit|MultiEdit",
