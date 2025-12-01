@@ -1,17 +1,20 @@
 #!/bin/bash
-# JSON入力を一度読み取る
+# Read JSON input from stdin
 input=$(cat)
+datetime=`date '+%Y/%m/%d %H:%M:%S'`
 
-# 一般的な抽出のためのヘルパー関数
-get_model_name() { echo "$input" | jq -r '.model.display_name'; }
-get_current_dir() { echo "$input" | jq -r '.workspace.current_dir'; }
-get_project_dir() { echo "$input" | jq -r '.workspace.project_dir'; }
-get_version() { echo "$input" | jq -r '.version'; }
-get_cost() { echo "$input" | jq -r '.cost.total_cost_usd'; }
-get_duration() { echo "$input" | jq -r '.cost.total_duration_ms'; }
+# Extract values using jq
+MODEL_DISPLAY=$(echo "$input" | jq -r '.model.display_name')
+CURRENT_DIR=$(echo "$input" | jq -r '.workspace.current_dir')
+CCUSAGE=$(echo "$input" | bunx --bun ccusage@latest statusline)
 
-# ヘルパーを使用
-MODEL=$(get_model_name)
-DIR=$(get_current_dir)
-echo "[$MODEL] 📁 ${DIR##*/}"
-echo "🕒 $(get_version) | 💰 $(get_cost) USD | ⏳ $(get_duration) ms"
+# Show git branch if in a git repo
+GIT_BRANCH=""
+if git rev-parse --git-dir > /dev/null 2>&1; then
+    BRANCH=$(git branch --show-current 2>/dev/null)
+    if [ -n "$BRANCH" ]; then
+        GIT_BRANCH=" | 🌿 $BRANCH"
+    fi
+fi
+
+echo "${CURRENT_DIR##*/}$GIT_BRANCH $CCUSAGE | $datetime"

@@ -13,9 +13,6 @@
       "Read(**)",
       "Read(~/.bashrc)",
       "Read(~/.zshrc)",
-      "mcp__gistdex",
-      "mcp__readability",
-      "mcp__serena",
       "mcp__mcpdoc"
     ],
     "deny": ["Bash(curl:*)"]
