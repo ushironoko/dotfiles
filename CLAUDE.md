@@ -107,31 +107,3 @@ The MCPMerger handles special logic for `.claude.json` using `defu` for deep obj
 2. Uses `defu` to deeply merge `mcpServers` arrays, preventing duplicates through custom array merging logic
 3. Creates backup before modifying target
 4. Preserves all other keys in target file (API keys, settings) through `defu`'s non-destructive merge behavior
-
-## Research and Documentation
-
-### Research Directory
-
-The `research/` directory contains technical investigation results and migration guides. These documents are:
-
-- Indexed in gistdex for searchable access via MCP
-- Available for querying through the gistdex MCP server
-- Used to store architectural decisions and technology evaluations
-
-### Gistdex Integration
-
-The project uses gistdex MCP for knowledge management:
-
-- **queries.md**: Contains example queries for efficiently searching indexed documentation
-- **Research documents**: Automatically indexed for semantic search
-- **Access method**: Use `mcp__gistdex__gistdex_query` to retrieve indexed information
-
-Example queries:
-
-```
-# Search for c12 configuration migration information
-c12 migration JSON to TypeScript
-
-# Find environment-specific configuration details
-c12 $development $production environment
-```
