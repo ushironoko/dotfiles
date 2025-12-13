@@ -179,49 +179,16 @@ bun run prepare
 }
 ```
 
-## BiomeJS Settings
+## formatter Settings
 
 - **Indentation**: 2 spaces
 - **Quotes**: Double quotes
 - **Semicolons**: Always
 - **Config**: Use defaults (minimal customization)
 
-## Vitest Configuration
-
-- **Test files**: `*.test.ts` (same directory as source)
-- **Coverage**: Optional but recommended
-- **Watch mode**: Use for TDD
-
-## TypeScript Configuration
-
-- **Module**: ESNext
-- **Target**: Based on Node.js version in `.node-version`
-- **Strict**: true
-- **No emit**: For type checking only
-
 ---
 
 # SPECIAL CASES
-
-## Human-in-the-Loop MCP
-
-When Human-in-the-Loop MCP server is enabled, you can ask humans for information that AI cannot determine alone:
-
-```typescript
-// Usage example (within Claude Code)
-mcp__hitl__ask_human({
-  question: "What is your preference for this design approach?",
-});
-```
-
-### When to Ask Questions
-
-- **Personal preferences**: Design direction, naming conventions, style choices
-- **Project-specific context**: Existing design decisions, non-public requirements
-- **Local environment details**: Installed tools, environment configurations
-- **Non-public information**: API keys, internal documentation, private settings
-
-Questions are sent via Discord and responses are returned to the AI.
 
 ## Windows Path Conversion
 
