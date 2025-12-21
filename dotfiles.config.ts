@@ -65,6 +65,11 @@ export default defineConfig({
       type: "directory",
     },
     {
+      source: "./config/ghostty",
+      target: "~/.config/ghostty",
+      type: "directory",
+    },
+    {
       source: "./bin/dotfiles",
       target: "~/.local/bin/dotfiles",
       type: "file",

@@ -40,7 +40,9 @@
       "Bash(echo:*)",
       "Bash(mise doctor:*)",
       "Bash(/Users/ushironoko/.local/share/mise/installs/bun/1.3.2/bin/bun run src/index.ts list)",
-      "Bash(/Users/ushironoko/.local/share/mise/installs/bun/1.3.2/bin/bun run src/index.ts list --verbose)"
+      "Bash(/Users/ushironoko/.local/share/mise/installs/bun/1.3.2/bin/bun run src/index.ts list --verbose)",
+      "WebFetch(domain:ghostty.org)",
+      "Bash(tree:*)"
     ],
     "deny": [],
     "ask": []
