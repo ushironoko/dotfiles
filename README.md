@@ -82,6 +82,7 @@ If you're having issues with the initial setup, run the diagnostic tool:
 ```
 
 This will show:
+
 - Binary locations (mise, bun, node)
 - Command availability in PATH
 - mise installation status

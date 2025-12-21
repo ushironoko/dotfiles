@@ -15,9 +15,7 @@
       "Read(~/.zshrc)",
       "mcp__mcpdoc"
     ],
-    "deny": [
-      "Bash(curl:*)"
-    ]
+    "deny": ["Bash(curl:*)"]
   },
   "enableAllProjectMcpServers": true,
   "hooks": {
