@@ -31,6 +31,7 @@ export default defineConfig({
         "commands",
         "hooks",
         "skills",
+        "plugins",
         "CLAUDE.md",
         "settings.json",
         "statusline.sh",

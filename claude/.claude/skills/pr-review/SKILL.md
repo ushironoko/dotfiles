@@ -1,198 +1,130 @@
 ---
 name: pr-review
-description: Gather comprehensive GitHub PR information using gh CLI. Use when reviewing PRs, checking CI/GitHub Actions status, analyzing review comments, understanding PR context, checking merge status, or examining related issues.
+description: GitHub Pull Requestのレビュー操作を行うスキル。PR情報取得、差分確認、コメント取得・投稿、インラインコメント、コメント返信をghコマンドで実行する。PRレビュー、コードレビュー、PR操作が必要な時に使用。
 ---
 
-# PR Review
+# GitHub PR Review Operation
 
-Gather and summarize comprehensive information about a GitHub Pull Request.
+GitHub CLI (`gh`) を使ったPRレビュー操作。
 
-## When to Use
+## 前提条件
 
-- Reviewing a PR (own or others')
-- Checking PR status (CI, reviews, merge state)
-- Understanding PR context and related issues
-- Analyzing review comments
+- `gh` インストール済み
+- `gh auth login` で認証済み
 
-## Prerequisites
+## PR URLのパース
 
-- `gh` CLI installed and authenticated
-- Inside a git repository
+PR URL `https://github.com/OWNER/REPO/pull/NUMBER` から以下を抽出して使用：
 
-## Quick Start
+- `OWNER`: リポジトリオーナー
+- `REPO`: リポジトリ名
+- `NUMBER`: PR番号
 
-```bash
-# Current branch's PR
-gh pr view --json number,title,state,author,url
+## 操作一覧
 
-# Specific PR
-gh pr view <NUMBER> --json number,title,state,author,url
-```
-
-## Step-by-Step Process
-
-### 1. Identify Target PR
+### 1. PR情報取得
 
 ```bash
-# Get current branch
-git branch --show-current
-
-# Check if PR exists for current branch
-gh pr view --json number,title,body,author,state,url,baseRefName,headRefName
+gh pr view NUMBER --repo OWNER/REPO --json title,body,author,state,baseRefName,headRefName,url
 ```
 
-For a specific PR number or URL:
+### 2. 差分取得（行番号付き）
 
 ```bash
-gh pr view <PR_NUMBER_OR_URL> --json number,title,body,author,state,url,baseRefName,headRefName
+gh pr diff NUMBER --repo OWNER/REPO | awk '
+/^@@/ {
+  match($0, /-([0-9]+)/, old)
+  match($0, /\+([0-9]+)/, new)
+  old_line = old[1]
+  new_line = new[1]
+  print $0
+  next
+}
+/^-/ { printf "L%-4d     | %s\n", old_line++, $0; next }
+/^\+/ { printf "     R%-4d| %s\n", new_line++, $0; next }
+/^ / { printf "L%-4d R%-4d| %s\n", old_line++, new_line++, $0; next }
+{ print }
+'
 ```
 
-### 2. Check Merge Status
+出力例：
+
+```
+@@ -46,15 +46,25 @@ jobs:
+L46   R46  |            prompt: |
+L49       | -            （削除行）
+     R49  | +            （追加行）
+L50   R50  |              # レビューガイドライン
+```
+
+- `L数字`: LEFT(base)側の行番号 → インラインコメントで`side=LEFT`に使用
+- `R数字`: RIGHT(head)側の行番号 → インラインコメントで`side=RIGHT`に使用
+
+### 3. コメント取得
+
+Issue Comments（PR全体へのコメント）:
 
 ```bash
-gh pr view --json mergeable,mergeStateStatus,reviewDecision
+gh api repos/OWNER/REPO/issues/NUMBER/comments --jq '.[] | {id, user: .user.login, created_at, body}'
 ```
 
-Key fields:
-
-- `mergeable`: Can be merged without conflicts
-- `mergeStateStatus`: CLEAN, UNSTABLE, DIRTY, etc.
-- `reviewDecision`: APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED
-
-### 3. Fetch Related Issues
+Review Comments（コード行へのコメント）:
 
 ```bash
-# Get issues that will be closed by this PR
-gh pr view --json closingIssuesReferences
-
-# View specific issue details
-gh issue view <ISSUE_NUMBER> --json number,title,body,labels,state
+gh api repos/OWNER/REPO/pulls/NUMBER/comments --jq '.[] | {id, user: .user.login, path, line, created_at, body, in_reply_to_id}'
 ```
 
-Also parse PR body for issue references like `#123`, `fixes #456`, `closes #789`.
-
-### 4. Check CI Status (GitHub Actions)
+### 4. PRにコメント
 
 ```bash
-# Summary of all checks
-gh pr checks
-
-# Detailed status with conclusions
-gh pr view --json statusCheckRollup
+gh pr comment NUMBER --repo OWNER/REPO --body "コメント内容"
 ```
 
-If checks failed:
+### 5. インラインコメント（コード行指定）
+
+まずhead commit SHAを取得：
 
 ```bash
-# List workflow runs
-gh run list --branch <BRANCH_NAME>
-
-# View failed run logs
-gh run view <RUN_ID> --log-failed
+gh api repos/OWNER/REPO/pulls/NUMBER --jq '.head.sha'
 ```
 
-### 5. Fetch Review Comments
+単一行コメント：
 
 ```bash
-# All comments on PR
-gh pr view --comments
-
-# Review status summary
-gh pr view --json reviews,reviewRequests
+gh api repos/OWNER/REPO/pulls/NUMBER/comments \
+  --method POST \
+  -f body="コメント内容" \
+  -f commit_id="COMMIT_SHA" \
+  -f path="src/example.py" \
+  -F line=15 \
+  -f side=RIGHT
 ```
 
-For detailed inline comments:
+複数行コメント（10〜15行目）：
 
 ```bash
-# Get repository info first
-gh repo view --json owner,name
-
-# Then fetch comments via API
-gh api repos/{owner}/{repo}/pulls/{pull_number}/comments
-gh api repos/{owner}/{repo}/pulls/{pull_number}/reviews
+gh api repos/OWNER/REPO/pulls/NUMBER/comments \
+  --method POST \
+  -f body="コメント内容" \
+  -f commit_id="COMMIT_SHA" \
+  -f path="src/example.py" \
+  -F line=15 \
+  -f side=RIGHT \
+  -F start_line=10 \
+  -f start_side=RIGHT
 ```
 
-### 6. Get Commit History
+**注意点：**
+
+- `-F` (大文字): 数値パラメータ（`line`, `start_line`）に使用。`-f`だと文字列になりエラーになる
+- `side`: `RIGHT`（追加行）または `LEFT`（削除行）
+
+### 6. コメントへ返信
 
 ```bash
-gh pr view --json commits
+gh api repos/OWNER/REPO/pulls/NUMBER/comments/COMMENT_ID/replies \
+  --method POST \
+  -f body="返信内容"
 ```
 
-### 7. Preview Changes
-
-```bash
-# Statistics
-gh pr view --json additions,deletions,changedFiles
-
-# File-level diff stats
-gh pr diff --stat
-
-# Full diff (use judiciously for large PRs)
-gh pr diff
-```
-
-## Output Format
-
-Present findings in this structure:
-
-```markdown
-## PR Summary
-
-- **PR #<number>**: <title>
-- **Author**: @<username>
-- **State**: Open/Merged/Closed
-- **Base**: <base> <- <head>
-- **URL**: <url>
-
-## Merge Status
-
-- **Mergeable**: Yes/No/Unknown
-- **Conflicts**: None / Has conflicts
-- **Review Decision**: Approved / Changes Requested / Pending
-
-## Related Issues
-
-- #<number>: <title> (<state>)
-
-## CI Status
-
-- ✅ <check_name>: Success
-- ❌ <check_name>: Failed - <reason>
-- ⏳ <check_name>: In Progress
-
-## Reviews
-
-- Approved: <count>
-- Changes Requested: <count>
-- Pending: <count>
-
-## Unresolved Comments
-
-1. **@<reviewer>** on `<file>:<line>`
-   > <comment>
-
-## Commits (<count>)
-
-1. `<sha>` - <message>
-
-## Changes
-
-- Files: <count>
-- Additions: +<count>
-- Deletions: -<count>
-```
-
-## Error Handling
-
-| Error             | Action                      |
-| ----------------- | --------------------------- |
-| No PR for branch  | Suggest `gh pr create`      |
-| PR not found      | Verify PR number/URL        |
-| Permission denied | Check `gh auth status`      |
-| Rate limited      | Wait or use `--limit` flags |
-
-## Tips
-
-- For large PRs, use `gh pr diff --stat` first to identify key files
-- Use `gh pr checks --watch` to monitor CI in real-time
-- Filter reviews: `gh api` with `?state=pending` query param
+`COMMENT_ID`はコメント取得で得た`id`を使用。
