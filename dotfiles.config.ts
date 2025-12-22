@@ -30,6 +30,7 @@ export default defineConfig({
         "agents",
         "commands",
         "hooks",
+        "skills",
         "CLAUDE.md",
         "settings.json",
         "statusline.sh",
