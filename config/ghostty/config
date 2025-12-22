@@ -1,3 +1,40 @@
 # Ghostty Configuration
+
 # https://ghostty.org/docs/config
 
+# Theme (light:dark format for automatic switching)
+
+theme = light:Catppuccin Latte,dark:Catppuccin Mocha
+
+# Font
+
+font-family = FiraCode-Retina
+font-size = 14
+
+# Window
+
+window-padding-x = 10
+window-padding-y = 10
+window-padding-balance = true
+window-width = 215
+window-height = 50
+window-save-state = always
+window-inherit-working-directory = true
+
+# Cursor
+
+cursor-style = underline
+cursor-style-blink = false
+
+# Shell
+
+shell-integration = detect
+copy-on-select = clipboard
+
+# Behavior
+
+quit-after-last-window-closed = true
+
+# Global keybind: Cmd+Esc to toggle visibility (show/hide all windows)
+
+keybind = global:super+escape=toggle_visibility
