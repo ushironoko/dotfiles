@@ -5,10 +5,11 @@
 # Theme (light:dark format for automatic switching)
 
 theme = light:Catppuccin Latte,dark:Catppuccin Mocha
+background-opacity = 0.8
 
 # Font
 
-font-family = FiraCode-Retina
+font-family = Osaka−等幅
 font-size = 14
 
 # Window
