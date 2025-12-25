@@ -6,11 +6,13 @@
 
 theme = light:Catppuccin Latte,dark:Catppuccin Mocha
 background-opacity = 0.8
+unfocused-split-opacity = 0.5
 
 # Font
 
 font-family = Osaka−等幅
-font-size = 14
+font-size = 15
+font-thicken = true
 
 # Window
 
@@ -39,3 +41,7 @@ quit-after-last-window-closed = true
 # Global keybind: Cmd+Esc to toggle visibility (show/hide all windows)
 
 keybind = global:super+escape=toggle_visibility
+
+# macos
+macos-titlebar-style = tabs
+macos-option-as-alt = true
