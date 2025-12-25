@@ -6,7 +6,9 @@
 
 theme = light:Catppuccin Latte,dark:Catppuccin Mocha
 background-opacity = 0.8
+background-blur-radius = 20
 unfocused-split-opacity = 0.5
+background = 282c34
 
 # Font
 
