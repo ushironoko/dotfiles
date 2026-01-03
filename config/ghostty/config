@@ -45,3 +45,9 @@ keybind = global:super+escape=toggle_visibility
 # macos
 macos-titlebar-style = tabs
 macos-option-as-alt = true
+
+# スプリット移動
+keybind = super+left=goto_split:left
+keybind = super+right=goto_split:right
+keybind = super+up=goto_split:top
+keybind = super+down=goto_split:bottom

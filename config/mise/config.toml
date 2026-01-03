@@ -1,4 +1,5 @@
 [tools]
+neovim = "latest"
 node = "24.6.0"
 starship = "latest"
 ni = "23.2.0"

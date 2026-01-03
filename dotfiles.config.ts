@@ -71,6 +71,11 @@ export default defineConfig({
       type: "directory",
     },
     {
+      source: "./config/nvim",
+      target: "~/.config/nvim",
+      type: "directory",
+    },
+    {
       source: "./bin/dotfiles",
       target: "~/.local/bin/dotfiles",
       type: "file",
