@@ -12,7 +12,7 @@
 # GitHub credential helper
 [credential "https://github.com"]
 	helper = 
-	helper = !/usr/bin/gh auth git-credential
+	helper = !/Users/ushironoko/.local/share/mise/installs/gh/2.83.1/gh_2.83.1_macOS_arm64/bin/gh auth git-credential
 
 # ============================================================
 # Git Core Developers' Recommended Settings
@@ -96,3 +96,6 @@
 # [core]
 # 	fsmonitor = true         # Monitor file changes (speeds up git status)
 # 	untrackedCache = true    # Cache untracked files
+[credential "https://gist.github.com"]
+	helper = 
+	helper = !/Users/ushironoko/.local/share/mise/installs/gh/2.83.1/gh_2.83.1_macOS_arm64/bin/gh auth git-credential
