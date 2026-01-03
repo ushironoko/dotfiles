@@ -5,8 +5,8 @@
 # Theme (light:dark format for automatic switching)
 
 theme = light:Catppuccin Latte,dark:Catppuccin Mocha
-background-opacity = 0.8
-background-blur-radius = 20
+background-opacity = 0.9
+background-blur-radius = 30
 unfocused-split-opacity = 0.5
 background = 1c1918
 
@@ -21,8 +21,6 @@ font-thicken = true
 window-padding-x = 10
 window-padding-y = 10
 window-padding-balance = true
-window-width = 215
-window-height = 50
 window-save-state = always
 window-inherit-working-directory = true
 
