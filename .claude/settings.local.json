@@ -45,7 +45,8 @@
       "Bash(tree:*)",
       "Bash(nvim:*)",
       "Bash(~/.local/share/mise/shims/nvim --version)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(head:*)"
     ],
     "deny": [],
     "ask": []

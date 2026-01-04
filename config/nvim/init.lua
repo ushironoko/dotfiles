@@ -23,7 +23,16 @@ require("lazy").setup({
       vim.cmd.colorscheme("catppuccin")
     end,
   },
-  { "nvim-tree/nvim-tree.lua", config = true },
+  { "nvim-tree/nvim-tree.lua",
+    config = function()
+      require("nvim-tree").setup({
+        filters = {
+          dotfiles = false,  -- ドットファイルを表示
+          git_ignored = false,  -- gitignore対象も表示
+        },
+      })
+    end,
+  },
   { "nvim-tree/nvim-web-devicons" },
   { "nvim-treesitter/nvim-treesitter",
     build = ":TSUpdate",
@@ -33,14 +42,31 @@ require("lazy").setup({
   },
   { "lewis6991/gitsigns.nvim", config = true },
   { "sindrets/diffview.nvim", config = true },
-  { "ibhagwan/fzf-lua", config = true },
+  { "ibhagwan/fzf-lua",
+    config = function()
+      require("fzf-lua").setup({
+        files = {
+          fd_opts = "--type f --hidden --follow --exclude .git",
+        },
+        grep = {
+          rg_opts = "--hidden --column --line-number --no-heading --color=always --smart-case --follow -g '!.git'",
+        },
+      })
+    end,
+  },
   { "folke/which-key.nvim", event = "VeryLazy", config = true },
   -- LSP
   { "williamboman/mason.nvim", config = true },
+  { "neovim/nvim-lspconfig" },
   { "williamboman/mason-lspconfig.nvim",
     config = function()
       require("mason-lspconfig").setup({
-        ensure_installed = { "ts_ls", "gopls", "rust_analyzer" },
+        ensure_installed = { "ts_ls", "rust_analyzer" },
+        handlers = {
+          function(server_name)
+            require("lspconfig")[server_name].setup({})
+          end,
+        },
       })
     end,
   },
@@ -48,15 +74,8 @@ require("lazy").setup({
   rocks = { enabled = false },
 })
 
--- LSP設定 (Neovim 0.11+)
-vim.lsp.config("ts_ls", {})
-vim.lsp.config("gopls", {})
-vim.lsp.config("rust_analyzer", {})
-vim.lsp.enable({ "ts_ls", "gopls", "rust_analyzer" })
-
 -- キーマップ
 vim.keymap.set("n", "<leader>e", ":NvimTreeToggle<CR>")
-vim.keymap.set("n", "<leader>r", ":source $MYVIMRC<CR>", { desc = "設定リロード" })
 vim.keymap.set("n", "<leader>w", "<cmd>w<CR>", { desc = "保存" })
 vim.keymap.set("n", "<leader>x", "<cmd>q<CR>", { desc = "閉じる" })
 vim.keymap.set("n", "<C-h>", "<C-w>h")  -- 左のウィンドウ
@@ -84,7 +103,9 @@ vim.keymap.set("n", "<leader>fh", "<cmd>FzfLua help_tags<CR>", { desc = "ヘル�
 -- LSP
 vim.keymap.set("n", "gd", vim.lsp.buf.definition, { desc = "定義へ移動" })
 vim.keymap.set("n", "K", vim.lsp.buf.hover, { desc = "ホバー情報" })
-vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, { desc = "コードアクション" })
+vim.keymap.set("n", "<leader>i", vim.lsp.buf.code_action, { desc = "コードアクション" })
 vim.keymap.set("n", "<leader>rn", vim.lsp.buf.rename, { desc = "リネーム" })
 vim.keymap.set("n", "[d", vim.diagnostic.goto_prev, { desc = "前のエラー" })
 vim.keymap.set("n", "]d", vim.diagnostic.goto_next, { desc = "次のエラー" })
+-- Terminal
+vim.keymap.set("n", "<leader>t", "<cmd>terminal<CR>", { desc = "ターミナル" })

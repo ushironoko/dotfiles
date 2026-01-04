@@ -161,6 +161,28 @@ bun run tsc          # Check types
 bun run prepare
 ```
 
+## Git Worktree Workflow
+
+実装作業を開始する前に、git worktreeで作業ディレクトリを分離する。
+
+### 適用条件
+
+- Plan mode終了後、コード変更を伴う実装を開始する時
+- 新しいブランチで作業を開始する時
+
+### 除外条件
+
+- 単一ファイルの軽微な修正（typo、コメント追加等）
+- READMEやドキュメントのみの変更
+- プロジェクトのCLAUDE.mdで除外指定がある場合
+
+### ワークフロー
+
+1. `git-worktree` スキルを参照してworktreeを作成
+2. 作成したworktreeディレクトリで作業を継続
+3. 作業完了後、ユーザーに削除確認
+4. 確認後、worktreeを削除してメインリポジトリに戻る
+
 ---
 
 # TOOLS CONFIGURATION
