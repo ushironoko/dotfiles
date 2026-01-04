@@ -44,7 +44,8 @@
       "WebFetch(domain:ghostty.org)",
       "Bash(tree:*)",
       "Bash(nvim:*)",
-      "Bash(~/.local/share/mise/shims/nvim --version)"
+      "Bash(~/.local/share/mise/shims/nvim --version)",
+      "WebFetch(domain:github.com)"
     ],
     "deny": [],
     "ask": []
