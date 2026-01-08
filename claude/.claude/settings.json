@@ -14,8 +14,7 @@
       "Read(~/.bashrc)",
       "Read(~/.zshrc)",
       "mcp__mcpdoc"
-    ],
-    "deny": ["Bash(curl:*)"]
+    ]
   },
   "enableAllProjectMcpServers": true,
   "hooks": {
@@ -37,8 +36,11 @@
     "command": "~/.claude/statusline.sh",
     "padding": 0
   },
-  "alwaysThinkingEnabled": true,
   "enabledPlugins": {
-    "rust-analyzer-lsp@claude-plugins-official": true
-  }
+    "rust-analyzer-lsp@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true,
+    "pyright-lsp@claude-plugins-official": true
+  },
+  "alwaysThinkingEnabled": true
 }

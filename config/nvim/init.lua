@@ -40,10 +40,14 @@ require("lazy").setup({
       require("nvim-treesitter").install({ "typescript", "tsx", "go", "rust", "lua", "vim", "vimdoc" })
     end,
   },
-  { "lewis6991/gitsigns.nvim", config = true },
+  { "kdheepak/lazygit.nvim",
+    dependencies = { "nvim-lua/plenary.nvim" },
+    cmd = { "LazyGit", "LazyGitConfig", "LazyGitCurrentFile", "LazyGitFilter", "LazyGitFilterCurrentFile" },
+    keys = { { "<leader>gg", "<cmd>LazyGit<CR>", desc = "LazyGit" } },
+  },
   { "sindrets/diffview.nvim", config = true },
   { "ibhagwan/fzf-lua",
-    config = function()
+   config = function()
       require("fzf-lua").setup({
         files = {
           fd_opts = "--type f --hidden --follow --exclude .git",
@@ -90,9 +94,6 @@ vim.keymap.set("n", "<leader>h", "<C-w>h")
 vim.keymap.set("n", "<leader>l", "<C-w>l")
 vim.keymap.set("n", "<leader>j", "<C-w>j")
 vim.keymap.set("n", "<leader>k", "<C-w>k")
-vim.keymap.set("n", "<leader>gp", ":Gitsigns preview_hunk<CR>")  -- hunkプレビュー
-vim.keymap.set("n", "<leader>gd", ":Gitsigns diffthis<CR>")      -- ファイルdiff
-vim.keymap.set("n", "<leader>gr", ":Gitsigns reset_hunk<CR>")    -- 変更を戻す
 vim.keymap.set("n", "<leader>gD", "<cmd>DiffviewOpen<CR>", { desc = "リポジトリdiff" })
 vim.keymap.set("n", "<leader>gc", "<cmd>DiffviewClose<CR>", { desc = "diffview閉じる" })
 -- fzf
