@@ -66,17 +66,30 @@ require("lazy").setup({
     config = function()
       require("mason-lspconfig").setup({
         ensure_installed = { "ts_ls", "rust_analyzer" },
-        handlers = {
-          function(server_name)
-            require("lspconfig")[server_name].setup({})
-          end,
-        },
       })
     end,
   },
 }, {
   rocks = { enabled = false },
 })
+
+-- LSP設定 (Neovim 0.11+)
+vim.lsp.config("ts_ls", {
+  init_options = {
+    preferences = {
+      includeInlayParameterNameHints = "all",
+      includeInlayParameterNameHintsWhenArgumentMatchesName = false,
+      includeInlayFunctionParameterTypeHints = true,
+      includeInlayVariableTypeHints = true,
+      includeInlayVariableTypeHintsWhenTypeMatchesName = false,
+      includeInlayPropertyDeclarationTypeHints = true,
+      includeInlayFunctionLikeReturnTypeHints = true,
+      includeInlayEnumMemberValueHints = true,
+    },
+  },
+})
+vim.lsp.config("rust_analyzer", {})
+vim.lsp.enable({ "ts_ls", "rust_analyzer" })
 
 -- キーマップ
 vim.keymap.set("n", "<leader>e", ":NvimTreeToggle<CR>")
@@ -110,3 +123,43 @@ vim.keymap.set("n", "[d", vim.diagnostic.goto_prev, { desc = "前のエラー" }
 vim.keymap.set("n", "]d", vim.diagnostic.goto_next, { desc = "次のエラー" })
 -- Terminal
 vim.keymap.set("n", "<leader>t", "<cmd>terminal<CR>", { desc = "ターミナル" })
+-- 絶対パスをクリップボードにコピー
+vim.keymap.set("n", "<leader>C", function()
+  local path = vim.fn.expand("%:p")
+  vim.fn.setreg("+", path)
+  vim.notify("Copied: " .. path)
+end, { desc = "絶対パスをコピー" })
+
+-- LSP自動ホバー（カーソル停止時に型情報を表示）
+vim.opt.updatetime = 500  -- ディレイ（ミリ秒）、お好みで調整
+
+vim.api.nvim_create_autocmd("CursorHold", {
+  callback = function()
+    -- LSPがアタッチされているバッファのみ
+    if #vim.lsp.get_clients({ bufnr = 0 }) == 0 then
+      return
+    end
+    -- すでにフローティングウィンドウが開いている場合はスキップ
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_get_config(win).relative ~= "" then
+        return
+      end
+    end
+    vim.lsp.buf.hover()
+  end,
+})
+
+-- インレイヒント（型情報のインライン表示）
+vim.api.nvim_create_autocmd("LspAttach", {
+  callback = function(args)
+    local client = vim.lsp.get_client_by_id(args.data.client_id)
+    if client and client.supports_method("textDocument/inlayHint") then
+      vim.lsp.inlay_hint.enable(true, { bufnr = args.buf })
+    end
+  end,
+})
+
+-- トグル用キーマップ
+vim.keymap.set("n", "<leader>ih", function()
+  vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled())
+end, { desc = "インレイヒント切替" })
