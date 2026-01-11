@@ -41,6 +41,14 @@ quit-after-last-window-closed = true
 
 keybind = global:super+escape=toggle_visibility
 
+# Quick Terminal (Quake-style drop-down terminal)
+# Cmd+T to toggle quick terminal from anywhere
+
+keybind = global:super+t=toggle_quick_terminal
+quick-terminal-position = top
+quick-terminal-animation-duration = 0.1
+quick-terminal-autohide = true
+
 # macos
 macos-titlebar-style = tabs
 macos-option-as-alt = true
