@@ -45,7 +45,7 @@ keybind = global:super+escape=toggle_visibility
 # Cmd+T to toggle quick terminal from anywhere
 
 keybind = global:super+t=toggle_quick_terminal
-quick-terminal-position = top
+quick-terminal-position = right
 quick-terminal-animation-duration = 0.1
 quick-terminal-autohide = true
 
