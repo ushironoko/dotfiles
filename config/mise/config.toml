@@ -12,6 +12,8 @@ deno = "latest"
 fzf = "latest"
 gh = "latest"
 ghq = "latest"
+lazygit = "latest"
+delta = "latest"
 
 [settings]
 experimental = true

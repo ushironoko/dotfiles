@@ -76,6 +76,11 @@ export default defineConfig({
       type: "directory",
     },
     {
+      source: "./config/lazygit",
+      target: "~/.config/lazygit",
+      type: "directory",
+    },
+    {
       source: "./bin/dotfiles",
       target: "~/.local/bin/dotfiles",
       type: "file",

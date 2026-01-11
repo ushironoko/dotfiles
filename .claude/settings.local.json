@@ -46,7 +46,10 @@
       "Bash(nvim:*)",
       "Bash(~/.local/share/mise/shims/nvim --version)",
       "WebFetch(domain:github.com)",
-      "Bash(head:*)"
+      "Bash(head:*)",
+      "Bash(lazygit --version:*)",
+      "Bash(/Users/ushironoko/.local/share/mise/installs/lazygit/0.58.0/lazygit --version)",
+      "Bash(delta:*)"
     ],
     "deny": [],
     "ask": []

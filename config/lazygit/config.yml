@@ -1,0 +1,69 @@
+# lazygit configuration
+# https://github.com/jesseduffield/lazygit/blob/master/docs/Config.md
+
+gui:
+  # 表示言語 (auto, en, ja, etc.)
+  language: "auto"
+  # マウス操作を有効化
+  mouseEvents: true
+  # 選択行をスクロール時に中央に保つ
+  scrollPastBottom: true
+  # サイドパネルの幅 (0.0-1.0)
+  sidePanelWidth: 0.3333
+  # メインパネルの分割方向 (horizontal, vertical)
+  mainPanelSplitMode: "flexible"
+  # テーマ設定
+  theme:
+    # ボーダースタイル (single, double, rounded, hidden)
+    border: "rounded"
+    # アクティブボーダーの色
+    activeBorderColor:
+      - green
+      - bold
+    # 非アクティブボーダーの色
+    inactiveBorderColor:
+      - white
+    # 選択範囲の背景色
+    selectedLineBgColor:
+      - blue
+  # コミットハッシュの表示長
+  commitHashLength: 8
+  # ブランチ名の最大表示幅
+  truncateBranchWidthTo: 40
+
+git:
+  # プル時のリベースを有効化
+  pull:
+    mode: "rebase"
+  # コミット時のスキップフック
+  skipHookPrefix: "WIP"
+  # 自動でフェッチを実行 (秒単位、0で無効)
+  autoFetch: true
+  autoRefresh: true
+  # コミットグラフのスタイル
+  log:
+    showGraph: "always"
+  # delta pager設定
+  paging:
+    pager: delta --paging=never --line-numbers --hyperlinks
+
+os:
+  # 外部エディタ (環境変数から取得)
+  editPreset: ""
+
+# キーバインド設定
+keybinding:
+  universal:
+    # vim風ナビゲーション
+    prevItem: "k"
+    nextItem: "j"
+    prevBlock: "h"
+    nextBlock: "l"
+    scrollUpMain: "<c-u>"
+    scrollDownMain: "<c-d>"
+# カスタムコマンド
+# customCommands:
+#   - key: "<c-r>"
+#     command: "gh pr create --web"
+#     context: "localBranches"
+#     description: "Create PR on GitHub"
