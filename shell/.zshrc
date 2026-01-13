@@ -27,6 +27,9 @@ zstyle ':completion:*' list-colors "${(s.:.)LS_COLORS}"
 zstyle ':completion:*' menu select
 
 
+# Default editor
+export EDITOR="hx"
+
 # Color support for ls (macOS)
 export CLICOLOR=1
 export LSCOLORS=ExGxBxDxCxEgEdxbxgxcxd
@@ -59,6 +62,16 @@ alias g="git"
 # Docker aliases
 alias dc="docker-compose"
 
+# yazi file manager (exit to cwd)
+function y() {
+  local tmp="$(mktemp -t "yazi-cwd.XXXXXX")" cwd
+  yazi "$@" --cwd-file="$tmp"
+  if cwd="$(command cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
+    builtin cd -- "$cwd"
+  fi
+  rm -f -- "$tmp"
+}
+
 # Package manager aliases
 alias px="pnpm dlx"
 alias p="pnpm"
@@ -78,9 +91,9 @@ case ":$PATH:" in
   *) export PATH="$PNPM_HOME:$PATH" ;;
 esac
 
-# Bun (managed by mise - path is added via mise shims)
-# export BUN_INSTALL="$HOME/.bun"
-# export PATH="$BUN_INSTALL/bin:$PATH"
+# Bun global packages
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
 
 # Homebrew (Apple Silicon)
 if [ -f "/opt/homebrew/bin/brew" ]; then

@@ -49,7 +49,16 @@
       "Bash(head:*)",
       "Bash(lazygit --version:*)",
       "Bash(/Users/ushironoko/.local/share/mise/installs/lazygit/0.58.0/lazygit --version)",
-      "Bash(delta:*)"
+      "Bash(delta:*)",
+      "WebFetch(domain:www.lorenzobettini.it)",
+      "WebFetch(domain:docs.helix-editor.com)",
+      "Bash(hx --health:*)",
+      "Bash(~/.local/share/mise/installs/helix/latest/bin/hx --health)",
+      "Bash(/Users/ushironoko/.local/share/mise/installs/helix/25.07.1/bin/hx:*)",
+      "Bash(/Users/ushironoko/.local/share/mise/installs/helix/25.07.1/helix-25.07.1-aarch64-macos/hx --health)",
+      "Bash(brew install:*)",
+      "Bash(yazi:*)",
+      "WebFetch(domain:yazi-rs.github.io)"
     ],
     "deny": [],
     "ask": []

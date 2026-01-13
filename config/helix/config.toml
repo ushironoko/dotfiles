@@ -1,0 +1,34 @@
+theme = "catppuccin_mocha"
+
+[editor]
+line-number = "absolute"
+mouse = true
+idle-timeout = 500
+auto-format = true
+bufferline = "multiple"
+
+[editor.cursor-shape]
+insert = "bar"
+normal = "block"
+select = "underline"
+
+[editor.lsp]
+display-inlay-hints = true
+
+[editor.file-picker]
+hidden = false
+
+[keys.normal]
+C-h = "jump_view_left"
+C-j = "jump_view_down"
+C-k = "jump_view_up"
+C-l = "jump_view_right"
+
+[keys.normal.space]
+w = ":write"
+x = ":buffer-close"
+g = { g = ":sh lazygit" }
+i = { h = ":toggle lsp.display-inlay-hints" }
+
+[keys.insert]
+j = { k = "normal_mode" }

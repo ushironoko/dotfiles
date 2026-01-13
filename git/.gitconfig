@@ -97,5 +97,23 @@
 # 	fsmonitor = true         # Monitor file changes (speeds up git status)
 # 	untrackedCache = true    # Cache untracked files
 [credential "https://gist.github.com"]
-	helper = 
+	helper =
 	helper = !/Users/ushironoko/.local/share/mise/installs/gh/2.83.1/gh_2.83.1_macOS_arm64/bin/gh auth git-credential
+
+# ============================================================
+# Delta Pager Configuration
+# https://dandavison.github.io/delta/
+# ============================================================
+
+[core]
+	pager = delta
+
+[interactive]
+	diffFilter = delta --color-only
+
+[delta]
+	dark = true
+	navigate = true
+	line-numbers = true
+	syntax-theme = Dracula
+	hyperlinks = true

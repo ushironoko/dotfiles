@@ -1,0 +1,23 @@
+[[language]]
+name = "typescript"
+auto-format = true
+language-servers = ["typescript-language-server"]
+
+[[language]]
+name = "tsx"
+auto-format = true
+language-servers = ["typescript-language-server"]
+
+[[language]]
+name = "rust"
+auto-format = true
+
+[language-server.typescript-language-server.config]
+preferences.includeInlayParameterNameHints = "all"
+preferences.includeInlayParameterNameHintsWhenArgumentMatchesName = false
+preferences.includeInlayFunctionParameterTypeHints = true
+preferences.includeInlayVariableTypeHints = true
+preferences.includeInlayVariableTypeHintsWhenTypeMatchesName = false
+preferences.includeInlayPropertyDeclarationTypeHints = true
+preferences.includeInlayFunctionLikeReturnTypeHints = true
+preferences.includeInlayEnumMemberValueHints = true

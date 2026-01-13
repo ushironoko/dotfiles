@@ -1,0 +1,4 @@
+[[mgr.prepend_keymap]]
+on   = "Y"
+run  = "copy path"
+desc = "Copy absolute path to clipboard"
