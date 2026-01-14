@@ -58,7 +58,10 @@
       "Bash(/Users/ushironoko/.local/share/mise/installs/helix/25.07.1/helix-25.07.1-aarch64-macos/hx --health)",
       "Bash(brew install:*)",
       "Bash(yazi:*)",
-      "WebFetch(domain:yazi-rs.github.io)"
+      "WebFetch(domain:yazi-rs.github.io)",
+      "Bash(lazygit:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:www.gh-dash.dev)"
     ],
     "deny": [],
     "ask": []
