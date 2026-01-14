@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Usage: gh-diff-no-lock <repo_name> <pr_number>
+# repo_name: e.g. "ushironoko/docsho"
+set -e
+
+repo_path=$(ghq list -p | grep -E "github.com/$1$")
+if [ -z "$repo_path" ]; then
+  echo "Repository not found: $1"
+  exit 1
+fi
+
+cd "$repo_path"
+gh pr checkout "$2"
+git diff main...HEAD -- . ':!*.lock' ':!*-lock.yaml' ':!*-lock.json' ':!*.lockb' | delta --paging=always

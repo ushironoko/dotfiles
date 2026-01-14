@@ -1,0 +1,7 @@
+# Global gitattributes
+# Treat lock files as binary (show "Binary files differ" in diff)
+pnpm-lock.yaml binary
+bun.lockb binary
+package-lock.json binary
+yarn.lock binary
+*.lock binary
