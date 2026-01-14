@@ -61,7 +61,8 @@
       "WebFetch(domain:yazi-rs.github.io)",
       "Bash(lazygit:*)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "WebFetch(domain:www.gh-dash.dev)"
+      "WebFetch(domain:www.gh-dash.dev)",
+      "WebFetch(domain:gh-dash.dev)"
     ],
     "deny": [],
     "ask": []
