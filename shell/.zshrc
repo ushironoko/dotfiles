@@ -58,6 +58,8 @@ alias re="exec $SHELL -l"
 
 # Git aliases
 alias g="git"
+alias lg="lazygit"
+alias gd="gh dash"
 
 # Docker aliases
 alias dc="docker-compose"
