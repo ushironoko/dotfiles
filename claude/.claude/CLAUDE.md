@@ -41,6 +41,7 @@
 - **NEVER** suppress errors without handling
 - **NEVER** commit to git until explicitly instructed by the user
 - **NEVER** run development server startup commands in any workflow
+- **ALWAYS** use `git-worktree` skill for non-trivial changes (multiple files, new features, refactoring)
 
 ## Before ANY Commit
 
@@ -163,7 +164,7 @@ bun run prepare
 
 ## Git Worktree Workflow
 
-実装作業を開始する前に、git worktreeで作業ディレクトリを分離する。
+**MUST**: 軽微な修正以外の実装作業は、必ずgit worktreeで作業ディレクトリを分離する。
 
 ### 適用条件
 

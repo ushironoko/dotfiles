@@ -13,6 +13,7 @@ deno = "latest"
 fzf = "latest"
 gh = "latest"
 ghq = "latest"
+"ubi:d-kuro/gwq" = "latest"
 lazygit = "latest"
 delta = "latest"
 

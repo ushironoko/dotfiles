@@ -3,40 +3,44 @@ name: git-worktree
 description: Git worktreeを使用した並行作業管理。実装開始時にworktreeを作成し、完了時に削除する。
 ---
 
-# Git Worktree Management
+# Git Worktree Management (gwq)
 
-実装作業をメインリポジトリから分離し、worktreeで作業する。
+軽微な修正以外の実装作業は、gwqを使ってworktreeで作業する。
+
+## 0. 前提条件
+
+- gwqはmise管理によりインストール済み
+- 参考: https://github.com/d-kuro/gwq
 
 ## 1. Worktree 作成
 
-### 1.1 現在の状態確認
+### 1.1 既存worktree確認
 
 ```bash
-# ブランチ名を取得
-git branch --show-current
-
-# リポジトリ名を取得
-basename "$(git rev-parse --show-toplevel)"
-
-# 既存のworktree一覧を確認
-git worktree list
+gwq list
 ```
 
-### 1.2 Worktree 作成・移動
+### 1.2 新規ブランチでworktree作成（推奨）
 
 ```bash
-# 変数設定
-REPO_NAME=$(basename "$(git rev-parse --show-toplevel)")
-BRANCH_NAME=$(git branch --show-current)
-WORKTREE_PATH="../${REPO_NAME}-${BRANCH_NAME}"
+# 新規ブランチ + worktree を作成
+gwq add -b feature/xxx
 
-# 現在のブランチでworktreeを作成
-git worktree add "$WORKTREE_PATH"
+# 作成後、worktreeに移動
+cd $(gwq get feature/xxx)
+```
 
-# worktreeに移動
-cd "$WORKTREE_PATH"
+### 1.3 現在のブランチでworktree作成
 
-# 依存関係インストール（lock fileを検出）
+```bash
+gwq add
+cd $(gwq get <branch-name>)
+```
+
+### 1.4 依存関係インストール
+
+```bash
+# lock fileを検出してインストール
 if [ -f "bun.lockb" ]; then
     bun install
 elif [ -f "pnpm-lock.yaml" ]; then
@@ -44,26 +48,28 @@ elif [ -f "pnpm-lock.yaml" ]; then
 fi
 ```
 
-### 1.3 新規ブランチでworktree作成
+## 2. 作業中
+
+### 2.1 worktree内でコマンド実行
 
 ```bash
-# 新しいブランチを指定してworktree作成
-git worktree add -b feature/new-feature "../${REPO_NAME}-feature-new-feature"
+# cdなしでworktree内でコマンド実行
+gwq exec feature/xxx -- bun test
+gwq exec feature/xxx -- bun run lint
+gwq exec feature/xxx -- bun run tsc
 ```
 
-### 1.4 同名worktreeが存在する場合
+### 2.2 変更状態確認
 
 ```bash
-# 番号を付与して作成
-WORKTREE_PATH="../${REPO_NAME}-${BRANCH_NAME}-2"
-git worktree add "$WORKTREE_PATH"
+gwq status
 ```
 
-## 2. 作業中の注意
+### 2.3 注意事項
 
 - worktree内で作業を継続する
 - コミット・プッシュは通常通り実行可能
-- 各Bashコマンドで `cd "$WORKTREE_PATH" &&` を先頭に付けるか、絶対パスを使用する
+- 各Bashコマンドは worktree ディレクトリ内で実行する
 
 ## 3. 作業完了後
 
@@ -72,25 +78,23 @@ git worktree add "$WORKTREE_PATH"
 ユーザーに以下を確認する:
 
 - 「worktree作業が完了しました。削除してよろしいですか？」
-- 未コミットの変更がある場合は警告を表示
 
 ```bash
-# 未コミット変更の確認
-cd "$WORKTREE_PATH" && git status --porcelain
+# 変更状態を確認
+gwq status
 ```
 
 ### 3.2 削除実行
 
 ```bash
-# 元のリポジトリに移動
-ORIGINAL_REPO=$(git rev-parse --show-toplevel)/../${REPO_NAME}
-cd "$ORIGINAL_REPO"
+# 元のリポジトリに移動してから削除
+cd <original-repo-path>
 
-# worktreeを削除
-git worktree remove "$WORKTREE_PATH"
+# worktree + ブランチを削除（推奨）
+gwq remove -b feature/xxx
 
-# 削除確認
-git worktree list
+# worktree のみ削除（ブランチは残す）
+gwq remove feature/xxx
 ```
 
 ### 3.3 強制削除（未コミット変更がある場合）
@@ -98,24 +102,19 @@ git worktree list
 ユーザー確認必須:
 
 ```bash
-git worktree remove --force "$WORKTREE_PATH"
+gwq remove -f feature/xxx
 ```
 
 ## 4. トラブルシューティング
 
-### ブランチがロックされている場合
+### 不要なworktree参照を削除
 
 ```bash
-# ロック状態を確認
-git worktree list --porcelain
-
-# ロック解除
-git worktree unlock "$WORKTREE_PATH"
+gwq prune
 ```
 
-### worktreeが残っている場合
+### 全worktree一覧確認
 
 ```bash
-# pruneで不要な参照を削除
-git worktree prune
+gwq list
 ```
