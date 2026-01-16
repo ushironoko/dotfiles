@@ -28,12 +28,12 @@ export interface SessionInfo {
 }
 
 // セッションログからツール呼び出しを抽出
-export function parseToolUsage(sessionPath: string): ToolUsage[] {
+export const parseToolUsage = (sessionPath: string): ToolUsage[] => {
   if (!existsSync(sessionPath)) {
     return [];
   }
 
-  const content = readFileSync(sessionPath, "utf-8");
+  const content = readFileSync(sessionPath, "utf8");
   const lines = content.split("\n").filter((line) => line.trim());
   const toolUsages: ToolUsage[] = [];
 
@@ -64,15 +64,15 @@ export function parseToolUsage(sessionPath: string): ToolUsage[] {
   }
 
   return toolUsages;
-}
+};
 
 // デバッグログからフック発火を抽出
-export function parseHookEvents(debugPath: string): HookEvent[] {
+export const parseHookEvents = (debugPath: string): HookEvent[] => {
   if (!existsSync(debugPath)) {
     return [];
   }
 
-  const content = readFileSync(debugPath, "utf-8");
+  const content = readFileSync(debugPath, "utf8");
   const lines = content.split("\n");
   const hookEvents: HookEvent[] = [];
 
@@ -95,13 +95,13 @@ export function parseHookEvents(debugPath: string): HookEvent[] {
   }
 
   return hookEvents;
-}
+};
 
 // 最新セッションのパスを取得
-export function getLatestSession(projectPath?: string): string | null {
+export const getLatestSession = (projectPath?: string): string | undefined => {
   const sessions = listSessions(projectPath);
   if (sessions.length === 0) {
-    return null;
+    return undefined;
   }
 
   // startTimeでソートして最新を取得
@@ -109,10 +109,10 @@ export function getLatestSession(projectPath?: string): string | null {
     (a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime(),
   );
   return sessions[0].path;
-}
+};
 
 // セッション一覧を取得
-export function listSessions(projectPath?: string): SessionInfo[] {
+export const listSessions = (projectPath?: string): SessionInfo[] => {
   const claudeDir = join(homedir(), ".claude", "projects");
 
   if (!existsSync(claudeDir)) {
@@ -153,10 +153,10 @@ export function listSessions(projectPath?: string): SessionInfo[] {
   }
 
   return sessions;
-}
+};
 
 // デバッグログのパスを取得
-export function getDebugLogPath(sessionId: string): string | null {
+export const getDebugLogPath = (sessionId: string): string | undefined => {
   const debugDir = join(homedir(), ".claude", "debug");
   const debugPath = join(debugDir, `${sessionId}.txt`);
 
@@ -164,5 +164,5 @@ export function getDebugLogPath(sessionId: string): string | null {
     return debugPath;
   }
 
-  return null;
-}
+  return undefined;
+};
