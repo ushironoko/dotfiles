@@ -3,6 +3,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "lib": ["ES2022"],
+    "jsx": "react",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -15,6 +16,6 @@
     "types": ["bun-types"],
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "bin/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "bin/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
