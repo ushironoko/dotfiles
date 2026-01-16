@@ -18,9 +18,12 @@ interface LogViewerProps {
   sessionId?: string;
 }
 
+const VIEWPORT_HEIGHT = 15;
+
 export const LogViewer = ({ sessionId }: LogViewerProps) => {
   const [activeTab, setActiveTab] = useState<Tab>("tools");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [scrollOffset, setScrollOffset] = useState(0);
   const [toolUsages, setToolUsages] = useState<ToolUsage[]>([]);
   const [hookEvents, setHookEvents] = useState<HookEvent[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>("");
@@ -39,16 +42,16 @@ export const LogViewer = ({ sessionId }: LogViewerProps) => {
         sessionPath.split("/").pop()?.replace(".jsonl", "") || "",
       );
 
-      // ツール使用履歴を読み込み
+      // ツール使用履歴を読み込み（変更がある場合のみ更新）
       const tools = parseToolUsage(sessionPath);
-      setToolUsages(tools);
+      setToolUsages((prev) => (prev.length !== tools.length ? tools : prev));
 
       // フック履歴を読み込み（デバッグログがあれば）
       const sessId = sessionPath.split("/").pop()?.replace(".jsonl", "") || "";
       const debugPath = getDebugLogPath(sessId);
       if (debugPath) {
         const hooks = parseHookEvents(debugPath);
-        setHookEvents(hooks);
+        setHookEvents((prev) => (prev.length !== hooks.length ? hooks : prev));
       }
     };
 
@@ -62,6 +65,10 @@ export const LogViewer = ({ sessionId }: LogViewerProps) => {
     return () => clearInterval(interval);
   }, [sessionId]);
 
+  // 現在のリストの長さを取得
+  const currentListLength =
+    activeTab === "tools" ? toolUsages.length : hookEvents.length;
+
   // キーボード入力処理
   useInput((input, key) => {
     if (input === "q") {
@@ -69,11 +76,25 @@ export const LogViewer = ({ sessionId }: LogViewerProps) => {
     }
 
     if (input === "j" || key.downArrow) {
-      setSelectedIndex((prev) => prev + 1);
+      setSelectedIndex((prev) => {
+        const next = Math.min(prev + 1, currentListLength - 1);
+        // 選択がビューポート外に出たらスクロール
+        if (next >= scrollOffset + VIEWPORT_HEIGHT) {
+          setScrollOffset(next - VIEWPORT_HEIGHT + 1);
+        }
+        return next;
+      });
     }
 
     if (input === "k" || key.upArrow) {
-      setSelectedIndex((prev) => Math.max(0, prev - 1));
+      setSelectedIndex((prev) => {
+        const next = Math.max(0, prev - 1);
+        // 選択がビューポート上部外に出たらスクロール
+        if (next < scrollOffset) {
+          setScrollOffset(next);
+        }
+        return next;
+      });
     }
 
     if (key.tab) {
@@ -83,6 +104,7 @@ export const LogViewer = ({ sessionId }: LogViewerProps) => {
         return "tools";
       });
       setSelectedIndex(0);
+      setScrollOffset(0);
     }
   });
 
@@ -115,13 +137,23 @@ export const LogViewer = ({ sessionId }: LogViewerProps) => {
         </Text>
       </Box>
 
-      {/* Content */}
-      <Box marginTop={1} flexDirection="column">
+      {/* Content - 固定高さでターミナルスクロールを防止 */}
+      <Box marginTop={1} flexDirection="column" height={VIEWPORT_HEIGHT + 4}>
         {activeTab === "tools" && (
-          <ToolList tools={toolUsages} selectedIndex={selectedIndex} />
+          <ToolList
+            tools={toolUsages}
+            selectedIndex={selectedIndex}
+            scrollOffset={scrollOffset}
+            viewportHeight={VIEWPORT_HEIGHT}
+          />
         )}
         {activeTab === "hooks" && (
-          <HookList hooks={hookEvents} selectedIndex={selectedIndex} />
+          <HookList
+            hooks={hookEvents}
+            selectedIndex={selectedIndex}
+            scrollOffset={scrollOffset}
+            viewportHeight={VIEWPORT_HEIGHT}
+          />
         )}
         {activeTab === "stats" && (
           <StatsView
