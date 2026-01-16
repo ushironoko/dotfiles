@@ -68,7 +68,12 @@
       "Bash(gwq config list:*)",
       "Bash(ghq root:*)",
       "Bash(ghq help:*)",
-      "Bash(ghq-help:*)"
+      "Bash(ghq-help:*)",
+      "WebFetch(domain:claude.com)",
+      "WebFetch(domain:docs.claude.com)",
+      "Bash(xargs -I {} sh -c 'echo \"\"=== {} ===\"\" && head -50 \"\"{}\"\"')",
+      "Skill(git-worktree)",
+      "Bash(gwq add:*)"
     ],
     "deny": [],
     "ask": []

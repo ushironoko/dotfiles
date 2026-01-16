@@ -95,6 +95,11 @@ export default defineConfig({
       target: "~/.local/bin/dotfiles",
       type: "file",
     },
+    {
+      source: "./bin/claude-logs",
+      target: "~/.local/bin/claude-logs",
+      type: "file",
+    },
   ],
   backup: {
     directory: "~/.dotfiles_backup",

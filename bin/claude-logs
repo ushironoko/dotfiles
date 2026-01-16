@@ -1,0 +1,7 @@
+#!/usr/bin/env bun
+import { claudeLogs } from "../src/commands/claude-logs.js";
+
+// コマンドライン引数から sessionId を取得（オプション）
+const sessionId = process.argv[2];
+
+claudeLogs(sessionId);
