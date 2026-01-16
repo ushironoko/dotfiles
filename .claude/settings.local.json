@@ -73,7 +73,8 @@
       "WebFetch(domain:docs.claude.com)",
       "Bash(xargs -I {} sh -c 'echo \"\"=== {} ===\"\" && head -50 \"\"{}\"\"')",
       "Skill(git-worktree)",
-      "Bash(gwq add:*)"
+      "Bash(gwq add:*)",
+      "Bash(claude-logs:*)"
     ],
     "deny": [],
     "ask": []
