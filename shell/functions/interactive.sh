@@ -137,10 +137,28 @@ gls() {
   ghq list
 }
 
-# Change directory to repository (interactive)
-gcd() { 
-  local r=$(ghq list | grep github.com | fzf --height 40% --reverse)
-  [ -n "$r" ] && cd "$(ghq root)/$r"
+# Change directory to repository or worktree (interactive)
+gcd() {
+  local ghq_list=$(ghq list | grep github.com)
+  local gwq_list=$(gwq list -g --json 2>/dev/null | jq -r '.[] | "⟳ \(.branch) → \(.path)"' 2>/dev/null)
+
+  local combined
+  if [[ -n "$gwq_list" ]]; then
+    combined=$(printf "%s\n%s" "$ghq_list" "$gwq_list")
+  else
+    combined="$ghq_list"
+  fi
+
+  local selected=$(echo "$combined" | fzf --height 40% --reverse)
+  [[ -z "$selected" ]] && return
+
+  if [[ "$selected" == ⟳* ]]; then
+    # gwq worktree: パスを抽出して移動
+    cd "$(echo "$selected" | sed 's/.*→ //')"
+  else
+    # ghq repository
+    cd "$(ghq root)/$selected"
+  fi
 }
 
 # Open repository in VS Code (interactive)

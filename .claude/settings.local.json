@@ -62,7 +62,13 @@
       "Bash(lazygit:*)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:www.gh-dash.dev)",
-      "WebFetch(domain:gh-dash.dev)"
+      "WebFetch(domain:gh-dash.dev)",
+      "Bash(gwq help:*)",
+      "Bash(gwq list:*)",
+      "Bash(gwq config list:*)",
+      "Bash(ghq root:*)",
+      "Bash(ghq help:*)",
+      "Bash(ghq-help:*)"
     ],
     "deny": [],
     "ask": []
