@@ -8,7 +8,7 @@
 
 # --- Claude ---
 
-\*\*/.claude/settings.local.json
+**/.claude/settings.local.json
 
 # --- macOS ---
 
@@ -16,31 +16,29 @@
 
 # VSCode
 
-.vscode/_
+.vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
-!.vscode/_.code-snippets
+!.vscode/*.code-snippets
 .history/
-\*.vsix
+*.vsix
 
 # --- Environment ---
 
 .env
 .env.local
-.env.\*.local
+.env.*.local
 .envrc
 
 # --- Backup files ---
 
-_.bak
-_.backup
+*.bak
+*.backup
 
 # --- Node.js ---
 
 node_modules/
 
 .serena/
-
-**/.claude/settings.local.json
