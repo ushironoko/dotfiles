@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { cli } from "gunshi";
 import { colors } from "consola/utils";
+import { analyzeCommand } from "./commands/analyze";
 import { doctorCommand } from "./commands/doctor";
 import { installCommand } from "./commands/install";
 import { listCommand } from "./commands/list";
@@ -23,6 +24,8 @@ if (command === "install") {
   await cli(args, doctorCommand);
 } else if (command === "mcpdoc") {
   await cli(args, mcpdocCommand);
+} else if (command === "analyze") {
+  await cli(args, analyzeCommand);
 } else {
   // Show help if no command or unknown command
   console.log(colors.bold(colors.cyan("\nDotfiles Manager v2.0.0")));
@@ -40,6 +43,9 @@ if (command === "install") {
   );
   console.log(
     `  ${colors.cyan("mcpdoc")}   - Manage mcpdoc documentation sources`,
+  );
+  console.log(
+    `  ${colors.cyan("analyze")}  - Analyze Claude Code operation logs`,
   );
   console.log(`\nUsage: ${colors.yellow("dotfiles <command> [options]")}`);
   console.log(
