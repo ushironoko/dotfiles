@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { ToolResult } from "../types/analysis.js";
 
 // 型定義
 export interface ToolUsage {
@@ -219,4 +220,177 @@ export const getSessionTitle = (sessionPath: string): SessionTitle => {
   }
 
   return result;
+};
+
+// tool_resultを抽出（エラー情報含む）
+export const parseToolResults = (sessionPath: string): ToolResult[] => {
+  if (!existsSync(sessionPath)) {
+    return [];
+  }
+
+  const content = readFileSync(sessionPath, "utf8");
+  const lines = content.split("\n").filter((line) => line.trim());
+  const toolResults: ToolResult[] = [];
+
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+
+      // user メッセージの tool_result を探す
+      if (entry.type === "user" && entry.message?.content) {
+        const timestamp = entry.timestamp || new Date().toISOString();
+        const contents = Array.isArray(entry.message.content)
+          ? entry.message.content
+          : [entry.message.content];
+
+        for (const content of contents) {
+          if (content.type === "tool_result") {
+            const isError = content.is_error === true;
+            let errorMessage: string | undefined;
+
+            if (isError && content.content) {
+              // エラーメッセージを抽出
+              if (typeof content.content === "string") {
+                errorMessage = content.content;
+              } else if (Array.isArray(content.content)) {
+                const textContent = content.content.find(
+                  (c: { type: string }) => c.type === "text",
+                );
+                if (textContent?.text) {
+                  errorMessage = textContent.text;
+                }
+              }
+            }
+
+            toolResults.push({
+              timestamp,
+              toolUseId: content.tool_use_id || "",
+              toolName: content.name || "unknown",
+              isError,
+              errorMessage,
+              content: isError ? undefined : content.content,
+            });
+          }
+        }
+      }
+    } catch {
+      // パースエラーは無視
+      continue;
+    }
+  }
+
+  return toolResults;
+};
+
+// セッションの時間範囲を取得
+export const getSessionTimeRange = (
+  sessionPath: string,
+): { startTime: string; endTime: string } | undefined => {
+  if (!existsSync(sessionPath)) {
+    return undefined;
+  }
+
+  const content = readFileSync(sessionPath, "utf8");
+  const lines = content.split("\n").filter((line) => line.trim());
+
+  let firstTimestamp: string | undefined;
+  let lastTimestamp: string | undefined;
+
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.timestamp) {
+        if (!firstTimestamp) {
+          firstTimestamp = entry.timestamp;
+        }
+        lastTimestamp = entry.timestamp;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  if (!firstTimestamp || !lastTimestamp) {
+    // ファイルのタイムスタンプにフォールバック
+    const stats = statSync(sessionPath);
+    return {
+      startTime: stats.birthtime.toISOString(),
+      endTime: stats.mtime.toISOString(),
+    };
+  }
+
+  return { startTime: firstTimestamp, endTime: lastTimestamp };
+};
+
+// ユーザーメッセージ数をカウント
+export const countUserMessages = (sessionPath: string): number => {
+  if (!existsSync(sessionPath)) {
+    return 0;
+  }
+
+  const content = readFileSync(sessionPath, "utf8");
+  const lines = content.split("\n").filter((line) => line.trim());
+  let count = 0;
+
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      // tool_resultを含まない純粋なユーザーメッセージをカウント
+      if (entry.type === "user" && entry.message?.content) {
+        const contents = Array.isArray(entry.message.content)
+          ? entry.message.content
+          : [entry.message.content];
+
+        const hasToolResult = contents.some(
+          (c: { type: string }) => c.type === "tool_result",
+        );
+        if (!hasToolResult) {
+          count++;
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return count;
+};
+
+// アシスタントメッセージ数をカウント
+export const countAssistantMessages = (sessionPath: string): number => {
+  if (!existsSync(sessionPath)) {
+    return 0;
+  }
+
+  const content = readFileSync(sessionPath, "utf8");
+  const lines = content.split("\n").filter((line) => line.trim());
+  let count = 0;
+
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "assistant") {
+        count++;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return count;
+};
+
+// 指定期間内のセッション一覧を取得
+export const listSessionsInPeriod = (
+  days: number,
+  projectPath?: string,
+): SessionInfo[] => {
+  const sessions = listSessions(projectPath);
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - days);
+
+  return sessions.filter((session) => {
+    const sessionDate = new Date(session.startTime);
+    return sessionDate >= cutoffDate;
+  });
 };
