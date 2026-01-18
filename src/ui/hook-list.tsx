@@ -30,7 +30,7 @@ export const HookList = ({
     <Box flexDirection="column">
       {/* Header */}
       <Box>
-        <Box width={12}>
+        <Box width={18}>
           <Text bold>TIME</Text>
         </Box>
         <Box width={20}>
@@ -50,22 +50,22 @@ export const HookList = ({
         </Text>
       </Box>
 
-      {/* Hook list (viewport only) */}
-      {hooks
+      {/* Hook list (viewport only, newest first) */}
+      {[...hooks]
+        .reverse()
         .slice(scrollOffset, scrollOffset + viewportHeight)
         .map((hook, viewIndex) => {
           const actualIndex = scrollOffset + viewIndex;
           const isSelected = actualIndex === selectedIndex;
-          const time = new Date(hook.timestamp).toLocaleTimeString("en-US", {
-            hour12: false,
-          });
+          const date = new Date(hook.timestamp);
+          const time = `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")} ${date.toLocaleTimeString("en-US", { hour12: false })}`;
 
           return (
             <Box key={`${hook.timestamp}-${actualIndex}`}>
               <Text color={isSelected ? "cyan" : undefined}>
                 {isSelected ? "> " : "  "}
               </Text>
-              <Box width={12}>
+              <Box width={18}>
                 <Text>{time}</Text>
               </Box>
               <Box width={20}>

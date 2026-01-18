@@ -3,10 +3,12 @@ import React, { useState, useEffect } from "react";
 import {
   type ToolUsage,
   type HookEvent,
+  type SessionTitle,
   parseToolUsage,
   parseHookEvents,
   getLatestSession,
   getDebugLogPath,
+  getSessionTitle,
 } from "../core/log-parser.js";
 import { ToolList } from "./tool-list.js";
 import { HookList } from "./hook-list.js";
@@ -27,6 +29,7 @@ export const LogViewer = ({ sessionId }: LogViewerProps) => {
   const [toolUsages, setToolUsages] = useState<ToolUsage[]>([]);
   const [hookEvents, setHookEvents] = useState<HookEvent[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>("");
+  const [sessionTitle, setSessionTitle] = useState<SessionTitle>({});
   const { exit } = useApp();
 
   // セッションログを読み込み（ポーリング方式でリアルタイム更新）
@@ -41,6 +44,10 @@ export const LogViewer = ({ sessionId }: LogViewerProps) => {
       setCurrentSessionId(
         sessionPath.split("/").pop()?.replace(".jsonl", "") || "",
       );
+
+      // セッションタイトルを取得
+      const title = getSessionTitle(sessionPath);
+      setSessionTitle(title);
 
       // ツール使用履歴を読み込み（変更がある場合のみ更新）
       const tools = parseToolUsage(sessionPath);
@@ -111,9 +118,26 @@ export const LogViewer = ({ sessionId }: LogViewerProps) => {
   return (
     <Box flexDirection="column">
       {/* Header */}
-      <Box borderStyle="single" paddingX={1}>
-        <Text bold>Claude Logs Viewer</Text>
-        <Text dimColor> Session: {currentSessionId.slice(0, 8)}...</Text>
+      <Box borderStyle="single" paddingX={1} flexDirection="column">
+        <Box>
+          <Text bold>Claude Logs Viewer</Text>
+        </Box>
+        <Box>
+          <Text dimColor>ID: </Text>
+          <Text>{currentSessionId.slice(0, 8)}</Text>
+          {sessionTitle.slug && (
+            <>
+              <Text dimColor> Slug: </Text>
+              <Text>{sessionTitle.slug}</Text>
+            </>
+          )}
+        </Box>
+        {sessionTitle.summary && (
+          <Box>
+            <Text dimColor>Summary: </Text>
+            <Text color="cyan">{sessionTitle.summary}</Text>
+          </Box>
+        )}
       </Box>
 
       {/* Tab Bar */}

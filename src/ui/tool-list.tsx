@@ -27,7 +27,7 @@ export const ToolList = ({
     <Box flexDirection="column">
       {/* Header */}
       <Box>
-        <Box width={12}>
+        <Box width={18}>
           <Text bold>TIME</Text>
         </Box>
         <Box width={20}>
@@ -47,15 +47,15 @@ export const ToolList = ({
         </Text>
       </Box>
 
-      {/* Tool list (viewport only) */}
-      {tools
+      {/* Tool list (viewport only, newest first) */}
+      {[...tools]
+        .reverse()
         .slice(scrollOffset, scrollOffset + viewportHeight)
         .map((tool, viewIndex) => {
           const actualIndex = scrollOffset + viewIndex;
           const isSelected = actualIndex === selectedIndex;
-          const time = new Date(tool.timestamp).toLocaleTimeString("en-US", {
-            hour12: false,
-          });
+          const date = new Date(tool.timestamp);
+          const time = `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")} ${date.toLocaleTimeString("en-US", { hour12: false })}`;
 
           // ツール入力を簡潔に表示
           let inputDisplay = "";
@@ -76,7 +76,7 @@ export const ToolList = ({
               <Text color={isSelected ? "cyan" : undefined}>
                 {isSelected ? "> " : "  "}
               </Text>
-              <Box width={12}>
+              <Box width={18}>
                 <Text>{time}</Text>
               </Box>
               <Box width={20}>

@@ -27,6 +27,12 @@ export interface SessionInfo {
   project: string;
 }
 
+export interface SessionTitle {
+  summary?: string;
+  slug?: string;
+  firstUserMessage?: string;
+}
+
 // セッションログからツール呼び出しを抽出
 export const parseToolUsage = (sessionPath: string): ToolUsage[] => {
   if (!existsSync(sessionPath)) {
@@ -165,4 +171,52 @@ export const getDebugLogPath = (sessionId: string): string | undefined => {
   }
 
   return undefined;
+};
+
+// セッションのタイトル情報を取得
+export const getSessionTitle = (sessionPath: string): SessionTitle => {
+  if (!existsSync(sessionPath)) {
+    return {};
+  }
+
+  const content = readFileSync(sessionPath, "utf8");
+  const lines = content.split("\n").filter((line) => line.trim());
+
+  const result: SessionTitle = {};
+
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+
+      // summaryを取得（最初に見つかったもの）
+      if (!result.summary && entry.type === "summary" && entry.summary) {
+        result.summary = entry.summary;
+      }
+
+      // slugを取得（最初に見つかったもの）
+      if (!result.slug && entry.slug) {
+        result.slug = entry.slug;
+      }
+
+      // 最初のユーザーメッセージを取得
+      if (
+        !result.firstUserMessage &&
+        entry.type === "user" &&
+        entry.message?.content
+      ) {
+        const content = String(entry.message.content);
+        result.firstUserMessage =
+          content.slice(0, 50) + (content.length > 50 ? "..." : "");
+      }
+
+      // すべて取得できたら終了
+      if (result.summary && result.slug && result.firstUserMessage) {
+        break;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return result;
 };
