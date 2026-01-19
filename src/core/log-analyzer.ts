@@ -7,6 +7,8 @@ import type {
   AnalysisSummary,
   ToolResult,
   OperationPattern,
+  SkillCandidate,
+  SkillCategory,
 } from "../types/analysis.js";
 import {
   parseToolUsage,
@@ -178,13 +180,216 @@ const evaluateEfficiency = (
   };
 };
 
-// Skill名を生成
-const generateSkillName = (sequence: string[]): string => {
+// パターンからSkillカテゴリを推定
+const inferSkillCategory = (pattern: OperationPattern): SkillCategory => {
+  // パターンに含まれるBashカテゴリから推定
+  if (pattern.category) {
+    const bashCategory = pattern.category;
+    if (bashCategory === "test") return "tdd";
+    if (bashCategory === "lint") return "lint";
+    if (bashCategory === "format") return "lint";
+    if (bashCategory === "build") return "build";
+    if (bashCategory === "git") return "git";
+    if (bashCategory === "typecheck") return "build";
+  }
+
+  // シーケンスパターンから推定
+  const { sequence, commonCommands } = pattern;
+  const hasEdit = sequence.includes("Edit");
+  const hasRead = sequence.includes("Read");
+  const commands = commonCommands || [];
+
+  // コマンド内容を解析してテストコマンドがあるか判定
+  const hasTestCommand = commands.some((cmd) => {
+    const lowerCmd = cmd.toLowerCase();
+    return (
+      lowerCmd.includes("test") ||
+      lowerCmd.includes("vitest") ||
+      lowerCmd.includes("jest") ||
+      lowerCmd.includes("pytest") ||
+      lowerCmd.includes("cargo test")
+    );
+  });
+
+  // Read -> Edit + テストコマンドがある場合のみTDD
+  if (hasRead && hasEdit && hasTestCommand) {
+    const readIdx = sequence.indexOf("Read");
+    const editIdx = sequence.indexOf("Edit");
+    if (readIdx < editIdx) {
+      return "tdd";
+    }
+  }
+
+  // テストコマンドがあるがTDDパターンでない場合はtest
+  if (hasTestCommand) {
+    return "test";
+  }
+
+  // Edit連続はリファクタリング
+  if (sequence.filter((t) => t === "Edit").length >= 3) {
+    return "refactoring";
+  }
+
+  // コマンドパターンから推定
+  for (const cmd of commands) {
+    const lowerCmd = cmd.toLowerCase();
+    if (lowerCmd.includes("lint") || lowerCmd.includes("biome check")) {
+      return "lint";
+    }
+    if (lowerCmd.includes("git ") || lowerCmd.includes("gh ")) {
+      return "git";
+    }
+    if (lowerCmd.includes("build") || lowerCmd.includes("tsc")) {
+      return "build";
+    }
+  }
+
+  return "other";
+};
+
+// Skill名を生成（一意性を保証）
+const generateSkillName = (
+  pattern: OperationPattern,
+  category: SkillCategory,
+  existingNames: Set<string>,
+): string => {
+  const { sequence } = pattern;
   const mainTools = sequence.slice(0, 2);
-  const name = mainTools
+  const toolPart = mainTools
     .map((t) => t.toLowerCase().replace(/[^a-z]/g, ""))
     .join("-");
-  return `auto-${name}`;
+
+  // カテゴリプレフィックス
+  const prefix = category !== "other" ? `${category}-` : "auto-";
+  let baseName = `${prefix}${toolPart}`;
+
+  // 一意性確保
+  let finalName = baseName;
+  let counter = 1;
+  while (existingNames.has(finalName)) {
+    finalName = `${baseName}-${counter++}`;
+  }
+  existingNames.add(finalName);
+
+  return finalName;
+};
+
+// Skillの説明文を生成
+const generateSkillDescription = (
+  pattern: OperationPattern,
+  category: SkillCategory,
+): string => {
+  const { sequence, commonCommands } = pattern;
+  const commands = commonCommands || [];
+
+  // カテゴリに基づいた説明
+  const categoryDescriptions: Record<SkillCategory, string> = {
+    tdd: "Test-driven development workflow",
+    refactoring: "Code refactoring workflow",
+    debugging: "Debugging workflow",
+    build: "Build and compilation workflow",
+    git: "Git operations workflow",
+    lint: "Code linting and formatting workflow",
+    test: "Test execution workflow",
+    docs: "Documentation workflow",
+    other: "Automated workflow",
+  };
+
+  let description = categoryDescriptions[category];
+
+  // コマンドがあれば追加
+  if (commands.length > 0) {
+    const shortCommands = commands.slice(0, 3).map((cmd) => {
+      // コマンドを短縮
+      const parts = cmd.split(" ");
+      return parts.slice(0, 3).join(" ") + (parts.length > 3 ? "..." : "");
+    });
+    description += ` (${shortCommands.join(", ")})`;
+  }
+
+  // シーケンス情報を追加
+  description += `: ${sequence.join(" -> ")}`;
+
+  return description;
+};
+
+// トリガー条件を生成
+const generateTriggerConditions = (
+  _pattern: OperationPattern,
+  category: SkillCategory,
+): string[] => {
+  const conditions: string[] = [];
+
+  // カテゴリ別のトリガー条件
+  switch (category) {
+    case "tdd": {
+      conditions.push("After editing source files");
+      conditions.push("Before committing changes");
+      break;
+    }
+    case "refactoring": {
+      conditions.push("When refactoring code across multiple files");
+      break;
+    }
+    case "build": {
+      conditions.push("Before deployment");
+      conditions.push("After dependency changes");
+      break;
+    }
+    case "git": {
+      conditions.push("When managing version control");
+      break;
+    }
+    case "lint": {
+      conditions.push("Before committing changes");
+      conditions.push("During code review");
+      break;
+    }
+    case "test": {
+      conditions.push("After code changes");
+      conditions.push("Before merging");
+      break;
+    }
+    default: {
+      conditions.push("Manual invocation");
+    }
+  }
+
+  return conditions;
+};
+
+// パターンがSkill化に適しているかを判定
+const isValidSkillPattern = (pattern: OperationPattern): boolean => {
+  const { sequence, frequency } = pattern;
+
+  // 単一ツールの連続は除外（例: Bash x 5）
+  const uniqueTools = new Set(sequence);
+  if (uniqueTools.size === 1) {
+    return false;
+  }
+
+  // 頻度が低すぎるものは除外
+  if (frequency < 5) {
+    return false;
+  }
+
+  // 最低2種類以上のツールが含まれていること
+  if (uniqueTools.size < 2) {
+    return false;
+  }
+
+  // 有意義なパターン（Read/Edit/Bashの組み合わせ）を優先
+  const hasRead = sequence.includes("Read");
+  const hasEdit = sequence.includes("Edit");
+  const hasBash = sequence.includes("Bash");
+
+  // Read -> Edit または Edit -> Bash のパターンは有意義
+  if ((hasRead && hasEdit) || (hasEdit && hasBash)) {
+    return true;
+  }
+
+  // それ以外でも高頻度なら許可
+  return frequency >= 10;
 };
 
 // サマリーを生成
@@ -269,23 +474,34 @@ const aggregateAnalysis = (
         })
       : [];
 
-  // Skill候補の生成
-  const skillCandidates = patterns
-    .filter((p: OperationPattern) => p.frequency >= 3 && p.sequence.length >= 2)
-    .map((p: OperationPattern, index: number) => ({
-      id: `skill-${index + 1}`,
-      name: generateSkillName(p.sequence),
-      description: `Automates the sequence: ${p.sequence.join(" -> ")}`,
-      triggerConditions: ["Manual invocation"],
-      steps: p.sequence.map((toolName: string, order: number) => ({
-        order: order + 1,
-        action: `Execute ${toolName}`,
-        toolName,
-      })),
-      expectedFrequency: p.frequency,
-      estimatedTimeSaved: `${p.sequence.length * 5} seconds per invocation`,
-      sourcePatterns: [p.id],
-    }));
+  // Skill候補の生成（改善版）
+  const existingNames = new Set<string>();
+  const skillCandidates: SkillCandidate[] = patterns
+    .filter((p: OperationPattern) => isValidSkillPattern(p))
+    .map((p: OperationPattern, index: number) => {
+      const category = inferSkillCategory(p);
+      const name = generateSkillName(p, category, existingNames);
+      const description = generateSkillDescription(p, category);
+      const triggerConditions = generateTriggerConditions(p, category);
+
+      return {
+        id: `skill-${index + 1}`,
+        name,
+        description,
+        category,
+        triggerConditions,
+        steps: p.sequence.map((toolName: string, order: number) => ({
+          order: order + 1,
+          action: `Execute ${toolName}`,
+          toolName,
+        })),
+        expectedFrequency: p.frequency,
+        estimatedTimeSaved: `${p.sequence.length * 5} seconds per invocation`,
+        sourcePatterns: [p.id],
+        relatedFiles: p.commonFilePaths,
+        relatedCommands: p.commonCommands,
+      };
+    });
 
   // サマリー生成
   const summary = generateSummary(sessionMetrics, patterns, efficiency);

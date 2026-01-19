@@ -36,6 +36,10 @@ export interface OperationPattern {
   firstSeen: string;
   lastSeen: string;
   successRate: number;
+  // 拡張: パターン分類と代表的なコンテキスト
+  category?: string;
+  commonCommands?: string[];
+  commonFilePaths?: string[];
 }
 
 // パターンのコンテキスト情報
@@ -44,6 +48,10 @@ export interface PatternContext {
   timestamp: string;
   surroundingTools: string[];
   userIntent?: string;
+  // 拡張: コンテキスト情報
+  bashCommands?: string[];
+  filePaths?: string[];
+  errorTypes?: string[];
 }
 
 // 効率性評価
@@ -87,16 +95,31 @@ export interface Recommendation {
   relatedPatterns?: string[];
 }
 
+// Skill候補のカテゴリ
+export type SkillCategory =
+  | "tdd"
+  | "refactoring"
+  | "debugging"
+  | "build"
+  | "git"
+  | "lint"
+  | "test"
+  | "docs"
+  | "other";
+
 // Skill候補
 export interface SkillCandidate {
   id: string;
   name: string;
   description: string;
+  category: SkillCategory;
   triggerConditions: string[];
   steps: SkillStep[];
   expectedFrequency: number;
   estimatedTimeSaved: string;
   sourcePatterns: string[];
+  relatedFiles?: string[];
+  relatedCommands?: string[];
 }
 
 // Skillのステップ
