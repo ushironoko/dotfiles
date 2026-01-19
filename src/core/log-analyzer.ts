@@ -194,19 +194,35 @@ const inferSkillCategory = (pattern: OperationPattern): SkillCategory => {
   }
 
   // シーケンスパターンから推定
-  const { sequence } = pattern;
+  const { sequence, commonCommands } = pattern;
   const hasEdit = sequence.includes("Edit");
-  const hasBash = sequence.includes("Bash");
   const hasRead = sequence.includes("Read");
+  const commands = commonCommands || [];
 
-  // Read -> Edit -> Bash パターンはTDD
-  if (hasRead && hasEdit && hasBash) {
+  // コマンド内容を解析してテストコマンドがあるか判定
+  const hasTestCommand = commands.some((cmd) => {
+    const lowerCmd = cmd.toLowerCase();
+    return (
+      lowerCmd.includes("test") ||
+      lowerCmd.includes("vitest") ||
+      lowerCmd.includes("jest") ||
+      lowerCmd.includes("pytest") ||
+      lowerCmd.includes("cargo test")
+    );
+  });
+
+  // Read -> Edit + テストコマンドがある場合のみTDD
+  if (hasRead && hasEdit && hasTestCommand) {
     const readIdx = sequence.indexOf("Read");
     const editIdx = sequence.indexOf("Edit");
-    const bashIdx = sequence.indexOf("Bash");
-    if (readIdx < editIdx && editIdx < bashIdx) {
+    if (readIdx < editIdx) {
       return "tdd";
     }
+  }
+
+  // テストコマンドがあるがTDDパターンでない場合はtest
+  if (hasTestCommand) {
+    return "test";
   }
 
   // Edit連続はリファクタリング
@@ -215,16 +231,8 @@ const inferSkillCategory = (pattern: OperationPattern): SkillCategory => {
   }
 
   // コマンドパターンから推定
-  const commands = pattern.commonCommands || [];
   for (const cmd of commands) {
     const lowerCmd = cmd.toLowerCase();
-    if (
-      lowerCmd.includes("test") ||
-      lowerCmd.includes("vitest") ||
-      lowerCmd.includes("jest")
-    ) {
-      return "test";
-    }
     if (lowerCmd.includes("lint") || lowerCmd.includes("biome check")) {
       return "lint";
     }
