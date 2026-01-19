@@ -13,8 +13,11 @@ import {
 import { ToolList } from "./tool-list.js";
 import { HookList } from "./hook-list.js";
 import { StatsView } from "./stats-view.js";
+import { ToolDetail } from "./tool-detail.js";
+import { HookDetail } from "./hook-detail.js";
 
 type Tab = "tools" | "hooks" | "stats";
+type View = "list" | "tool-detail" | "hook-detail";
 
 interface LogViewerProps {
   sessionId?: string;
@@ -30,6 +33,13 @@ export const LogViewer = ({ sessionId }: LogViewerProps) => {
   const [hookEvents, setHookEvents] = useState<HookEvent[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>("");
   const [sessionTitle, setSessionTitle] = useState<SessionTitle>({});
+  const [view, setView] = useState<View>("list");
+  const [selectedTool, setSelectedTool] = useState<ToolUsage | undefined>(
+    undefined,
+  );
+  const [selectedHook, setSelectedHook] = useState<HookEvent | undefined>(
+    undefined,
+  );
   const { exit } = useApp();
 
   // セッションログを読み込み（ポーリング方式でリアルタイム更新）
@@ -78,8 +88,30 @@ export const LogViewer = ({ sessionId }: LogViewerProps) => {
 
   // キーボード入力処理
   useInput((input, key) => {
+    // 詳細ページではqキーでリストに戻る
+    if (view !== "list") {
+      if (input === "q") {
+        setView("list");
+      }
+      return;
+    }
+
     if (input === "q") {
       exit();
+    }
+
+    // Enterキーで詳細ページへ遷移
+    if (key.return) {
+      if (activeTab === "tools" && toolUsages.length > 0) {
+        const tool = [...toolUsages].reverse()[selectedIndex];
+        setSelectedTool(tool);
+        setView("tool-detail");
+      } else if (activeTab === "hooks" && hookEvents.length > 0) {
+        const hook = [...hookEvents].reverse()[selectedIndex];
+        setSelectedHook(hook);
+        setView("hook-detail");
+      }
+      return;
     }
 
     if (input === "j" || key.downArrow) {
@@ -115,6 +147,16 @@ export const LogViewer = ({ sessionId }: LogViewerProps) => {
     }
   });
 
+  // 詳細ページの表示
+  if (view === "tool-detail" && selectedTool) {
+    return <ToolDetail tool={selectedTool} onBack={() => setView("list")} />;
+  }
+
+  if (view === "hook-detail" && selectedHook) {
+    return <HookDetail hook={selectedHook} onBack={() => setView("list")} />;
+  }
+
+  // リスト表示
   return (
     <Box flexDirection="column">
       {/* Header */}
@@ -189,7 +231,7 @@ export const LogViewer = ({ sessionId }: LogViewerProps) => {
 
       {/* Footer */}
       <Box marginTop={1} borderStyle="single" paddingX={1}>
-        <Text dimColor>↑↓/jk: Navigate Tab: Switch view q: Quit</Text>
+        <Text dimColor>↑↓/jk: Navigate Tab: Switch Enter: Detail q: Quit</Text>
       </Box>
     </Box>
   );

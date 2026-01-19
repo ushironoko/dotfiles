@@ -13,12 +13,20 @@ export interface ToolUsage {
   error?: string;
 }
 
+export interface HookCommand {
+  type: string;
+  command: string;
+  timeout?: number;
+}
+
 export interface HookEvent {
   timestamp: string;
   eventType: string;
   matcher?: string;
   hookCommand?: string;
   exitCode?: number;
+  matchedCount?: number;
+  commands?: HookCommand[];
 }
 
 export interface SessionInfo {
@@ -73,6 +81,57 @@ export const parseToolUsage = (sessionPath: string): ToolUsage[] => {
   return toolUsages;
 };
 
+// settings.jsonからフック設定を読み込む
+interface HookConfig {
+  matcher: string;
+  hooks: HookCommand[];
+}
+
+interface HooksSettings {
+  [eventType: string]: HookConfig[];
+}
+
+const loadHooksSettings = (): HooksSettings => {
+  const settingsPath = join(homedir(), ".claude", "settings.json");
+  if (!existsSync(settingsPath)) {
+    return {};
+  }
+
+  try {
+    const content = readFileSync(settingsPath, "utf8");
+    const settings = JSON.parse(content);
+    return settings.hooks || {};
+  } catch {
+    return {};
+  }
+};
+
+// マッチャーパターンに一致するフック設定を取得
+const findMatchingHooks = (
+  hooksSettings: HooksSettings,
+  eventType: string,
+  query: string,
+): HookCommand[] => {
+  const eventHooks = hooksSettings[eventType];
+  if (!eventHooks) {
+    return [];
+  }
+
+  const matchedCommands: HookCommand[] = [];
+  for (const config of eventHooks) {
+    try {
+      const regex = new RegExp(config.matcher, "i");
+      if (regex.test(query)) {
+        matchedCommands.push(...config.hooks);
+      }
+    } catch {
+      // 無効な正規表現は無視
+    }
+  }
+
+  return matchedCommands;
+};
+
 // デバッグログからフック発火を抽出
 export const parseHookEvents = (debugPath: string): HookEvent[] => {
   if (!existsSync(debugPath)) {
@@ -82,6 +141,23 @@ export const parseHookEvents = (debugPath: string): HookEvent[] => {
   const content = readFileSync(debugPath, "utf8");
   const lines = content.split("\n");
   const hookEvents: HookEvent[] = [];
+  const hooksSettings = loadHooksSettings();
+
+  // マッチ数を追跡するためのマップ（タイムスタンプ + イベントタイプ → マッチ数）
+  const matchCounts = new Map<string, number>();
+
+  // 最初のパスでマッチ数を収集
+  for (const line of lines) {
+    const matchedMatch = line.match(
+      /(\d{4}-\d{2}-\d{2}T[\d:.]+Z).*Matched (\d+) unique hooks for query/,
+    );
+    if (matchedMatch) {
+      // 直前のイベントにマッチ数を紐付けるためにタイムスタンプをキーにする
+      const [, timestamp, countStr] = matchedMatch;
+      const count = Number.parseInt(countStr, 10);
+      matchCounts.set(timestamp, count);
+    }
+  }
 
   for (const line of lines) {
     // フック関連のログを抽出
@@ -91,12 +167,19 @@ export const parseHookEvents = (debugPath: string): HookEvent[] => {
     );
 
     if (hookMatch) {
+      const [, timestamp, eventType, query] = hookMatch;
+
+      // settings.jsonから対応するコマンドを取得
+      const commands = findMatchingHooks(hooksSettings, eventType, query);
+
       hookEvents.push({
-        timestamp: hookMatch[1],
-        eventType: hookMatch[2],
-        matcher: hookMatch[3],
-        hookCommand: undefined,
+        timestamp,
+        eventType,
+        matcher: query,
+        hookCommand: commands.length > 0 ? commands[0].command : undefined,
         exitCode: 0,
+        matchedCount: commands.length,
+        commands: commands.length > 0 ? commands : undefined,
       });
     }
   }
