@@ -3,6 +3,18 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ToolResult } from "../types/analysis.js";
 
+// Bashコマンドのカテゴリ
+export type BashCommandCategory =
+  | "test"
+  | "lint"
+  | "format"
+  | "build"
+  | "git"
+  | "install"
+  | "typecheck"
+  | "run"
+  | "other";
+
 // 型定義
 export interface ToolUsage {
   timestamp: string;
@@ -11,6 +23,10 @@ export interface ToolUsage {
   duration?: number;
   success: boolean;
   error?: string;
+  // 拡張: コンテキスト情報
+  bashCommand?: string;
+  bashCategory?: BashCommandCategory;
+  filePath?: string;
 }
 
 export interface HookCommand {
@@ -42,6 +58,113 @@ export interface SessionTitle {
   firstUserMessage?: string;
 }
 
+// Bashコマンドをカテゴリに分類
+export const categorizeBashCommand = (command: string): BashCommandCategory => {
+  const normalizedCommand = command.toLowerCase().trim();
+
+  // テスト
+  if (
+    normalizedCommand.includes("test") ||
+    normalizedCommand.includes("vitest") ||
+    normalizedCommand.includes("jest") ||
+    normalizedCommand.includes("pytest") ||
+    normalizedCommand.includes("bun test")
+  ) {
+    return "test";
+  }
+
+  // Lint
+  if (
+    normalizedCommand.includes("lint") ||
+    normalizedCommand.includes("eslint") ||
+    normalizedCommand.includes("biome check") ||
+    normalizedCommand.includes("oxlint")
+  ) {
+    return "lint";
+  }
+
+  // Format
+  if (
+    normalizedCommand.includes("format") ||
+    normalizedCommand.includes("prettier") ||
+    normalizedCommand.includes("biome format")
+  ) {
+    return "format";
+  }
+
+  // Build
+  if (
+    normalizedCommand.includes("build") ||
+    normalizedCommand.includes("compile") ||
+    normalizedCommand.includes("webpack") ||
+    normalizedCommand.includes("vite build") ||
+    normalizedCommand.includes("tsc ") ||
+    normalizedCommand.includes("cargo build")
+  ) {
+    return "build";
+  }
+
+  // Git
+  if (
+    normalizedCommand.startsWith("git ") ||
+    normalizedCommand.startsWith("gh ")
+  ) {
+    return "git";
+  }
+
+  // Install
+  if (
+    normalizedCommand.includes("install") ||
+    normalizedCommand.includes("npm i") ||
+    normalizedCommand.includes("pnpm add") ||
+    normalizedCommand.includes("bun add") ||
+    normalizedCommand.includes("cargo add")
+  ) {
+    return "install";
+  }
+
+  // Type check
+  if (
+    normalizedCommand.includes("tsc --noEmit") ||
+    normalizedCommand.includes("tsc -noEmit") ||
+    normalizedCommand.includes("run tsc") ||
+    normalizedCommand.includes("type-check") ||
+    normalizedCommand.includes("typecheck")
+  ) {
+    return "typecheck";
+  }
+
+  // Run / Execute
+  if (
+    normalizedCommand.startsWith("bun run ") ||
+    normalizedCommand.startsWith("npm run ") ||
+    normalizedCommand.startsWith("pnpm run ") ||
+    normalizedCommand.startsWith("node ") ||
+    normalizedCommand.startsWith("python ")
+  ) {
+    return "run";
+  }
+
+  return "other";
+};
+
+// ファイルパスを抽出（Read, Edit, Write, Glob等から）
+const extractFilePath = (
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): string | undefined => {
+  if (toolName === "Read" || toolName === "Edit" || toolName === "Write") {
+    return toolInput.file_path as string | undefined;
+  }
+  if (toolName === "Glob") {
+    return toolInput.path as string | undefined;
+  }
+  if (toolName === "Grep") {
+    return toolInput.path as string | undefined;
+  }
+  return undefined;
+};
+
 // セッションログからツール呼び出しを抽出
 export const parseToolUsage = (sessionPath: string): ToolUsage[] => {
   if (!existsSync(sessionPath)) {
@@ -62,12 +185,30 @@ export const parseToolUsage = (sessionPath: string): ToolUsage[] => {
 
         for (const content of entry.message.content) {
           if (content.type === "tool_use") {
+            const toolName = content.name;
+            const toolInput = content.input || {};
+
+            // Bashコマンドのコンテキスト情報を抽出
+            let bashCommand: string | undefined;
+            let bashCategory: BashCommandCategory | undefined;
+            const command = toolInput.command;
+            if (toolName === "Bash" && typeof command === "string") {
+              bashCommand = command;
+              bashCategory = categorizeBashCommand(command);
+            }
+
+            // ファイルパス情報を抽出
+            const filePath = extractFilePath(toolName, toolInput);
+
             toolUsages.push({
               timestamp,
-              toolName: content.name,
-              toolInput: content.input || {},
+              toolName,
+              toolInput,
               success: true, // tool_result から判定する必要があるが簡易実装
               error: undefined,
+              bashCommand,
+              bashCategory,
+              filePath,
             });
           }
         }

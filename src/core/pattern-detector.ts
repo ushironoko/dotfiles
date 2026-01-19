@@ -10,11 +10,24 @@ interface PatternOccurrence {
   startIndex: number;
   timestamp: string;
   surroundingTools: string[];
+  // 拡張: コンテキスト情報
+  bashCommands: string[];
+  filePaths: string[];
+  bashCategories: string[];
+}
+
+// 内部用の拡張ToolUsage
+interface EnrichedToolSequenceItem {
+  name: string;
+  timestamp: string;
+  bashCommand?: string;
+  bashCategory?: string;
+  filePath?: string;
 }
 
 // 周辺のツールを取得
 const getSurroundingTools = (
-  sequence: { name: string; timestamp: string }[],
+  sequence: EnrichedToolSequenceItem[],
   startIndex: number,
   length: number,
 ): string[] => {
@@ -38,6 +51,74 @@ const getSurroundingTools = (
   return context;
 };
 
+// 配列から上位N件を取得（重複カウント）
+const getTopItems = (items: string[], limit: number): string[] => {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    counts.set(item, (counts.get(item) || 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([item]) => item);
+};
+
+// 最も頻繁な要素を取得
+const getMostFrequent = (items: string[]): string | undefined => {
+  if (items.length === 0) return undefined;
+
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    counts.set(item, (counts.get(item) || 0) + 1);
+  }
+
+  let maxCount = 0;
+  let mostFrequent: string | undefined;
+  for (const [item, count] of counts) {
+    if (count > maxCount) {
+      maxCount = count;
+      mostFrequent = item;
+    }
+  }
+
+  return mostFrequent;
+};
+
+// パターン内のコンテキスト情報を抽出
+const extractPatternContext = (
+  sequence: EnrichedToolSequenceItem[],
+  startIndex: number,
+  length: number,
+): {
+  bashCommands: string[];
+  filePaths: string[];
+  bashCategories: string[];
+} => {
+  const bashCommands: string[] = [];
+  const filePaths: string[] = [];
+  const bashCategories: string[] = [];
+
+  for (
+    let i = startIndex;
+    i < startIndex + length && i < sequence.length;
+    i++
+  ) {
+    const item = sequence[i];
+    if (item.bashCommand) {
+      bashCommands.push(item.bashCommand);
+    }
+    if (item.bashCategory) {
+      bashCategories.push(item.bashCategory);
+    }
+    if (item.filePath) {
+      filePaths.push(item.filePath);
+    }
+  }
+
+  return { bashCommands, filePaths, bashCategories };
+};
+
 // N-gramベースのパターン検出
 const detectPatterns = (
   toolUsages: ToolUsage[],
@@ -46,12 +127,15 @@ const detectPatterns = (
   const { minFrequency, maxSequenceLength, minSequenceLength, excludeTools } =
     options;
 
-  // ツール名のシーケンスを抽出
-  const toolSequence = toolUsages
+  // ツール名のシーケンスを抽出（拡張情報付き）
+  const toolSequence: EnrichedToolSequenceItem[] = toolUsages
     .filter((u) => !excludeTools?.includes(u.toolName))
     .map((u) => ({
       name: u.toolName,
       timestamp: u.timestamp,
+      bashCommand: u.bashCommand,
+      bashCategory: u.bashCategory,
+      filePath: u.filePath,
     }));
 
   if (toolSequence.length < minSequenceLength) {
@@ -66,21 +150,23 @@ const detectPatterns = (
       const sequence = toolSequence.slice(i, i + n);
       const key = sequence.map((s) => s.name).join("|");
 
+      // コンテキスト情報を抽出
+      const context = extractPatternContext(toolSequence, i, n);
+
+      const occurrence: PatternOccurrence = {
+        startIndex: i,
+        timestamp: sequence[0].timestamp,
+        surroundingTools: getSurroundingTools(toolSequence, i, n),
+        bashCommands: context.bashCommands,
+        filePaths: context.filePaths,
+        bashCategories: context.bashCategories,
+      };
+
       const existing = patternCounts.get(key);
       if (existing) {
-        existing.push({
-          startIndex: i,
-          timestamp: sequence[0].timestamp,
-          surroundingTools: getSurroundingTools(toolSequence, i, n),
-        });
+        existing.push(occurrence);
       } else {
-        patternCounts.set(key, [
-          {
-            startIndex: i,
-            timestamp: sequence[0].timestamp,
-            surroundingTools: getSurroundingTools(toolSequence, i, n),
-          },
-        ]);
+        patternCounts.set(key, [occurrence]);
       }
     }
   }
@@ -111,11 +197,26 @@ const detectPatterns = (
       // 成功率の計算（簡易版：ここではtool_resultの情報がないため100%とする）
       const successRate = 1;
 
+      // コンテキスト情報を含めてPatternContextを生成
       const contexts: PatternContext[] = occurrences.map((o) => ({
         sessionId: "aggregate",
         timestamp: o.timestamp,
         surroundingTools: o.surroundingTools,
+        bashCommands: o.bashCommands.length > 0 ? o.bashCommands : undefined,
+        filePaths: o.filePaths.length > 0 ? o.filePaths : undefined,
       }));
+
+      // 全occurrenceから共通コマンド・ファイルパスを集計
+      const allBashCommands = occurrences.flatMap((o) => o.bashCommands);
+      const allFilePaths = occurrences.flatMap((o) => o.filePaths);
+      const allBashCategories = occurrences.flatMap((o) => o.bashCategories);
+
+      // よく使われるコマンドとファイルパスを抽出
+      const commonCommands = getTopItems(allBashCommands, 5);
+      const commonFilePaths = getTopItems(allFilePaths, 5);
+
+      // パターンのカテゴリを決定（最も頻繁なBashカテゴリ）
+      const category = getMostFrequent(allBashCategories);
 
       patterns.push({
         id: `pattern-${++patternId}`,
@@ -125,6 +226,10 @@ const detectPatterns = (
         firstSeen: sortedTimestamps[0],
         lastSeen: sortedTimestamps[sortedTimestamps.length - 1],
         successRate,
+        category,
+        commonCommands: commonCommands.length > 0 ? commonCommands : undefined,
+        commonFilePaths:
+          commonFilePaths.length > 0 ? commonFilePaths : undefined,
       });
     }
   }
