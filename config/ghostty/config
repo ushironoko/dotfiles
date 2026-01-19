@@ -37,6 +37,10 @@ copy-on-select = clipboard
 
 quit-after-last-window-closed = true
 
+# Scrollbar (requires Ghostty 1.3.0+)
+
+scrollbar = never
+
 # Global keybind: Cmd+Esc to toggle visibility (show/hide all windows)
 
 keybind = global:super+escape=toggle_visibility

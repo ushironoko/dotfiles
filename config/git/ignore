@@ -9,6 +9,7 @@
 # --- Claude ---
 
 **/.claude/settings.local.json
+plans/
 
 # --- macOS ---
 

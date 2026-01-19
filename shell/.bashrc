@@ -8,6 +8,9 @@ case $- in
       *) return;;
 esac
 
+# Default editor
+export EDITOR="hx"
+
 # History configuration (enhanced)
 # don't put duplicate lines or lines starting with space in the history.
 HISTCONTROL=ignoreboth:erasedups  # Remove duplicates from history
@@ -160,6 +163,18 @@ alias dc="docker-compose"
 alias px="pnpm dlx"
 alias p="pnpm"
 alias dccc="deno run -A jsr:@mizchi/ccdiscord"
+alias lg="lazygit"
+alias gd="gh dash"
+
+# yazi file manager (exit to cwd)
+function y() {
+  local tmp="$(mktemp -t "yazi-cwd.XXXXXX")" cwd
+  yazi "$@" --cwd-file="$tmp"
+  if cwd="$(command cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
+    builtin cd -- "$cwd"
+  fi
+  rm -f -- "$tmp"
+}
 
 # Interactive functions (fzf-based)
 # Load ghq/fzf functions and fcd from shared file
@@ -186,6 +201,9 @@ eval "$(direnv hook bash)"
 
 # Initialize mise for managing development tools
 eval "$(mise activate bash)"
+
+# Load additional bash configurations if exists
+[ -f "$HOME/.bashrc.local" ] && . "$HOME/.bashrc.local"
 
 # Initialize starship prompt
 eval "$(starship init bash)"
