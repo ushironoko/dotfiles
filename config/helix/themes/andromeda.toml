@@ -1,0 +1,197 @@
+# Andromeda Theme for Helix
+# Ported from VSCode Andromeda by EliverLara
+# https://github.com/EliverLara/Andromeda
+
+# Syntax highlighting
+"attribute" = { fg = "orange", modifiers = ["italic"] }
+
+"comment" = { fg = "comment" }
+"comment.block" = { fg = "comment" }
+"comment.block.documentation" = { fg = "comment" }
+"comment.line" = { fg = "comment" }
+"comment.line.documentation" = { fg = "comment" }
+
+"constant" = { fg = "pink" }
+"constant.builtin" = { fg = "pink" }
+"constant.builtin.boolean" = { fg = "pink" }
+"constant.character" = { fg = "green" }
+"constant.character.escape" = { fg = "cyan" }
+"constant.macro" = { fg = "orange" }
+"constant.numeric" = { fg = "pink" }
+
+"constructor" = { fg = "yellow" }
+
+"definition" = { underline = { color = "cyan" } }
+
+"diagnostic" = { underline = { color = "orange", style = "curl" } }
+"diagnostic.hint" = { underline = { color = "purple", style = "curl" } }
+"diagnostic.warning" = { underline = { color = "warning", style = "curl" } }
+"diagnostic.error" = { underline = { color = "error", style = "curl" } }
+"diagnostic.info" = { underline = { color = "cyan", style = "curl" } }
+"diagnostic.unnecessary" = { modifiers = ["dim"] }
+"diagnostic.deprecated" = { modifiers = ["crossed_out"] }
+
+"error" = { fg = "error" }
+"hint" = { fg = "purple" }
+"info" = { fg = "cyan" }
+"warning" = { fg = "warning" }
+
+"diff.delta" = { fg = "orange" }
+"diff.minus" = { fg = "red" }
+"diff.plus" = { fg = "green" }
+
+# Functions: deep blue for all
+"function" = { fg = "deep_blue" }
+"function.builtin" = { fg = "deep_blue" }
+"function.call" = { fg = "deep_blue" }
+"function.macro" = { fg = "deep_blue" }
+"function.method" = { fg = "deep_blue" }
+"function.method.call" = { fg = "deep_blue" }
+
+# Keywords: purple (const, let, function, if, etc.)
+"keyword" = { fg = "purple" }
+"keyword.control" = { fg = "purple" }
+"keyword.control.conditional" = { fg = "purple" }
+"keyword.control.exception" = { fg = "purple" }
+"keyword.control.import" = { fg = "purple" }
+"keyword.control.repeat" = { fg = "purple" }
+"keyword.control.return" = { fg = "purple" }
+"keyword.directive" = { fg = "purple" }
+"keyword.function" = { fg = "purple" }
+"keyword.operator" = { fg = "purple" }
+"keyword.return" = { fg = "purple" }
+"keyword.storage" = { fg = "purple" }
+"keyword.storage.modifier" = { fg = "purple" }
+"keyword.storage.type" = { fg = "purple" }
+
+"label" = { fg = "cyan" }
+
+"markup.bold" = { fg = "orange", modifiers = ["bold"] }
+"markup.heading" = { fg = "purple", modifiers = ["bold"] }
+"markup.italic" = { fg = "yellow", modifiers = ["italic"] }
+"markup.link.text" = { fg = "cyan" }
+"markup.link.url" = { fg = "cyan" }
+"markup.list" = { fg = "orange" }
+"markup.quote" = { fg = "green", modifiers = ["italic"] }
+"markup.raw" = { fg = "green" }
+"markup.strikethrough" = { modifiers = ["crossed_out"] }
+
+"namespace" = { fg = "foreground" }
+
+"operator" = { fg = "foreground" }
+
+"punctuation" = { fg = "foreground" }
+"punctuation.bracket" = { fg = "foreground" }
+"punctuation.delimiter" = { fg = "foreground" }
+"punctuation.special" = { fg = "cyan" }
+
+"special" = { fg = "cyan" }
+
+# Strings: green
+"string" = { fg = "green" }
+"string.regexp" = { fg = "cyan" }
+"string.special" = { fg = "cyan" }
+"string.special.symbol" = { fg = "green" }
+
+"tag" = { fg = "orange" }
+"tag.attribute" = { fg = "cyan", modifiers = ["italic"] }
+"tag.delimiter" = { fg = "foreground" }
+
+"type" = { fg = "yellow" }
+"type.builtin" = { fg = "yellow" }
+"type.enum.variant" = { fg = "cyan" }
+
+# Variables: foreground (white/light gray)
+"variable" = { fg = "foreground" }
+"variable.builtin" = { fg = "foreground" }
+"variable.other" = { fg = "foreground" }
+"variable.other.member" = { fg = "cyan" }
+"variable.parameter" = { fg = "orange", modifiers = ["italic"] }
+
+# UI elements
+"ui.background" = { fg = "foreground", bg = "background" }
+"ui.cursor" = { fg = "background", bg = "cyan" }
+"ui.cursor.insert" = { fg = "background", bg = "cyan" }
+"ui.cursor.match" = { fg = "foreground", bg = "selection" }
+"ui.cursor.normal" = { fg = "background", bg = "cyan" }
+"ui.cursor.primary" = { fg = "background", bg = "cyan" }
+"ui.cursor.primary.insert" = { fg = "background", bg = "cyan" }
+"ui.cursor.primary.normal" = { fg = "background", bg = "cyan" }
+"ui.cursor.primary.select" = { fg = "background", bg = "purple" }
+"ui.cursor.select" = { fg = "background", bg = "purple" }
+
+"ui.gutter" = { bg = "background" }
+"ui.gutter.selected" = { bg = "line_highlight" }
+
+"ui.highlight" = { bg = "selection" }
+
+"ui.linenr" = { fg = "grey" }
+"ui.linenr.selected" = { fg = "foreground" }
+
+"ui.menu" = { fg = "foreground", bg = "menu_bg" }
+"ui.menu.scroll" = { fg = "cyan", bg = "menu_bg" }
+"ui.menu.selected" = { fg = "foreground", bg = "selection" }
+
+"ui.picker.header" = { fg = "purple", modifiers = ["bold"] }
+
+"ui.popup" = { fg = "foreground", bg = "menu_bg" }
+"ui.popup.info" = { fg = "foreground", bg = "menu_bg" }
+
+"ui.selection" = { bg = "selection" }
+"ui.selection.primary" = { bg = "selection" }
+
+"ui.statusline" = { fg = "foreground", bg = "statusline_bg" }
+"ui.statusline.inactive" = { fg = "grey", bg = "background" }
+"ui.statusline.insert" = { fg = "background", bg = "green" }
+"ui.statusline.normal" = { fg = "background", bg = "cyan" }
+"ui.statusline.select" = { fg = "background", bg = "purple" }
+"ui.statusline.separator" = { fg = "grey" }
+
+"ui.text" = { fg = "foreground" }
+"ui.text.focus" = { fg = "foreground" }
+"ui.text.inactive" = { fg = "grey" }
+"ui.text.info" = { fg = "foreground" }
+
+"ui.virtual" = { fg = "grey" }
+"ui.virtual.indent-guide" = { fg = "indent_guide" }
+"ui.virtual.inlay-hint" = { fg = "grey" }
+"ui.virtual.inlay-hint.parameter" = { fg = "grey", modifiers = ["italic"] }
+"ui.virtual.inlay-hint.type" = { fg = "grey" }
+"ui.virtual.jump-label" = { fg = "cyan", modifiers = ["bold"] }
+"ui.virtual.ruler" = { bg = "line_highlight" }
+"ui.virtual.whitespace" = { fg = "indent_guide" }
+"ui.virtual.wrap" = { fg = "grey" }
+
+"ui.window" = { fg = "grey" }
+
+"ui.bufferline" = { fg = "grey", bg = "background" }
+"ui.bufferline.active" = { fg = "foreground", bg = "line_highlight" }
+"ui.bufferline.background" = { bg = "background" }
+
+# Color palette
+[palette]
+background = "#000000"
+foreground = "#D5CED9"
+selection = "#2A2D35"
+line_highlight = "#111215"
+menu_bg = "#050507"
+statusline_bg = "#0A0B0D"
+indent_guide = "#1E2127"
+
+comment = "#5C5C5C"
+grey = "#5C5C5C"
+
+# Accent colors
+cyan = "#00E8C6"
+green = "#96E072"
+yellow = "#FFE66D"
+orange = "#F29668"
+red = "#EE5D43"
+purple = "#C74DED"
+pink = "#F92672"
+blue = "#7CB7FF"
+deep_blue = "#6C99FF"
+
+# Status colors
+error = "#FC644D"
+warning = "#FF9F2E"
