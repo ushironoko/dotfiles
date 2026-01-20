@@ -100,6 +100,16 @@ export default defineConfig({
       target: "~/.local/bin/claude-logs",
       type: "file",
     },
+    {
+      source: "./bin/gh-octo-review",
+      target: "~/.local/bin/gh-octo-review",
+      type: "file",
+    },
+    {
+      source: "./config/gh-dash",
+      target: "~/.config/gh-dash",
+      type: "directory",
+    },
   ],
   backup: {
     directory: "~/.dotfiles_backup",
