@@ -1,5 +1,6 @@
 -- ~/.config/nvim/init.lua
 vim.g.mapleader = " "
+vim.g.maplocalleader = ","
 vim.opt.number = true  -- 行番号表示
 
 -- lazy.nvim bootstrap
@@ -18,9 +19,13 @@ vim.opt.rtp:prepend(lazypath)
 
 -- プラグイン設定
 require("lazy").setup({
-  { "catppuccin/nvim", name = "catppuccin", priority = 1000,
+  { "Mofiqul/dracula.nvim", name = "dracula", priority = 1000,
     config = function()
-      vim.cmd.colorscheme("catppuccin")
+      require("dracula").setup({
+        transparent_bg = false,
+        italic_comment = true,
+      })
+      vim.cmd.colorscheme("dracula")
     end,
   },
   { "nvim-tree/nvim-tree.lua",
@@ -46,6 +51,38 @@ require("lazy").setup({
     keys = { { "<leader>gg", "<cmd>LazyGit<CR>", desc = "LazyGit" } },
   },
   { "sindrets/diffview.nvim", config = true },
+  { "pwntester/octo.nvim",
+    cmd = "Octo",
+    dependencies = {
+      "nvim-lua/plenary.nvim",
+      "nvim-tree/nvim-web-devicons",
+      "ibhagwan/fzf-lua",
+    },
+    config = function()
+      require("octo").setup({
+        picker = "fzf-lua",
+        enable_builtin = true,
+        default_remote = { "origin", "upstream" },
+        suppress_missing_scope = {
+          projects_v2 = true,
+        },
+        mappings = {
+          review_diff = {
+            add_review_comment = { lhs = "<localleader>c", desc = "コメント追加" },
+            add_review_suggestion = { lhs = "<localleader>s", desc = "サジェスト追加" },
+            next_thread = { lhs = "n", desc = "次のコメント" },
+            prev_thread = { lhs = "N", desc = "前のコメント" },
+          },
+          file_panel = {
+            add_review_comment = { lhs = "<localleader>c", desc = "コメント追加" },
+            add_review_suggestion = { lhs = "<localleader>s", desc = "サジェスト追加" },
+            next_thread = { lhs = "n", desc = "次のコメント" },
+            prev_thread = { lhs = "N", desc = "前のコメント" },
+          },
+        },
+      })
+    end,
+  },
   { "ibhagwan/fzf-lua",
    config = function()
       require("fzf-lua").setup({
@@ -163,3 +200,8 @@ vim.api.nvim_create_autocmd("LspAttach", {
 vim.keymap.set("n", "<leader>ih", function()
   vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled())
 end, { desc = "インレイヒント切替" })
+
+-- Octo (GitHub PR Review)
+vim.keymap.set("n", "<leader>op", "<cmd>Octo pr list<CR>", { desc = "PR一覧" })
+vim.keymap.set("n", "<leader>or", "<cmd>Octo review start<CR>", { desc = "レビュー開始" })
+vim.keymap.set("n", "<leader>os", "<cmd>Octo review submit<CR>", { desc = "レビュー送信" })
