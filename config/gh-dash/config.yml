@@ -65,6 +65,9 @@ keybindings:
       command: cd {{.RepoPath}} && lazygit
   prs:
     - key: d
+      name: review (octorus)
+      command: "or --repo {{.RepoName}} --pr {{.PrNumber}}"
+    - key: o
       name: review (octo.nvim)
       command: "/Users/ushironoko/.local/bin/gh-octo-review {{.RepoName}} {{.PrNumber}}"
     - key: D
