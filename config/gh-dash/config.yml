@@ -67,9 +67,6 @@ keybindings:
     - key: d
       name: review (octorus)
       command: "or --repo {{.RepoName}} --pr {{.PrNumber}}"
-    - key: o
-      name: review (octo.nvim)
-      command: "/Users/ushironoko/.local/bin/gh-octo-review {{.RepoName}} {{.PrNumber}}"
     - key: D
       name: diff (no lock)
       command: "/Users/ushironoko/.local/bin/gh-diff-no-lock {{.RepoName}} {{.PrNumber}}"
