@@ -11,20 +11,32 @@ REMAINING_PCT=$(echo "$input" | jq -r '.context_window.remaining_percentage // e
 # Format context usage with color based on usage level
 CONTEXT_DISPLAY=""
 if [ -n "$USED_PCT" ]; then
-    # Round to integer for display
-    USED_INT=$(printf "%.0f" "$USED_PCT")
-    REMAINING_INT=$(printf "%.0f" "$REMAINING_PCT")
+    # Add auto-compact buffer (22.5%) to show effective usage
+    ADJUSTED_PCT=$(echo "$USED_PCT + 22.5" | bc)
+    USED_INT=$(printf "%.0f" "$ADJUSTED_PCT")
 
-    # Color coding based on remaining context
-    if [ "$REMAINING_INT" -le 10 ]; then
-        # Critical: red
-        CONTEXT_DISPLAY="\033[31m${USED_INT}%\033[0m"
-    elif [ "$REMAINING_INT" -le 30 ]; then
-        # Warning: yellow
-        CONTEXT_DISPLAY="\033[33m${USED_INT}%\033[0m"
-    else
+    # Cap at 100%
+    if [ "$USED_INT" -gt 100 ]; then
+        USED_INT=100
+    fi
+
+    # Build progress bar (10 chars width)
+    FILLED=$((USED_INT / 10))
+    EMPTY=$((10 - FILLED))
+    BAR=""
+    for ((i=0; i<FILLED; i++)); do BAR+="█"; done
+    for ((i=0; i<EMPTY; i++)); do BAR+="░"; done
+
+    # Color coding based on adjusted percentage
+    if [ "$USED_INT" -le 70 ]; then
         # Normal: green
-        CONTEXT_DISPLAY="\033[32m${USED_INT}%\033[0m"
+        CONTEXT_DISPLAY="\033[32m[${BAR}] ${USED_INT}%\033[0m"
+    elif [ "$USED_INT" -le 90 ]; then
+        # Warning: yellow
+        CONTEXT_DISPLAY="\033[33m[${BAR}] ${USED_INT}%\033[0m"
+    else
+        # Critical: red
+        CONTEXT_DISPLAY="\033[31m[${BAR}] ${USED_INT}%\033[0m"
     fi
 fi
 
@@ -40,7 +52,7 @@ fi
 # Build output
 OUTPUT="${CURRENT_DIR##*/}$GIT_BRANCH"
 if [ -n "$CONTEXT_DISPLAY" ]; then
-    OUTPUT="$OUTPUT | CTX: $CONTEXT_DISPLAY"
+    OUTPUT="$OUTPUT | $CONTEXT_DISPLAY"
 fi
 OUTPUT="$OUTPUT | $datetime"
 
