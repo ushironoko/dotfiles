@@ -37,7 +37,7 @@ Arguments:
   agent-name : レビューに使用するエージェント名 (必須)
 
 Examples:
-  /plan-review rust-reviwer
+  /plan-review rust-reviewer
   /plan-review similarity
   /plan-review pr-review-answer
 
@@ -102,7 +102,7 @@ Available agents:
 
 | エージェント名   | 用途                                       |
 | ---------------- | ------------------------------------------ |
-| rust-reviwer     | Rustコードのパフォーマンス・保守性レビュー |
+| rust-reviewer    | Rustコードのパフォーマンス・保守性レビュー |
 | pr-review-answer | PRレビューコメント対応                     |
 | similarity       | コード重複分析・リファクタリング提案       |
 
@@ -110,16 +110,16 @@ Available agents:
 
 ```
 # PlanExitでreject後のコメント欄で:
-> /plan-review rust-reviwer
+> /plan-review rust-reviewer
 
 最新Planファイルを検出: ./plans/kind-cuddling-dragon.md
-エージェント: rust-reviwer
+エージェント: rust-reviewer
 
 レビュー実行中...
 
 === レビュー結果 ===
 
-[rust-reviwerからのフィードバック]
+[rust-reviewerからのフィードバック]
 
 1. 技術的正確性:
    - ...
