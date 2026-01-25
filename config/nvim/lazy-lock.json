@@ -1,11 +1,11 @@
 {
-  "catppuccin": {
-    "branch": "main",
-    "commit": "ce8d176faa4643e026e597ae3c31db59b63cef09"
-  },
   "diffview.nvim": {
     "branch": "main",
     "commit": "4516612fe98ff56ae0415a259ff6361a89419b0a"
+  },
+  "dracula": {
+    "branch": "main",
+    "commit": "ae752c13e95fb7c5f58da4b5123cb804ea7568ee"
   },
   "fzf-lua": {
     "branch": "main",
@@ -42,6 +42,10 @@
   "nvim-web-devicons": {
     "branch": "master",
     "commit": "6788013bb9cb784e606ada44206b0e755e4323d7"
+  },
+  "octo.nvim": {
+    "branch": "master",
+    "commit": "e1ec5cc2eb0bcfc64e312c6ab93764ffb0c43c3b"
   },
   "plenary.nvim": {
     "branch": "master",

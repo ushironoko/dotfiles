@@ -91,6 +91,11 @@ export default defineConfig({
       type: "directory",
     },
     {
+      source: "./config/octorus",
+      target: "~/.config/octorus",
+      type: "directory",
+    },
+    {
       source: "./bin/dotfiles",
       target: "~/.local/bin/dotfiles",
       type: "file",
