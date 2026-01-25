@@ -188,17 +188,80 @@ let node = Rc::new(TreeNode { ... });
 // Not Send -> compile error prevents misuse
 ```
 
+### 5. Memory & Allocation Patterns (Weight: Medium)
+
+**Checkpoints**:
+
+- Arena allocator (bumpalo) for batch allocations with shared lifetime
+- `SmallVec<[T; N]>` for small, bounded collections
+- `CompactString` / SSO for short strings
+- Static metadata for immutable runtime data
+- Zero-cost conditional features
+
+**Examples**:
+
+```rust
+// Anti-pattern: always heap-allocates
+props: Vec<String>
+
+// Good: stack-optimized for typical case
+props: SmallVec<[CompactString; 4]>
+```
+
+```rust
+// Anti-pattern: potential padding overhead
+pub struct CacheId(u32);
+
+// Good: guaranteed same layout as inner type
+#[repr(transparent)]
+pub struct CacheId(u32);
+```
+
+```rust
+// Anti-pattern: constructed every call
+fn meta(&self) -> RuleMeta { RuleMeta { name: "rule", ... } }
+
+// Good: zero runtime cost
+static META: RuleMeta = RuleMeta { name: "rule", ... };
+fn meta(&self) -> &'static RuleMeta { &META }
+```
+
+```rust
+// Good: optimized away when disabled
+pub fn timer(&self, name: &'static str) -> Option<Timer> {
+    if self.enabled.load(Ordering::SeqCst) {
+        Some(Timer::start(name))
+    } else {
+        None
+    }
+}
+```
+
+**Collection Size Heuristics**:
+
+- props/attributes: 4-8
+- children/siblings: 8-16
+- nesting depth: 8-16
+- short identifiers: 16-32 bytes
+
+**Hash Map Selection**:
+
+- `FxHashMap` (rustc-hash): small-medium size, no DoS concern
+- `phf`: compile-time known key sets
+- `std::HashMap`: when DoS resistance required
+
 ## Review Modes
 
 ### Code Review Mode
 
-When reviewing Rust code directly, evaluate across these 5 categories:
+When reviewing Rust code directly, evaluate across these 6 categories:
 
 1. **Trait Design**: trait + struct separation, bounds, dispatch choice
 2. **Type System Utilization**: newtype, type state, phantom types
 3. **Optimization Awareness**: monomorphization, inline, hot path allocations
 4. **Clone/Copy Strategy**: unnecessary clones, Cow, Arc/Rc choice
-5. **Core Rust Patterns**: ownership, lifetimes, error handling, unsafe
+5. **Memory & Allocation**: SmallVec, arena allocators, static metadata, repr attributes
+6. **Core Rust Patterns**: ownership, lifetimes, error handling, unsafe
 
 ### Plan Review Mode
 
