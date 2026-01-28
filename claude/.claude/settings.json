@@ -1,13 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm:*)",
       "Bash(pnpm:*)",
       "Bash(bun:*)",
       "Bash(cargo:*)",
-      "Bash(go:*)",
       "Bash(find:*)",
-      "Bash(git:*)",
       "Bash(gh:*)",
       "Bash(mise:*)",
       "Read(**)",
