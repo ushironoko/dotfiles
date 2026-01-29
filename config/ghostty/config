@@ -58,6 +58,9 @@ quick-terminal-autohide = true
 macos-titlebar-style = tabs
 macos-option-as-alt = true
 
+# Disable default fullscreen toggle (Cmd+Enter)
+keybind = super+enter=unbind
+
 # スプリット移動
 keybind = alt+left=goto_split:left
 keybind = alt+right=goto_split:right
