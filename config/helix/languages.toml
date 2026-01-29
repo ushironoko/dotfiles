@@ -9,8 +9,17 @@ auto-format = true
 language-servers = ["typescript-language-server"]
 
 [[language]]
+name = "vue"
+auto-format = true
+language-servers = ["vize-lsp", "typescript-language-server"]
+
+[[language]]
 name = "rust"
 auto-format = true
+
+[language-server.vize-lsp]
+command = "vize"
+args = ["lsp"]
 
 [language-server.typescript-language-server.config]
 preferences.includeInlayParameterNameHints = "all"
