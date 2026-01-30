@@ -14,6 +14,7 @@ select = "underline"
 
 [editor.lsp]
 display-inlay-hints = true
+display-color-swatches = false
 
 [editor.file-picker]
 hidden = false

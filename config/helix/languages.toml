@@ -11,15 +11,21 @@ language-servers = ["typescript-language-server"]
 [[language]]
 name = "vue"
 auto-format = true
-language-servers = ["vize-lsp", "typescript-language-server"]
+language-servers = [
+  { name = "vuels", except-features = ["inlay-hints"] },
+  "typescript-language-server"
+]
 
 [[language]]
 name = "rust"
 auto-format = true
 
-[language-server.vize-lsp]
-command = "vize"
-args = ["lsp"]
+[language-server.vuels]
+command = "vue-language-server"
+args = ["--stdio"]
+
+[language-server.vuels.config]
+typescript = { tsdk = "/Users/ushironoko/.bun/install/global/node_modules/typescript/lib" }
 
 [language-server.typescript-language-server.config]
 preferences.includeInlayParameterNameHints = "all"
@@ -30,3 +36,8 @@ preferences.includeInlayVariableTypeHintsWhenTypeMatchesName = false
 preferences.includeInlayPropertyDeclarationTypeHints = true
 preferences.includeInlayFunctionLikeReturnTypeHints = true
 preferences.includeInlayEnumMemberValueHints = true
+
+[[language-server.typescript-language-server.config.plugins]]
+name = "@vue/typescript-plugin"
+location = "/Users/ushironoko/.bun/install/global/node_modules/@vue/typescript-plugin"
+languages = ["vue"]
