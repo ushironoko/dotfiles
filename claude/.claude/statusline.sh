@@ -11,8 +11,8 @@ REMAINING_PCT=$(echo "$input" | jq -r '.context_window.remaining_percentage // e
 # Format context usage with color based on usage level
 CONTEXT_DISPLAY=""
 if [ -n "$USED_PCT" ]; then
-    # Add auto-compact buffer (22.5%) to show effective usage
-    ADJUSTED_PCT=$(echo "$USED_PCT + 22.5" | bc)
+    # Add auto-compact buffer (16.5%) to show effective usage
+    ADJUSTED_PCT=$(echo "$USED_PCT + 16.5" | bc)
     USED_INT=$(printf "%.0f" "$ADJUSTED_PCT")
 
     # Cap at 100%
