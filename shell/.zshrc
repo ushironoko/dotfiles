@@ -86,6 +86,10 @@ alias dccc="deno run -A jsr:@mizchi/ccdiscord"
 [ -f "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/interactive.sh" ] && \
   source "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/interactive.sh"
 
+# jj workspace management functions
+[ -f "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/jj-workspace.sh" ] && \
+  source "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/jj-workspace.sh"
+
 # pnpm
 export PNPM_HOME="$HOME/Library/pnpm"
 case ":$PATH:" in

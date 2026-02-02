@@ -137,14 +137,35 @@ gls() {
   ghq list
 }
 
-# Change directory to repository or worktree (interactive)
+# Change directory to repository or jj workspace (interactive)
 gcd() {
   local ghq_list=$(ghq list | grep github.com)
-  local gwq_list=$(gwq list -g --json 2>/dev/null | jq -r '.[] | "⟳ \(.branch) → \(.path)"' 2>/dev/null)
+
+  # jj workspace一覧（グローバル）
+  local jwq_list=""
+  if command -v jj &>/dev/null && [[ -d "${JJ_WORKSPACE_BASE:-$HOME/.jj-workspaces}" ]]; then
+    # jwq-list関数が利用可能な場合はそれを使用、なければ直接検索
+    if type jwq-list &>/dev/null; then
+      jwq_list=$(jwq-list -g --json 2>/dev/null | jq -r '.[] | "⟳ \(.branch) → \(.path)"' 2>/dev/null)
+    else
+      # Fallback: 直接ディレクトリを検索
+      local ws_base="${JJ_WORKSPACE_BASE:-$HOME/.jj-workspaces}"
+      if [[ -d "$ws_base" ]]; then
+        while IFS= read -r -d '' ws_dir; do
+          if [[ -d "$ws_dir/.jj" ]]; then
+            local branch
+            branch=$(cd "$ws_dir" && jj log -r @ --no-graph -T 'bookmarks' 2>/dev/null | head -1 | sed 's/@.*//')
+            [[ -z "$branch" ]] && branch=$(cd "$ws_dir" && jj log -r @ --no-graph -T 'change_id.short()' 2>/dev/null)
+            jwq_list="${jwq_list}⟳ ${branch} → ${ws_dir}\n"
+          fi
+        done < <(find "$ws_base" -mindepth 1 -maxdepth 2 -type d -print0 2>/dev/null)
+      fi
+    fi
+  fi
 
   local combined
-  if [[ -n "$gwq_list" ]]; then
-    combined=$(printf "%s\n%s" "$ghq_list" "$gwq_list")
+  if [[ -n "$jwq_list" ]]; then
+    combined=$(printf "%s\n%b" "$ghq_list" "$jwq_list" | sed '/^$/d')
   else
     combined="$ghq_list"
   fi
@@ -153,7 +174,7 @@ gcd() {
   [[ -z "$selected" ]] && return
 
   if [[ "$selected" == ⟳* ]]; then
-    # gwq worktree: パスを抽出して移動
+    # jj workspace: パスを抽出して移動
     cd "$(echo "$selected" | sed 's/.*→ //')"
   else
     # ghq repository

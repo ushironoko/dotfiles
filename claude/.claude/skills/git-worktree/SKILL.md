@@ -1,7 +1,12 @@
 ---
 name: git-worktree
-description: Git worktreeを使用した並行作業管理。実装開始時にworktreeを作成し、完了時に削除する。
+description: "[DEPRECATED] Git worktreeを使用した並行作業管理。jj-workspaceスキルへ移行してください。"
 ---
+
+> **⚠️ DEPRECATED**: このスキルは非推奨です。代わりに `jj-workspace` スキルを使用してください。
+> Jujutsu (jj) はgit互換のcolocatedモードで動作し、より効率的なワークフローを提供します。
+>
+> 移行方法: `/jj-workspace` を参照
 
 # Git Worktree Management (gwq)
 

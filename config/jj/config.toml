@@ -1,0 +1,17 @@
+"$schema" = "https://docs.jj-vcs.dev/latest/config-schema.json"
+
+[user]
+name = "ushironoko"
+email = "ushironoko@example.com"
+
+[ui]
+default-command = "log"
+pager = "less -FRX"
+diff.tool = "delta"
+
+[git]
+colocate = true
+
+# 新規ブックマークを自動でリモートにトラッキング
+[remotes.origin]
+track-managed-bookmarks = "all"

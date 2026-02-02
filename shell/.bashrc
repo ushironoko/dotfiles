@@ -181,6 +181,10 @@ function y() {
 [ -f "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/interactive.sh" ] && \
   source "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/interactive.sh"
 
+# jj workspace management functions
+[ -f "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/jj-workspace.sh" ] && \
+  source "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/jj-workspace.sh"
+
 # pnpm
 export PNPM_HOME="/home/ushironoko/.local/share/pnpm"
 case ":$PATH:" in

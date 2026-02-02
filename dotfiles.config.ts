@@ -56,6 +56,11 @@ export default defineConfig({
       type: "directory",
     },
     {
+      source: "./config/jj",
+      target: "~/.config/jj",
+      type: "directory",
+    },
+    {
       source: "./config/ghq",
       target: "~/.config/ghq",
       type: "directory",
