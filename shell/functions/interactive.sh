@@ -163,9 +163,15 @@ gcd() {
     fi
   fi
 
+  # git worktree一覧（gwqを使用、フォールバック）
+  local gwq_list=""
+  if command -v gwq &>/dev/null; then
+    gwq_list=$(gwq list -g --json 2>/dev/null | jq -r '.[] | select(.is_main == false) | "⎇ \(.branch) → \(.path)"' 2>/dev/null)
+  fi
+
   local combined
-  if [[ -n "$jwq_list" ]]; then
-    combined=$(printf "%s\n%b" "$ghq_list" "$jwq_list" | sed '/^$/d')
+  if [[ -n "$jwq_list" || -n "$gwq_list" ]]; then
+    combined=$(printf "%s\n%b%b" "$ghq_list" "$jwq_list" "$gwq_list" | sed '/^$/d')
   else
     combined="$ghq_list"
   fi
@@ -173,8 +179,8 @@ gcd() {
   local selected=$(echo "$combined" | fzf --height 40% --reverse)
   [[ -z "$selected" ]] && return
 
-  if [[ "$selected" == ⟳* ]]; then
-    # jj workspace: パスを抽出して移動
+  if [[ "$selected" == ⟳* ]] || [[ "$selected" == ⎇* ]]; then
+    # jj workspace or git worktree: パスを抽出して移動
     cd "$(echo "$selected" | sed 's/.*→ //')"
   else
     # ghq repository
