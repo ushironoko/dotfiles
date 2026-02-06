@@ -8,7 +8,7 @@
 # Configuration
 # ============================================================================
 
-JJ_WORKSPACE_BASE="${JJ_WORKSPACE_BASE:-$HOME/.jj-workspaces}"
+# Workspaces are created as siblings of the main repo under ghq root
 
 # ============================================================================
 # Helper Functions
@@ -60,7 +60,7 @@ jwq-list() {
         echo "Usage: jwq-list [-g|--global] [--json]"
         echo ""
         echo "Options:"
-        echo "  -g, --global    Search all workspaces in JJ_WORKSPACE_BASE"
+        echo "  -g, --global    Search all workspaces under ghq root"
         echo "  --json          Output in JSON format"
         return 0
         ;;
@@ -72,8 +72,10 @@ jwq-list() {
   done
 
   if $global; then
-    # Global search: find all workspaces in JJ_WORKSPACE_BASE
-    if [[ ! -d "$JJ_WORKSPACE_BASE" ]]; then
+    # Global search: ghq配下で .jj/repo がファイルのディレクトリ = workspace
+    local ghq_root
+    ghq_root=$(ghq root 2>/dev/null)
+    if [[ -z "$ghq_root" ]]; then
       if $json_output; then
         echo "[]"
       fi
@@ -81,16 +83,13 @@ jwq-list() {
     fi
 
     local workspaces=()
-    while IFS= read -r -d '' ws_dir; do
-      if [[ -d "$ws_dir/.jj" ]]; then
-        local branch
-        branch=$(cd "$ws_dir" && jj log -r @ --no-graph -T 'bookmarks' 2>/dev/null | head -1 | sed 's/@.*//')
-        if [[ -z "$branch" ]]; then
-          branch=$(cd "$ws_dir" && jj log -r @ --no-graph -T 'change_id.short()' 2>/dev/null)
-        fi
-        workspaces+=("$branch|$ws_dir")
-      fi
-    done < <(find "$JJ_WORKSPACE_BASE" -mindepth 1 -maxdepth 2 -type d -print0 2>/dev/null)
+    while IFS= read -r repo_file; do
+      local ws_dir
+      ws_dir=$(dirname "$(dirname "$repo_file")")
+      local name
+      name=$(basename "$ws_dir")
+      workspaces+=("$name|$ws_dir")
+    done < <(find "$ghq_root" -maxdepth 5 -path '*/.jj/repo' -type f 2>/dev/null)
 
     if $json_output; then
       echo "["
@@ -167,12 +166,14 @@ jwq-add() {
   # Sanitize workspace name for directory
   local safe_name="${ws_name//\//-}"
 
-  # Create workspace directory
+  # Create workspace directory as sibling of current repo under ghq
+  local repo_root
+  repo_root=$(jj root 2>/dev/null || pwd)
+  local repo_parent
+  repo_parent=$(dirname "$repo_root")
   local repo_name
-  repo_name=$(_jwq_get_repo_name)
-  local ws_path="$JJ_WORKSPACE_BASE/$repo_name/$safe_name"
-
-  mkdir -p "$JJ_WORKSPACE_BASE/$repo_name"
+  repo_name=$(basename "$repo_root")
+  local ws_path="$repo_parent/${repo_name}-${safe_name}"
 
   # Create the workspace
   echo "Creating workspace: $ws_name at $ws_path"
@@ -223,32 +224,44 @@ jwq-get() {
     return 0
   fi
 
-  # Search in workspace base directory
+  # Search as sibling of current repo under ghq
+  local repo_root
+  repo_root=$(jj root 2>/dev/null || pwd)
+  local repo_parent
+  repo_parent=$(dirname "$repo_root")
   local repo_name
-  repo_name=$(_jwq_get_repo_name)
+  repo_name=$(basename "$repo_root")
 
-  # Try exact match first
-  local ws_path="$JJ_WORKSPACE_BASE/$repo_name/$ws_name"
+  # Try exact match: repo-name
+  local ws_path="$repo_parent/${repo_name}-${ws_name}"
   if [[ -d "$ws_path/.jj" ]]; then
     echo "$ws_path"
     return 0
   fi
 
-  # Try sanitized name
+  # Try sanitized name: repo-sanitized
   local safe_name="${ws_name//\//-}"
-  ws_path="$JJ_WORKSPACE_BASE/$repo_name/$safe_name"
+  ws_path="$repo_parent/${repo_name}-${safe_name}"
   if [[ -d "$ws_path/.jj" ]]; then
     echo "$ws_path"
     return 0
   fi
 
-  # Search globally
-  while IFS= read -r -d '' dir; do
-    if [[ "$(basename "$dir")" == "$ws_name" || "$(basename "$dir")" == "$safe_name" ]]; then
-      echo "$dir"
-      return 0
-    fi
-  done < <(find "$JJ_WORKSPACE_BASE" -mindepth 2 -maxdepth 2 -type d -name ".jj" -print0 2>/dev/null | xargs -0 -I {} dirname {} 2>/dev/null | tr '\n' '\0')
+  # Search globally under ghq root
+  local ghq_root
+  ghq_root=$(ghq root 2>/dev/null)
+  if [[ -n "$ghq_root" ]]; then
+    while IFS= read -r repo_file; do
+      local dir
+      dir=$(dirname "$(dirname "$repo_file")")
+      local dir_name
+      dir_name=$(basename "$dir")
+      if [[ "$dir_name" == "$ws_name" || "$dir_name" == "$safe_name" || "$dir_name" == *"-${ws_name}" || "$dir_name" == *"-${safe_name}" ]]; then
+        echo "$dir"
+        return 0
+      fi
+    done < <(find "$ghq_root" -maxdepth 5 -path '*/.jj/repo' -type f 2>/dev/null)
+  fi
 
   echo "Error: Workspace not found: $ws_name" >&2
   return 1
@@ -420,7 +433,7 @@ jwq-status() {
         echo "Usage: jwq-status [-g|--global]"
         echo ""
         echo "Options:"
-        echo "  -g, --global    Show status of all workspaces in JJ_WORKSPACE_BASE"
+        echo "  -g, --global    Show status of all workspaces under ghq root"
         return 0
         ;;
       *)
@@ -431,20 +444,28 @@ jwq-status() {
   done
 
   if $global; then
-    if [[ ! -d "$JJ_WORKSPACE_BASE" ]]; then
-      echo "No workspaces found in $JJ_WORKSPACE_BASE"
+    local ghq_root
+    ghq_root=$(ghq root 2>/dev/null)
+    if [[ -z "$ghq_root" ]]; then
+      echo "No ghq root found"
       return 0
     fi
 
-    while IFS= read -r -d '' ws_dir; do
-      if [[ -d "$ws_dir/.jj" ]]; then
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "📁 $ws_dir"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        (cd "$ws_dir" && jj status 2>/dev/null)
-        echo ""
-      fi
-    done < <(find "$JJ_WORKSPACE_BASE" -mindepth 1 -maxdepth 2 -type d -print0 2>/dev/null)
+    local found=false
+    while IFS= read -r repo_file; do
+      local ws_dir
+      ws_dir=$(dirname "$(dirname "$repo_file")")
+      found=true
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      echo "📁 $ws_dir"
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      (cd "$ws_dir" && jj status 2>/dev/null)
+      echo ""
+    done < <(find "$ghq_root" -maxdepth 5 -path '*/.jj/repo' -type f 2>/dev/null)
+
+    if ! $found; then
+      echo "No workspaces found"
+    fi
   else
     _jwq_check_repo || return 1
 
