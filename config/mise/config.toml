@@ -17,6 +17,7 @@ ghq = "latest"
 jj = "latest"
 lazygit = "latest"
 delta = "latest"
+ffmpeg = "latest"
 
 [settings]
 experimental = true

@@ -43,6 +43,27 @@
 - **NEVER** run development server startup commands in any workflow
 - **ALWAYS** use `jj-workspace` skill for non-trivial changes (multiple files, new features, refactoring)
 
+## PR・コミットの安全規則（CRITICAL — 違反は情報漏洩インシデントに直結）
+
+### PR作成の絶対ルール
+
+- **NEVER** `gh pr create` を実行する前に、以下を必ず行うこと:
+  1. `gh repo view --json nameWithOwner` でターゲットリポジトリを確認
+  2. forkの場合、PRがfork元（upstream）ではなくユーザー自身のリポジトリに向くことを確認
+  3. **ターゲットリポジトリ名とブランチ名をユーザーに提示し、明示的な承認を得てから実行**
+- **NEVER** ユーザーの承認なしにPRを作成しない
+- forkリポジトリでは `gh pr create -R <owner/repo>` で明示的にユーザーのリポジトリを指定する
+
+### コミットメッセージ・PR descriptionの機密情報保護
+
+- **NEVER** コミットメッセージ、PR description、CLAUDE.mdのいずれにも以下を含めない:
+  - プライベートリポジトリ名
+  - 企業名・組織名・チーム名・クライアント名
+  - プロジェクト固有の名称・ファイル数・ビルド統計など具体的な業務情報
+  - 社内ツール名やインフラ情報
+- **ALWAYS** コミットメッセージは汎用的な技術用語のみで記述する
+- この規則はCLAUDE.md自体の記述、例示、コメント内にも適用される
+
 ## Before ANY Commit
 
 **ALWAYS**
