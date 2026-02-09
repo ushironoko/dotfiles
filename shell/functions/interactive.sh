@@ -132,18 +132,40 @@ fcd() {
 # Repository management with ghq and fzf
 # ============================================================================
 
+# 選択履歴ファイル
+GHQ_SELECT_HISTFILE="$HOME/.cache/.ghq_fzf_history"
+
+# ファイル内容を逆順出力（履歴の新しい順表示に使用）
+revcat() {
+  if command -v tac >/dev/null 2>&1; then
+    tac "$@"
+  elif tail -r /dev/null >/dev/null 2>&1; then
+    tail -r "$@"
+  else
+    awk '{ buf[NR]=$0 } END { for (i=NR;i>0;i--) print buf[i] }' "$@"
+  fi
+}
+
 # List all repositories
 gls() { 
   ghq list
 }
 
 # Change directory to repository or jj workspace (interactive)
+# -f オプションで頻度順表示（デフォルトは最近使った順）
 gcd() {
   # zshのジョブ制御通知を抑制（関数スコープのみ）
   [[ -n "$ZSH_VERSION" ]] && setopt local_options no_monitor no_notify
 
+  local frequency_mode=false
+  if [[ "$1" == "-f" ]]; then
+    frequency_mode=true
+    shift
+  fi
+
   local tmp_dir=$(mktemp -d)
   local ghq_root=$(ghq root)
+  local histfile="$GHQ_SELECT_HISTFILE"
 
   # 全ソースを並列で収集
   ghq list | grep github.com > "$tmp_dir/ghq" &
@@ -178,21 +200,61 @@ gcd() {
     cp "$tmp_dir/ghq" "$tmp_dir/ghq_filtered"
   fi
 
-  # 結合: workspace → repos → worktrees
+  # ghqエントリを履歴順に並べ替え
+  if [[ -f "$histfile" ]]; then
+    if [[ "$frequency_mode" == true ]]; then
+      # 頻度順（使用回数の多い順）
+      (sort "$histfile" | uniq -c | sort -nr | awk '{print $2}'; cat "$tmp_dir/ghq_filtered") | awk '!seen[$0]++' > "$tmp_dir/ghq_sorted"
+    else
+      # 最近使った順（デフォルト）
+      (revcat "$histfile"; cat "$tmp_dir/ghq_filtered") | awk '!seen[$0]++' > "$tmp_dir/ghq_sorted"
+    fi
+  else
+    cp "$tmp_dir/ghq_filtered" "$tmp_dir/ghq_sorted"
+  fi
+
+  # 結合: workspace → repos (履歴順) → worktrees
   local combined
-  combined=$(cat "$tmp_dir/jwq" "$tmp_dir/ghq_filtered" "$tmp_dir/gwq" 2>/dev/null | sed '/^$/d')
+  combined=$(cat "$tmp_dir/jwq" "$tmp_dir/ghq_sorted" "$tmp_dir/gwq" 2>/dev/null | sed '/^$/d')
   rm -rf "$tmp_dir"
 
   [[ -z "$combined" ]] && return
 
-  local selected=$(echo "$combined" | fzf --height 40% --reverse)
+  # fzfヘッダ
+  local header="ghq repositories"
+  if [[ "$frequency_mode" == true ]]; then
+    header="$header (frequency order)"
+  else
+    header="$header (recent order)"
+  fi
+
+  # READMEプレビュー
+  local preview_cmd='
+    selected={}
+    ghq_root="'"$ghq_root"'"
+    if [[ "$selected" == ⟳* ]] || [[ "$selected" == ⎇* ]]; then
+      dir=$(echo "$selected" | sed "s/.*→ //")
+      head -n200 "$dir/README.md" 2>/dev/null || echo "No README.md"
+    else
+      head -n200 "${ghq_root}/${selected}/README.md" 2>/dev/null || echo "No README.md"
+    fi
+  '
+
+  local selected=$(echo "$combined" | fzf \
+    --height 40% \
+    --reverse \
+    --header "$header" \
+    --preview "$preview_cmd" \
+    --preview-window "right:40%")
   [[ -z "$selected" ]] && return
 
   if [[ "$selected" == ⟳* ]] || [[ "$selected" == ⎇* ]]; then
     # jj workspace or git worktree: パスを抽出して移動
     cd "$(echo "$selected" | sed 's/.*→ //')"
   else
-    # ghq repository
+    # ghq repository: 履歴に追記して移動
+    mkdir -p "$(dirname "$histfile")"
+    echo "$selected" >> "$histfile"
     cd "$ghq_root/$selected"
   fi
 }
@@ -221,10 +283,48 @@ ghnew() {
   gh repo create "$@" && ghq get "https://github.com/$(gh api user --jq .login)/$1" && cd "$(ghq root)/github.com/$(gh api user --jq .login)/$1"
 }
 
-# Remove repository (interactive)
-grm() { 
-  local r=$(ghq list | fzf --height 40% --reverse)
-  [ -n "$r" ] && echo "Remove $(ghq root)/$r? [y/N]" && read -r a && [ "$a" = "y" ] && rm -rf "$(ghq root)/$r" && echo "Removed"
+# Remove repository (interactive, multi-select, oldest first)
+grm() {
+  local ghq_root
+  ghq_root=$(ghq root | head -n1) || return
+
+  local selected
+  selected=$(
+    ghq list -p | while IFS= read -r d; do
+      local mtime
+      if stat --version >/dev/null 2>&1; then
+        # GNU stat
+        mtime=$(date -d "@$(stat -c %Y "$d")" +%Y-%m-%d 2>/dev/null)
+      else
+        # BSD stat (macOS)
+        mtime=$(date -r "$(stat -f %m "$d")" +%Y-%m-%d 2>/dev/null)
+      fi
+      printf '%s\t%s\n' "${mtime:-unknown}" "${d#$ghq_root/}"
+    done | sort | fzf --multi --height 40% --reverse \
+      --header "Select repositories to remove (oldest first, TAB to multi-select)" | cut -f2
+  ) || return
+
+  if [[ -z "$selected" ]]; then
+    echo "No repositories selected."
+    return
+  fi
+
+  echo "Removing:"
+  echo "$selected" | sed 's/^/  /'
+  echo ""
+  echo -n "Are you sure? (y/N) "
+  read -r reply
+  [[ ! "$reply" =~ ^[yY]$ ]] && return
+
+  local histfile="$GHQ_SELECT_HISTFILE"
+
+  echo "$selected" | while IFS= read -r r; do
+    rm -rf "${ghq_root}/${r}"
+    if [[ -f "$histfile" ]]; then
+      grep -v "^${r}$" "$histfile" > "${histfile}.tmp" && mv "${histfile}.tmp" "$histfile"
+    fi
+    echo "Removed ${r}"
+  done
 }
 
 # Git branch cleanup with safety checks
@@ -364,12 +464,12 @@ gsw() {
 ghq-help() {
   echo "ghq/fzf commands:"
   echo "  gls         - List all repositories"
-  echo "  gcd         - Change directory to GitHub repository (interactive)"
+  echo "  gcd         - Change directory to GitHub repository (interactive, -f for frequency order)"
   echo "  ghcode      - Open repository in VS Code (interactive)"
   echo "  gget        - Clone repository (no args: your repos, with args: any repo)"
   echo "  gget-search - Search and clone from GitHub"
   echo "  ghnew       - Create new GitHub repo and clone"
-  echo "  grm         - Remove repository (interactive)"
+  echo "  grm         - Remove repository (multi-select, oldest first)"
   echo "  gclean      - Clean up local branches not on remote (interactive)"
   echo "  gsw         - Switch to remote branch with fzf (interactive)"
   echo "  fcd         - Interactive directory navigation with fzf"
@@ -485,6 +585,7 @@ ns() {
 if [[ -n "$BASH_VERSION" ]]; then
   # Running in bash - export functions
   export -f fcd
+  export -f revcat
   export -f gls
   export -f gcd
   export -f ghcode
