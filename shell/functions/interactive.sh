@@ -329,53 +329,70 @@ grm() {
 
 # Git branch cleanup with safety checks
 gclean() {
-  # Fetch latest remote state
+  local ghq_root=$(ghq root)
+  local items=""
+
+  # 1. Gone branches (current repo)
   git fetch --prune
-  
-  # Get current branch
-  local current_branch=$(git branch --show-current)
-  
-  # Get all local branches that don't exist on remote
   local branches=$(git branch -vv | grep ': gone]' | awk '{print $1}' | grep -v "^*")
-  
-  if [ -z "$branches" ]; then
-    echo "No branches to clean up"
-    return 0
-  fi
-  
-  # Filter out branches with unmerged commits
-  local safe_branches=""
   for branch in $branches; do
-    if git cherry main "$branch" | grep -q "^+"; then
-      echo "Skipping $branch (has unmerged commits)"
-    else
-      safe_branches="$safe_branches$branch\n"
-    fi
+    items="${items}[branch] ${branch}\n"
   done
-  
-  if [ -z "$safe_branches" ]; then
-    echo "No safe branches to clean up"
+
+  # 2. jj workspaces (ghq配下, .jj/repo がファイル = non-main workspace)
+  if command -v jj &>/dev/null; then
+    while IFS= read -r repo_file; do
+      local ws_dir=$(dirname "$(dirname "$repo_file")")
+      items="${items}[jj-ws] $(basename "$ws_dir") → ${ws_dir}\n"
+    done < <(find "$ghq_root" -maxdepth 5 -path '*/.jj/repo' -type f 2>/dev/null)
+  fi
+
+  # 3. git worktrees (non-main)
+  if command -v gwq &>/dev/null; then
+    while IFS= read -r line; do
+      [ -n "$line" ] && items="${items}[worktree] ${line}\n"
+    done < <(gwq list -g --json 2>/dev/null | jq -r '.[] | select(.is_main == false) | "\(.branch) → \(.path)"' 2>/dev/null)
+  fi
+
+  items=$(echo -e "$items" | sed '/^$/d')
+
+  if [ -z "$items" ]; then
+    echo "Nothing to clean up"
     return 0
   fi
-  
+
   # Use fzf for selection (multi-select enabled)
-  local selected=$(echo -e "$safe_branches" | fzf --multi --height 40% --reverse \
-    --header "Select branches to delete (TAB to select multiple, ENTER to confirm)")
-  
+  local selected=$(echo "$items" | fzf --multi --height 40% --reverse \
+    --header "Select items to delete (TAB to select, ENTER to confirm)")
+
   if [ -z "$selected" ]; then
-    echo "No branches selected"
+    echo "No items selected"
     return 0
   fi
-  
+
   # Confirmation
-  echo "Will delete the following branches:"
+  echo "Will delete:"
   echo "$selected"
   echo -n "Continue? [y/N]: "
   read -r confirm
-  
+
   if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
-    echo "$selected" | xargs -r git branch -d
-    echo "Branches deleted successfully"
+    echo "$selected" | while IFS= read -r item; do
+      case "$item" in
+        \[branch\]*)
+          local name="${item#\[branch\] }"
+          git branch -D "$name" && echo "Deleted branch: $name"
+          ;;
+        \[jj-ws\]*)
+          local target="${item#*→ }"
+          rm -rf "$target" && echo "Removed jj workspace: $target"
+          ;;
+        \[worktree\]*)
+          local target="${item#*→ }"
+          git worktree remove --force "$target" && echo "Removed worktree: $target"
+          ;;
+      esac
+    done
   else
     echo "Cancelled"
   fi
@@ -470,7 +487,7 @@ ghq-help() {
   echo "  gget-search - Search and clone from GitHub"
   echo "  ghnew       - Create new GitHub repo and clone"
   echo "  grm         - Remove repository (multi-select, oldest first)"
-  echo "  gclean      - Clean up local branches not on remote (interactive)"
+  echo "  gclean      - Clean up gone branches, jj workspaces, git worktrees (interactive)"
   echo "  gsw         - Switch to remote branch with fzf (interactive)"
   echo "  fcd         - Interactive directory navigation with fzf"
   echo "  ns          - Run package.json scripts with fzf (interactive)"
