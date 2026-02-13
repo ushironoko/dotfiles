@@ -15,17 +15,6 @@
   },
   "enableAllProjectMcpServers": true,
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup|clear",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.claude/hooks/session_start/clear_hearing_flag.sh"
-          }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit|MultiEdit",
@@ -34,26 +23,6 @@
             "type": "command",
             "command": "jq -r '.tool_input.file_path | select(endswith(\".js\") or endswith(\".ts\"))' | ~/.claude/hooks/post_tool_use/coding_cycle.sh",
             "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "AskUserQuestion",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "jq -r '.permission_mode' | ~/.claude/hooks/post_tool_use/mark_hearing.sh"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "ExitPlanMode",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "jq -r '.permission_mode' | ~/.claude/hooks/pre_tool_use/check_hearing.sh"
           }
         ]
       }

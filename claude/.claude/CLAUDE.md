@@ -268,3 +268,14 @@ bunx --bun index.ts
 # If fails, use tsx
 pnpm dlx tsx index.ts
 ```
+
+## Vite Dev Server デバッグ
+
+Vite dev server が起動中の場合、`curl` で直接リクエストを投げてコンパイル結果を確認できる。ブラウザ不要で codegen バグの特定が速い。
+
+```bash
+# コンパイル済み SFC の出力を確認
+curl -s "http://127.0.0.1:<port>/src/components/Login/Login.vue"
+
+# テンプレート codegen、script 処理、HMR コードがそのまま返る
+```
