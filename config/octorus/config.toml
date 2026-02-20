@@ -1,4 +1,4 @@
-editor = "hx"
+editor = ""
 
 [diff]
 theme = "Dracula"

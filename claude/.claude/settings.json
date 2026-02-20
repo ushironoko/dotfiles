@@ -1,6 +1,54 @@
 {
-  "permissions": {
-    "allow": [
+  "alwaysThinkingEnabled" : true,
+  "enableAllProjectMcpServers" : true,
+  "enabledPlugins" : {
+    "clangd-lsp@claude-plugins-official" : true,
+    "frontend-design@claude-plugins-official" : true,
+    "pyright-lsp@claude-plugins-official" : true,
+    "rust-analyzer-lsp@claude-plugins-official" : true,
+    "swift-lsp@claude-plugins-official" : true,
+    "typescript-lsp@claude-plugins-official" : true
+  },
+  "hooks" : {
+    "Notification" : [
+      {
+        "hooks" : [
+          {
+            "async" : true,
+            "command" : "\/Users\/ushironoko\/ghq\/github.com\/ushironoko\/asuku\/.build\/asuku.app\/Contents\/MacOS\/asuku-hook notification",
+            "type" : "command"
+          }
+        ],
+        "matcher" : ".*"
+      }
+    ],
+    "PermissionRequest" : [
+      {
+        "hooks" : [
+          {
+            "command" : "\/Users\/ushironoko\/ghq\/github.com\/ushironoko\/asuku\/.build\/asuku.app\/Contents\/MacOS\/asuku-hook permission-request",
+            "timeout" : 300,
+            "type" : "command"
+          }
+        ],
+        "matcher" : ".*"
+      }
+    ],
+    "PostToolUse" : [
+      {
+        "hooks" : [
+          {
+            "command" : "jq -r '.tool_input.file_path | select(endswith(\".js\") or endswith(\".ts\"))' | ~\/.claude\/hooks\/post_tool_use\/coding_cycle.sh",
+            "timeout" : 10,
+            "type" : "command"
+          }
+        ],
+        "matcher" : "Write|Edit|MultiEdit"
+      }
+    ]
+  },
+  "permissions" : {
+    "allow" : [
       "Bash(pnpm:*)",
       "Bash(bun:*)",
       "Bash(cargo:*)",
@@ -8,38 +56,15 @@
       "Bash(gh:*)",
       "Bash(mise:*)",
       "Read(**)",
-      "Read(~/.bashrc)",
-      "Read(~/.zshrc)",
+      "Read(~\/.bashrc)",
+      "Read(~\/.zshrc)",
       "mcp__mcpdoc"
     ]
   },
-  "enableAllProjectMcpServers": true,
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "jq -r '.tool_input.file_path | select(endswith(\".js\") or endswith(\".ts\"))' | ~/.claude/hooks/post_tool_use/coding_cycle.sh",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
-  },
-  "statusLine": {
-    "type": "command",
-    "command": "~/.claude/statusline.sh",
-    "padding": 0
-  },
-  "enabledPlugins": {
-    "rust-analyzer-lsp@claude-plugins-official": true,
-    "frontend-design@claude-plugins-official": true,
-    "typescript-lsp@claude-plugins-official": true,
-    "pyright-lsp@claude-plugins-official": true,
-    "clangd-lsp@claude-plugins-official": true
-  },
-  "alwaysThinkingEnabled": true,
-  "plansDirectory": "./plans"
+  "plansDirectory" : ".\/plans",
+  "statusLine" : {
+    "command" : "~\/.claude\/statusline.sh",
+    "padding" : 0,
+    "type" : "command"
+  }
 }
