@@ -1,32 +1,12 @@
 # Starship prompt configuration
 # Format defines the order of modules from left to right
 format = """
-$os\
 $directory\
 $git_branch\
 $git_status\
-$nodejs\
-$bun\
-$deno\
-$rust\
-$python\
 $direnv\
-$cmd_duration\
 $line_break\
 $character"""
-
-# OS module - displays operating system icon
-[os]
-format = "[$symbol]($style) "
-style = "bold white"
-disabled = false
-
-[os.symbols]
-Linux = "🐧"
-Macos = "🍎"
-Ubuntu = "🎯"
-Unknown = "❓"
-Windows = "🪟"
 
 # Directory module - current working directory
 [directory]
@@ -57,37 +37,6 @@ staged = "+${count}"
 renamed = "»${count}"
 deleted = "✘${count}"
 
-# Node.js module
-[nodejs]
-format = "[$symbol$version]($style) "
-symbol = "⬢ "
-style = "bold green"
-detect_extensions = ["js", "mjs", "cjs", "ts", "mts", "cts"]
-detect_files = ["package.json", ".node-version", ".nvmrc"]
-detect_folders = ["node_modules"]
-
-# Bun module
-[bun]
-format = "[$symbol$version]($style) "
-symbol = "🥟 "
-style = "bold yellow"
-detect_files = ["bun.lockb", "bunfig.toml", "bun.lock"]
-
-# Deno module
-[deno]
-format = "[$symbol$version]($style) "
-symbol = "🦕 "
-style = "bold blue"
-detect_files = ["deno.json", "deno.jsonc", "deno.lock", "mod.ts", "deps.ts"]
-
-# Rust module
-[rust]
-format = "[$symbol$version]($style) "
-symbol = "🦀 "
-style = "bold red"
-detect_files = ["Cargo.toml", "Cargo.lock"]
-detect_extensions = ["rs"]
-
 # Direnv module - shows if direnv is active
 [direnv]
 format = "[\\[$symbol $allowed\\]]($style) "
@@ -95,12 +44,6 @@ symbol = "direnv"
 style = "bold cyan"
 disabled = false
 detect_files = [".envrc"]
-
-# Command duration - shows execution time for long commands
-[cmd_duration]
-min_time = 5000  # Show if command takes more than 5 seconds
-format = "took [$duration]($style) "
-style = "bold yellow"
 
 # Character module - the prompt symbol
 [character]
