@@ -63,7 +63,7 @@
   },
   "plansDirectory": ".\/plans",
   "statusLine": {
-    "command": "~\/.claude\/statusline.sh",
+    "command": "if [ -x '\/Applications\/asuku.app\/Contents\/MacOS\/asuku-hook' ]; then '\/Applications\/asuku.app\/Contents\/MacOS\/asuku-hook' statusline | ~\/.claude\/statusline.sh; else ~\/.claude\/statusline.sh; fi",
     "padding": 0,
     "type": "command"
   }

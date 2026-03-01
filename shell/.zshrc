@@ -81,6 +81,17 @@ alias p="pnpm"
 # Deno aliases
 alias dccc="deno run -A jsr:@mizchi/ccdiscord"
 
+# Chrome debug mode (CDP)
+chrome-debug() {
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' \
+    --remote-debugging-port=9222 \
+    --remote-debugging-address=127.0.0.1 \
+    --user-data-dir="$HOME/.chrome-dev-profile" "$@"
+}
+
+# CDP CLI (browser console/screenshot via Chrome DevTools Protocol)
+alias cdp='bunx --bun @myerscarpenter/cdp-cli@2.3.0'
+
 # Interactive functions (fzf-based)
 # Load ghq/fzf functions and fcd from shared file
 [ -f "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/interactive.sh" ] && \
