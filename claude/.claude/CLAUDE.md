@@ -279,3 +279,50 @@ curl -s "http://127.0.0.1:<port>/src/components/Login/Login.vue"
 
 # テンプレート codegen、script 処理、HMR コードがそのまま返る
 ```
+
+## ブラウザコンソール・スクリーンショット取得（CDP経由）
+
+ユーザーが `chrome-debug` でChromeを起動している場合、CDP経由でブラウザのコンソールログやスクリーンショットを取得できる。`curl -s` でのモジュール取得と併用する。
+
+前提: Chrome debugモードが起動済みであること。確認方法:
+
+```bash
+# Chrome debugモードの起動確認（接続できなければユーザーに chrome-debug の起動を依頼）
+curl -s http://127.0.0.1:9222/json/version
+```
+
+```bash
+# タブ一覧を確認
+cdp tabs
+
+# コンソールログ取得（デフォルトは直近10件のみ）
+cdp console "タブ名"
+
+# 全件取得
+cdp console "タブ名" --all
+
+# エラー・警告のみ
+cdp console "タブ名" --type error --all
+cdp console "タブ名" --type warning --all
+
+# 詳細ログ（型・タイムスタンプ・ソース・オブジェクト展開付き）
+cdp console "タブ名" --all --verbose --inspect
+
+# リアルタイム収集（10秒間）
+cdp console "タブ名" --duration 10
+
+# スクリーンショット取得
+cdp screenshot "タブ名" --output /tmp/screenshot.png
+
+# JS実行
+cdp eval "タブ名" "document.title"
+
+# APIリクエスト監視（10秒間）
+cdp network "タブ名" --duration 10
+```
+
+注意:
+
+- `cdp` は `bunx --bun @myerscarpenter/cdp-cli@2.3.0` のエイリアス。alias未定義環境では `bunx --bun @myerscarpenter/cdp-cli@2.3.0 <subcommand>` で直接実行可能
+- Vue `[Vue warn]`、React開発モード警告も `console` コマンドで取得可能
+- スクリーンショットは `Read` ツールで画像として読み取り可能
