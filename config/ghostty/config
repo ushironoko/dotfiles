@@ -5,8 +5,7 @@
 # Theme (light:dark format for automatic switching)
 
 theme = light:Catppuccin Latte,dark:Catppuccin Mocha
-background-opacity = 0.9
-background-blur-radius = 30
+background-opacity = 1
 background = 1c1918
 
 # Font
@@ -34,25 +33,18 @@ shell-integration = detect
 copy-on-select = clipboard
 
 # Behavior
-
+# 
 quit-after-last-window-closed = true
-
-# Scrollbar (requires Ghostty 1.3.0+)
-
-scrollbar = never
-
-# Global keybind: Cmd+Esc to toggle visibility (show/hide all windows)
-
-keybind = global:super+escape=toggle_visibility
+keybind = global:shift+escape=toggle_visibility
 
 # Quick Terminal (Quake-style drop-down terminal)
 # Cmd+T to toggle quick terminal from anywhere
-
 keybind = global:super+t=toggle_quick_terminal
-quick-terminal-position = right
-quick-terminal-size = 70%
+quick-terminal-position = bottom
+quick-terminal-size = 90%
 quick-terminal-animation-duration = 0.1
 quick-terminal-autohide = true
+quick-terminal-keyboard-interactivity = on-demand
 
 # macos
 macos-titlebar-style = tabs
