@@ -1,7 +1,9 @@
 ---
 name: jj-workspace
-description: Jujutsu workspaceを使用した並行作業管理。実装開始時にworkspaceを作成し、完了時に削除する。
+description: "[DEPRECATED] Jujutsu workspaceを使用した並行作業管理。git-worktreeスキルへ移行してください。"
 ---
+
+> **⚠️ DEPRECATED**: このスキルは非推奨です。代わりに `git-worktree` スキルを使用してください。
 
 # Jujutsu Workspace Management (jwq)
 

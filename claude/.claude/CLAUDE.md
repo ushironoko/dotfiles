@@ -41,7 +41,7 @@
 - **NEVER** suppress errors without handling
 - **NEVER** commit to git until explicitly instructed by the user
 - **NEVER** run development server startup commands in any workflow
-- **ALWAYS** use `jj-workspace` skill for non-trivial changes (multiple files, new features, refactoring)
+- **ALWAYS** use `git-worktree` skill for non-trivial changes (multiple files, new features, refactoring)
 
 ## PR・コミットの安全規則（CRITICAL — 違反は情報漏洩インシデントに直結）
 
@@ -183,9 +183,9 @@ bun run tsc          # Check types
 bun run prepare
 ```
 
-## Jujutsu Workspace Workflow
+## Git Worktree Workflow
 
-**MUST**: 軽微な修正以外の実装作業は、必ずjj workspaceで作業ディレクトリを分離する。
+**MUST**: 軽微な修正以外の実装作業は、必ずgit worktreeで作業ディレクトリを分離する。
 
 ### 適用条件
 
@@ -200,16 +200,10 @@ bun run prepare
 
 ### ワークフロー
 
-1. `jj-workspace` スキルを参照してworkspaceを作成
-2. 作成したworkspaceディレクトリで作業を継続
+1. `git-worktree` スキルを参照してworktreeを作成
+2. 作成したworktreeディレクトリで作業を継続
 3. 作業完了後、ユーザーに削除確認
-4. 確認後、workspaceを削除してメインリポジトリに戻る
-
-### 補足: Colocatedモード
-
-- jj workspaceはcolocatedモードで作成され、git互換を維持
-- `jj`コマンドと`git`コマンドの両方が使用可能
-- 他のgit利用者との協業に支障なし
+4. 確認後、worktreeを削除してメインリポジトリに戻る
 
 ---
 
