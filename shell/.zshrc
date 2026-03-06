@@ -115,6 +115,11 @@ if [ -d "$HOME/.local/bin" ] ; then
     PATH="$HOME/.local/bin:$PATH"
 fi
 
+# bit (mizchi/bit-vcs)
+if [ -d "$HOME/.moon/bin" ] ; then
+    PATH="$HOME/.moon/bin:$PATH"
+fi
+
 # mise - universal version manager
 # Always activate mise to ensure shims are in PATH
 eval "$(mise activate zsh)"
