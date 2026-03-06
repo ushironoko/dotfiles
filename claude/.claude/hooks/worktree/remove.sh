@@ -14,7 +14,8 @@ BRANCH=$(git worktree list --porcelain | awk -v path="$WORKTREE_PATH" '
 ')
 
 if [ -n "$BRANCH" ]; then
-  gwq remove -f -b "$BRANCH" >&2 || true
+  # gwq失敗時はgit worktree removeにフォールバック
+  gwq remove -f -b "$BRANCH" >&2 || git worktree remove --force "$WORKTREE_PATH" >&2 || true
 else
   # ブランチ名が取れない場合は git worktree remove で直接削除
   git worktree remove --force "$WORKTREE_PATH" >&2 || true

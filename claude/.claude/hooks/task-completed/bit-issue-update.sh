@@ -30,12 +30,13 @@ command -v bit &>/dev/null || exit 0
 ISSUE_LINE=$(GIT_DIR="$MAIN_GIT" bit issue list --open 2>/dev/null | grep -F "[task:${BRANCH}:${TASK_ID}]" || true)
 [ -z "$ISSUE_LINE" ] && exit 0
 
-# issue IDを抽出
-ISSUE_ID=$(printf '%s' "$ISSUE_LINE" | head -1 | sed 's/^#\([^ ]*\).*/\1/')
-[ -z "$ISSUE_ID" ] && exit 0
+# 全マッチのissue IDを抽出し、それぞれ comment + close
+printf '%s\n' "$ISSUE_LINE" | while IFS= read -r line; do
+  ISSUE_ID=$(printf '%s' "$line" | sed 's/^#\([^ ]*\).*/\1/')
+  [ -z "$ISSUE_ID" ] && continue
 
-# comment add + close
-GIT_DIR="$MAIN_GIT" bit issue comment add "$ISSUE_ID" \
-  --body "Task completed: ${TASK_SUBJECT}" 2>/dev/null || true
+  GIT_DIR="$MAIN_GIT" bit issue comment add "$ISSUE_ID" \
+    --body "Task completed: ${TASK_SUBJECT}" 2>/dev/null || true
 
-GIT_DIR="$MAIN_GIT" bit issue close "$ISSUE_ID" 2>/dev/null || true
+  GIT_DIR="$MAIN_GIT" bit issue close "$ISSUE_ID" 2>/dev/null || true
+done
