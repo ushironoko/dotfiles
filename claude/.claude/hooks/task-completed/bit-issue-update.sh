@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Required dependencies: jq, git, bit (bit is optional — script exits gracefully if missing)
+for cmd in jq git; do
+  command -v "$cmd" &>/dev/null || exit 0
+done
+
 INPUT=$(cat)
 TASK_ID=$(printf '%s' "$INPUT" | jq -r '.task_id // empty')
 TASK_SUBJECT=$(printf '%s' "$INPUT" | jq -r '.task_subject // empty')
@@ -22,7 +27,7 @@ command -v bit &>/dev/null || exit 0
 
 # [task:<branch>:<task_id>] を含むopen issueを検索
 # bit issue list出力形式: "#<id> [open] <title>"
-ISSUE_LINE=$(GIT_DIR="$MAIN_GIT" bit issue list --open 2>/dev/null | grep "\[task:${BRANCH}:${TASK_ID}\]" || true)
+ISSUE_LINE=$(GIT_DIR="$MAIN_GIT" bit issue list --open 2>/dev/null | grep -F "[task:${BRANCH}:${TASK_ID}]" || true)
 [ -z "$ISSUE_LINE" ] && exit 0
 
 # issue IDを抽出

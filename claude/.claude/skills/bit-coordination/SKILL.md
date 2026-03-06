@@ -269,7 +269,7 @@ GIT_DIR="$MAIN_GIT" bit issue comment add <id> --body "Target Files added: path/
 
 `TaskUpdate(task_id, completed)` を呼ぶと TaskCompleted hookが発火し、bit issueを自動でcomment + closeする:
 
-- hookは `[task:<task_id>]` をtitleに含むopen issueを検索し、comment add + closeを実行する
+- hookは `[task:<branch>:<task_id>]` をtitleに含むopen issueを検索し、comment add + closeを実行する
 - hookは非同期（async）実行のためメインagentをブロックしない
 - **推奨フロー**: `TaskUpdate` で完了マーク → hookが自動close → worktree削除
 
