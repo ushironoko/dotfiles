@@ -200,6 +200,11 @@ if [ -d "$HOME/.local/bin" ] ; then
     PATH="$HOME/.local/bin:$PATH"
 fi
 
+# bit (mizchi/bit-vcs)
+if [ -d "$HOME/.moon/bin" ] ; then
+    PATH="$HOME/.moon/bin:$PATH"
+fi
+
 # direnv hook
 eval "$(direnv hook bash)"
 
