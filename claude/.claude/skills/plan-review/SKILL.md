@@ -154,9 +154,10 @@ Plan File: <path>
   - Rust プロジェクト: ✓ (Cargo.toml 検出)
   - codex CLI: ✓ (利用可能)
   - リファクタリング系: ✗
+  - テスト基盤: ✓ (vitest.config.ts 検出)
 
-起動するレビュワー: rust-reviewer, codex-reviewer
-レビュー実行中...（2エージェント並列）
+起動するレビュワー: rust-reviewer, codex-reviewer, tdd-reviewer
+レビュー実行中...（3エージェント並列）
 
 === Plan Review 結果 ===
 
@@ -164,6 +165,9 @@ Plan File: <path>
 [フィードバック内容]
 
 --- codex-reviewer ---
+[フィードバック内容]
+
+--- tdd-reviewer ---
 [フィードバック内容]
 
 === 総合サマリ ===

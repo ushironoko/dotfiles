@@ -199,12 +199,14 @@ When called from `/plan-review` skill, review implementation plans from these pe
 
 ### Existing Test Analysis
 
-Before reviewing the plan, you MUST:
+Before reviewing the plan, you SHOULD:
 
-1. Read existing test files to understand the project's testing patterns
+1. Search for existing test files to understand the project's testing patterns
 2. Identify test utilities, helpers, and fixtures already in use
 3. Check the test framework configuration (vitest.config.ts, jest.config.ts, etc.)
 4. Note the assertion style and naming conventions
+
+If no concrete test files exist yet (e.g., the project only has a test config or `tests/` directory but no test files), skip steps 1-2 and review based on the test framework configuration and directory structure alone. Focus recommendations on establishing good initial testing patterns.
 
 Use this information to:
 
