@@ -1,52 +1,4 @@
 {
-  "alwaysThinkingEnabled": true,
-  "enableAllProjectMcpServers": true,
-  "enabledPlugins": {
-    "clangd-lsp@claude-plugins-official": true,
-    "frontend-design@claude-plugins-official": true,
-    "pyright-lsp@claude-plugins-official": true,
-    "rust-analyzer-lsp@claude-plugins-official": true,
-    "swift-lsp@claude-plugins-official": true,
-    "typescript-lsp@claude-plugins-official": true
-  },
-  "hooks": {
-    "Notification": [
-      {
-        "hooks": [
-          {
-            "async": true,
-            "command": "\/Applications\/asuku.app\/Contents\/MacOS\/asuku-hook notification",
-            "type": "command"
-          }
-        ],
-        "matcher": ".*"
-      }
-    ],
-    "PermissionRequest": [
-      {
-        "hooks": [
-          {
-            "command": "\/Applications\/asuku.app\/Contents\/MacOS\/asuku-hook permission-request",
-            "timeout": 300,
-            "type": "command"
-          }
-        ],
-        "matcher": ".*"
-      }
-    ],
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "command": "jq -r '.tool_input.file_path | select(endswith(\".js\") or endswith(\".ts\"))' | ~\/.claude\/hooks\/post_tool_use\/coding_cycle.sh",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Write|Edit|MultiEdit"
-      }
-    ]
-  },
   "permissions": {
     "allow": [
       "Bash(pnpm:*)",
@@ -55,16 +7,119 @@
       "Bash(find:*)",
       "Bash(gh:*)",
       "Bash(mise:*)",
+      "Bash(bit issue init:*)",
+      "Bash(bit issue create:*)",
+      "Bash(bit issue list:*)",
+      "Bash(bit issue view:*)",
+      "Bash(bit issue get:*)",
+      "Bash(bit issue update:*)",
+      "Bash(bit issue close:*)",
+      "Bash(bit issue reopen:*)",
+      "Bash(bit issue comment:*)",
+      "Bash(bit issue search:*)",
       "Read(**)",
-      "Read(~\/.bashrc)",
-      "Read(~\/.zshrc)",
+      "Read(~/.bashrc)",
+      "Read(~/.zshrc)",
       "mcp__mcpdoc"
+    ],
+    "deny": [
+      "Bash(bit issue claim:*)",
+      "Bash(bit issue unclaim:*)",
+      "Bash(bit issue claims:*)",
+      "Bash(bit issue watch:*)",
+      "Bash(bit issue import:*)",
+      "Bash(bit pr import:*)",
+      "Bash(bit relay:*)",
+      "Bash(bit clone relay+*)"
     ]
   },
-  "plansDirectory": ".\/plans",
+  "enableAllProjectMcpServers": true,
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/asuku.app/Contents/MacOS/asuku-hook notification",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/asuku.app/Contents/MacOS/asuku-hook permission-request",
+            "timeout": 300
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path | select(endswith(\".js\") or endswith(\".ts\"))' | ~/.claude/hooks/post_tool_use/coding_cycle.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/worktree/create.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "WorktreeRemove": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/worktree/remove.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/task-completed/bit-issue-update.sh",
+            "async": true,
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  },
   "statusLine": {
-    "command": "~\/.claude\/statusline.sh",
-    "padding": 0,
-    "type": "command"
-  }
+    "type": "command",
+    "command": "'/Applications/asuku.app/Contents/MacOS/asuku-hook' statusline | ~/.claude/statusline.sh",
+    "padding": 0
+  },
+  "enabledPlugins": {
+    "clangd-lsp@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
+    "pyright-lsp@claude-plugins-official": true,
+    "rust-analyzer-lsp@claude-plugins-official": true,
+    "swift-lsp@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true
+  },
+  "alwaysThinkingEnabled": true,
+  "plansDirectory": "./plans",
+  "effortLevel": "high"
 }
