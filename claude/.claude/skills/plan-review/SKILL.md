@@ -44,10 +44,23 @@ Readツールで検出したPlanファイルの内容を取得。
 | Rust プロジェクト  | `Cargo.toml` の存在、または `*.rs` ファイルの存在 |
 | codex CLI 利用可   | `which codex` が成功するか                        |
 | リファクタリング系 | Plan内容に以下のキーワードを含むか検査            |
+| テスト基盤あり     | テストファイル・テスト設定の存在を検査            |
 
 **リファクタリング系キーワード**（Plan本文を検査）:
 
 - refactor / リファクタリング / 重複 / duplication / DRY / 共通化 / 抽出 / extract
+
+**テスト基盤の検出方法**:
+
+以下の **プライマリシグナル** のうち少なくとも1つが存在する場合に「テスト基盤あり」と判定する：
+
+- テストファイルの存在: `*.test.ts`, `*.spec.ts`, `*.test.tsx`, `*.spec.tsx`, `*.test.js`, `*.spec.js`, `*.test.jsx`, `*.spec.jsx`, `*_test.go`, `*_test.rs`
+- テスト設定ファイルの存在: `vitest.config.*`, `jest.config.*`, `playwright.config.*`, `.mocharc.*`
+- テスト用ディレクトリの存在: `tests/`, `__tests__/`, `test/`
+
+**補助シグナル**（単独ではトリガーしない、プライマリシグナルと併用で確度を高める）:
+
+- package.json に `test` スクリプトが定義されている
 
 #### 2b: レビュワーマッチングルール
 
@@ -58,6 +71,7 @@ Readツールで検出したPlanファイルの内容を取得。
 | Rustプロジェクトである             | `rust-reviewer`      |
 | codex CLI が利用可能               | `codex-reviewer`     |
 | リファクタリング系キーワードを含む | `similarity`         |
+| テスト基盤が存在する               | `tdd-reviewer`       |
 
 - 複数条件に該当する場合は**すべて**起動する（並列）
 - **どの条件にも該当しない場合**: 利用可能なレビュワーがない旨をユーザーに通知し、手動指定を促す
@@ -71,8 +85,9 @@ Readツールで検出したPlanファイルの内容を取得。
   - Rust プロジェクト: ✓ (Cargo.toml 検出)
   - codex CLI: ✓ (利用可能)
   - リファクタリング系: ✗
+  - テスト基盤: ✓ (vitest.config.ts 検出)
 
-起動するレビュワー: rust-reviewer, codex-reviewer
+起動するレビュワー: rust-reviewer, codex-reviewer, tdd-reviewer
 ```
 
 ### Phase 3: 並列レビュー実行
@@ -119,11 +134,12 @@ Plan File: <path>
 
 ## レビュワー一覧
 
-| エージェント名 | 自動選択条件                         | 専門領域                             |
-| -------------- | ------------------------------------ | ------------------------------------ |
-| rust-reviewer  | Cargo.toml / .rs ファイルの存在      | Rustコードのパフォーマンス・保守性   |
-| codex-reviewer | codex CLI が利用可能                 | 汎用的なアーキテクチャ・設計レビュー |
-| similarity     | Plan内にリファクタリング系キーワード | コード重複分析・リファクタリング提案 |
+| エージェント名 | 自動選択条件                                                                 | 専門領域                                              |
+| -------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------- |
+| rust-reviewer  | Cargo.toml / .rs ファイルの存在                                              | Rustコードのパフォーマンス・保守性                    |
+| codex-reviewer | codex CLI が利用可能                                                         | 汎用的なアーキテクチャ・設計レビュー                  |
+| similarity     | Plan内にリファクタリング系キーワード                                         | コード重複分析・リファクタリング提案                  |
+| tdd-reviewer   | テストファイル・テスト設定・テスト用ディレクトリの存在（プライマリシグナル） | TDD準拠・Testing Trophy・モック最小化・テスト重複検知 |
 
 ## 使用例
 
@@ -138,9 +154,10 @@ Plan File: <path>
   - Rust プロジェクト: ✓ (Cargo.toml 検出)
   - codex CLI: ✓ (利用可能)
   - リファクタリング系: ✗
+  - テスト基盤: ✓ (vitest.config.ts 検出)
 
-起動するレビュワー: rust-reviewer, codex-reviewer
-レビュー実行中...（2エージェント並列）
+起動するレビュワー: rust-reviewer, codex-reviewer, tdd-reviewer
+レビュー実行中...（3エージェント並列）
 
 === Plan Review 結果 ===
 
@@ -148,6 +165,9 @@ Plan File: <path>
 [フィードバック内容]
 
 --- codex-reviewer ---
+[フィードバック内容]
+
+--- tdd-reviewer ---
 [フィードバック内容]
 
 === 総合サマリ ===
