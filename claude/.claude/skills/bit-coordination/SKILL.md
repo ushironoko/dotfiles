@@ -1,197 +1,120 @@
 ---
 name: bit-coordination
-description: "worktreeのライフサイクル管理とbit issueによるpeer-to-peer作業公開。worktreeで作業するすべてのセッションがTarget Filesを宣言し、セッション間のファイル競合を回避する。"
+description: "Manage worktree lifecycle and declare Target Files via bit issue for cross-session file conflict avoidance. Use this skill when starting implementation work (after plan mode, when creating a new branch, or any non-trivial code change across multiple files). Also use when the user mentions worktree, bit issue, session coordination, or parallel work."
 ---
 
-# Bit Coordination: Worktree + Peer-to-Peer 作業公開
+# Overview
 
-軽微な修正以外の実装作業はworktreeで作業ディレクトリを分離し、bit issueで作業範囲を公開する。このスキルはworktreeで作業するすべてのセッションに適用される。orchestrator/workerの区別はない。
+Declare work scope and Target Files via bit issue + git worktree so that parallel Claude Code sessions can see each other's file ownership and avoid conflicts.
 
-各セッションがbit issueでTarget Filesを宣言し、他セッションから作業範囲が見えるようにする。git worktreeは同一の `.git` を共有するため、どのworktreeからも同じbit issueが即座に参照・更新できる。
+Every session working in a worktree creates a bit issue listing its Target Files. Since all worktrees share the same `.git`, any worktree can instantly read any other session's issues.
 
-### アーキテクチャ
-
-```
-┌──────────────────────────────────────────────┐
-│            .git (全worktree共有)              │
-│      refs/notes/bit-hub ← bit issue データ   │
-└──────┬──────────────────────────┬─────────────┘
-       │                          │
-┌──────┴──────┐            ┌──────┴──────┐
-│ Session A   │            │ Session B   │
-│ (独立起動)  │            │ (独立起動)  │
-│             │            │             │
-│ bit issue   │◄──────────►│ bit issue   │
-│ create/list │  共有参照  │ create/list │
-└─────────────┘            └─────────────┘
-```
-
-### 棲み分け
-
-| 仕組み      | 用途                                         | スコープ                       |
-| ----------- | -------------------------------------------- | ------------------------------ |
-| agent-teams | タスク分配・進捗管理・チーム内メッセージング | リーダーが起動したセッション内 |
-| bit issue   | Target Files宣言・ファイル競合回避           | 全worktreeセッション横断       |
-
-### セッション状態遷移
+### Session Lifecycle
 
 ```
   EnterWorktree           bit issue create
  ┌──────────┐          ┌──────────────┐
  │ worktree │─────────►│ issue create │
- │  作成    │          │ (Target宣言) │
+ │  create  │          │ (Target decl)│
  │ (hook)   │          └──────┬───────┘
  └──────────┘                 │
-                    issue list (レース対策)
+                    issue list (race check)
                               │
                        ┌──────▼───────┐
-                  ┌───►│   作業中     │◄───┐
+                  ┌───►│   working    │◄───┐
                   │    └──────┬───────┘    │
                   │           │            │
-            スコープ変更    完了前確認   重複検知
-            (§3再実行)     (issue list)  → 調整
+            scope change   pre-close    overlap
+            (re-run §3)    (issue list) → adjust
                   │           │            │
                   └───────────┤            │
-                              │            │
-                       ┌──────▼───────┐    │
-                       │ issue close  │────┘
+                              │
+                       ┌──────▼───────┐
+                       │ issue close  │
                        └──────┬───────┘
                               │
                        ┌──────▼───────┐
-                       │ worktree削除 │
+                       │ worktree rm  │
                        │ (hook)       │
                        └──────────────┘
 ```
 
-### bit issue ライフサイクル
+## 0. Prerequisites
 
-```
- create                  comment add             close
-   │                     (進捗/調整)               │
-   ▼                         │                     ▼
-┌──────┐  comment add   ┌───▼──┐  comment add  ┌──────┐
-│ open │────────────────►│ open │───────────────►│closed│
-│      │  (Target追加)   │      │  (完了サマリ) │      │
-└──────┘                 └──────┘               └──────┘
-                             │
-                      ┌──────▼───────┐
-                      │ orphan検知時 │
-                      │ → 除外扱い  │
-                      └──────────────┘
+### GIT_DIR is required for bit commands inside a worktree
 
- ※ issueの状態は open / closed の2値のみ。
-   commentで作業内容の変遷を記録する。
-```
+In a git worktree, `.git` is a file (pointer to the main `.git` directory), not a directory. The bit CLI expects a `.git` directory, so running bit commands directly inside a worktree fails with `"path exists and is not dir: ./.git"`.
 
-## 0. 前提条件
-
-### worktreeのライフサイクルはhookが管理する
-
-worktreeの作成・削除は Claude Code の `EnterWorktree` / `WorktreeRemove` hookが自動実行する。gwqコマンドを直接実行する必要はない。
-
-| hook           | 実行内容                                       |
-| -------------- | ---------------------------------------------- |
-| WorktreeCreate | `gwq add -b <name>` → worktree絶対パス返却     |
-| WorktreeRemove | ブランチ逆引き → `gwq remove -f -b` で完全削除 |
-
-worktree作成後は依存関係をインストールする:
+Set `GIT_DIR` to the main repo's `.git` before every bit command:
 
 ```bash
-# lock fileを検出してインストール
-if [ -f "bun.lockb" ]; then
-    bun install
-elif [ -f "pnpm-lock.yaml" ]; then
-    pnpm install
+MAIN_GIT="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')/.git"
+GIT_DIR="$MAIN_GIT" bit issue <subcommand> ...
+```
+
+All subsequent sections assume `MAIN_GIT` has been set. It only needs to be computed once per session.
+
+### Worktree lifecycle is managed by hooks
+
+Worktree creation/removal is handled by Claude Code's `EnterWorktree` / `WorktreeRemove` hooks — no need to run gwq commands directly.
+
+| Hook           | Action                                          |
+| -------------- | ----------------------------------------------- |
+| WorktreeCreate | `gwq add -b <name>` → returns worktree abs path |
+| WorktreeRemove | branch lookup → `gwq remove -f -b` full cleanup |
+
+After worktree creation, install dependencies based on the lock file:
+
+```bash
+if [ -f "bun.lockb" ]; then bun install
+elif [ -f "pnpm-lock.yaml" ]; then pnpm install
 fi
 ```
 
-### bit存在チェック
+### CRITICAL: Prohibited commands
+
+These commands communicate via the bit relay server. Running them on a private repo leaks repository content externally. **Never execute them.**
+
+| Prohibited                                         | Reason                        |
+| -------------------------------------------------- | ----------------------------- |
+| `bit issue claim` / `unclaim` / `claims` / `watch` | relay-based exclusive control |
+| `bit issue import` / `bit pr import`               | GitHub API access             |
+| `bit relay serve` / `bit relay sync`               | relay publishing              |
+| `bit clone relay+*`                                | relay-based clone             |
+
+Also denied in `settings.json` `permissions.deny`.
+
+### Allowed commands (local only)
+
+`bit issue init` / `create` / `list` / `view` / `update` / `close` / `reopen` / `comment add` / `comment list` / `search`
+
+## 1. Read the Plan File
+
+Worktrees have isolated filesystems. Plan files are `.gitignore`d, so `git show` won't work. Read from the main repo's absolute path.
+
+1. If the plan file path is still in the session context, use it directly
+2. Otherwise, find the latest file in the plans directory (default: `./plans`) relative to the main repo
 
 ```bash
-command -v bit &>/dev/null && echo "bit: available" || echo "bit: not found"
-```
-
-- **不在時**: 単独作業モード。worktreeで作業し、「bit未検出のため協調はスキップ」と通知。以降のbit関連プロトコルはすべてスキップ。
-- **存在時**: `bit issue init 2>/dev/null`（初回のみ）を実行し、以降のプロトコルに従う。
-
-### CRITICAL: worktree内でのbit操作には GIT_DIR が必要
-
-git worktreeでは `.git` がディレクトリではなくファイル（メイン `.git` へのポインタ）になる。bit CLIは `.git` ディレクトリを前提としているため、**worktree内でbit issueコマンドをそのまま実行するとエラーになる**。
-
-```bash
-# NG: worktree内でそのまま実行
-bit issue list --open
-# → "path exists and is not dir: ./.git"
-
-# OK: GIT_DIR でメインリポジトリの .git を指定
-GIT_DIR="<main-repo-path>/.git" bit issue list --open
-```
-
-メインリポジトリのパスは `git worktree list` の最初の行から取得できる:
-
-```bash
-MAIN_GIT="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')/.git"
-GIT_DIR="$MAIN_GIT" bit issue create ...
-```
-
-**注意**: bit CLIは日本語の title/body が文字化けする場合がある。issue内容は英語で記述するか、日本語が必要な場合はASCII以外の部分が化ける可能性を許容する。
-
-### CRITICAL: 使用禁止コマンド
-
-以下のコマンドはrelay server経由でネットワーク通信を行う。private repoで実行するとリポジトリ内容が外部に漏洩するため、**絶対に実行してはならない**:
-
-| 禁止コマンド                                       | 理由                             |
-| -------------------------------------------------- | -------------------------------- |
-| `bit issue claim` / `unclaim` / `claims` / `watch` | relay server経由の排他制御・監視 |
-| `bit issue import` / `bit pr import`               | GitHub APIへの接続               |
-| `bit relay serve` / `bit relay sync`               | リポジトリ内容のrelay公開・同期  |
-| `bit clone relay+*`                                | relay経由のクローン              |
-
-`settings.json` の `permissions.deny` でも禁止済み。
-
-### 使用可能コマンド（ローカル操作のみ）
-
-- `bit issue init` / `create` / `list` / `view` / `update` / `close` / `reopen`
-- `bit issue comment add` / `comment list`
-- `bit issue search`
-
-## 1. Planファイルの取得
-
-worktreeはmainとファイルシステムが分離される。planファイルは `.gitignore` 対象のためgit showでは取得できない。以下の手順でメインリポジトリ上のplanファイルを読み取る。
-
-1. セッション中にplanファイルのパスが残っていればそれを使う
-2. 残っていなければ、settings.jsonの `plansDirectory`（デフォルト: `./plans`）を参照し、メインリポジトリの絶対パスと組み合わせて最新ファイルを特定する
-
-```bash
-# メインリポジトリのplansディレクトリから最新ファイルを取得
 ls -t <main-repo-path>/plans/*.md 2>/dev/null | head -1
 ```
 
-planファイルが存在しない場合（plan modeを使わなかった軽微な作業）はPlanセクションを省略する。
+If no plan file exists (minor work without plan mode), omit the Plan section from the issue body.
 
-**重要**: planファイルの読み取りは **worktreeに移動する前** に行うのが最も確実。移動後でもメインリポジトリの絶対パスでアクセスは可能。
+**Important**: Reading the plan file **before entering the worktree** is the most reliable approach. After entering, you can still access it via the main repo's absolute path.
 
-## 2. 作業公開プロトコル
+## 2. Work Declaration Protocol
 
-worktree作成直後に `TaskCreate` でタスクを作成し、返された `task_id` をbit issue titleに埋め込む。これにより TaskCompleted hook がbit issueを自動特定・closeできる。
+After worktree creation, create a `TaskCreate` task, then embed the returned `task_id` in the bit issue title. This lets the TaskCompleted hook auto-identify and close the issue later.
 
-### TaskCreate → bit issue create の手順
+### TaskCreate → bit issue create
 
-1. `TaskCreate` ツールでタスクを作成し、`task_id` を取得する
-2. bit issue create の `--title` に `[task:<branch-name>:<task_id>]` を埋め込む
+1. Call `TaskCreate` tool → get `task_id`
+2. Embed `[task:<branch-name>:<task_id>]` in `--title`
 
-`<branch-name>` を含めることで、複数セッションが同じ連番task_idを持っても衝突しない。
-
-agent-teamsでチームメイトとして起動された場合、リーダーが作成した `task_id` がセッションに存在するので、それを使う。
-
-worktree内で実行する場合は `GIT_DIR` を指定する（§0参照）。
+Including `<branch-name>` prevents collision when multiple sessions have the same sequential task_id.
 
 ```bash
-# GIT_DIRの取得（worktree内で実行する場合）
-MAIN_GIT="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')/.git"
-
-# 1. TaskCreateでタスク作成 → task_id取得（ツール呼び出し）
-# 2. bit issue createでbranch名+task_idをtitleに埋め込む
 GIT_DIR="$MAIN_GIT" bit issue create \
   --title "[task:<branch-name>:<task_id>] <task summary in English>" \
   --label "session:<branch-name>" \
@@ -212,226 +135,78 @@ GIT_DIR="$MAIN_GIT" bit issue create \
 
 ## Plan
 
-<planファイルの内容を完全コピー>
+<full plan file content>
 BODY
 )"
 ```
 
-- branch名でセッションを識別する（pid/agent-idは不要）
-- issueのopen/closedで作業状態を管理する
-- **Planセクションにはplanファイルの全文を含める**。セッション再開時に唯一のコンテキスト復元手段となる
-- **worktreeパスは絶対パスで記載する**。orphan検知やセッション再開時のcd先として使う
+**Why include the full plan?** It becomes the only context restoration source when resuming a session.
 
-## 3. 他セッション認識プロトコル
+**Why use absolute paths for worktree?** Needed for orphan detection and as the `cd` target on session resume.
 
-以下の3つのタイミングで他セッションの作業範囲を確認する:
+## 3. Cross-Session Awareness Protocol
 
-1. **作業開始時**: issue create直後に `bit issue list --open` で再確認（同時宣言レース対策）
-2. **スコープ変更時**: 予定外ファイル変更が必要になった場合
-3. **作業完了前**: close前の最終確認
+Check other sessions' Target Files at these three points:
 
-### 同時宣言レース対策
-
-2セッションがほぼ同時にissueを作成すると、双方が「重複なし」と判断するリスクがある。create後に必ず `bit issue list --open` で再確認し、作成直後に他セッションのissueが増えていたら重複検知を再実行する。
+1. **After issue create**: Run `bit issue list --open` immediately (race condition mitigation — two sessions creating issues simultaneously may both see "no overlap")
+2. **On scope change**: When you need to modify files not in your original Target Files
+3. **Before close**: Final check before completing
 
 ```bash
-# worktree内ではGIT_DIR指定（§0参照）
-GIT_DIR="$MAIN_GIT" bit issue list --open     # 全openのissue一覧
-GIT_DIR="$MAIN_GIT" bit issue view <id>       # Target Files確認
+GIT_DIR="$MAIN_GIT" bit issue list --open
+GIT_DIR="$MAIN_GIT" bit issue view <id>
 ```
 
-## 4. 重複検知・自律調整
+## 4. Overlap Detection & Autonomous Adjustment
 
-### 判断マトリクス
+### Decision Matrix
 
 ```
-重複度 = |自分のTarget Files ∩ 他のTarget Files| / |自分のTarget Files|
+overlap = |my Target Files ∩ other Target Files| / |my Target Files|
 
-- 0%:       そのまま作業
-- 50%未満:  重複ファイルを除外、comment記録
-- 50%以上:  ユーザーに確認（peer-to-peerなのでorchestratorはいない）
+- 0%:      proceed
+- <50%:    exclude overlapping files, record in comment
+- ≥50%:    ask user (no orchestrator in peer-to-peer model)
 ```
 
-### Target Files動的更新
+### Dynamic Target Files Update
 
-- 他セッション管轄のファイル → 変更を避け別アプローチを検討
-- 誰の管轄でもないファイル → Target Filesに追加し、commentに記録
+- Files owned by another session → avoid modifying, find alternative approach
+- Files owned by nobody → add to your Target Files, record in comment
 
 ```bash
 GIT_DIR="$MAIN_GIT" bit issue comment add <id> --body "Target Files added: path/to/new-file.ts (modify) - reason: ..."
 ```
 
-## 5. 作業完了プロトコル
+## 5. Completion Protocol
 
-以下の順序で完了処理を行う。bit issue close → worktree削除の順序を厳守する（issueがopenのまま削除されるとorphanになる）。
+Close the issue **before** removing the worktree. Reversing this order creates orphan issues (issue stays open but its worktree is gone).
 
-### TaskCompleted hookによる自動close
+### Recommended: auto-close via TaskCompleted hook
 
-`TaskUpdate(task_id, completed)` を呼ぶと TaskCompleted hookが発火し、bit issueを自動でcomment + closeする:
+Call `TaskUpdate(task_id, completed)` → the TaskCompleted hook fires and auto-closes the matching bit issue (finds the open issue with `[task:<branch>:<task_id>]` in its title).
 
-- hookは `[task:<branch>:<task_id>]` をtitleに含むopen issueを検索し、comment add + closeを実行する
-- hookは非同期（async）実行のためメインagentをブロックしない
-- **推奨フロー**: `TaskUpdate` で完了マーク → hookが自動close → worktree削除
+The hook runs async, so it doesn't block the main agent. After the hook fires, the worktree can be removed.
 
-### フォールバック（hookが失敗した場合）
+### Fallback: manual close
 
-hookが失敗してもエラーにはならない（async実行）。issueがopenのまま残った場合は手動でcloseする:
+If the hook fails (async, so no error is raised), close manually:
 
 ```bash
-# worktree内ではGIT_DIR指定（§0参照）
-
-# 1. 完了サマリを記録
 GIT_DIR="$MAIN_GIT" bit issue comment add <id> --body "Done: <summary of changes>"
-
-# 2. issueをclose
 GIT_DIR="$MAIN_GIT" bit issue close <id>
-
-# 3. worktree削除（WorktreeRemove hookが自動実行）
+# WorktreeRemove hook handles gwq remove
 ```
 
-## 6. agent-teamsとの併用
+## 6. Error Handling
 
-- **agent-teams**: セッション内タスク管理（共有タスクリスト + メッセージング）
-- **bit issue**: セッション間Target Files宣言（ファイル競合回避）
-- **併用ルール**: agent-teamsのチームメイトもworktree作業時はbit issueを作成する。外部の独立セッションからもチームメイトの作業が見えるようになる。
+| Situation         | Response                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------------- |
+| bit command fails | Notify user: "Coordination disabled — overlap detection is not working." Continue work.           |
+| bit not installed | Solo mode — notify user that coordination is skipped.                                             |
+| Orphan issue      | Check `gwq list` for worktree existence. If no matching worktree, exclude from overlap detection. |
+| Worktree trouble  | `gwq list` (list all), `gwq prune` (clean stale refs), `gwq status` (check changes)               |
 
-### task_id連携
+## Worked Examples
 
-- チームメイトがbit issue createする際、リーダーから渡された `task_id` をtitleに `[task:<branch-name>:<task_id>]` として埋め込む
-- チームメイトのターン終了時にもTaskCompletedが自動発火し、対応するbit issueがcloseされる
-
-## 7. 動作例
-
-### 例1: 単独セッション（基本フロー）
-
-他セッションがいない場合でも、後から別セッションが起動する可能性があるため必ずissueを作成する。
-
-```
-Session A:
-  # 1. worktree移動前にplanファイルを読み取る
-  Read: /Users/user/project/plans/add-validation.md
-  → planの内容を保持
-
-  # 2. EnterWorktreeでworktree作成（hookがgwq add -bを実行）
-  → /Users/user/.worktrees/feat/add-validation に移動
-
-  # 3. 依存関係インストール
-  bun install
-
-  # 4. GIT_DIR取得 + issue作成（plan全文を含む）
-  MAIN_GIT="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')/.git"
-  GIT_DIR="$MAIN_GIT" bit issue create \
-    --title "[task:feat/add-validation:1] Add input validation" \
-    --label "session:feat/add-validation" \
-    --body "
-      ## Session Info
-      - branch: feat/add-validation
-      - worktree: /Users/user/.worktrees/feat/add-validation
-      - main repo: /Users/user/project
-
-      ## Target Files
-      - src/utils/validate.ts (create)
-      - src/commands/install.ts (modify)
-
-      ## Task Description
-      Add input validation for CLI commands
-
-      ## Plan
-      (planファイルの全文)
-    "
-
-  # 5. 他セッション確認
-  GIT_DIR="$MAIN_GIT" bit issue list --open
-  → #1 Add input validation [session:feat/add-validation]  ← 自分のみ
-
-  ... 作業 ...
-
-  # セッション再開時: GIT_DIR="$MAIN_GIT" bit issue view 1 で全コンテキスト復元可能
-
-  # 6. 完了 → close → worktree削除
-  GIT_DIR="$MAIN_GIT" bit issue comment add 1 --body "Done: validate.ts created, install.ts updated"
-  GIT_DIR="$MAIN_GIT" bit issue close 1
-  # WorktreeRemove hookがgwq removeを実行
-```
-
-### 例2: 2セッション並行（重複なし）
-
-Target Filesが被らないため、互いに干渉せず作業できる。
-
-```
-Session A:                                Session B:
-  bit issue create                          bit issue create
-    "Improve CLI parser"                      "Increase test coverage"
-    Target: src/cli/parser.ts                 Target: tests/core/*.test.ts
-    → issue #2                                → issue #3
-       │                                         │
-  bit issue list --open                     bit issue list --open
-  → #2 CLI parser (self)                    → #2 CLI parser (Session A)
-  → #3 test coverage (Session B)            → #3 test coverage (self)
-       │                                         │
-  overlap = 0% → proceed                    overlap = 0% → proceed
-       │                                         │
-  bit issue close #2                        bit issue close #3
-```
-
-### 例3: 2セッション並行（重複あり → 調整）
-
-Target Filesが被った場合のセッション側の判断と調整。
-
-```
-Session A:                                Session B:
-  bit issue create                          bit issue create
-    "Unify error handling"                    "Improve logging"
-    Target:                                   Target:
-      src/core/symlink-manager.ts               src/core/symlink-manager.ts  ← overlap!
-      src/core/backup-manager.ts                src/utils/logger.ts
-    → issue #4                                → issue #5
-       │                                         │
-  bit issue list --open                     bit issue list --open
-  → #4 (self), #5 (Session B)              → #4 (Session A), #5 (self)
-       │                                         │
-  bit issue view #5                         bit issue view #4
-  → symlink-manager.ts overlaps!            → symlink-manager.ts overlaps!
-       │                                         │
-  overlap = 1/2 = 50%                       overlap = 1/2 = 50%
-  → ask user                                → ask user
-       │                                         │
-       ▼                                         ▼
-  User: "A owns symlink-manager.ts"         User: "leave symlink-manager.ts to A"
-       │                                         │
-  proceed as-is                             bit issue comment add #5
-                                              "Excluded symlink-manager.ts, logger.ts only"
-```
-
-### 例4: agent-teams併用
-
-リーダーがチームメイトをworktreeで起動する場合。各チームメイトが独立にbit issueを作成するため、外部セッションからも見える。
-
-```
-┌─ Leader Session ─────────────────────────────┐
-│ agent-teams でチームメイト A, B を起動        │
-│                                               │
-│  Teammate A (worktree: feat/api)              │
-│    bit issue #6: "Implement API"              │
-│    Target: src/api/*.ts                       │
-│                                               │
-│  Teammate B (worktree: feat/ui)               │
-│    bit issue #7: "Implement UI"               │
-│    Target: src/components/*.tsx               │
-└───────────────────────────────────────────────┘
-
-┌─ External Session C (独立起動) ──────────────┐
-│ bit issue list --open                         │
-│ → #6 Implement API [session:feat/api]         │
-│ → #7 Implement UI [session:feat/ui]           │
-│                                               │
-│ → チームの作業範囲が見え、重複を回避できる   │
-└───────────────────────────────────────────────┘
-```
-
-## 8. 異常系
-
-- **bit操作失敗**: ユーザーに「協調機能が無効化されています。他セッションとの重複検知が機能しません」と明示通知し、作業は継続する
-- **bit不在**: 単独作業モード（協調スキップを通知）
-- **orphan issue**: `gwq list` でworktree存在確認。対応するworktreeが不在ならば重複チェック対象から除外する
-- **worktreeの手動トラブルシューティング**: `gwq list`（一覧確認）、`gwq prune`（不要な参照を削除）、`gwq status`（変更状態確認）
+For concrete workflow examples (solo session, parallel sessions without overlap, parallel sessions with overlap adjustment), read `references/examples.md`.

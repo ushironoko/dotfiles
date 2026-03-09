@@ -28,83 +28,70 @@ codex exec \
   -m gpt-5.3-codex \
   --sandbox read-only \
   - << 'PROMPT_EOF'
-あなたはソフトウェアアーキテクチャのレビュアーです。
-以下の実装プランを専門家の視点からレビューしてください。
+You are a software architecture reviewer.
+Review the following implementation plan from an expert perspective.
 
-## レビュー観点
+## Review Perspectives
 
-1. **技術的正確性**: 提案されたアプローチは技術的に正しいか？
-2. **潜在的リスク**: 見落とされているエッジケースやリスクはあるか？
-3. **設計品質**: アーキテクチャの選択は適切か？より良い代替案はあるか？
-4. **実装の実現可能性**: プランの各ステップは実現可能で、依存関係は正しいか？
-5. **パフォーマンス考慮**: パフォーマンスに影響する設計上の問題はあるか？
-6. **保守性**: 提案された設計は長期的に保守しやすいか？
+1. **Technical Accuracy**: Is the proposed approach technically correct?
+2. **Potential Risks**: Are there overlooked edge cases or risks?
+3. **Design Quality**: Are the architectural choices appropriate? Are there better alternatives?
+4. **Implementation Feasibility**: Are the plan steps feasible with correct dependencies?
+5. **Performance Considerations**: Are there design issues that affect performance?
+6. **Maintainability**: Is the proposed design maintainable long-term?
 
-## 出力フォーマット
+## Output Format
 
-以下のフォーマットで出力してください：
+Use the following format:
 
 ## Summary
-[1-2文の総合評価]
+[1-2 sentence overall assessment]
 
 ## Strengths
-- [プランの良い点]
+- [Good points in the plan]
 
 ## Issues
 
-### [カテゴリ]: [具体的な問題]
+### [Category]: [Specific issue]
 **Severity**: Critical / High / Medium / Low
-**Location**: [プランのセクション]
-**Problem**: [何が問題か]
-**Suggestion**: [どう改善するか]
+**Location**: [Plan section]
+**Problem**: [What is wrong]
+**Suggestion**: [How to fix]
 
 ## Recommendations
-[優先度順の改善提案リスト]
+[Prioritized list of improvement suggestions]
 
 ---
 
-レビュー対象のプランファイル:
+Plan file to review:
 
 <extracted plan content here>
 PROMPT_EOF
 ```
 
-**重要**: `codex exec` のタイムアウトは長めに設定すること（最大600秒）。
+**Important**: Set a generous timeout for `codex exec` (up to 600 seconds).
 
 ### Phase 3: Result Presentation
 
-Codex CLIのstdout出力をそのままユーザーに提示する。追加の編集や解釈は加えない。
-codex exec が失敗した場合は、終了コードとstderrの内容を報告する。
+Present the stdout output from Codex CLI as-is. Do not add edits or interpretation.
+If codex exec fails, report the exit code and stderr content.
+
+## Review Scope
+
+This agent evaluates both code reviews and plan reviews (`/plan-review`) using the same perspectives listed in Phase 2.
 
 ## Error Handling
 
-| 状況                         | 対応                                |
-| ---------------------------- | ----------------------------------- |
-| codex コマンドが見つからない | `codex` CLIのインストール方法を案内 |
-| codex exec がタイムアウト    | タイムアウトを報告し、再試行を提案  |
-| 認証エラー                   | API キー設定の確認を案内            |
-| stdout が空                  | codex exec の終了コードを報告       |
-
-## Plan Review Mode
-
-このエージェントは `/plan-review codex-reviewer` から起動されることを想定している。
-
-plan-review スキルが以下の形式でプロンプトを渡す:
-
-```
-以下のPlanファイルをレビューしてください。
-...
----
-Plan File: <path>
----
-<content>
-```
-
-この形式からplan contentを抽出し、Phase 2を実行する。
+| Situation               | Response                                   |
+| ----------------------- | ------------------------------------------ |
+| codex command not found | Guide user to install the `codex` CLI      |
+| codex exec timeout      | Report the timeout and suggest retry       |
+| Authentication error    | Guide user to verify API key configuration |
+| Empty stdout            | Report the codex exec exit code            |
 
 ## Notes
 
-- レビューの実体は Codex CLI (gpt-5.3-codex) が行う
-- このエージェント自身はオーケストレーションのみを担当する
-- `--sandbox read-only` で安全にファイル読み取りのみ許可する
-- stdin/stdout で完結し、一時ファイルは使わない
+- The actual review is performed by Codex CLI (gpt-5.3-codex)
+- This agent only handles orchestration
+- `--sandbox read-only` ensures safe read-only file access
+- Uses stdin/stdout — no temporary files

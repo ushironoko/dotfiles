@@ -55,22 +55,22 @@ The Testing Trophy prioritizes test types in this order:
 
 ```
         /\
-       /  \       E2E (少数 - 重要なユーザーフローのみ)
+       /  \       E2E (few - critical user flows only)
       /----\
-     /      \     Integration (最多 - 主要なテスト層)
+     /      \     Integration (most - primary test layer)
     /--------\
-   /          \   Unit (適度 - 純粋ロジックのみ)
+   /          \   Unit (moderate - pure logic only)
   /------------\
- / Static Type  \  Static (TypeScript型チェック)
+ / Static       \  Static (type system, linter, compiler checks)
 /________________\
 ```
 
 **Checkpoints**:
 
-- Integration tests が主要なテスト層として計画されているか?
-- Unit tests は純粋なロジック（計算、変換、バリデーション）に限定されているか?
-- E2E tests は重要なユーザーフローに絞られているか?
-- 静的型チェック（TypeScript）で防げるものをテストで検証していないか?
+- Are integration tests planned as the primary test layer?
+- Are unit tests limited to pure logic (calculations, transformations, validation)?
+- Are E2E tests restricted to critical user flows only?
+- Are things preventable by static analysis (type system, compiler) being verified by tests instead?
 
 **Anti-patterns**:
 
@@ -78,98 +78,154 @@ The Testing Trophy prioritizes test types in this order:
 // Bad: Unit test with heavy mocking (testing implementation, not behavior)
 const mockRepo = { find: vi.fn().mockResolvedValue(user) };
 const mockLogger = { info: vi.fn() };
-const mockCache = { get: vi.fn(), set: vi.fn() };
-const service = createService(mockRepo, mockLogger, mockCache);
+const service = createService(mockRepo, mockLogger);
 expect(mockRepo.find).toHaveBeenCalledWith("123");
 
-// Good: Integration test with real behavior
+// Good: Integration test with real behavior (vitest)
 const db = await setupTestDatabase();
 const app = createApp({ db });
 const response = await app.request("/users/123");
 expect(response.status).toBe(200);
 expect(await response.json()).toMatchObject({ id: "123", name: "Alice" });
+
+// Good: Integration test with real behavior (bun test)
+import { test, expect } from "bun:test";
+const db = await setupTestDatabase();
+const app = createApp({ db });
+const response = await app.request("/users/123");
+expect(response.status).toBe(200);
+```
+
+```rust
+// Bad: over-mocked unit test
+let mut mock_repo = MockRepository::new();
+mock_repo.expect_find().returning(|_| Ok(some_user()));
+let service = Service::new(mock_repo);
+// only verifies mock was called, not actual behavior
+
+// Good: integration test with real storage
+#[tokio::test]
+async fn find_user_returns_stored_user() {
+    let db = setup_test_db().await;
+    db.insert_user(&test_user()).await;
+    let app = create_app(db);
+    let resp = app.get("/users/123").await;
+    assert_eq!(resp.status(), 200);
+    let user: User = resp.json().await;
+    assert_eq!(user.name, "Alice");
+}
+```
+
+```swift
+// Bad: testing implementation details
+func testFetchUser_callsRepository() {
+    let mockRepo = MockUserRepository()
+    let service = UserService(repository: mockRepo)
+    _ = try? service.fetchUser(id: "123")
+    XCTAssertTrue(mockRepo.findCalled) // verifies internal call, not behavior
+}
+
+// Good: integration test with real behavior (Swift Testing)
+@Test func fetchUserReturnsStoredUser() async throws {
+    let db = try await setupTestDatabase()
+    try await db.insertUser(testUser)
+    let service = UserService(database: db)
+    let user = try await service.fetchUser(id: "123")
+    #expect(user.name == "Alice")
+}
 ```
 
 ### 3. Mock Minimization (Weight: High)
 
 **Checkpoints**:
 
-- モックは外部境界（HTTP API、DB、ファイルシステム）にのみ使用されているか?
-- 内部モジュール間のモックが計画されていないか?
-- テスト用のin-memory実装やテストダブルが検討されているか?
-- `vi.mock()` / `jest.mock()` のモジュールモックが多用されていないか?
+- Are mocks used only at external boundaries (HTTP APIs, DB, filesystem)?
+- Are there no mocks between internal modules?
+- Are in-memory implementations or test doubles considered?
+- Is module-level mocking overused (e.g., `vi.mock()`, `#[mockall]`, protocol-based mocks)?
 
 **Acceptable mocks**:
 
-- 外部APIクライアント（HTTP呼び出し）
-- 時刻（`Date.now`、タイマー）
-- 乱数生成器
-- 環境変数
+- External API clients (HTTP calls)
+- Time (`Date.now`, timers)
+- Random number generators
+- Environment variables
 
 **Avoid mocking**:
 
-- 自分のコードの内部モジュール
-- データ変換関数
-- バリデーションロジック
-- ルーティング/ミドルウェア
+- Internal modules of your own code
+- Data transformation functions
+- Validation logic
+- Routing / middleware
 
 ### 4. Existing Test Pattern Conformance (Weight: Medium)
 
 **Checkpoints**:
 
-- プロジェクトの既存テストパターン（セットアップ、ヘルパー、ファイル構成）に沿っているか?
-- 既存のテストユーティリティやファクトリが活用されているか?
-- テストの命名規則が既存と一致しているか?
-- テストファイルの配置が既存の構成と整合しているか?
+- Does it follow the project's existing test patterns (setup, helpers, file organization)?
+- Are existing test utilities and factories being reused?
+- Do test naming conventions match the existing codebase?
+- Is the test file placement consistent with the existing structure?
+
+**Test file placement**:
+
+- **Prefer colocation**: place test files next to source files (`foo.test.ts`, `foo.e2e.ts`, `foo_test.rs`)
+- **Rust**: use inline `#[cfg(test)] mod tests {}` for unit tests, `tests/` directory for integration tests
+- **Swift**: `Tests/<TargetName>Tests/` per Swift Package Manager convention
+- **TypeScript**: `*.test.ts` / `*.e2e.ts` colocated with source
 
 **What to examine**:
 
-- `tests/` or `__tests__/` directory structure
 - Existing test helper functions and fixtures
-- Setup/teardown patterns (beforeEach, afterEach)
-- Assertion style (expect, assert)
+- Setup/teardown patterns
+- Assertion style and conventions
 
 ### 5. Test Duplication Detection (Weight: Medium)
 
 **Checkpoints**:
 
-- 計画されたテストが既存テストと重複していないか?
-- 同じビヘイビアを異なるレイヤーで重複テストしていないか?
-- 既存のテストをextendすることで新しいケースをカバーできないか?
-- パラメタライズドテストで複数ケースをまとめられないか?
+- Do planned tests overlap with existing test coverage?
+- Is the same behavior tested redundantly across different layers?
+- Can existing tests be extended to cover new cases instead of writing new ones?
+- Can multiple cases be consolidated with parameterized tests?
 
 **Anti-patterns**:
 
 ```typescript
-// Bad: Duplicate tests at different layers
-// unit test
-test("validateEmail returns false for invalid email", () => { ... });
-// integration test (same assertion, different wrapper)
-test("POST /users returns 400 for invalid email", () => { ... });
-// e2e test (same behavior tested again)
-test("signup form shows error for invalid email", () => { ... });
+// Bad: same behavior tested at every layer
+test("validateEmail returns false for invalid email", () => { ... });         // unit
+test("POST /users returns 400 for invalid email", () => { ... });            // integration
+test("signup form shows error for invalid email", () => { ... });            // e2e
 
-// Good: Each layer tests unique behavior
-// unit: pure validation logic edge cases
-test.each(invalidEmails)("validateEmail(%s) returns false", (email) => { ... });
-// integration: API error response format and status code
-test("POST /users with invalid email returns structured error", () => { ... });
-// e2e: (skip - covered by integration test sufficiently)
+// Good: each layer tests unique behavior
+test.each(invalidEmails)("validateEmail(%s) returns false", (email) => { ... }); // unit: edge cases
+test("POST /users with invalid email returns structured error", () => { ... });  // integration: response format
+// e2e: skip — covered by integration test sufficiently
+```
+
+```rust
+// Good: use parameterized tests to consolidate cases
+#[test_case("" ; "empty string")]
+#[test_case("not-an-email" ; "missing @")]
+#[test_case("@no-local" ; "missing local part")]
+fn validate_email_rejects_invalid(input: &str) {
+    assert!(!validate_email(input));
+}
 ```
 
 ### 6. Behavior-Driven Test Design (Weight: Medium)
 
 **Checkpoints**:
 
-- テストはユーザーの操作や期待する結果を記述しているか?
-- 内部実装の詳細（メソッド呼び出し順、内部状態）をテストしていないか?
-- テスト名が「何をするか」ではなく「何が起きるべきか」を表現しているか?
-- テストがリファクタリングに耐えられる設計か?
+- Do tests describe user actions and expected outcomes?
+- Are implementation details (method call order, internal state) avoided in assertions?
+- Do test names express "what should happen" rather than "what it does"?
+- Are tests designed to survive refactoring?
 
 **Anti-patterns**:
 
 ```typescript
-// Bad: Testing implementation details (breaks on refactor)
+// Bad: testing implementation details (breaks on refactor)
 test("calls repository.save with correct arguments", () => {
   service.createUser(input);
   expect(mockRepo.save).toHaveBeenCalledWith({
@@ -178,7 +234,7 @@ test("calls repository.save with correct arguments", () => {
   });
 });
 
-// Good: Testing behavior (survives refactor)
+// Good: testing behavior (survives refactor)
 test("created user can be retrieved by ID", async () => {
   const created = await service.createUser(input);
   const found = await service.getUser(created.id);
@@ -186,31 +242,123 @@ test("created user can be retrieved by ID", async () => {
 });
 ```
 
-## Plan Review Mode
+```rust
+// Bad: asserting internal state
+#[test]
+fn test_cache_stores_entry() {
+    let mut cache = Cache::new();
+    cache.insert("key", "value");
+    assert_eq!(cache.inner.len(), 1); // depends on internal field
+}
 
-When called from `/plan-review` skill, review implementation plans from these perspectives:
+// Good: asserting observable behavior
+#[test]
+fn inserted_value_can_be_retrieved() {
+    let mut cache = Cache::new();
+    cache.insert("key", "value");
+    assert_eq!(cache.get("key"), Some("value"));
+}
+```
+
+```swift
+// Bad: asserting internal state
+@Test func testCacheStoresEntry() {
+    let cache = Cache()
+    cache.insert(key: "key", value: "value")
+    #expect(cache.storage.count == 1) // depends on internal storage
+}
+
+// Good: asserting observable behavior
+@Test func insertedValueCanBeRetrieved() {
+    let cache = Cache()
+    cache.insert(key: "key", value: "value")
+    #expect(cache.get(key: "key") == "value")
+}
+```
+
+## Review Scope
+
+Evaluate both code reviews and plan reviews (`/plan-review`) using the same perspectives:
 
 1. **TDD Cycle**: Are test-first steps explicitly planned before each implementation step?
 2. **Testing Trophy Balance**: Is the test distribution appropriate (integration > unit > e2e)?
 3. **Mock Strategy**: Are mocks minimized and used only at external boundaries?
-4. **Existing Test Awareness**: Does the plan reference or build upon existing test patterns?
+4. **Existing Test Awareness**: Does the plan/code reference or build upon existing test patterns?
 5. **Duplication Risk**: Are there tests that overlap with existing coverage?
-6. **Behavior Focus**: Do planned tests describe behavior, not implementation?
+6. **Behavior Focus**: Do planned/written tests describe behavior, not implementation?
+
+### Language-Specific Guidance
+
+**TypeScript**:
+
+- Use `vitest` or `bun:test` as the test runner
+- Prefer `test()` over `describe()` + `it()` for flat, readable test files
+- Use `test.each()` for parameterized cases
+
+**Rust**:
+
+- Use inline tests (`#[cfg(test)] mod tests {}`) for unit tests colocated with source
+- Use `tests/` directory for integration tests
+- **Actively use `insta` for snapshot testing** — ideal for asserting complex output (AST, IR, formatted strings, error messages) without brittle manual assertions
+- Use `insta::assert_snapshot!` / `assert_debug_snapshot!` / `assert_yaml_snapshot!` depending on output format
+- Use `#[test_case]` or `rstest` for parameterized tests
+
+```rust
+// Good: snapshot test with insta — output changes are reviewed via `cargo insta review`
+#[test]
+fn parse_function_declaration() {
+    let ast = parse("fn hello(x: i32) -> bool {}");
+    insta::assert_debug_snapshot!(ast);
+}
+
+// Good: inline test colocated with implementation
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokenize_simple_expression() {
+        let tokens = tokenize("1 + 2");
+        insta::assert_debug_snapshot!(tokens);
+    }
+}
+```
+
+**Swift**:
+
+- Use Swift Testing framework (`@Test`, `#expect`, `@Suite`) over XCTest for new code
+- Place tests in `Tests/<TargetName>Tests/` per Swift Package Manager convention
+- Use `swift-snapshot-testing` (pointfree) for snapshot tests of views and complex output
+- Use `@Test(arguments:)` for parameterized tests
+
+```swift
+// Good: parameterized test with Swift Testing
+@Test(arguments: ["", "not-an-email", "@no-local"])
+func validateEmailRejectsInvalid(input: String) {
+    #expect(!validateEmail(input))
+}
+
+// Good: snapshot test with swift-snapshot-testing
+@Test func loginViewMatchesSnapshot() {
+    let view = LoginView(viewModel: .preview)
+    assertSnapshot(of: view, as: .image)
+}
+```
 
 ### Existing Test Analysis
 
-Before reviewing the plan, you SHOULD:
+Before reviewing, you SHOULD:
 
 1. Search for existing test files to understand the project's testing patterns
 2. Identify test utilities, helpers, and fixtures already in use
-3. Check the test framework configuration (vitest.config.ts, jest.config.ts, etc.)
+3. Check the test framework configuration (vitest.config.ts, Cargo.toml `[dev-dependencies]`, Package.swift, etc.)
 4. Note the assertion style and naming conventions
 
 If no concrete test files exist yet (e.g., the project only has a test config or `tests/` directory but no test files), skip steps 1-2 and review based on the test framework configuration and directory structure alone. Focus recommendations on establishing good initial testing patterns.
 
 Use this information to:
 
-- Flag tests in the plan that duplicate existing coverage
+- Flag tests that duplicate existing coverage
 - Suggest reusing existing test utilities
 - Ensure new tests follow established patterns
 

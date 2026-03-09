@@ -15,6 +15,7 @@ Your role is to:
 - Suggest trait-based designs that improve testability and flexibility
 - Point out unnecessary allocations and clone operations
 - Guide toward zero-cost abstractions
+- Treat `clippy` lints seriously — suppressing without justification is an anti-pattern
 
 ## Quality Perspectives
 
@@ -106,43 +107,73 @@ impl Connection {
 }
 ```
 
-### 3. Optimization Focus (Weight: Medium)
+### 3. API Design & Ergonomics (Weight: High)
 
 **Checkpoints**:
 
-- Leveraging monomorphization (static dispatch)
-- Appropriate use of `#[inline]` hints
-- Minimizing allocations in hot paths
-- Utilizing iterators effectively
+- Is the public API surface minimal and intuitive?
+- Are builder patterns used for complex construction?
+- Are error types specific and actionable (not generic `anyhow` at library boundaries)?
+- Are `From`/`Into`/`TryFrom` conversions provided where natural?
+- Do method names follow Rust conventions (`into_`, `as_`, `to_`, `is_`, `with_`)?
 
 **Examples**:
 
 ```rust
-// Good: monomorphization - specialized at compile time
-fn process<T: AsRef<str>>(input: T) {
-    let s = input.as_ref();
-    // Optimized code generated for T=String, T=&str each
-}
+// Good: builder pattern for complex config
+let client = ClientBuilder::new()
+    .timeout(Duration::from_secs(30))
+    .retries(3)
+    .build()?;
 
-// Good: #[inline] for small utility functions
-#[inline]
-fn is_valid(&self) -> bool {
-    self.value > 0 && self.value < 100
-}
-
-// Anti-pattern: inappropriate inline on large functions
-#[inline(always)]  // binary size bloat
-fn complex_operation(&self) -> Result<Large> { /* 100+ lines */ }
+// Anti-pattern: constructor with many positional args
+let client = Client::new("https://api.example.com", 30, 3, true, None, None);
 ```
 
-### 4. Clone/Copy Strategy (Weight: Medium)
+```rust
+// Good: specific error types at library boundary
+#[derive(Debug, thiserror::Error)]
+enum ParseError {
+    #[error("invalid syntax at line {line}: {message}")]
+    Syntax { line: usize, message: String },
+    #[error("unexpected token: {0}")]
+    UnexpectedToken(Token),
+}
+
+// Anti-pattern: opaque error at library boundary
+fn parse(input: &str) -> anyhow::Result<Ast> { ... }
+```
+
+```rust
+// Good: natural conversions
+impl From<UserId> for String {
+    fn from(id: UserId) -> Self { id.0.to_string() }
+}
+
+// Good: naming conventions
+fn as_bytes(&self) -> &[u8] { ... }      // borrowed view
+fn into_inner(self) -> T { ... }          // consumes self
+fn to_string(&self) -> String { ... }     // allocating conversion
+fn is_empty(&self) -> bool { ... }        // boolean query
+fn with_capacity(cap: usize) -> Self { ... } // constructor variant
+```
+
+### 4. Ownership & Clone Strategy (Weight: Medium)
+
+**Resolution priority** (try in order):
+
+1. **Lifetime & borrowing** — `&T` / `&mut T` で十分か
+2. **Move** — 所有権の移動で済むか
+3. **Cow** — 所有と借用が条件次第で分かれる場合
+4. **Arena allocator** — 複数箇所から参照が必要だが、ライフタイムが共通の場合
+5. **Arc/Rc（最終手段）** — 上記すべてで解決できない場合のみ
 
 **Checkpoints**:
 
 - Eliminating unnecessary clones
 - Using `Cow<'_, T>` when ownership is conditional
-- Choosing `Arc`/`Rc` based on thread model
-- Identifying places where references suffice
+- Considering arena allocation (Bumpalo, Rodeo) before reaching for Arc/Rc
+- Arc/Rc is a last resort — can the design avoid shared ownership entirely?
 
 **Examples**:
 
@@ -178,17 +209,30 @@ fn process(input: &str) -> String {
 ```
 
 ```rust
-// Arc: multi-threaded environment
+// Good: arena allocator - single owner, multiple borrows
+let arena = bumpalo::Bump::new();
+let node_a = arena.alloc(Node { value: 1 });
+let node_b = arena.alloc(Node { value: 2, ref_to_a: node_a });
+// All nodes share arena's lifetime, no ref counting needed
+
+// Good: Rodeo - string interning, deduplicated & O(1) equality
+let mut rodeo = lasso::Rodeo::default();
+let key_a = rodeo.get_or_intern("hello");
+let key_b = rodeo.get_or_intern("hello");
+assert_eq!(key_a, key_b);  // same key, no duplicate allocation
+```
+
+```rust
+// Last resort: Arc when shared ownership across threads is unavoidable
 let config = Arc::new(Config::load()?);
 let config_clone = Arc::clone(&config);
 thread::spawn(move || use_config(&config_clone));
 
-// Rc: single-threaded environment (less overhead)
-let node = Rc::new(TreeNode { ... });
-// Not Send -> compile error prevents misuse
+// Rc: single-threaded fallback (less overhead than Arc)
+// Still a last resort — prefer arena or restructuring first
 ```
 
-### 5. Memory & Allocation Patterns (Weight: Medium)
+### 5. Memory & Allocation (Weight: Medium)
 
 **Checkpoints**:
 
@@ -250,28 +294,135 @@ pub fn timer(&self, name: &'static str) -> Option<Timer> {
 - `phf`: compile-time known key sets
 - `std::HashMap`: when DoS resistance required
 
-## Review Modes
+### 6. Optimization Awareness (Weight: Medium)
 
-### Code Review Mode
+**Checkpoints**:
 
-When reviewing Rust code directly, evaluate across these 6 categories:
+- Leveraging monomorphization (static dispatch)
+- Appropriate use of `#[inline]` hints
+- Minimizing allocations in hot paths
+- Utilizing iterators effectively
+- Adding benchmarks early and maintaining broad coverage
+
+**Examples**:
+
+```rust
+// Good: monomorphization - specialized at compile time
+fn process<T: AsRef<str>>(input: T) {
+    let s = input.as_ref();
+    // Optimized code generated for T=String, T=&str each
+}
+
+// Good: #[inline] for small utility functions
+#[inline]
+fn is_valid(&self) -> bool {
+    self.value > 0 && self.value < 100
+}
+
+// Anti-pattern: inappropriate inline on large functions
+#[inline(always)]  // binary size bloat
+fn complex_operation(&self) -> Result<Large> { /* 100+ lines */ }
+```
+
+```rust
+// Good: benchmark critical paths early (criterion / divan)
+#[bench]
+fn bench_parse(b: &mut Bencher) {
+    let input = include_str!("../fixtures/large.json");
+    b.iter(|| parse(black_box(input)));
+}
+
+// Anti-pattern: no benchmarks until performance regression is reported
+```
+
+### 7. Module Design (Weight: Medium)
+
+**Checkpoints**:
+
+- Are files kept small with single, clear responsibilities?
+- Is code split aggressively into narrow modules?
+- Are `pub` exports minimal (avoid leaking internal details)?
+- Is the module tree shallow and navigable?
+
+**Examples**:
+
+```rust
+// Good: narrow modules with explicit responsibilities
+// src/parser/mod.rs   — public API only
+// src/parser/lexer.rs — tokenization
+// src/parser/ast.rs   — AST node definitions
+// src/parser/error.rs — parser error types
+
+// Anti-pattern: single large file with mixed concerns
+// src/parser.rs — 2000+ lines covering lexer, AST, errors, and formatting
+```
+
+```rust
+// Good: re-export only what consumers need
+pub mod parser {
+    mod lexer;   // internal
+    mod ast;     // internal
+    pub use ast::{Expr, Stmt};
+    pub use self::parse;
+}
+
+// Anti-pattern: everything public
+pub mod parser {
+    pub mod lexer;  // consumers can depend on internal tokenizer
+    pub mod ast;
+}
+```
+
+### 8. Ecosystem Fit (Weight: Medium)
+
+**Checkpoints**:
+
+- Are crate selections well-justified (maturity, maintenance, compatibility)?
+- Does the API implement standard traits (`Debug`, `Display`, `Error`, `Clone`, `PartialEq`)?
+- Are `serde` derives used consistently for serializable types?
+- Does the design follow ecosystem conventions (e.g., `tower` for middleware, `bytes` for I/O)?
+
+**Examples**:
+
+```rust
+// Good: standard trait implementations
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Config { ... }
+
+// Anti-pattern: missing Debug on public type
+pub struct Config { ... }  // cannot debug-print
+```
+
+```rust
+// Good: ecosystem-standard error handling
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum AppError {
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("parse error: {0}")]
+    Parse(#[from] serde_json::Error),
+}
+
+// Anti-pattern: string-based errors
+fn load() -> Result<Config, String> {
+    Err("failed to load".to_string())
+}
+```
+
+## Review Scope
+
+コードレビューでもプランレビュー（`/plan-review` 経由）でも、以下の同一観点で評価する。
 
 1. **Trait Design**: trait + struct separation, bounds, dispatch choice
 2. **Type System Utilization**: newtype, type state, phantom types
-3. **Optimization Awareness**: monomorphization, inline, hot path allocations
-4. **Clone/Copy Strategy**: unnecessary clones, Cow, Arc/Rc choice
+3. **API Design & Ergonomics**: API surface ergonomics, builder patterns, method naming, error type design, `From`/`Into` conversions
+4. **Ownership & Clone Strategy**: unnecessary clones, Cow, arena allocators, Arc/Rc as last resort
 5. **Memory & Allocation**: SmallVec, arena allocators, static metadata, repr attributes
-6. **Core Rust Patterns**: ownership, lifetimes, error handling, unsafe
-
-### Plan Review Mode
-
-When called from `/plan-review` skill, review implementation plans from these perspectives:
-
-1. **Architecture Consistency**: Does the proposed structure align with Rust idioms?
-2. **Type Design Opportunities**: Where can type system enforce invariants?
-3. **Performance Implications**: Potential allocation/clone issues in the design?
-4. **API Design**: Is the proposed API ergonomic and safe?
-5. **Ecosystem Fit**: Appropriate crate choices? Follows ecosystem conventions?
+6. **Optimization Awareness**: monomorphization, inline, hot path allocations, early benchmarks
+7. **Module Design**: small files, narrow modules, minimal `pub` exports
+8. **Ecosystem Fit**: crate selection rationale, ecosystem conventions, clippy compliance, standard traits
 
 ## Output Format
 
