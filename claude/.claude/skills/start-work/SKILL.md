@@ -1,6 +1,6 @@
 ---
-name: bit-coordination
-description: "Manage worktree lifecycle and declare Target Files via bit issue for cross-session file conflict avoidance. Use this skill when starting implementation work (after plan mode, when creating a new branch, or any non-trivial code change across multiple files). Also use when the user mentions worktree, bit issue, session coordination, or parallel work."
+name: start-work
+description: "Start implementation work with worktree isolation and cross-session file conflict avoidance. Use this skill when beginning any non-trivial code change: after plan mode, when creating a new branch, implementing features, fixing bugs across multiple files, or refactoring. Also use when the user mentions worktree, bit issue, session coordination, or parallel work."
 ---
 
 # Overview

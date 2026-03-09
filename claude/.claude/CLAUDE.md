@@ -41,7 +41,7 @@
 - **NEVER** suppress errors without handling
 - **NEVER** commit to git until explicitly instructed by the user
 - **NEVER** run development server startup commands in any workflow
-- **ALWAYS** use `bit-coordination` skill for non-trivial changes (multiple files, new features, refactoring)
+- **ALWAYS** use `start-work` skill for non-trivial changes (multiple files, new features, refactoring)
 
 ## PR・コミットの安全規則（CRITICAL — 違反は情報漏洩インシデントに直結）
 
@@ -183,9 +183,9 @@ bun run tsc          # Check types
 bun run prepare
 ```
 
-## Worktree + Bit Coordination Workflow
+## Worktree + Start Work Workflow
 
-**MUST**: 軽微な修正以外の実装作業は、`bit-coordination` スキルに従いworktreeで作業する。
+**MUST**: 軽微な修正以外の実装作業は、`start-work` スキルに従いworktreeで作業する。
 
 ### 適用条件
 
@@ -200,7 +200,7 @@ bun run prepare
 
 ### ワークフロー
 
-`bit-coordination` スキルの統合フローに従う:
+`start-work` スキルの統合フローに従う:
 
 1. planファイルを読み取る（worktree移動前）
 2. EnterWorktreeでworktree作成（hookがgwq add/removeを自動実行）
