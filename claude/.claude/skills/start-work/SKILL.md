@@ -204,9 +204,13 @@ Close task issues **before** removing the worktree. Reversing this order creates
 
 ### Task issue close
 
-As each task completes, call `TaskUpdate(task_id, completed)` → the TaskCompleted hook fires and auto-closes the matching bit issue (finds the open issue with `[task:<branch>:<task_id>]` in its title).
+**MUST**: When each task completes, immediately call `TaskUpdate(task_id, completed)`. This is the trigger that fires the TaskCompleted hook and auto-closes the matching bit issue. Without this call, the issue stays open indefinitely.
 
-The hook runs async, so it doesn't block the main agent.
+```
+task done → TaskUpdate(task_id, completed) → TaskCompleted hook → bit issue close
+```
+
+The hook matches the open issue containing `[task:<branch>:<task_id>]` in its title. It runs async, so it doesn't block the main agent.
 
 Fallback if the hook fails (async, so no error is raised):
 
