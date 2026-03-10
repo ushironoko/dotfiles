@@ -107,16 +107,13 @@ If no plan file exists (minor work without plan mode), omit the Plan section fro
 
 After worktree creation, create a `TaskCreate` task, then embed the returned `task_id` in the bit issue title. This lets the TaskCompleted hook auto-identify and close the issue later.
 
-### TaskCreate → bit issue create
+### Create parent issue (plan)
 
-1. Call `TaskCreate` tool → get `task_id`
-2. Embed `[task:<branch-name>:<task_id>]` in `--title`
-
-Including `<branch-name>` prevents collision when multiple sessions have the same sequential task_id.
+Create a single parent issue containing the full plan. This serves as the root for all task issues in this session.
 
 ```bash
 GIT_DIR="$MAIN_GIT" bit issue create \
-  --title "[task:<branch-name>:<task_id>] <task summary in English>" \
+  --title "[plan:<branch-name>] <plan title in English>" \
   --label "session:<branch-name>" \
   --body "$(cat <<'BODY'
 ## Session Info
@@ -125,14 +122,6 @@ GIT_DIR="$MAIN_GIT" bit issue create \
 - **worktree**: <worktree-absolute-path>
 - **main repo**: <main-repo-absolute-path>
 
-## Target Files
-
-- path/to/file.ts (modify|create|delete)
-
-## Task Description
-
-<task description>
-
 ## Plan
 
 <full plan file content>
@@ -140,7 +129,38 @@ BODY
 )"
 ```
 
-**Why include the full plan?** It becomes the only context restoration source when resuming a session.
+Note the returned issue ID — all task issues reference it as their parent.
+
+### Create task issues (one per task, all upfront)
+
+For **each task** in the plan, call `TaskCreate` → get `task_id`, then create a bit issue linked to the parent.
+
+Create **all task issues before starting work**.
+
+```bash
+# Repeat for each task in the plan
+GIT_DIR="$MAIN_GIT" bit issue create \
+  --title "[task:<branch-name>:<task_id>] <task summary in English>" \
+  --label "session:<branch-name>" \
+  --body "$(cat <<'BODY'
+parent: #<parent_issue_id>
+
+## Target Files
+
+- path/to/file.ts (modify|create|delete)
+
+## Task Description
+
+<task description>
+BODY
+)"
+```
+
+Including `<branch-name>` in the title prevents collision when multiple sessions have the same sequential task_id.
+
+**Why create a parent issue?** It groups all tasks under one plan, making it easy to see the full scope of a session. On resume, reading the parent issue restores the complete plan context.
+
+**Why create all task issues upfront?** Other sessions need to see the full scope of your work across all phases to avoid conflicts. Creating issues only for the current phase causes false "no overlap" results for later phases.
 
 **Why use absolute paths for worktree?** Needed for orphan detection and as the `cd` target on session resume.
 
@@ -180,21 +200,27 @@ GIT_DIR="$MAIN_GIT" bit issue comment add <id> --body "Target Files added: path/
 
 ## 5. Completion Protocol
 
-Close the issue **before** removing the worktree. Reversing this order creates orphan issues (issue stays open but its worktree is gone).
+Close task issues **before** removing the worktree. Reversing this order creates orphan issues (issue stays open but its worktree is gone).
 
-### Recommended: auto-close via TaskCompleted hook
+### Task issue close
 
-Call `TaskUpdate(task_id, completed)` → the TaskCompleted hook fires and auto-closes the matching bit issue (finds the open issue with `[task:<branch>:<task_id>]` in its title).
+As each task completes, call `TaskUpdate(task_id, completed)` → the TaskCompleted hook fires and auto-closes the matching bit issue (finds the open issue with `[task:<branch>:<task_id>]` in its title).
 
-The hook runs async, so it doesn't block the main agent. After the hook fires, the worktree can be removed.
+The hook runs async, so it doesn't block the main agent.
 
-### Fallback: manual close
-
-If the hook fails (async, so no error is raised), close manually:
+Fallback if the hook fails (async, so no error is raised):
 
 ```bash
 GIT_DIR="$MAIN_GIT" bit issue comment add <id> --body "Done: <summary of changes>"
 GIT_DIR="$MAIN_GIT" bit issue close <id>
+```
+
+### Parent issue close
+
+After all task issues are closed, close the parent plan issue:
+
+```bash
+GIT_DIR="$MAIN_GIT" bit issue close <parent_id>
 # WorktreeRemove hook handles gwq remove
 ```
 
