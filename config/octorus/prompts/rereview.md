@@ -25,4 +25,3 @@ PR #{{pr_number}}: {{pr_title}}
 ## Output Format
 
 You MUST respond with a JSON object matching the schema provided.
-Must use Japanese language response. user is japanese.

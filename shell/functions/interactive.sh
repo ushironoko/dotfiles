@@ -167,8 +167,12 @@ gcd() {
   local ghq_root=$(ghq root)
   local histfile="$GHQ_SELECT_HISTFILE"
 
-  # 全ソースを並列で収集
-  ghq list | grep github.com > "$tmp_dir/ghq" &
+  local _gcd_pids=()
+
+  # 全ソースを並列で収集（findベースで高速化: ghq list/gwq listはVCSチェックで遅い）
+  find "$ghq_root" -maxdepth 4 \( -name '.git' -type d -o -name '.jj' -type d \) 2>/dev/null \
+    | sed "s|$ghq_root/||;s|/\.git$||;s|/\.jj$||" | grep github.com | sort -u > "$tmp_dir/ghq" &
+  _gcd_pids+=($!)
 
   # jj workspace検索（ghq配下で .jj/repo がファイル = workspace）
   {
@@ -179,13 +183,27 @@ gcd() {
       done
     fi
   } > "$tmp_dir/jwq_raw" 2>/dev/null &
+  _gcd_pids+=($!)
 
-  # git worktree一覧
+  # git worktree一覧（findベースで高速化: gwq list -gは内部git操作で遅い）
   {
-    command -v gwq &>/dev/null && gwq list -g --json 2>/dev/null | jq -r '.[] | select(.is_main == false) | "⎇ \(.branch) → \(.path)"' 2>/dev/null
+    local gwq_basedir="${GWQ_BASEDIR:-$(command -v gwq &>/dev/null && gwq config get worktree.basedir 2>/dev/null | sed "s|^~|$HOME|")}"
+    if [[ -d "$gwq_basedir" ]]; then
+      find "$gwq_basedir" -maxdepth 5 -name '.git' -type f 2>/dev/null | while IFS= read -r git_file; do
+        local dir=$(dirname "$git_file")
+        local gitdir=$(sed 's/gitdir: //' "$git_file")
+        if [[ -f "$gitdir/HEAD" ]]; then
+          local ref=$(cat "$gitdir/HEAD")
+          echo "⎇ ${ref#ref: refs/heads/} → $dir"
+        else
+          echo "⎇ $(basename "$dir") → $dir"
+        fi
+      done
+    fi
   } > "$tmp_dir/gwq" 2>/dev/null &
+  _gcd_pids+=($!)
 
-  wait
+  wait "${_gcd_pids[@]}"
 
   # jj workspace処理: 表示用エントリ作成 + ghq listから重複除外
   if [[ -s "$tmp_dir/jwq_raw" ]]; then

@@ -1,0 +1,35 @@
+{
+  "binary_version": "0.5.7",
+  "initialized_at": "2026-03-11T00:01:46.100213+00:00",
+  "last_migrated_at": "2026-03-11T00:02:17.814417+00:00",
+  "files": {
+    "reviewee.md": {
+      "version": "0.5.7",
+      "status": "Migrated"
+    },
+    "config-reference.md": {
+      "version": "0.5.7",
+      "status": "Migrated"
+    },
+    "reviewer.md": {
+      "version": "0.5.7",
+      "status": "Migrated"
+    },
+    "SKILL.md": {
+      "version": "0.5.7",
+      "status": "Migrated"
+    },
+    "headless-output.md": {
+      "version": "0.5.7",
+      "status": "Migrated"
+    },
+    "config.toml": {
+      "version": "0.5.7",
+      "status": "Migrated"
+    },
+    "rereview.md": {
+      "version": "0.5.7",
+      "status": "Migrated"
+    }
+  }
+}

@@ -34,35 +34,8 @@ export EDITOR="hx"
 export CLICOLOR=1
 export LSCOLORS=ExGxBxDxCxEgEdxbxgxcxd
 
-# Aliases
-alias ls='ls -G'
-alias ll='ls -alF'
-alias la='ls -A'
-alias l='ls -CF'
-alias grep='grep --color=auto'
-alias fgrep='fgrep --color=auto'
-alias egrep='egrep --color=auto'
-
-# Navigation aliases
-alias ..="cd .."
-alias ...="cd ../.."
-alias ....="cd ../../.."
-alias .....="cd ../../../.."
-alias dev="cd ~/dev"
-
-# Editor and config aliases
-alias zrc="code ~/.zshrc"
-alias gc="code ~/.gitconfig"
-alias c="code"
-alias re="exec $SHELL -l"
-
-# Git aliases
-alias g="git"
-alias lg="lazygit"
-alias gd="gh dash"
-
-# Docker aliases
-alias dc="docker-compose"
+# Aliases are managed by kort (~/.config/kort/kort.toml)
+eval "$(/Users/ushironoko/ghq/github.com/ushironoko/kort/target/release/kort init zsh)"
 
 # yazi file manager (exit to cwd)
 function y() {
@@ -74,12 +47,6 @@ function y() {
   rm -f -- "$tmp"
 }
 
-# Package manager aliases
-alias px="pnpm dlx"
-alias p="pnpm"
-
-# Deno aliases
-alias dccc="deno run -A jsr:@mizchi/ccdiscord"
 
 # Interactive functions (fzf-based)
 # Load ghq/fzf functions and fcd from shared file
