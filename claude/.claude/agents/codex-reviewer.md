@@ -25,7 +25,7 @@ Run codex exec in headless mode. Pass the review prompt with plan content via st
 
 ```bash
 codex exec \
-  -m gpt-5.3-codex \
+  -m gpt-5.4 \
   --sandbox read-only \
   - << 'PROMPT_EOF'
 You are a software architecture reviewer.
@@ -91,7 +91,7 @@ This agent evaluates both code reviews and plan reviews (`/plan-review`) using t
 
 ## Notes
 
-- The actual review is performed by Codex CLI (gpt-5.3-codex)
+- The actual review is performed by Codex CLI (gpt-5.4)
 - This agent only handles orchestration
 - `--sandbox read-only` ensures safe read-only file access
 - Uses stdin/stdout — no temporary files
