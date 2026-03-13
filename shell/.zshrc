@@ -32,10 +32,10 @@ export EDITOR="hx"
 
 # Color support for ls (macOS)
 export CLICOLOR=1
-export LSCOLORS=ExGxBxDxCxEgEdxbxgxcxd
+export LSCOLORS=ExGxBxDxCxEgEdxbxgxcxdalias
 
-# Aliases are managed by kort (~/.config/kort/kort.toml)
-eval "$(/Users/ushironoko/ghq/github.com/ushironoko/kort/target/release/kort init zsh)"
+# Rust/Cargo
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
 # yazi file manager (exit to cwd)
 function y() {
@@ -95,6 +95,9 @@ eval "$(mise activate zsh)"
 if command -v direnv &> /dev/null; then
   eval "$(direnv hook zsh)"
 fi
+
+# Abbreviations are managed by abbrs (~/.config/abbrs/abbrs.toml)
+eval "$(abbrs init zsh)"
 
 # VS Code
 export PATH="$PATH:/Applications/Visual Studio Code.app/Contents/Resources/app/bin"

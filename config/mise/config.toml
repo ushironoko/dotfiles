@@ -19,6 +19,7 @@ lazygit = "latest"
 delta = "latest"
 ffmpeg = "latest"
 "github:ushironoko/octorus" = "latest"
+"github:ushironoko/abbrs" = "latest"
 
 [settings]
 experimental = true

@@ -33,3 +33,4 @@ i = { h = ":toggle lsp.display-inlay-hints" }
 
 [keys.insert]
 j = { k = "normal_mode" }
+A-i = "completion"

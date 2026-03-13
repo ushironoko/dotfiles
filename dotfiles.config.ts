@@ -120,6 +120,11 @@ export default defineConfig({
       target: "~/.config/gh-dash",
       type: "directory",
     },
+    {
+      source: "./config/abbrs",
+      target: "~/.config/abbrs",
+      type: "directory",
+    },
   ],
   backup: {
     directory: "~/.dotfiles_backup",

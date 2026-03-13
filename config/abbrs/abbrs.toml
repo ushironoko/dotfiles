@@ -1,0 +1,128 @@
+# abbrs - abbreviation configuration
+# See: https://github.com/ushironoko/abbrs
+
+[settings]
+# prefixes = ["sudo", "doas"]  # commands that preserve command position
+# remind = false  # remind when abbreviation could have been used
+
+# Regular abbreviation (expand only at command position)
+[[abbr]]
+keyword = "g"
+expansion = "git"
+
+[[abbr]]
+keyword = "gc"
+expansion = "git commit -m '{{message}}'"
+
+# Global abbreviation (expand at any position)
+# [[abbr]]
+# keyword = "NE"
+# expansion = "2>/dev/null"
+# global = true
+
+# Command-scoped abbreviation (expand only after specific command)
+# [[abbr]]
+# keyword = "co"
+# expansion = "checkout"
+# command = "git"
+
+# Context abbreviation (with context condition)
+# [[abbr]]
+# keyword = "main"
+# expansion = "main --branch"
+# context.lbuffer = "^git (checkout|switch)"
+
+# Command evaluation (expand with command output)
+# [[abbr]]
+# keyword = "TODAY"
+# expansion = "date +%Y-%m-%d"
+# evaluate = true
+# global = true
+
+[[abbr]]
+keyword = ".."
+expansion = "cd .."
+
+[[abbr]]
+keyword = "..."
+expansion = "cd ../.."
+
+[[abbr]]
+keyword = "...."
+expansion = "cd ../../.."
+
+[[abbr]]
+keyword = "....."
+expansion = "cd ../../../.."
+
+[[abbr]]
+keyword = "dev"
+expansion = "cd ~/ghq/"
+
+[[abbr]]
+keyword = "la"
+expansion = "ls -A"
+
+[[abbr]]
+keyword = "lg"
+expansion = "lazygit"
+
+[[abbr]]
+keyword = "ll"
+expansion = "ls -alF"
+
+[[abbr]]
+keyword = "ol"
+expansion = "or --local"
+
+[[abbr]]
+keyword = "p"
+expansion = "pnpm"
+
+[[abbr]]
+keyword = "px"
+expansion = "pnpm dlx"
+
+[[abbr]]
+keyword = "re"
+expansion = "exec /bin/zsh -l"
+
+[[abbr]]
+keyword = "run-help"
+expansion = "man"
+
+[[abbr]]
+keyword = "which-command"
+expansion = "whence"
+
+[[abbr]]
+keyword = "zrc"
+expansion = "c ~/.zshrc"
+
+[[abbr]]
+keyword = "gpl"
+expansion = "git pull"
+
+[[abbr]]
+keyword = "cl"
+expansion = "claude"
+
+[[abbr]]
+keyword = "abr"
+expansion = "abbrs"
+
+[[abbr]]
+keyword = "ga"
+expansion = "git add ."
+
+[[abbr]]
+keyword = "gpo"
+expansion = "git push origin $(git branch --show-current)"
+
+[[abbr]]
+keyword = "cla"
+expansion = "claude --permission-mode auto"
+
+[[abbr]]
+keyword = "clr"
+expansion = "claude --permission-mode auto --resume {{session_id}}"

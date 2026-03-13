@@ -31,7 +31,8 @@
       "Bash(bit pr import:*)",
       "Bash(bit relay:*)",
       "Bash(bit clone relay+*)"
-    ]
+    ],
+    "defaultMode": "auto"
   },
   "enableAllProjectMcpServers": true,
   "hooks": {
@@ -121,5 +122,6 @@
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "high",
-  "plansDirectory": "./plans"
+  "plansDirectory": "./plans",
+  "skipAutoPermissionPrompt": true
 }

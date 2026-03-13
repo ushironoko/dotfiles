@@ -53,6 +53,9 @@ macos-option-as-alt = true
 # Disable default fullscreen toggle (Cmd+Enter)
 keybind = super+enter=unbind
 
+# Helix補完用
+keybind = alt+i=unbind
+
 # スプリット移動
 keybind = alt+left=goto_split:left
 keybind = alt+right=goto_split:right
