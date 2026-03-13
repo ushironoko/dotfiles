@@ -1,6 +1,7 @@
 ---
 name: plan-review
 description: Plan modeで作成したプランに対して、プロジェクト特性を分析し適切なレビューエージェントを自動選択・並列起動するスキル。引数なしで実行可能。
+allowed-tools: Bash(codex exec *)
 ---
 
 # Plan Review
