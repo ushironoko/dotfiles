@@ -151,7 +151,7 @@ gls() {
   ghq list
 }
 
-# Change directory to repository or jj workspace (interactive)
+# Change directory to repository (interactive)
 # -f オプションで頻度順表示（デフォルトは最近使った順）
 gcd() {
   # zshのジョブ制御通知を抑制（関数スコープのみ）
@@ -170,19 +170,8 @@ gcd() {
   local _gcd_pids=()
 
   # 全ソースを並列で収集（findベースで高速化: ghq list/gwq listはVCSチェックで遅い）
-  find "$ghq_root" -maxdepth 4 \( -name '.git' -type d -o -name '.jj' -type d \) 2>/dev/null \
-    | sed "s|$ghq_root/||;s|/\.git$||;s|/\.jj$||" | grep github.com | sort -u > "$tmp_dir/ghq" &
-  _gcd_pids+=($!)
-
-  # jj workspace検索（ghq配下で .jj/repo がファイル = workspace）
-  {
-    if command -v jj &>/dev/null; then
-      find "$ghq_root" -maxdepth 5 -path '*/.jj/repo' -type f 2>/dev/null | while IFS= read -r repo_file; do
-        local ws_dir=$(dirname "$(dirname "$repo_file")")
-        echo "$(basename "$ws_dir")|$ws_dir|${ws_dir#$ghq_root/}"
-      done
-    fi
-  } > "$tmp_dir/jwq_raw" 2>/dev/null &
+  find "$ghq_root" -maxdepth 4 -name '.git' -type d 2>/dev/null \
+    | sed "s|$ghq_root/||;s|/\.git$||" | grep github.com | sort -u > "$tmp_dir/ghq" &
   _gcd_pids+=($!)
 
   # git worktree一覧（findベースで高速化: gwq list -gは内部git操作で遅い）
@@ -205,35 +194,22 @@ gcd() {
 
   wait "${_gcd_pids[@]}"
 
-  # jj workspace処理: 表示用エントリ作成 + ghq listから重複除外
-  if [[ -s "$tmp_dir/jwq_raw" ]]; then
-    # 表示用エントリと相対パスを分離
-    while IFS='|' read -r name abs_path rel_path; do
-      echo "⟳ $name → $abs_path" >> "$tmp_dir/jwq"
-      echo "$rel_path" >> "$tmp_dir/jwq_rel"
-    done < "$tmp_dir/jwq_raw"
-    # ghq listからworkspaceエントリを除外
-    grep -v -x -F -f "$tmp_dir/jwq_rel" "$tmp_dir/ghq" > "$tmp_dir/ghq_filtered" 2>/dev/null || cp "$tmp_dir/ghq" "$tmp_dir/ghq_filtered"
-  else
-    cp "$tmp_dir/ghq" "$tmp_dir/ghq_filtered"
-  fi
-
   # ghqエントリを履歴順に並べ替え
   if [[ -f "$histfile" ]]; then
     if [[ "$frequency_mode" == true ]]; then
       # 頻度順（使用回数の多い順）
-      (sort "$histfile" | uniq -c | sort -nr | awk '{print $2}'; cat "$tmp_dir/ghq_filtered") | awk '!seen[$0]++' > "$tmp_dir/ghq_sorted"
+      (sort "$histfile" | uniq -c | sort -nr | awk '{print $2}'; cat "$tmp_dir/ghq") | awk '!seen[$0]++' > "$tmp_dir/ghq_sorted"
     else
       # 最近使った順（デフォルト）
-      (revcat "$histfile"; cat "$tmp_dir/ghq_filtered") | awk '!seen[$0]++' > "$tmp_dir/ghq_sorted"
+      (revcat "$histfile"; cat "$tmp_dir/ghq") | awk '!seen[$0]++' > "$tmp_dir/ghq_sorted"
     fi
   else
-    cp "$tmp_dir/ghq_filtered" "$tmp_dir/ghq_sorted"
+    cp "$tmp_dir/ghq" "$tmp_dir/ghq_sorted"
   fi
 
-  # 結合: workspace → repos (履歴順) → worktrees
+  # 結合: repos (履歴順) → worktrees
   local combined
-  combined=$(cat "$tmp_dir/jwq" "$tmp_dir/ghq_sorted" "$tmp_dir/gwq" 2>/dev/null | sed '/^$/d')
+  combined=$(cat "$tmp_dir/ghq_sorted" "$tmp_dir/gwq" 2>/dev/null | sed '/^$/d')
   rm -rf "$tmp_dir"
 
   [[ -z "$combined" ]] && return
@@ -250,7 +226,7 @@ gcd() {
   local preview_cmd='
     selected={}
     ghq_root="'"$ghq_root"'"
-    if [[ "$selected" == ⟳* ]] || [[ "$selected" == ⎇* ]]; then
+    if [[ "$selected" == ⎇* ]]; then
       dir=$(echo "$selected" | sed "s/.*→ //")
       head -n200 "$dir/README.md" 2>/dev/null || echo "No README.md"
     else
@@ -266,8 +242,8 @@ gcd() {
     --preview-window "right:40%")
   [[ -z "$selected" ]] && return
 
-  if [[ "$selected" == ⟳* ]] || [[ "$selected" == ⎇* ]]; then
-    # jj workspace or git worktree: パスを抽出して移動
+  if [[ "$selected" == ⎇* ]]; then
+    # git worktree: パスを抽出して移動
     cd "$(echo "$selected" | sed 's/.*→ //')"
   else
     # ghq repository: 履歴に追記して移動
@@ -357,15 +333,7 @@ gclean() {
     items="${items}[branch] ${branch}\n"
   done
 
-  # 2. jj workspaces (ghq配下, .jj/repo がファイル = non-main workspace)
-  if command -v jj &>/dev/null; then
-    while IFS= read -r repo_file; do
-      local ws_dir=$(dirname "$(dirname "$repo_file")")
-      items="${items}[jj-ws] $(basename "$ws_dir") → ${ws_dir}\n"
-    done < <(find "$ghq_root" -maxdepth 5 -path '*/.jj/repo' -type f 2>/dev/null)
-  fi
-
-  # 3. git worktrees (non-main)
+  # 2. git worktrees (non-main)
   if command -v gwq &>/dev/null; then
     while IFS= read -r line; do
       [ -n "$line" ] && items="${items}[worktree] ${line}\n"
@@ -400,10 +368,6 @@ gclean() {
         \[branch\]*)
           local name="${item#\[branch\] }"
           git branch -D "$name" && echo "Deleted branch: $name"
-          ;;
-        \[jj-ws\]*)
-          local target="${item#*→ }"
-          rm -rf "$target" && echo "Removed jj workspace: $target"
           ;;
         \[worktree\]*)
           local target="${item#*→ }"
@@ -505,7 +469,7 @@ ghq-help() {
   echo "  gget-search - Search and clone from GitHub"
   echo "  ghnew       - Create new GitHub repo and clone"
   echo "  grm         - Remove repository (multi-select, oldest first)"
-  echo "  gclean      - Clean up gone branches, jj workspaces, git worktrees (interactive)"
+  echo "  gclean      - Clean up gone branches, git worktrees (interactive)"
   echo "  gsw         - Switch to remote branch with fzf (interactive)"
   echo "  fcd         - Interactive directory navigation with fzf"
   echo "  ns          - Run package.json scripts with fzf (interactive)"

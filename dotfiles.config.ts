@@ -56,11 +56,6 @@ export default defineConfig({
       type: "directory",
     },
     {
-      source: "./config/jj",
-      target: "~/.config/jj",
-      type: "directory",
-    },
-    {
       source: "./config/ghq",
       target: "~/.config/ghq",
       type: "directory",
@@ -73,11 +68,6 @@ export default defineConfig({
     {
       source: "./config/ghostty",
       target: "~/.config/ghostty",
-      type: "directory",
-    },
-    {
-      source: "./config/nvim",
-      target: "~/.config/nvim",
       type: "directory",
     },
     {
@@ -108,11 +98,6 @@ export default defineConfig({
     {
       source: "./bin/claude-logs",
       target: "~/.local/bin/claude-logs",
-      type: "file",
-    },
-    {
-      source: "./bin/gh-octo-review",
-      target: "~/.local/bin/gh-octo-review",
       type: "file",
     },
     {

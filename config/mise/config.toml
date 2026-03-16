@@ -1,5 +1,4 @@
 [tools]
-neovim = "latest"
 helix = "latest"
 node = "24.6.0"
 starship = "latest"
@@ -14,11 +13,10 @@ fzf = "latest"
 gh = "latest"
 ghq = "latest"
 "ubi:d-kuro/gwq" = "latest"
-jj = "latest"
 lazygit = "latest"
 delta = "latest"
 ffmpeg = "latest"
-"github:ushironoko/octorus" = "latest"
+"github:ushironoko/octorus" = "0.5.8"
 "github:ushironoko/abbrs" = "latest"
 
 [settings]
