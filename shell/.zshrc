@@ -53,6 +53,10 @@ function y() {
 [ -f "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/interactive.sh" ] && \
   source "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/interactive.sh"
 
+# Claude Code session history display on chpwd
+[ -f "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/claude-sessions.sh" ] && \
+  source "$HOME/ghq/github.com/ushironoko/dotfiles/shell/functions/claude-sessions.sh"
+
 # pnpm
 export PNPM_HOME="$HOME/Library/pnpm"
 case ":$PATH:" in

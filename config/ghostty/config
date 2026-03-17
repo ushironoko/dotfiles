@@ -24,8 +24,8 @@ window-inherit-working-directory = true
 
 # Cursor
 
-cursor-style = underline
-cursor-style-blink = false
+cursor-style = block
+cursor-style-blink = true
 
 # Shell
 
