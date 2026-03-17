@@ -62,9 +62,14 @@ const copyRecursive = async (source: string, dest: string): Promise<void> => {
   const expandedSource = expandPath(source);
   const expandedDest = expandPath(dest);
 
-  const stats = await stat(expandedSource);
+  const lstats = await lstat(expandedSource);
 
-  if (stats.isDirectory()) {
+  if (lstats.isSymbolicLink()) {
+    // Skip symlinks during backup (may be broken or managed by dotfiles)
+    return;
+  }
+
+  if (lstats.isDirectory()) {
     await ensureDir(expandedDest);
     const files = await readdir(expandedSource);
 
