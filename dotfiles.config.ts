@@ -28,7 +28,6 @@ export default defineConfig({
       type: "selective",
       include: [
         "agents",
-        "commands",
         "hooks",
         "skills",
         "CLAUDE.md",

@@ -3,7 +3,8 @@
 
 [settings]
 # prefixes = ["sudo", "doas"]  # commands that preserve command position
-# remind = false  # remind when abbreviation could have been used
+remind = true  # remind when abbreviation could have been used
+page_size = 5
 
 # Regular abbreviation (expand only at command position)
 [[abbr]]
