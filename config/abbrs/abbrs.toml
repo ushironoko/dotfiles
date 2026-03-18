@@ -127,3 +127,8 @@ expansion = "claude --permission-mode auto"
 [[abbr]]
 keyword = "clr"
 expansion = "claude --permission-mode auto --resume {{session_id}}"
+
+[[abbr]]
+keyword = "grep"
+expansion = "rg"
+allow_conflict = true
