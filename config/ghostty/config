@@ -4,13 +4,13 @@
 
 # Theme (light:dark format for automatic switching)
 
-theme = light:Catppuccin Latte,dark:Citruszest
+theme = light:Catppuccin Latte,dark:Arcoiris
 background-opacity = 1
 background = 1c1918
 
 # Font
 
-font-family = Osaka−等幅
+font-family = Osaka
 font-size = 15
 font-thicken = true
 
@@ -44,7 +44,7 @@ quick-terminal-position = bottom
 quick-terminal-size = 90%
 quick-terminal-animation-duration = 0.1
 quick-terminal-autohide = true
-quick-terminal-keyboard-interactivity = on-demand
+quick-terminal-keyboard-interactivity = none
 
 # macos
 macos-titlebar-style = tabs

@@ -4,7 +4,6 @@ format = """
 $directory\
 $git_branch\
 $git_status\
-$direnv\
 $line_break\
 $character"""
 
@@ -16,34 +15,18 @@ format = "[$path]($style) "
 style = "bold cyan"
 read_only = " 🔒"
 
-# Git branch module
-[git_branch]
-symbol = ""
-format = "[$symbol $branch]($style) "
-style = "bold purple"
-
 # Git status module - shows repository status
 [git_status]
 format = '([\[$all_status$ahead_behind\]]($style) )'
 style = "bold yellow"
-conflicted = "=${count}"
 ahead = "⇡${count}"
 behind = "⇣${count}"
 diverged = "⇕⇡${ahead_count}⇣${behind_count}"
 untracked = "?${count}"
-stashed = "\\$${count}"
 modified = "!${count}"
 staged = "+${count}"
 renamed = "»${count}"
 deleted = "✘${count}"
-
-# Direnv module - shows if direnv is active
-[direnv]
-format = "[\\[$symbol $allowed\\]]($style) "
-symbol = "direnv"
-style = "bold cyan"
-disabled = false
-detect_files = [".envrc"]
 
 # Character module - the prompt symbol
 [character]

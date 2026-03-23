@@ -132,3 +132,11 @@ expansion = "claude --permission-mode auto --resume {{session_id}}"
 keyword = "grep"
 expansion = "rg"
 allow_conflict = true
+
+[[abbr]]
+keyword = "car"
+expansion = "cargo run --release"
+
+[[abbr]]
+keyword = "gs"
+expansion = "git switch '{{branch_name}}'"
