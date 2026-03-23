@@ -33,13 +33,13 @@ if [ -n "$USED_PCT" ]; then
     # Color coding based on remaining percentage
     if [ "$REMAINING_INT" -ge 30 ]; then
         # Safe: green
-        CONTEXT_DISPLAY="\033[32m[${BAR}] ${REMAINING_INT}%\033[0m"
+        CONTEXT_DISPLAY="\033[32m${BAR} ${REMAINING_INT}%\033[0m"
     elif [ "$REMAINING_INT" -ge 10 ]; then
         # Warning: yellow
-        CONTEXT_DISPLAY="\033[33m[${BAR}] ${REMAINING_INT}%\033[0m"
+        CONTEXT_DISPLAY="\033[33m${BAR} ${REMAINING_INT}%\033[0m"
     else
         # Critical: red
-        CONTEXT_DISPLAY="\033[31m[${BAR}] ${REMAINING_INT}%\033[0m"
+        CONTEXT_DISPLAY="\033[31m${BAR} ${REMAINING_INT}%\033[0m"
     fi
 fi
 
