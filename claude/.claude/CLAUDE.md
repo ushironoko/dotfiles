@@ -55,13 +55,13 @@ Terms
   - Specific project information such as project-specific names, file counts, or build statistics
   - Internal tool names or infrastructure information
 - **ALWAYS** Write commit messages using only generic technical terms.
-- These rules also apply to the content, examples, and comments within CLAUDE.md itself.c
+- These rules also apply to the content, examples, and comments within CLAUDE.md itself
 
 # 4. Workflow Principles
 
 **ALWAYS** Always use `start-work` skill
 
-## expections
+## exceptions
 
 - Simply tasks(e.g. typo fix, document updates, etc.)
 
