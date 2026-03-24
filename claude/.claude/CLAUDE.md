@@ -23,7 +23,7 @@ Terms
 - **ALWAYS** Specify exact versions: `module@5.5.1` (NOT `^5.0.0` or `@latest`)
 - **NEVER** Suppress errors without handling
 - **NEVER** Commit to git until explicitly instructed by the user
-- **NEVER** In code comments, write only "why it is necessary." Do not write what is already obvious from the code
+- **NEVER** Do not write what is already obvious from the code.In code comments, write only "why it is necessary." 
 
 ## TypeScript Projects
 - **ALWAYS** Check for lock files and use the appropriate package manager:
