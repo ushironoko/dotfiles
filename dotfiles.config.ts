@@ -95,16 +95,6 @@ export default defineConfig({
       type: "file",
     },
     {
-      source: "./bin/claude-logs",
-      target: "~/.local/bin/claude-logs",
-      type: "file",
-    },
-    {
-      source: "./config/gh-dash",
-      target: "~/.config/gh-dash",
-      type: "directory",
-    },
-    {
       source: "./config/abbrs",
       target: "~/.config/abbrs",
       type: "directory",
