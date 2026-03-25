@@ -24,8 +24,11 @@ window-inherit-working-directory = true
 
 # Cursor
 
-cursor-style = block
+cursor-style = block_hollow
 cursor-style-blink = true
+cursor-color = #ff6600
+cursor-opacity = 1
+adjust-cursor-thickness = 1
 
 # Shell
 
