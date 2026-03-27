@@ -19,6 +19,7 @@ reviewer = "codex"
 reviewee = "claude"
 max_iterations = 10
 timeout_secs = 600
+enable_worktree = true
 # prompt_dir = "/custom/path/to/prompts"  # Optional: custom prompt directory
 
 # Additional tools for reviewer agent (Claude only)

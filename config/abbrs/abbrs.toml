@@ -121,14 +121,6 @@ keyword = "gpo"
 expansion = "git push origin $(git branch --show-current)"
 
 [[abbr]]
-keyword = "cla"
-expansion = "claude --permission-mode auto"
-
-[[abbr]]
-keyword = "clr"
-expansion = "claude --permission-mode auto --resume {{session_id}}"
-
-[[abbr]]
 keyword = "grep"
 expansion = "rg"
 allow_conflict = true
@@ -140,3 +132,7 @@ expansion = "cargo run --release"
 [[abbr]]
 keyword = "gs"
 expansion = "git switch '{{branch_name}}'"
+
+[[abbr]]
+keyword = "cla"
+expansion = "claude --enable-auto-mode"

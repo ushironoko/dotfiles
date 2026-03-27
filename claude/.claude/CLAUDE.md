@@ -14,7 +14,7 @@ Terms
 
 ## All time requirements
 
-- **ALWAYS** Regarding technology, always research and apply the latest best practices. Do not rely solely on your own knowledge to make decisions 
+- **ALWAYS** Regarding technology, always research and apply the latest best practices. Do not rely solely on your own knowledge to make decisions
 - **ALWAYS** Before PlanExit, review the created plan file using the `plan-review` skill before showing it to the user
 - **ALWAYS** Use `start-work` skill for non-trivial changes
 - **ALWAYS** Use `ast-grep` skill for any code research in codebases
@@ -23,9 +23,10 @@ Terms
 - **ALWAYS** Specify exact versions: `module@5.5.1` (NOT `^5.0.0` or `@latest`)
 - **NEVER** Suppress errors without handling
 - **NEVER** Commit to git until explicitly instructed by the user
-- **NEVER** Do not write what is already obvious from the code.In code comments, write only "why it is necessary." 
+- **NEVER** Do not write what is already obvious from the code.In code comments, write only "why it is necessary."
 
 ## TypeScript Projects
+
 - **ALWAYS** Check for lock files and use the appropriate package manager:
   - If `pnpm-lock.yaml` exists → use `pnpm`
   - If `bun.lock` exists → use `bun`
@@ -77,4 +78,3 @@ Terms
 # To WSL/Ubuntu mount path
 "/mnt/c/Users/user1/Pictures/test.jpg"
 ```
-

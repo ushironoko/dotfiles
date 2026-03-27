@@ -14,6 +14,7 @@ This agent reviews whether code comments are appropriately provided. Appropriate
 ## Args
 
 This agent is called with the following parameters. If not provided, it searches from the project root.
+
 - File path of the review target (regular expression)
 
 ## If a violation is detected
@@ -22,6 +23,6 @@ Violating comments must be collected and fed back to the main agent in their ent
 
 ```json
 {
-  "/path/to/file.{ext}:LXXX-LXXX": "Reason",
+  "/path/to/file.{ext}:LXXX-LXXX": "Reason"
 }
 ```

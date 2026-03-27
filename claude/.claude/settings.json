@@ -123,5 +123,6 @@
   "alwaysThinkingEnabled": true,
   "effortLevel": "high",
   "plansDirectory": "./plans",
-  "skipAutoPermissionPrompt": true
+  "skipAutoPermissionPrompt": true,
+  "language": "Japanese"
 }
