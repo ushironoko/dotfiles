@@ -9,6 +9,8 @@ Declare work scope and Target Files via bit issue + git worktree so that paralle
 
 Every session working in a worktree creates a bit issue listing its Target Files. Since all worktrees share the same `.git`, any worktree can instantly read any other session's issues.
 
+`bit issue` works transparently from any worktree.
+
 ### Session Lifecycle
 
 ```
@@ -40,19 +42,6 @@ Every session working in a worktree creates a bit issue listing its Target Files
 ```
 
 ## 0. Prerequisites
-
-### GIT_DIR is required for bit commands inside a worktree
-
-In a git worktree, `.git` is a file (pointer to the main `.git` directory), not a directory. The bit CLI expects a `.git` directory, so running bit commands directly inside a worktree fails with `"path exists and is not dir: ./.git"`.
-
-Set `GIT_DIR` to the main repo's `.git` before every bit command:
-
-```bash
-MAIN_GIT="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')/.git"
-GIT_DIR="$MAIN_GIT" bit issue <subcommand> ...
-```
-
-All subsequent sections assume `MAIN_GIT` has been set. It only needs to be computed once per session.
 
 ### Worktree lifecycle is managed by hooks
 
@@ -88,7 +77,16 @@ Also denied in `settings.json` `permissions.deny`.
 
 `bit issue init` / `create` / `list` / `view` / `update` / `close` / `reopen` / `comment add` / `comment list` / `search`
 
-## 1. Read the Plan File
+## 1. Decide: New Session or Resume
+
+```bash
+bit issue list --open
+```
+
+- **Open session exists for this branch** → go to [Resume Session](#6-resume-session)
+- **No existing session** → continue to §2
+
+## 2. Read the Plan File
 
 Worktrees have isolated filesystems. Plan files are `.gitignore`d, so `git show` won't work. Read from the main repo's absolute path.
 
@@ -103,17 +101,26 @@ If no plan file exists (minor work without plan mode), omit the Plan section fro
 
 **Important**: Reading the plan file **before entering the worktree** is the most reliable approach. After entering, you can still access it via the main repo's absolute path.
 
-## 2. Work Declaration Protocol
+## 3. Work Declaration Protocol
 
 After worktree creation, create a `TaskCreate` task, then embed the returned `task_id` in the bit issue title. This lets the TaskCompleted hook auto-identify and close the issue later.
+
+### Assign a sequence number
+
+Count **all** issues (not just open) with the session label to avoid reuse after close/reopen cycles:
+
+```bash
+bit issue list --all --label "session:<branch-name>"
+# → N issues found → next seq = N+1
+```
 
 ### Create parent issue (plan)
 
 Create a single parent issue containing the full plan. This serves as the root for all task issues in this session.
 
 ```bash
-GIT_DIR="$MAIN_GIT" bit issue create \
-  --title "[plan:<branch-name>] <plan title in English>" \
+bit issue create \
+  --title "[plan:<branch-name>#<seq>] <plan title in English>" \
   --label "session:<branch-name>" \
   --body "$(cat <<'BODY'
 ## Session Info
@@ -139,8 +146,8 @@ Create **all task issues before starting work**.
 
 ```bash
 # Repeat for each task in the plan
-GIT_DIR="$MAIN_GIT" bit issue create \
-  --title "[task:<branch-name>:<task_id>] <task summary in English>" \
+bit issue create \
+  --title "[task:<branch-name>#<seq>:<task_id>] <task summary in English>" \
   --label "session:<branch-name>" \
   --body "$(cat <<'BODY'
 parent: #<parent_issue_id>
@@ -156,7 +163,7 @@ BODY
 )"
 ```
 
-Including `<branch-name>` in the title prevents collision when multiple sessions have the same sequential task_id.
+Including `<branch-name>` and `#<seq>` in the title prevents collision when multiple sessions have the same sequential task_id.
 
 **Why create a parent issue?** It groups all tasks under one plan, making it easy to see the full scope of a session. On resume, reading the parent issue restores the complete plan context.
 
@@ -164,7 +171,7 @@ Including `<branch-name>` in the title prevents collision when multiple sessions
 
 **Why use absolute paths for worktree?** Needed for orphan detection and as the `cd` target on session resume.
 
-## 3. Cross-Session Awareness Protocol
+## 4. Cross-Session Awareness Protocol
 
 Check other sessions' Target Files at these three points:
 
@@ -172,33 +179,81 @@ Check other sessions' Target Files at these three points:
 2. **On scope change**: When you need to modify files not in your original Target Files
 3. **Before close**: Final check before completing
 
+For each open issue **other than your own**, view it and extract Target Files from the body. Only consider `modify` and `delete` operations for overlap — `create` files are unowned by definition.
+
 ```bash
-GIT_DIR="$MAIN_GIT" bit issue list --open
-GIT_DIR="$MAIN_GIT" bit issue view <id>
+bit issue list --open
+bit issue view <other-session-id>
 ```
 
-## 4. Overlap Detection & Autonomous Adjustment
+## 5. Overlap Detection & Autonomous Adjustment
 
 ### Decision Matrix
 
 ```
-overlap = |my Target Files ∩ other Target Files| / |my Target Files|
+overlapping = my modify/delete files ∩ other modify/delete files
+remaining   = my total targets - overlapping files
 
-- 0%:      proceed
-- <50%:    exclude overlapping files, record in comment
-- ≥50%:    ask user (no orchestrator in peer-to-peer model)
+- 0 overlapping:              proceed
+- some overlapping, remaining > 0: exclude overlapping files, update issue body + add comment
+- all modify/delete files overlap:  ask user whether to proceed with exclusions or abort
 ```
 
 ### Dynamic Target Files Update
 
-- Files owned by another session → avoid modifying, find alternative approach
-- Files owned by nobody → add to your Target Files, record in comment
+When excluding or adding files, update the issue body to keep Target Files authoritative, then add a comment for audit trail:
+
+- Files owned by another session → exclude from issue body, find alternative approach
 
 ```bash
-GIT_DIR="$MAIN_GIT" bit issue comment add <id> --body "Target Files added: path/to/new-file.ts (modify) - reason: ..."
+bit issue view <id>                      # read current body
+bit issue update <id> --body "<revised body with excluded files removed>"
+bit issue comment add <id> --body "Excluded path/to/file.ts (owned by session X)"
 ```
 
-## 5. Completion Protocol
+- Files owned by nobody → add to issue body, record in comment
+
+```bash
+bit issue view <id>                      # read current body
+bit issue update <id> --body "<revised body with new file added>"
+bit issue comment add <id> --body "Target added: path/to/new-file.ts (modify) - reason: ..."
+```
+
+## 6. Resume Session
+
+### 1. Find the Session
+
+```bash
+bit issue list --open --label "session:<branch-name>"
+# or
+bit issue list --open
+```
+
+### 2. Restore Context
+
+```bash
+bit issue view <id>              # plan + target files
+bit issue comment list <id>      # scope changes + progress
+```
+
+The issue body contains the canonical Target Files and plan. Comments track scope changes and progress.
+
+### 3. Continue
+
+Resume work using the restored context. The issue body is the source of truth for current Target Files.
+
+### 4. Clean Up Orphans
+
+If a session is abandoned with no committed work:
+
+```bash
+bit issue comment add <id> --body "Orphan: session abandoned"
+bit issue close <id>
+```
+
+Use `bit issue list --all` to find both open and closed sessions.
+
+## 7. Completion Protocol
 
 Close task issues **before** removing the worktree. Reversing this order creates orphan issues (issue stays open but its worktree is gone).
 
@@ -215,8 +270,8 @@ The hook matches the open issue containing `[task:<branch>:<task_id>]` in its ti
 Fallback if the hook fails (async, so no error is raised):
 
 ```bash
-GIT_DIR="$MAIN_GIT" bit issue comment add <id> --body "Done: <summary of changes>"
-GIT_DIR="$MAIN_GIT" bit issue close <id>
+bit issue comment add <id> --body "Done: <summary of changes>"
+bit issue close <id>
 ```
 
 ### Parent issue close
@@ -224,11 +279,11 @@ GIT_DIR="$MAIN_GIT" bit issue close <id>
 After all task issues are closed, close the parent plan issue:
 
 ```bash
-GIT_DIR="$MAIN_GIT" bit issue close <parent_id>
+bit issue close <parent_id>
 # WorktreeRemove hook handles gwq remove
 ```
 
-## 6. Error Handling
+## 8. Error Handling
 
 | Situation         | Response                                                                                          |
 | ----------------- | ------------------------------------------------------------------------------------------------- |
@@ -240,3 +295,16 @@ GIT_DIR="$MAIN_GIT" bit issue close <parent_id>
 ## Worked Examples
 
 For concrete workflow examples (solo session, parallel sessions without overlap, parallel sessions with overlap adjustment), read `references/examples.md`.
+
+## Commands Reference
+
+```bash
+bit issue create --title "..." --label "..." [--label "..."] --body "..."
+bit issue list [--open] [--closed] [--all] [--label <name>] [--parent <id>]
+bit issue view <id>
+bit issue update <id> [--title "..."] [--body "..."] [--label "..."]
+bit issue close <id>                     # idempotent
+bit issue reopen <id>                    # idempotent
+bit issue comment add <id> --body "..."
+bit issue comment list <id>
+```

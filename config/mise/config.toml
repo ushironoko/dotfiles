@@ -20,6 +20,7 @@ ffmpeg = "latest"
 "github:ushironoko/abbrs" = "0.2.10"
 "ubi:ast-grep/ast-grep" = "latest"
 "github:ushironoko/gitfilm" = "0.2.0"
+"github:bit-vcs/bit" = "0.35.2"
 
 [settings]
 experimental = true
