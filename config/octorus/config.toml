@@ -8,11 +8,18 @@ theme = "Dracula"
 # Number of spaces per tab character in diff view (minimum: 1)
 tab_width = 4
 
+[layout]
+left_panel_width = 20
+zen_mode = false
+
 [keybindings]
 approve = 'a'
 request_changes = 'r'
 comment = 'c'
 suggestion = 's'
+
+[shell]
+timeout_secs = 5
 
 [ai]
 reviewer = "codex"

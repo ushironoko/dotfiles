@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="$HOME/.local/share/mise/installs/github-d-kuro-gwq/0.0.17:$PATH"
 
 INPUT=$(cat)
 WORKTREE_PATH=$(printf '%s' "$INPUT" | jq -r '.worktree_path')
