@@ -75,11 +75,6 @@ export default defineConfig({
       type: "directory",
     },
     {
-      source: "./config/lazygit",
-      target: "~/.config/lazygit",
-      type: "directory",
-    },
-    {
       source: "./config/yazi",
       target: "~/.config/yazi",
       type: "directory",

@@ -136,3 +136,7 @@ expansion = "git switch '{{branch_name}}'"
 [[abbr]]
 keyword = "cla"
 expansion = "claude --enable-auto-mode"
+
+[[abbr]]
+keyword = "og"
+expansion = "or --git-ops"

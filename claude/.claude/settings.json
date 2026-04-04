@@ -120,9 +120,9 @@
     "swift-lsp@claude-plugins-official": true,
     "typescript-lsp@claude-plugins-official": true
   },
+  "language": "Japanese",
   "alwaysThinkingEnabled": true,
-  "effortLevel": "high",
+  "effortLevel": "medium",
   "plansDirectory": "./plans",
-  "skipAutoPermissionPrompt": true,
-  "language": "Japanese"
+  "skipAutoPermissionPrompt": true
 }
