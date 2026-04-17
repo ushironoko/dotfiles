@@ -35,26 +35,26 @@ Use this skill when:
 
 Map C types to MoonBit types before writing any declarations.
 
-| C Type | MoonBit Type | Notes |
-|---|---|---|
-| `int`, `int32_t` | `Int` | 32-bit signed |
-| `uint32_t` | `UInt` | 32-bit unsigned |
-| `int64_t` | `Int64` | 64-bit signed |
-| `uint64_t` | `UInt64` | 64-bit unsigned |
-| `float` | `Float` | 32-bit float |
-| `double` | `Double` | 64-bit float |
-| `bool` | `Bool` | Passed as `int32_t` in the C ABI (not C99 `_Bool`) |
-| `uint8_t`, `char` | `Byte` | Single byte |
-| `void` | `Unit` | Return type only |
-| `void *` (opaque, GC-managed) | `type Handle` (opaque) | External object with finalizer |
-| `void *` (opaque, C-managed) | `type Handle` with `#external` annotation | No GC tracking; C manages lifetime |
-| `const uint8_t *`, `uint8_t *` | `Bytes` or `FixedArray[Byte]` | Use `#borrow` if C doesn't store it |
-| `const char *` (UTF-8 string) | `Bytes` | Null-terminated by runtime; pass directly to C |
-| `struct *` (small, no cleanup) | `struct Foo(Bytes)` | Value-as-Bytes pattern |
-| `struct *` (needs cleanup) | `type Foo` (opaque) | External object with finalizer |
-| `int` (enum/flags) | `UInt`, `Int`, or constant `enum` | `enum Foo { A = 0; B = 1; C = 10 }` maps to `int32_t` |
-| callback function pointer | `FuncRef[...]` or closure | See @references/callbacks.md |
-| output `int *` | `Ref[Int]` | Borrow the Ref |
+| C Type                         | MoonBit Type                              | Notes                                                 |
+| ------------------------------ | ----------------------------------------- | ----------------------------------------------------- |
+| `int`, `int32_t`               | `Int`                                     | 32-bit signed                                         |
+| `uint32_t`                     | `UInt`                                    | 32-bit unsigned                                       |
+| `int64_t`                      | `Int64`                                   | 64-bit signed                                         |
+| `uint64_t`                     | `UInt64`                                  | 64-bit unsigned                                       |
+| `float`                        | `Float`                                   | 32-bit float                                          |
+| `double`                       | `Double`                                  | 64-bit float                                          |
+| `bool`                         | `Bool`                                    | Passed as `int32_t` in the C ABI (not C99 `_Bool`)    |
+| `uint8_t`, `char`              | `Byte`                                    | Single byte                                           |
+| `void`                         | `Unit`                                    | Return type only                                      |
+| `void *` (opaque, GC-managed)  | `type Handle` (opaque)                    | External object with finalizer                        |
+| `void *` (opaque, C-managed)   | `type Handle` with `#external` annotation | No GC tracking; C manages lifetime                    |
+| `const uint8_t *`, `uint8_t *` | `Bytes` or `FixedArray[Byte]`             | Use `#borrow` if C doesn't store it                   |
+| `const char *` (UTF-8 string)  | `Bytes`                                   | Null-terminated by runtime; pass directly to C        |
+| `struct *` (small, no cleanup) | `struct Foo(Bytes)`                       | Value-as-Bytes pattern                                |
+| `struct *` (needs cleanup)     | `type Foo` (opaque)                       | External object with finalizer                        |
+| `int` (enum/flags)             | `UInt`, `Int`, or constant `enum`         | `enum Foo { A = 0; B = 1; C = 10 }` maps to `int32_t` |
+| callback function pointer      | `FuncRef[...]` or closure                 | See @references/callbacks.md                          |
+| output `int *`                 | `Ref[Int]`                                | Borrow the Ref                                        |
 
 ## Workflow
 
@@ -85,14 +85,14 @@ options(
 
 **Key fields:**
 
-| Field | Purpose |
-|---|---|
-| `"native-stub"` | C source files to compile. Must be in the same directory as `moon.pkg`. |
-| `targets` | Gate `.mbt` files to backends: `"ffi.mbt": ["native"]` |
-| `link(native("cc-flags": ...))` | Compile flags (`-I`, `-D`). Only for system libraries. |
-| `link(native("cc-link-flags": ...))` | Linker flags (`-L`, `-l`). Only for system libraries. |
-| `link(native("stub-cc-flags": ...))` | Compile flags for stub files only |
-| `link(native(exports: ...))` | Export MoonBit functions to C (reverse direction) |
+| Field                                | Purpose                                                                 |
+| ------------------------------------ | ----------------------------------------------------------------------- |
+| `"native-stub"`                      | C source files to compile. Must be in the same directory as `moon.pkg`. |
+| `targets`                            | Gate `.mbt` files to backends: `"ffi.mbt": ["native"]`                  |
+| `link(native("cc-flags": ...))`      | Compile flags (`-I`, `-D`). Only for system libraries.                  |
+| `link(native("cc-link-flags": ...))` | Linker flags (`-L`, `-l`). Only for system libraries.                   |
+| `link(native("stub-cc-flags": ...))` | Compile flags for stub files only                                       |
+| `link(native(exports: ...))`         | Export MoonBit functions to C (reverse direction)                       |
 
 > **Warning — `supported-targets`:** Avoid `supported-targets: ["native"]`. It prevents downstream packages from building on other targets. Use `targets` to gate individual files instead.
 
@@ -164,10 +164,10 @@ No C stub wrapper or `moonbit_make_external_object` is needed — the MoonBit ex
 
 **Ownership annotations:**
 
-| Annotation | When to use |
-|---|---|
-| `#borrow(param)` | C only reads during the call, does not store a reference |
-| `#owned(param)` | Ownership transfers to C; C must `moonbit_decref` when done |
+| Annotation       | When to use                                                 |
+| ---------------- | ----------------------------------------------------------- |
+| `#borrow(param)` | C only reads during the call, does not store a reference    |
+| `#owned(param)`  | Ownership transfers to C; C must `moonbit_decref` when done |
 
 Rules:
 
@@ -219,14 +219,14 @@ struct Settings(Bytes)  // backed by GC-managed Bytes, no finalizer
 
 **`moonbit.h` core API:**
 
-| API | Purpose |
-|---|---|
+| API                                             | Purpose                                  |
+| ----------------------------------------------- | ---------------------------------------- |
 | `moonbit_make_external_object(finalizer, size)` | GC-tracked object with cleanup finalizer |
-| `moonbit_make_bytes(len, init)` | GC-managed byte array (MoonBit `Bytes`) |
-| `moonbit_incref(ptr)` | Prevent GC collection of C-held object |
-| `moonbit_decref(ptr)` | Release C's reference (pair with incref) |
-| `Moonbit_array_length(arr)` | Length of GC-managed array or Bytes |
-| `MOONBIT_FFI_EXPORT` | Required macro on all exported functions |
+| `moonbit_make_bytes(len, init)`                 | GC-managed byte array (MoonBit `Bytes`)  |
+| `moonbit_incref(ptr)`                           | Prevent GC collection of C-held object   |
+| `moonbit_decref(ptr)`                           | Release C's reference (pair with incref) |
+| `Moonbit_array_length(arr)`                     | Length of GC-managed array or Bytes      |
+| `MOONBIT_FFI_EXPORT`                            | Required macro on all exported functions |
 
 For the full API, read `$MOON_HOME/lib/moonbit.h` (default `MOON_HOME` is `~/.moon`).
 
@@ -293,18 +293,18 @@ See @references/asan-validation.md for details.
 
 ## Decision Table
 
-| Situation | Pattern | Key Action |
-|---|---|---|
-| C reads pointer only during call | `#borrow(param)` | No decref in C |
-| C takes ownership of pointer | `#owned(param)` | C must `moonbit_decref` |
-| C handle needs cleanup on GC | External object + finalizer | `moonbit_make_external_object` |
-| C pointer, C manages lifetime | `#external` annotation on `type` | No GC tracking; call C destroy explicitly |
-| Small C struct, no cleanup | Value-as-Bytes | `moonbit_make_bytes` + `struct Foo(Bytes)` |
-| C returns null on failure | Nullable wrapper | Check null, return `Option` or raise error |
-| Callback with data parameter | FuncRef + Callback trick | See @references/callbacks.md |
-| Callback without data parameter | FuncRef only | See @references/callbacks.md |
-| C string (UTF-8) output | `Bytes` across FFI | `moonbit_make_bytes` + `memcpy` in C; `@utf8.decode_lossy` in MoonBit |
-| Output parameter (`int *result`) | `Ref[T]` with `#borrow` | C writes into Ref, MoonBit reads `.val` |
+| Situation                        | Pattern                          | Key Action                                                            |
+| -------------------------------- | -------------------------------- | --------------------------------------------------------------------- |
+| C reads pointer only during call | `#borrow(param)`                 | No decref in C                                                        |
+| C takes ownership of pointer     | `#owned(param)`                  | C must `moonbit_decref`                                               |
+| C handle needs cleanup on GC     | External object + finalizer      | `moonbit_make_external_object`                                        |
+| C pointer, C manages lifetime    | `#external` annotation on `type` | No GC tracking; call C destroy explicitly                             |
+| Small C struct, no cleanup       | Value-as-Bytes                   | `moonbit_make_bytes` + `struct Foo(Bytes)`                            |
+| C returns null on failure        | Nullable wrapper                 | Check null, return `Option` or raise error                            |
+| Callback with data parameter     | FuncRef + Callback trick         | See @references/callbacks.md                                          |
+| Callback without data parameter  | FuncRef only                     | See @references/callbacks.md                                          |
+| C string (UTF-8) output          | `Bytes` across FFI               | `moonbit_make_bytes` + `memcpy` in C; `@utf8.decode_lossy` in MoonBit |
+| Output parameter (`int *result`) | `Ref[T]` with `#borrow`          | C writes into Ref, MoonBit reads `.val`                               |
 
 ## Common Pitfalls
 

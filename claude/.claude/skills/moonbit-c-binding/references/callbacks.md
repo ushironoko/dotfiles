@@ -38,7 +38,7 @@ pub fn register_callback(callback : () -> Unit) -> Unit {
 - The C function calls your closed function with the data parameter, which
   effectively performs partial application
 - This works with any C API that supports callback data (e.g., `void
-  *user_data`, `void *ctx`, `void *payload`)
+*user_data`, `void *ctx`, `void *payload`)
 
 **Example with parameters:**
 

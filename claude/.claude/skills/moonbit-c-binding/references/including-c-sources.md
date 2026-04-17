@@ -67,10 +67,10 @@ concerns:
 Copy each source file into the package directory, encoding the original path
 into a flat filename. A common convention is replacing `/` with `#`:
 
-| Original path | Flattened filename |
-|---|---|
-| `lib/src/lib.c` | `tree-sitter#lib#src#lib.c` |
-| `src/unix/async.c` | `uv#src#unix#async.c` |
+| Original path      | Flattened filename          |
+| ------------------ | --------------------------- |
+| `lib/src/lib.c`    | `tree-sitter#lib#src#lib.c` |
+| `src/unix/async.c` | `uv#src#unix#async.c`       |
 
 The `#` has no special meaning to `moon` — it simply makes it easy to trace a
 file back to its original location. Use a library-name prefix (e.g.,

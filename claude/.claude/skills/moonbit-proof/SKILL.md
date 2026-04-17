@@ -8,6 +8,7 @@ description: Use when writing or refactoring proof-carrying code in MoonBit, esp
 Use this skill when the task is to write, extend, or debug verified MoonBit code.
 
 Typical triggers:
+
 - add contracts to executable MoonBit code
 - define an abstract model or representation invariant
 - verify a recursive data structure
@@ -20,6 +21,7 @@ Typical triggers:
 Write proof-carrying code, not proof-shaped comments.
 
 That means:
+
 - the runtime code remains executable and readable
 - the proof model is explicit
 - contracts talk about named predicates/functions with consistent roles
@@ -30,16 +32,19 @@ That means:
 Prefer `model(...)` as the default name for the proof-side semantic view of a value.
 
 Examples:
+
 - `model(set) : Fset[Int]`
 - `model(map) : Fmap[Int, Int]`
 - `model(tree) : Seq[Int]`
 
 Use a more specific name only when it is materially clearer:
+
 - `elements(node)` when the model is literally the set of elements stored in a recursive subtree
 - `domain(bitmap)` when the model is specifically the occupied index set
 - `height(tree)` when it is a structural measure, not the main semantic model
 
 Default rule:
+
 - use `model` for the main semantic abstraction
 - use specialized names like `elements`, `domain`, `height`, or `rank` for auxiliary views
 
@@ -108,6 +113,7 @@ Avoid putting the whole semantics directly into every contract.
 ## Step 2: Keep the Invariant Small
 
 The invariant should mostly describe:
+
 - shape
 - bounds
 - layout
@@ -128,6 +134,7 @@ predicate sparse_ok(sa : SparseArray) {
 ```
 
 Not good:
+
 - putting every update theorem into the invariant
 - encoding the entire semantic equality into `*_inv`
 
@@ -181,6 +188,7 @@ predicate avl(t : Tree) {
 ```
 
 Keep `.mbtp` focused on:
+
 - logic definitions
 - predicates
 - lemmas
@@ -211,6 +219,7 @@ This is often the cleanest way to finish map-refinement proofs.
 2. Small transport lemmas for updates.
 
 Examples:
+
 - add/remove `mem` at self and other keys
 - add/remove `find` at self and other keys
 - set cardinality after adding/removing an absent/present element
@@ -234,6 +243,7 @@ result
 ```
 
 Use `proof_assert`:
+
 - after record construction
 - after array writes
 - after case splits
@@ -246,6 +256,7 @@ Prefer this over introducing a callable trusted wrapper function.
 Any loop that is relevant to the proof should get invariants as soon as the loop shape stabilizes.
 
 In practice, proof-carrying MoonBit code often relies on loops for:
+
 - copying array prefixes or suffixes
 - accumulating counts or ranks
 - building a result structure incrementally
@@ -254,6 +265,7 @@ In practice, proof-carrying MoonBit code often relies on loops for:
 Do not wait for the prover to fail before writing the obvious invariants.
 
 Typical invariants:
+
 - index bounds
 - relationship between the accumulator and the abstract model so far
 - prefix/suffix copy facts
@@ -293,6 +305,7 @@ for i = 0; i < pos; {
 Then strengthen to a second invariant after the inserted/removed element is handled.
 
 Default rule:
+
 - if a loop contributes to a postcondition, its invariant should mention the proof-side progress explicitly
 - if a loop only mutates concrete state, the invariant should still state the concrete relation needed by the next abstraction lemma
 - if the loop's final yielded value matters semantically, add `proof_yield` so the prover knows what the yielded result satisfies
@@ -334,6 +347,7 @@ Use top-level verified helper functions only when they improve structure or reus
 ## Step 8: Use Structural Proof Shape for Recursive Code
 
 For recursive data structures:
+
 - define a semantic view like `model(node)` or `elements(node)`
 - define a shape invariant like `node_ok(node, level)`
 - recurse structurally
@@ -373,6 +387,7 @@ A common progression is:
 The exact intermediate predicates depend on the implementation. Choose names that reflect the actual stages in the code.
 
 Typical stages are:
+
 - unchanged region
 - updated region
 - shifted or rebuilt region
@@ -401,11 +416,13 @@ For sparse or dense-array code, a more specific ladder like `*_prefix_ok`, `*_fi
 If you have reusable proof imports or theories, put them in shim packages.
 
 Typical examples:
+
 - finite-set wrappers
 - finite-map wrappers
 - bitmap domain/rank/count helpers
 
 The benefit is:
+
 - client packages stay focused
 - imports are not duplicated
 - shared reasoning is easier to test for regressions
@@ -413,6 +430,7 @@ The benefit is:
 But keep shared shims minimal. Large shared lemma sets can perturb unrelated proofs.
 
 Also account for lowering quirks:
+
 - methods may work in contracts while static constructors do not
 - a free wrapper like `fmap_mk(...)` may still be needed even if `Fmap::mk(...)` parses
 - keep those wrappers in the shim package, not duplicated in every client
@@ -424,6 +442,7 @@ If a helper is only needed by one package, prefer a local lemma there rather tha
 Trusted helpers are acceptable as narrow bridges, but they should not be the design endpoint.
 
 If trust is unavoidable:
+
 - keep preconditions concrete
 - target one named predicate
 - keep the mathematical statement in `.mbtp`
@@ -443,6 +462,7 @@ fn singleton_bridge(res : SparseArray, idx : Int, value : Int) -> Unit where {
 ```
 
 Then remove trusted bridges in this order:
+
 1. constructors
 2. observers
 3. update functions
@@ -451,10 +471,12 @@ Then remove trusted bridges in this order:
 ## Debugging Rule: Inspect the Actual Failure First
 
 After a proof failure:
+
 - run `moon prove <pkg>`
 - inspect `_build/verif/<pkg>/<pkg>.proof.json`
 
 Classify the problem before editing:
+
 - missing arithmetic/index fact
 - missing semantic bridge
 - bad quantifier instantiation
@@ -464,12 +486,14 @@ Classify the problem before editing:
 Different causes need different fixes.
 
 Examples:
+
 - missing index fact → add a local `proof_assert`
 - missing model bridge → add a helper lemma or predicate
 - solver perturbation → move a lemma out of a shared shim
 - lowering limitation → simplify the proof surface or probe a smaller reproducer
 
 Common reproducer strategy:
+
 - isolate the construct in a tiny probe package
 - check whether `moon check` fails, `moon prove` crashes, or the VC merely times out
 - only then decide whether the issue is modeling, solver guidance, or compiler lowering
@@ -491,6 +515,7 @@ Do not assume a local fix is safe globally.
 ## Anti-Patterns
 
 Avoid:
+
 - repeating raw `#proof_import` in every client package
 - large inline contract formulas instead of named predicates
 - changing abstraction design and solver guidance in one step
@@ -502,6 +527,7 @@ Avoid:
 ## Minimal Checklist
 
 Before handing off a verified MoonBit change, confirm:
+
 - a semantic `model(...)` exists, or there is a clear reason to use a more specific name like `elements(...)`
 - a `*_inv` predicate exists
 - contracts mention named `*_pre` / `*_post` predicates when appropriate

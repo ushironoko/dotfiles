@@ -1,6 +1,5 @@
 # MoonBit Language Fundamentals
 
-
 ## Quick reference:
 
 ```mbt check
@@ -128,7 +127,6 @@ test "inspect test" {
 }
 ```
 
-
 ## Complex Types
 
 ```mbt check
@@ -240,7 +238,7 @@ test "pattern match over Array, struct and StringView" {
     [] => ... // empty array
     [single] => ... // single element
     [first, .. middle, rest] => {
-      let _ : ArrayView[Int] = middle // middle is ArrayView[Int]  
+      let _ : ArrayView[Int] = middle // middle is ArrayView[Int]
       assert_true(first is 10 && middle is [20, 25] && rest is 30)
     }
   }
@@ -301,7 +299,6 @@ fn find_pair(arr : Array[Int], target : Int) -> (Int, Int)? {
 ```
 
 **Note**: You must provide a payload to `loop`. If you want an infinite loop, use `while true { ... }` instead. The syntax `loop { ... }` without arguments is invalid.
-
 
 ## Methods and Traits
 

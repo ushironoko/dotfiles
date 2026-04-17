@@ -20,7 +20,6 @@ For fast, reliable task execution, follow this order:
 4. **Reliable refactoring**
    - Use `moon ide rename` for semantic refactoring. If multiple symbols share a name, add `--loc filename:line:col`.
    - If you want maintain backwards compatibility, use `#alias(old_api, deprecated)`.
-   
 5. **Edit minimally and package-locally**
    - Keep changes inside the correct package, use `///|` top-level delimiters, and split code into cohesive files.
 
@@ -32,7 +31,6 @@ For fast, reliable task execution, follow this order:
    - Run `moon fmt`.
    - Run `moon info` to verify whether public APIs changed (`pkg.generated.mbti` diff).
    - Report changed files, validation commands, and any remaining risks.
-
 
 ## Fast Task Playbooks
 
@@ -75,7 +73,6 @@ Use the smallest playbook that matches the request.
    - `moon fmt`
    - `moon info` (review and keep intended `pkg.generated.mbti` changes)
 
-
 # MoonBit Project Layouts
 
 MoonBit uses the `.mbt` extension for source code files and interface files with the `.mbti` extension. At
@@ -107,14 +104,14 @@ my_module
 ```
 
 - **Module**: characterized by a `moon.mod.json` file in the project root directory.
-  A MoonBit *module* is like a Go module; it is a collection of packages in subdirectories, usually corresponding to a repository or project.
+  A MoonBit _module_ is like a Go module; it is a collection of packages in subdirectories, usually corresponding to a repository or project.
   Module boundaries matter for dependency management and import paths.
 
 - **Package**: characterized by a `moon.pkg` file in each directory.
   All subcommands of `moon` will
   still be executed in the directory of the module (where `moon.mod.json` is
   located), not the current package.
-  A MoonBit *package* is the actual compilation unit (like a Go package).
+  A MoonBit _package_ is the actual compilation unit (like a Go package).
   All source files in the same package are concatenated into one unit and
   thereby share all definitions throughout that package.
   The `name` in the `moon.mod.json` file combined with the relative path to
@@ -126,7 +123,6 @@ my_module
   File names do NOT create modules, packages, or namespaces.
   You may freely split/merge/move declarations between files in the same package.
   Any declaration in a package can reference any other declaration in that package, regardless of file.
-
 
 ## Coding/layout rules you MUST follow:
 
@@ -209,7 +205,8 @@ my_module
 - `moon add package` - Add dependency
 - `moon remove package` - Remove dependency
 - `moon fmt` - Format code - should be run periodically - note that the files may be rewritten
-Note you can also use `moon -C dir check` to run commands in a specific directory.
+  Note you can also use `moon -C dir check` to run commands in a specific directory.
+
 ### Test Commands
 
 - `moon test` - Run all tests
@@ -228,7 +225,7 @@ Note you can also use `moon -C dir check` to run commands in a specific director
 
 - Output `README.mbt.md` in the package directory.
   `*.mbt.md` file and docstring contents treats `mbt check` specially.
-  `mbt check` block will be included directly as code and also run by `moon check` and `moon test`.  If you don't want the code snippets to be checked, explicit `mbt nocheck` is preferred.
+  `mbt check` block will be included directly as code and also run by `moon check` and `moon test`. If you don't want the code snippets to be checked, explicit `mbt nocheck` is preferred.
   If you are only referencing types from the package, you should use `mbt nocheck` which will only be syntax highlighted.
   Symlink `README.mbt.md` to `README.md` to adapt to systems that expect `README.md`.
 
@@ -303,6 +300,7 @@ declare pub fn parse_yaml(s : String) -> Yaml raise
 ## `moon ide [doc|peek-def|outline|find-references|hover|rename|analyze]` for code navigation and refactoring
 
 For project-local symbols and navigation, use:
+
 - `moon ide doc <query>` to discover available APIs, functions, types, and methods in MoonBit. Always prefer `moon ide doc` over other approaches when exploring what APIs are available, it is **more powerful and accurate** than `grep_search` or any regex-based searching tools.
 - `moon ide outline .` to scan a package,
 - `moon ide find-references <symbol>` to locate usages, and
@@ -310,13 +308,13 @@ For project-local symbols and navigation, use:
 - `moon ide hover sym --loc filename:line:col` to get type information at a specific location.
 - `moon ide rename <symbol> <new_name> [--loc filename:line:col]` to rename a symbol project-wide. Prefer `--loc` when symbol names are ambiguous.
 - `moon ide analyze [path]` to inspect public API usage of a package or module when planning safe refactors.
-These tools save tokens and are more precise than grepping (`grep` displays results in both definitions and call sites including comments too).
+  These tools save tokens and are more precise than grepping (`grep` displays results in both definitions and call sites including comments too).
 
 ### `moon ide doc` for API Discovery
 
 `moon ide doc` uses a specialized query syntax designed for symbol lookup:
-- **Empty query**: `moon ide doc ''`
 
+- **Empty query**: `moon ide doc ''`
   - In a module: shows all available packages in current module, including dependencies and moonbitlang/core
   - In a package: shows all symbols in current package
   - Outside package: shows all available packages
@@ -336,7 +334,7 @@ These tools save tokens and are more precise than grepping (`grep` displays resu
 
 #### `moon ide doc` Examples
 
-````bash
+```bash
 # search for String methods in standard library:
 $ moon ide doc "String"
 
@@ -367,7 +365,7 @@ pub fn String::rev(String) -> String
 
 pub fn String::rev_find(String, StringView) -> Int?
   Returns ... omitted ...
-````
+```
 
 **Best practice**: Treat this section as command reference; execution order is defined in `Agent Workflow`.
 
@@ -407,7 +405,7 @@ $ moon ide rename compute_sum calculate_sum --loc math_utils.mbt:2
 
 When the user asks: "What is the signature and docstring of `filter`? at line 14 of hover.mbt"
 
-```
+````
 $ moon ide hover  filter --loc hover.mbt:14
 test {
   let a: Array[Int] = [1]
@@ -417,12 +415,11 @@ test {
             fn[T] Array::filter(self : Array[T], f : (T) -> Bool raise?) -> Array[T] raise?
             ```
             ---
-            
+
              Creates a new array containing all elements from the input array that satisfy
              ... omitted ...
 }
-```
-
+````
 
 ### `moon ide peek-def sym [--loc filename:line:col]` example
 
@@ -430,7 +427,7 @@ When the user asks: "Can you check if `Parser::read_u32_leb128` is implemented c
 you can run `moon ide peek-def Parser::read_u32_leb128` to get the definition context
 (this is better than `grep` since it searches the whole project by semantics):
 
-``` file src/parse.mbt
+```file src/parse.mbt
 L45:|///|
 L46:|fn Parser::read_u32_leb128(self : Parser) -> UInt raise ParseError {
 L47:|  ...
@@ -456,7 +453,7 @@ the positional argument `Parser` helps locate the position.
 
 If the "sym" is a toplevel symbol, the location can be omitted:
 
-````bash
+```bash
 $ moon ide peek-def String::rev
 Found 1 symbols matching 'String::rev':
 
@@ -467,7 +464,7 @@ Found 1 symbols matching 'String::rev':
      | pub fn String::rev(self : String) -> String {
      |   self[:].rev()
      | }
-````
+```
 
 ### `moon ide outline [dir|file]` and `moon ide find-references <sym>` for Package Symbols
 
@@ -526,6 +523,7 @@ moon update                   # Update package index
 ### Typical Package configuration (`moon.pkg`)
 
 moon.pkg for simplicity
+
 ```
 import {
   "username/hello/liba",
@@ -567,7 +565,6 @@ fn main {
 
 **MoonBit standard library (moonbitlang/core) packages were automatically imported**. MoonBit is transitioning to explicit imports—you will see a warning to add imports like `moonbitlang/core/strconv` to `moon.pkg` if you use them.
 The module is always available without adding to dependencies.
-
 
 ### Creating Packages
 
@@ -728,6 +725,7 @@ test "integer and char literal overloading disambiguation via type in the curren
 
 }
 ```
+
 ## Bytes (Immutable)
 
 ```mbt check
@@ -742,6 +740,7 @@ test "bytes literals overloading and indexing" {
   }
 }
 ```
+
 ## Array (Resizable)
 
 ```mbt check
@@ -754,7 +753,9 @@ test "array literals overloading: disambiguation via type in the current context
 
 }
 ```
+
 ## String (Immutable UTF-16)
+
 `s[i]` returns a code unit (UInt16), `s.get_char(i)` returns `Char?`.
 Since MoonBit supports char literal overloading, you can write code snippets like this:
 
@@ -816,7 +817,6 @@ test "string interpolation basics" {
 ```
 
 Expressions inside `\{}` can only be _basic expressions_ (no quotes, newlines, or nested interpolations). String literals are not allowed as they make lexing too difficult.
-
 
 ### Multiple line strings
 
@@ -882,7 +882,7 @@ test "map literals and common operations" {
 
 - `String` → `StringView` via `s[:]` or `s[start:end]` or `s[start:]` or `s[:end]`
 - `Bytes` → `BytesView` via `b[:]` or `b[start:end]`, etc.
-- `Array[T]`, `FixedArray[T]`, `ReadOnlyArray[T] → `ArrayView[T]` via `a[:]` or `a[start:end]`, etc.
+- `Array[T]`, `FixedArray[T]`, `ReadOnlyArray[T] → `ArrayView[T]`via`a[:]`or`a[start:end]`, etc.
 
 **Important**: StringView slice is slightly different due to unicode safety:
 `s[a:b]` may raise an error at surrogate boundaries (UTF-16 encoding edge case). You have two options:
@@ -929,7 +929,6 @@ test "user defined types: enum and struct" {
 ```
 
 ## Functional `for` loop
-
 
 ```mbt check
 ///|
@@ -991,14 +990,15 @@ test "functional for loop control flow" {
 }
 ```
 
-You are *STRONGLY ENCOURAGED* to use functional `for` loops instead of imperative loops
-*WHENEVER POSSIBLE*, as they are easier to read and reason about.
+You are _STRONGLY ENCOURAGED_ to use functional `for` loops instead of imperative loops
+_WHENEVER POSSIBLE_, as they are easier to read and reason about.
 
 ### Loop Invariants with `where` Clause
 
 The `where` clause attaches **machine-checkable invariants** and **human-readable reasoning** to functional `for` loops. This enables formal verification thinking while keeping the code executable. Note for trivial loops, you are encouraged to convert it into `for .. in` so no reasoning is needed.
 
 **Syntax:**
+
 ```mbt nocheck
 for ... {
   ...

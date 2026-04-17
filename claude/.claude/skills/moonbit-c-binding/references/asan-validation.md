@@ -7,13 +7,13 @@ Reference for detecting memory bugs in C stub code using AddressSanitizer.
 C bindings introduce manual memory management invisible to MoonBit's GC. These bugs
 silently corrupt memory or leak resources. ASan catches them at runtime:
 
-| Bug Class | Typical Cause in Bindings |
-|---|---|
-| Use-after-free | Accessing a C object after its finalizer ran |
-| Double-free | Calling `moonbit_decref` on an already-released object |
-| Memory leaks | Missing finalizer via `moonbit_make_external_object` |
-| Buffer overflow | Wrong size passed to `moonbit_make_bytes` |
-| Use-after-return | Returning a pointer to a local C variable |
+| Bug Class        | Typical Cause in Bindings                              |
+| ---------------- | ------------------------------------------------------ |
+| Use-after-free   | Accessing a C object after its finalizer ran           |
+| Double-free      | Calling `moonbit_decref` on an already-released object |
+| Memory leaks     | Missing finalizer via `moonbit_make_external_object`   |
+| Buffer overflow  | Wrong size passed to `moonbit_make_bytes`              |
+| Use-after-return | Returning a pointer to a local C variable              |
 
 ## Quick Start
 
@@ -65,10 +65,10 @@ it afterward. Pass `--no-disable-mimalloc` to skip this step.
 ASan flags must be injected into package config files. The script snapshots,
 patches, and restores them in a `try/finally` block:
 
-| Field | How it's patched | Why |
-|---|---|---|
-| `cc-flags` | Set to `-g -fsanitize=address -fno-omit-frame-pointer` | Instruments MoonBit-generated C code |
-| `stub-cc-flags` | **Append** the same flags to existing value | Instruments C stub files (preserves `-I`, `-D` flags) |
+| Field           | How it's patched                                       | Why                                                   |
+| --------------- | ------------------------------------------------------ | ----------------------------------------------------- |
+| `cc-flags`      | Set to `-g -fsanitize=address -fno-omit-frame-pointer` | Instruments MoonBit-generated C code                  |
+| `stub-cc-flags` | **Append** the same flags to existing value            | Instruments C stub files (preserves `-I`, `-D` flags) |
 
 Patch `stub-cc-flags` on all packages with `native-stub` (unconditionally safe to
 patch all packages). Patch `cc-flags` on all entry packages (`is-main` or test).

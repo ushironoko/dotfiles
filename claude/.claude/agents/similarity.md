@@ -23,13 +23,19 @@ Install the similarity module for the target language for refactoring.
 For example, to measure duplication in TypeScript/JavaScript:
 
 ```
-cargo install similarity-ts
+cargo install similarity-ts@0.5.2
 ```
 
-After installation is complete, verify it:
+To measure duplication in MoonBit:
 
 ```
-similarity-ts --help
+cargo install similarity-mbt@0.5.2
+```
+
+After installation is complete, verify it (replace the binary name with the installed one, e.g. `similarity-ts`, `similarity-mbt`):
+
+```
+similarity-mbt --help
 ```
 
 ### 4. Executing Similarity Module
