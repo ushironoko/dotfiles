@@ -122,7 +122,7 @@
   },
   "language": "Japanese",
   "alwaysThinkingEnabled": true,
-  "effortLevel": "medium",
+  "effortLevel": "xhigh",
   "plansDirectory": "./plans",
   "skipAutoPermissionPrompt": true
 }
