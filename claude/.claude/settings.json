@@ -124,5 +124,8 @@
   "alwaysThinkingEnabled": true,
   "effortLevel": "xhigh",
   "plansDirectory": "./plans",
-  "skipAutoPermissionPrompt": true
+  "skipAutoPermissionPrompt": true,
+  "verbose": true,
+  "remoteControlAtStartup": true,
+  "agentPushNotifEnabled": true
 }

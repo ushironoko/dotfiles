@@ -18,6 +18,7 @@ ffmpeg = "latest"
 "github:bit-vcs/bit" = "0.35.2"
 "github:ast-grep/ast-grep" = "latest"
 "github:d-kuro/gwq" = "latest"
+gcloud = "latest"
 
 [settings]
 experimental = true
