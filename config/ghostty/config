@@ -4,7 +4,7 @@
 
 # Theme (light:dark format for automatic switching)
 
-theme = light:Catppuccin Latte,dark:Arcoiris
+theme = light:Catppuccin Latte,dark:Paul Millr
 background-opacity = 1
 background = 1c1918
 
