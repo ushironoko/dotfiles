@@ -7,6 +7,12 @@ idle-timeout = 500
 auto-format = true
 bufferline = "multiple"
 
+[editor.soft-wrap]
+enable = true
+max-wrap = 25
+max-indent-retain = 0
+wrap-indicator = ""
+
 [editor.cursor-shape]
 insert = "bar"
 normal = "block"

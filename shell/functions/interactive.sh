@@ -371,7 +371,17 @@ gclean() {
           ;;
         \[worktree\]*)
           local target="${item#*→ }"
-          git worktree remove --force "$target" && echo "Removed worktree: $target"
+          local main_repo=""
+          if [ -f "$target/.git" ]; then
+            main_repo=$(sed -n 's|^gitdir: \(.*\)/\.git/worktrees/.*|\1|p' "$target/.git")
+          fi
+          if [ -n "$main_repo" ] && [ -d "$main_repo/.git" ]; then
+            git -C "$main_repo" worktree remove --force "$target" && echo "Removed worktree: $target"
+          elif command -v gwq &>/dev/null; then
+            gwq remove -g -f "$target" && echo "Removed worktree: $target"
+          else
+            git worktree remove --force "$target" && echo "Removed worktree: $target"
+          fi
           ;;
       esac
     done
