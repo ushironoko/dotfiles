@@ -21,7 +21,7 @@ window-padding-y = 10
 window-padding-balance = true
 window-save-state = always
 window-inherit-working-directory = true
-split-divider-color = #969696
+split-divider-color = #393f4c
 
 # Cursor
 
