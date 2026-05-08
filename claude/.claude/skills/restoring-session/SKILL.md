@@ -1,11 +1,11 @@
 ---
-name: repairing-bit
+name: restoring-session
 description: Restore session state (plan, target files, in-flight tasks) from bit issues created by the start-work skill. Use when resuming work after Claude Code restart, when the in-memory task list is empty but bit issues exist for the current branch, or when the user mentions "restore session", "repair session", "pick up where I left off", or references a prior bit-issue-tracked session.
 ---
 
 # Overview
 
-Reverse companion of the `start-work` skill. `start-work` writes session state (plan, target files, tasks) into bit issues; `repairing-bit` reads them back and rehydrates the in-memory `TaskList`.
+Reverse companion of the `start-work` skill. `start-work` writes session state (plan, target files, tasks) into bit issues; `restoring-session` reads them back and rehydrates the in-memory `TaskList`.
 
 Use when the conversation has lost task context (new session, compacted history) but the underlying bit issues still describe ongoing work.
 
@@ -135,7 +135,7 @@ bit issue comment add <task_id_issue> \
 
 ### Phase 8: Hand off to start-work conventions
 
-Once tasks are restored, work continues under the `start-work` Cross-Session Awareness Protocol (overlap detection, scope-change updates, completion protocol). `repairing-bit` does not own the rest of the lifecycle.
+Once tasks are restored, work continues under the `start-work` Cross-Session Awareness Protocol (overlap detection, scope-change updates, completion protocol). `restoring-session` does not own the rest of the lifecycle.
 
 ## Error handling
 
