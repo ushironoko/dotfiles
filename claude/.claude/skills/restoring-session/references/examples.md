@@ -1,4 +1,4 @@
-# Worked Examples — repairing-bit
+# Worked Examples — restoring-session
 
 Concrete restoration walk-throughs. Read on demand from `SKILL.md`.
 
