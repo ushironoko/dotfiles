@@ -1,6 +1,5 @@
 #!/bin/bash
 input=$(cat)
-datetime=$(date '+%Y/%m/%d %H:%M:%S')
 
 CURRENT_DIR=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // empty')
 USED_PCT=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
@@ -32,17 +31,34 @@ if [ -n "$USED_PCT" ]; then
     fi
 fi
 
+# Git context. Run via `git -C "$CURRENT_DIR"` so worktrees resolve their own
+# HEAD/remote even if the shell CWD differs from the workspace path.
 GIT_BRANCH=""
-if git rev-parse --git-dir > /dev/null 2>&1; then
-    BRANCH=$(git branch --show-current 2>/dev/null)
+ORG_REPO=""
+GIT_DIR_ARG="${CURRENT_DIR:-.}"
+if git -C "$GIT_DIR_ARG" rev-parse --git-dir > /dev/null 2>&1; then
+    BRANCH=$(git -C "$GIT_DIR_ARG" branch --show-current 2>/dev/null)
     if [ -n "$BRANCH" ]; then
         GIT_BRANCH=" | $BRANCH"
     fi
+    # Extract org/repo from origin URL. Handles SSH (git@host:org/repo.git)
+    # and HTTPS (https://host/org/repo.git). Strips trailing .git, then takes
+    # the last "<seg>/<seg>" pair using the final ':' or '/' as separator.
+    ORIGIN_URL=$(git -C "$GIT_DIR_ARG" remote get-url origin 2>/dev/null)
+    if [ -n "$ORIGIN_URL" ]; then
+        TRIMMED_URL="${ORIGIN_URL%.git}"
+        CANDIDATE=$(printf '%s' "$TRIMMED_URL" | sed -E 's|^.*[/:]([^/:]+/[^/:]+)$|\1|')
+        case "$CANDIDATE" in
+            */*) ORG_REPO="$CANDIDATE" ;;
+        esac
+    fi
 fi
 
-# Checks section: render lint/typecheck/test from cache if available.
-# Quietly omitted when the lib or jq is missing so the rest of the statusline
-# keeps working on minimal systems.
+# Checks section: always render lint/typecheck/test glyphs when a project is
+# detected. Cache may be absent (hook hasn't completed) or contain "skipped"
+# slots — both states must still be visible to the user. Section is only
+# omitted when no project type can be identified, or when prerequisites
+# (lib, jq) are missing on minimal systems.
 CHECKS_DISPLAY=""
 LIB_PATH="${STATUSLINE_LIB:-$HOME/.claude/hooks/lib/statusline_checks_lib.sh}"
 if [ -n "$CURRENT_DIR" ] && [ -f "$LIB_PATH" ] && command -v jq > /dev/null 2>&1; then
@@ -50,29 +66,39 @@ if [ -n "$CURRENT_DIR" ] && [ -f "$LIB_PATH" ] && command -v jq > /dev/null 2>&1
     source "$LIB_PATH"
     PROJECT_ROOT=$(find_project_root "$CURRENT_DIR")
     if [ -n "$PROJECT_ROOT" ]; then
-        CACHE_FILE=$(cache_file_path "$PROJECT_ROOT")
-        if [ -f "$CACHE_FILE" ]; then
-            CACHE_CONTENT=$(cat "$CACHE_FILE" 2>/dev/null)
-            if printf '%s' "$CACHE_CONTENT" | jq -e . > /dev/null 2>&1; then
-                LABEL=$(printf '%s' "$CACHE_CONTENT" | jq -r '.label // empty')
-                LINT_ST=$(printf '%s' "$CACHE_CONTENT" | jq -r '.checks.lint.status // "skipped"')
-                TC_ST=$(printf '%s' "$CACHE_CONTENT" | jq -r '.checks.typecheck.status // "skipped"')
-                TEST_ST=$(printf '%s' "$CACHE_CONTENT" | jq -r '.checks.test.status // "skipped"')
-                if [ "$LINT_ST" != "skipped" ] || [ "$TC_ST" != "skipped" ] || [ "$TEST_ST" != "skipped" ]; then
-                    LINT_G=$(status_to_glyph "$LINT_ST")
-                    TC_G=$(status_to_glyph "$TC_ST")
-                    TEST_G=$(status_to_glyph "$TEST_ST")
-                    CHECKS_DISPLAY=" | ${LABEL} L${LINT_G} T${TC_G} X${TEST_G}"
+        LANG_TYPE=$(detect_project_type "$PROJECT_ROOT")
+        LABEL=$(project_label "$LANG_TYPE")
+        if [ -n "$LABEL" ]; then
+            LINT_ST="pending"
+            TC_ST="pending"
+            TEST_ST="pending"
+            CACHE_FILE=$(cache_file_path "$PROJECT_ROOT")
+            if [ -f "$CACHE_FILE" ]; then
+                CACHE_CONTENT=$(cat "$CACHE_FILE" 2>/dev/null)
+                if printf '%s' "$CACHE_CONTENT" | jq -e . > /dev/null 2>&1; then
+                    CACHED_LABEL=$(printf '%s' "$CACHE_CONTENT" | jq -r '.label // empty')
+                    [ -n "$CACHED_LABEL" ] && LABEL="$CACHED_LABEL"
+                    LINT_ST=$(printf '%s' "$CACHE_CONTENT" | jq -r '.checks.lint.status // "pending"')
+                    TC_ST=$(printf '%s' "$CACHE_CONTENT" | jq -r '.checks.typecheck.status // "pending"')
+                    TEST_ST=$(printf '%s' "$CACHE_CONTENT" | jq -r '.checks.test.status // "pending"')
                 fi
             fi
+            LINT_G=$(status_to_glyph "$LINT_ST")
+            TC_G=$(status_to_glyph "$TC_ST")
+            TEST_G=$(status_to_glyph "$TEST_ST")
+            CHECKS_DISPLAY=" | ${LABEL} L${LINT_G} T${TC_G} X${TEST_G}"
         fi
     fi
 fi
 
-OUTPUT="${CURRENT_DIR##*/}${GIT_BRANCH}${CHECKS_DISPLAY}"
+DIR_NAME="${CURRENT_DIR##*/}"
+if [ -n "$ORG_REPO" ]; then
+    OUTPUT="${ORG_REPO} | ${DIR_NAME}${GIT_BRANCH}${CHECKS_DISPLAY}"
+else
+    OUTPUT="${DIR_NAME}${GIT_BRANCH}${CHECKS_DISPLAY}"
+fi
 if [ -n "$CONTEXT_DISPLAY" ]; then
     OUTPUT="$OUTPUT | $CONTEXT_DISPLAY"
 fi
-OUTPUT="$OUTPUT | $datetime"
 
 echo -e "$OUTPUT"

@@ -155,7 +155,7 @@ describe("statusline render: checks section", () => {
     expect(r.stdout).toContain("L\x1b[90m-\x1b[0m");
   });
 
-  test("omits section when all checks are skipped", async () => {
+  test("renders all-skipped row with grey dashes when every slot is skipped", async () => {
     const { project, cache } = await setupProject();
     tmps.push(join(project, ".."));
     await writeCache(cache, project, "ts", "TS", {
@@ -169,11 +169,12 @@ describe("statusline render: checks section", () => {
       { STATUSLINE_CACHE_DIR: cache },
     );
 
-    expect(r.stdout).not.toContain("TS L");
-    expect(r.stdout).not.toContain("\x1b[90m-\x1b[0m");
+    expect(r.stdout).toContain(
+      "TS L\x1b[90m-\x1b[0m T\x1b[90m-\x1b[0m X\x1b[90m-\x1b[0m",
+    );
   });
 
-  test("omits section when no cache file exists", async () => {
+  test("renders pending '?' glyphs when no cache file exists yet", async () => {
     const { project, cache } = await setupProject();
     tmps.push(join(project, ".."));
 
@@ -182,7 +183,9 @@ describe("statusline render: checks section", () => {
       { STATUSLINE_CACHE_DIR: cache },
     );
 
-    expect(r.stdout).not.toContain("TS L");
+    expect(r.stdout).toContain(
+      "TS L\x1b[90m?\x1b[0m T\x1b[90m?\x1b[0m X\x1b[90m?\x1b[0m",
+    );
   });
 
   test("omits section when project type is undetected", async () => {

@@ -9,7 +9,7 @@ theme = "Dracula"
 tab_width = 4
 
 [layout]
-left_panel_width = 20
+left_panel_width = 30
 zen_mode = false
 
 [keybindings]
