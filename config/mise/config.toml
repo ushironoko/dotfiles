@@ -19,6 +19,7 @@ ffmpeg = "latest"
 "github:ast-grep/ast-grep" = "latest"
 "github:d-kuro/gwq" = "latest"
 gcloud = "latest"
+"github:koalaman/shellcheck" = "v0.10.0"
 
 [settings]
 experimental = true

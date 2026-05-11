@@ -10,7 +10,7 @@
     "build": "bun build src/index.ts --outdir=dist --target=bun",
     "test": "bun test",
     "lint": "oxlint",
-    "lint:sh": "if command -v shellcheck >/dev/null 2>&1; then shellcheck -x claude/.claude/statusline.sh claude/.claude/hooks/lib/statusline_checks_lib.sh claude/.claude/hooks/lib/statusline_checks_run.sh claude/.claude/hooks/session_start/statusline_checks.sh claude/.claude/hooks/stop/statusline_checks.sh; else echo 'shellcheck not installed; skipping shell lint. Install with: mise use -g ubi:koalaman/shellcheck'; fi",
+    "lint:sh": "if command -v shellcheck >/dev/null 2>&1; then shellcheck -x claude/.claude/statusline.sh claude/.claude/hooks/lib/statusline_checks_lib.sh claude/.claude/hooks/lib/statusline_checks_run.sh claude/.claude/hooks/session_start/statusline_checks.sh claude/.claude/hooks/stop/statusline_checks.sh; else echo 'shellcheck not installed; skipping shell lint. Install with: mise use -g github:koalaman/shellcheck'; fi",
     "format": "prettier --write .",
     "lint:fix": "oxlint --fix",
     "tsc": "tsgo --noEmit",
