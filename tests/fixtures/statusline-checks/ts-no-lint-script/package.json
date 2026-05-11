@@ -1,0 +1,9 @@
+{
+  "name": "fixture-ts-no-lint-script",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "true",
+    "test": "true"
+  }
+}
