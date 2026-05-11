@@ -105,6 +105,30 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session_start/statusline_checks.sh",
+            "timeout": 600,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/stop/statusline_checks.sh",
+            "timeout": 600,
+            "async": true
+          }
+        ]
+      }
     ]
   },
   "statusLine": {

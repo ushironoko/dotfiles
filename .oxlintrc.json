@@ -3,10 +3,16 @@
     "node": true,
     "es2022": true
   },
+  "globals": {
+    "Bun": "readonly"
+  },
   "plugins": ["typescript", "import", "unicorn"],
   "rules": {
     "no-unused-vars": "warn",
     "no-undef": "error",
+    "unicorn/no-null": "off",
+    "unicorn/numeric-separators-style": "off",
+    "unicorn/consistent-function-scoping": "off",
     "no-await-in-loop": "off",
     "no-continue": "off",
     "no-ternary": "off",

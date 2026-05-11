@@ -1,0 +1,10 @@
+{
+  "name": "fixture-ts-no-tsconfig-no-lockfile",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint": "true",
+    "typecheck": "true",
+    "test": "true"
+  }
+}

@@ -1,49 +1,37 @@
 #!/bin/bash
-# Read JSON input from stdin
 input=$(cat)
 datetime=$(date '+%Y/%m/%d %H:%M:%S')
 
-# Extract values using jq
-CURRENT_DIR=$(echo "$input" | jq -r '.workspace.current_dir')
+CURRENT_DIR=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // empty')
 USED_PCT=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
-REMAINING_PCT=$(echo "$input" | jq -r '.context_window.remaining_percentage // empty')
 
-# Format context remaining as HP gauge (decreases as context is used)
 CONTEXT_DISPLAY=""
 if [ -n "$USED_PCT" ]; then
     # Add auto-compact buffer (16.5%) to show effective usage
     ADJUSTED_PCT=$(echo "$USED_PCT + 16.5" | bc)
     USED_INT=$(printf "%.0f" "$ADJUSTED_PCT")
 
-    # Cap at 100%
     if [ "$USED_INT" -gt 100 ]; then
         USED_INT=100
     fi
 
-    # Remaining = 100 - used
     REMAINING_INT=$((100 - USED_INT))
 
-    # Build HP bar (10 chars width) - filled = remaining, empty = used
     FILLED=$((REMAINING_INT / 10))
     EMPTY=$((10 - FILLED))
     BAR=""
     for ((i=0; i<FILLED; i++)); do BAR+="█"; done
     for ((i=0; i<EMPTY; i++)); do BAR+="░"; done
 
-    # Color coding based on remaining percentage
     if [ "$REMAINING_INT" -ge 30 ]; then
-        # Safe: green
         CONTEXT_DISPLAY="\033[32m${BAR} ${REMAINING_INT}%\033[0m"
     elif [ "$REMAINING_INT" -ge 10 ]; then
-        # Warning: yellow
         CONTEXT_DISPLAY="\033[33m${BAR} ${REMAINING_INT}%\033[0m"
     else
-        # Critical: red
         CONTEXT_DISPLAY="\033[31m${BAR} ${REMAINING_INT}%\033[0m"
     fi
 fi
 
-# Show git branch if in a git repo
 GIT_BRANCH=""
 if git rev-parse --git-dir > /dev/null 2>&1; then
     BRANCH=$(git branch --show-current 2>/dev/null)
@@ -52,8 +40,36 @@ if git rev-parse --git-dir > /dev/null 2>&1; then
     fi
 fi
 
-# Build output
-OUTPUT="${CURRENT_DIR##*/}$GIT_BRANCH"
+# Checks section: render lint/typecheck/test from cache if available.
+# Quietly omitted when the lib or jq is missing so the rest of the statusline
+# keeps working on minimal systems.
+CHECKS_DISPLAY=""
+LIB_PATH="${STATUSLINE_LIB:-$HOME/.claude/hooks/lib/statusline_checks_lib.sh}"
+if [ -n "$CURRENT_DIR" ] && [ -f "$LIB_PATH" ] && command -v jq > /dev/null 2>&1; then
+    # shellcheck disable=SC1090
+    source "$LIB_PATH"
+    PROJECT_ROOT=$(find_project_root "$CURRENT_DIR")
+    if [ -n "$PROJECT_ROOT" ]; then
+        CACHE_FILE=$(cache_file_path "$PROJECT_ROOT")
+        if [ -f "$CACHE_FILE" ]; then
+            CACHE_CONTENT=$(cat "$CACHE_FILE" 2>/dev/null)
+            if printf '%s' "$CACHE_CONTENT" | jq -e . > /dev/null 2>&1; then
+                LABEL=$(printf '%s' "$CACHE_CONTENT" | jq -r '.label // empty')
+                LINT_ST=$(printf '%s' "$CACHE_CONTENT" | jq -r '.checks.lint.status // "skipped"')
+                TC_ST=$(printf '%s' "$CACHE_CONTENT" | jq -r '.checks.typecheck.status // "skipped"')
+                TEST_ST=$(printf '%s' "$CACHE_CONTENT" | jq -r '.checks.test.status // "skipped"')
+                if [ "$LINT_ST" != "skipped" ] || [ "$TC_ST" != "skipped" ] || [ "$TEST_ST" != "skipped" ]; then
+                    LINT_G=$(status_to_glyph "$LINT_ST")
+                    TC_G=$(status_to_glyph "$TC_ST")
+                    TEST_G=$(status_to_glyph "$TEST_ST")
+                    CHECKS_DISPLAY=" | ${LABEL} L${LINT_G} T${TC_G} X${TEST_G}"
+                fi
+            fi
+        fi
+    fi
+fi
+
+OUTPUT="${CURRENT_DIR##*/}${GIT_BRANCH}${CHECKS_DISPLAY}"
 if [ -n "$CONTEXT_DISPLAY" ]; then
     OUTPUT="$OUTPUT | $CONTEXT_DISPLAY"
 fi
