@@ -2,7 +2,7 @@
 helix = "25.07.1"
 node = "24.6.0"
 starship = "1.25.1"
-ni = "23.2.0"
+ni = "30.1.0"
 pnpm = "11.0.9"
 rust = "1.95.0"
 uv = "0.11.13"
@@ -20,6 +20,7 @@ ffmpeg = "8.0.1"
 "github:d-kuro/gwq" = "0.1.1"
 gcloud = "567.0.0"
 "github:koalaman/shellcheck" = "v0.10.0"
+tmux = "3.6a"
 
 [settings]
 experimental = true
