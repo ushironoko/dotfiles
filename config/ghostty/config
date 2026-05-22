@@ -16,8 +16,8 @@ font-thicken = true
 
 # Window
 
-window-padding-x = 10
-window-padding-y = 10
+window-padding-x = 20
+window-padding-y = 20
 window-padding-balance = true
 window-save-state = always
 window-inherit-working-directory = true
@@ -45,7 +45,7 @@ keybind = global:shift+escape=toggle_visibility
 # Cmd+T to toggle quick terminal from anywhere
 keybind = global:super+t=toggle_quick_terminal
 quick-terminal-position = bottom
-quick-terminal-size = 90%
+quick-terminal-size = 100%
 quick-terminal-animation-duration = 0.1
 quick-terminal-autohide = true
 quick-terminal-keyboard-interactivity = none
