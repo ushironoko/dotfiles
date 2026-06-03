@@ -413,7 +413,7 @@ fn load() -> Result<Config, String> {
 
 ## Review Scope
 
-コードレビューでもプランレビュー（`/plan-review` 経由）でも、以下の同一観点で評価する。
+Whether it's a code review or a plan review (via `/plan-review`), the evaluation will be based on the same criteria as described below.
 
 1. **Trait Design**: trait + struct separation, bounds, dispatch choice
 2. **Type System Utilization**: newtype, type state, phantom types
