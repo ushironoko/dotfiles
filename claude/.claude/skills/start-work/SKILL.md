@@ -292,6 +292,23 @@ bit issue close <parent_id>
 | Orphan issue      | Check `gwq list` for worktree existence. If no matching worktree, exclude from overlap detection. |
 | Worktree trouble  | `gwq list` (list all), `gwq prune` (clean stale refs), `gwq status` (check changes)               |
 
+## Cross-Model Stages (ultracode)
+
+When the session runs in ultracode mode and you author multi-agent Workflow
+scripts for the work started here, include cross-model (codex) stages so the
+result is not blind to single-model-family biases:
+
+- Every review/verification fan-out includes an `agentType: 'codex-reviewer'`
+  stage.
+- Competing implementation phases include an `agentType: 'codex-poc'` stage
+  spawned with `isolation: 'worktree'` — codex writes its PoC in its own
+  isolated worktree (a sibling of this session's worktree), and each PoC diff
+  is reviewed by the OTHER model family before judging.
+
+All codex calls go through `~/.claude/hooks/lib/codex-stage.sh`. For ready-made
+workflow script templates (review fan-out, dual-PoC cross-review), read
+`references/multi-model-workflows.md`.
+
 ## Worked Examples
 
 For concrete workflow examples (solo session, parallel sessions without overlap, parallel sessions with overlap adjustment), read `references/examples.md`.

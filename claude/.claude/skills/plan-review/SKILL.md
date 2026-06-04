@@ -1,7 +1,7 @@
 ---
 name: plan-review
 description: Plan modeで作成したプランに対して、プロジェクト特性を分析し適切なレビューエージェントを自動選択・並列起動するスキル。引数なしで実行可能。
-allowed-tools: Bash(codex exec *)
+allowed-tools: Bash(codex exec *), Bash(~/.claude/hooks/lib/codex-stage.sh *)
 ---
 
 # Plan Review
@@ -75,6 +75,7 @@ Readツールで検出したPlanファイルの内容を取得。
 | テスト基盤が存在する               | `tdd-reviewer`       |
 
 - 複数条件に該当する場合は**すべて**起動する（並列）
+- codex CLI が利用可能な場合、`codex-reviewer` は他の条件に関わらず**必ず**起動する（クロスモデル視点の確保。Claude系モデル固有の盲点を補う）
 - **どの条件にも該当しない場合**: 利用可能なレビュワーがない旨をユーザーに通知し、手動指定を促す
 
 #### 2c: 選択結果の表示

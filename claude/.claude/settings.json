@@ -7,6 +7,8 @@
       "Bash(find:*)",
       "Bash(gh:*)",
       "Bash(mise:*)",
+      "Bash(codex login status:*)",
+      "Bash(~/.claude/hooks/lib/codex-stage.sh:*)",
       "Bash(bit issue init:*)",
       "Bash(bit issue create:*)",
       "Bash(bit issue list:*)",
@@ -36,6 +38,30 @@
   },
   "enableAllProjectMcpServers": true,
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/user_prompt_submit/ultracode_codex_context.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Workflow",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/pre_tool_use/codex_stage_guard.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "Notification": [
       {
         "matcher": ".*",
