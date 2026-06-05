@@ -49,4 +49,5 @@ These rules also apply to the content, examples, and comments within CLAUDE.md i
 
 # 4. Workflow Principles
 
-Always use `start-work` skill
+- Always use `start-work` skill
+- In ultracode workflow scripts, include at least one codex cross-model stage: `agentType: 'codex-reviewer'` in review/verification fan-outs, `agentType: 'codex-poc'` (with `isolation: 'worktree'`) for competing implementation PoCs. All codex calls go through `~/.claude/hooks/lib/codex-stage.sh` (never pass `-m`). Templates: `~/.claude/skills/start-work/references/multi-model-workflows.md`
