@@ -34,6 +34,7 @@ fi
 # Git context. Run via `git -C "$CURRENT_DIR"` so worktrees resolve their own
 # HEAD/remote even if the shell CWD differs from the workspace path.
 GIT_BRANCH=""
+GIT_DIFF=""
 ORG_REPO=""
 GIT_DIR_ARG="${CURRENT_DIR:-.}"
 if git -C "$GIT_DIR_ARG" rev-parse --git-dir > /dev/null 2>&1; then
@@ -51,6 +52,19 @@ if git -C "$GIT_DIR_ARG" rev-parse --git-dir > /dev/null 2>&1; then
         case "$CANDIDATE" in
             */*) ORG_REPO="$CANDIDATE" ;;
         esac
+    fi
+    # Local diff vs HEAD (staged + unstaged tracked changes; untracked files
+    # are not counted). numstat prints "-" for binary files, so guard before
+    # summing. Requires at least one commit; on an empty repo HEAD is absent
+    # and the diff is silently skipped.
+    DIFF_NUMSTAT=$(git -C "$GIT_DIR_ARG" diff --numstat HEAD 2>/dev/null)
+    if [ -n "$DIFF_NUMSTAT" ]; then
+        read -r ADDED REMOVED <<EOF
+$(printf '%s\n' "$DIFF_NUMSTAT" | awk '{ if ($1 != "-") a += $1; if ($2 != "-") d += $2 } END { print a + 0, d + 0 }')
+EOF
+        if [ "$ADDED" -gt 0 ] || [ "$REMOVED" -gt 0 ]; then
+            GIT_DIFF=" | \033[32m+${ADDED}\033[0m \033[31m-${REMOVED}\033[0m"
+        fi
     fi
 fi
 
@@ -93,9 +107,9 @@ fi
 
 DIR_NAME="${CURRENT_DIR##*/}"
 if [ -n "$ORG_REPO" ]; then
-    OUTPUT="${ORG_REPO} | ${DIR_NAME}${GIT_BRANCH}${CHECKS_DISPLAY}"
+    OUTPUT="${ORG_REPO} | ${DIR_NAME}${GIT_BRANCH}${GIT_DIFF}${CHECKS_DISPLAY}"
 else
-    OUTPUT="${DIR_NAME}${GIT_BRANCH}${CHECKS_DISPLAY}"
+    OUTPUT="${DIR_NAME}${GIT_BRANCH}${GIT_DIFF}${CHECKS_DISPLAY}"
 fi
 if [ -n "$CONTEXT_DISPLAY" ]; then
     OUTPUT="$OUTPUT | $CONTEXT_DISPLAY"
