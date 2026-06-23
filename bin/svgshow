@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#
+# svgshow — render an SVG (or any raster image) inline in the terminal.
+#
+# SVGs from the html-to-svg skill embed every glyph as a vector path, so they
+# rasterize correctly offline with no font fetching. We turn the SVG into a PNG
+# with rsvg-convert, then hand it to viu, which speaks the kitty graphics
+# protocol that Ghostty implements. viu detects protocol support at runtime by
+# querying the terminal, so it works in Ghostty even though $TERM is
+# xterm-ghostty (not xterm-kitty); when graphics are unsupported it falls back
+# to half-block characters.
+#
+# NOTE: this only renders inside a real terminal prompt (e.g. a Ghostty split or
+# tab). It cannot draw inside the Claude Code TUI — that captures stdout and has
+# no inline-image support.
+#
+# Usage:
+#   svgshow FILE.svg [COLS]   # COLS = display width in terminal columns
+#   svgshow IMAGE.png         # non-SVG images are passed straight to viu
+
+set -euo pipefail
+
+usage() {
+  echo "usage: svgshow FILE [COLS]" >&2
+  exit 2
+}
+
+[ "$#" -ge 1 ] || usage
+src="$1"
+cols="${2:-}"
+
+[ -f "$src" ] || { echo "svgshow: no such file: $src" >&2; exit 1; }
+
+command -v viu >/dev/null 2>&1 || {
+  echo "svgshow: 'viu' not found. Install it: mise install (github:atanunq/viu)" >&2
+  exit 127
+}
+
+# Default display width: fit to the terminal, preserving aspect ratio. Passing
+# only -w (no -h) keeps the aspect ratio, so tall reports scale to width and
+# scroll vertically instead of being squashed to fit the screen height.
+if [ -z "$cols" ]; then
+  cols="$(tput cols 2>/dev/null || echo 80)"
+fi
+
+img="$src"
+tmp_dir=""
+case "$src" in
+  *.svg | *.SVG)
+    command -v rsvg-convert >/dev/null 2>&1 || {
+      echo "svgshow: 'rsvg-convert' not found (needed to rasterize SVG)." >&2
+      exit 127
+    }
+    tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/svgshow.XXXXXX")"
+    trap 'rm -rf "$tmp_dir"' EXIT
+    img="$tmp_dir/out.png"
+    # -z 2 renders at 2x so the image stays crisp when scaled on HiDPI displays.
+    rsvg-convert -z 2 "$src" -o "$img"
+    ;;
+esac
+
+# Not `exec`: keep this shell alive so the EXIT trap can clean up tmp_dir after
+# viu has finished reading the rasterized PNG.
+viu -w "$cols" "$img"

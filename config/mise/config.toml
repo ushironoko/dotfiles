@@ -18,6 +18,7 @@ ffmpeg = "8.0.1"
 "github:bit-vcs/bit" = "0.35.2"
 "github:ast-grep/ast-grep" = "0.42.2"
 "github:d-kuro/gwq" = "0.1.1"
+"github:atanunq/viu" = { version = "1.6.1", bin = "viu" }
 gcloud = "567.0.0"
 "github:koalaman/shellcheck" = "v0.10.0"
 tmux = "3.6a"

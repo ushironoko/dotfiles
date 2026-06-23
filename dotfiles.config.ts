@@ -90,6 +90,11 @@ export default defineConfig({
       type: "file",
     },
     {
+      source: "./bin/svgshow",
+      target: "~/.local/bin/svgshow",
+      type: "file",
+    },
+    {
       source: "./config/abbrs",
       target: "~/.config/abbrs",
       type: "directory",
