@@ -62,7 +62,7 @@ glyphs with `<defs>`/`<use>`. Consequences:
 This bites Japanese and any non-system-font report. satoru resolves web fonts from
 Google Fonts **while rendering**:
 
-- `font-family: 'Noto Sans JP'` → fetches CSS from `fonts.googleapis.com`, then the
+- `font-family: 'IBM Plex Sans JP'` → fetches CSS from `fonts.googleapis.com`, then the
   woff2 files from `fonts.gstatic.com`.
 - Emoji fall back to a font from `cdn.jsdelivr.net`.
 

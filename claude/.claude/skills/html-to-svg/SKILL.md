@@ -41,9 +41,9 @@ project convention it is installed with `bun install -g`, not mise/ubi.
    (no saturated primaries; no color-only labels). `references/html-authoring.md` has a
    render-verified template that already implements it — start from that template.
    - Omit `<!DOCTYPE html>` — start at `<html>` (see the gotcha below).
-   - For Japanese / any non-system text, set a web font, e.g.
-     `font-family: 'Noto Sans JP', sans-serif;` — satoru fetches it from Google Fonts.
-     Write it to a temp file, e.g. `$TMPDIR/report.html`.
+   - Set `font-family: 'IBM Plex Sans JP', sans-serif;` (the standard font for this
+     format; covers Latin + Japanese) — satoru fetches it from Google Fonts at render
+     time. Write the HTML to a temp file, e.g. `$TMPDIR/report.html`.
 
 2. **Render to SVG.** Output extension `.svg` selects the format automatically:
 
@@ -61,8 +61,8 @@ project convention it is installed with `bun install -g`, not mise/ubi.
 
 ## Critical caveat: fonts are fetched over the network at render time
 
-satoru resolves non-system fonts (including Japanese **Noto Sans JP**) from Google Fonts
-**during conversion**. Claude Code's default Bash sandbox blocks those hosts, so Japanese
+satoru resolves non-system fonts (including the format's **IBM Plex Sans JP**) from
+Google Fonts **during conversion**. Claude Code's default Bash sandbox blocks those hosts, so Japanese
 and other web-font text **silently disappears** from the output (structure renders, text
 is blank) while the command still exits 0.
 
@@ -74,10 +74,10 @@ this is almost always the cause. Details and the local-font workaround are in
 
 ## References
 
-- `references/design-format.md` — the default design format: the six rules (whitespace,
+- `references/design-format.md` — the default design format: the seven rules (whitespace,
   structure, plain language, no color-coded labels, low-chroma palette, paragraph writing
-  in ordered sections), the palette ramps, typography scale, and the patterns that follow
-  them.
+  in ordered sections, gloss every symbolic label), the palette ramps, typography scale,
+  and the patterns that follow them.
 - `references/satoru-render.md` — full CLI/API reference, all flags, the font/network
   requirement, the DOCTYPE gotcha, and other output formats.
 - `references/html-authoring.md` — a render-verified report HTML template (implementing

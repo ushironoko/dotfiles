@@ -12,9 +12,10 @@ template below already implements it; start from that template.
 ## Rules that matter for satoru
 
 - **No `<!DOCTYPE html>`.** Start at `<html>` (see the gotcha in `satoru-render.md`).
-- **Set an explicit `font-family`.** For Japanese use a CJK web font, e.g.
-  `'Noto Sans JP'`; satoru fetches it from Google Fonts at render time (network
-  required — see `satoru-render.md`).
+- **Set the `font-family` to `'IBM Plex Sans JP'`** (the standard font for this format;
+  see `design-format.md`). It covers Latin + Japanese and satoru fetches it from Google
+  Fonts at render time (network required — see `satoru-render.md`). For code use
+  `'IBM Plex Mono'` with `'IBM Plex Sans JP'` as the fallback.
 - **Give `body` an explicit background.** Otherwise it is white. Pick light or dark
   intentionally.
 - **Inline everything.** One `<style>` block; no external CSS/JS files. JS does not run
@@ -61,10 +62,10 @@ status shown by glyph + word rather than color. Adapt the content; keep the stru
         --ink: #3d3b37;
         --ink-muted: #6f6b64;
         --accent: #5b6770;
-        --mono: "DejaVu Sans Mono", "Noto Sans JP", monospace;
+        --mono: "IBM Plex Mono", "IBM Plex Sans JP", monospace;
       }
       body {
-        font-family: "Noto Sans JP", sans-serif;
+        font-family: "IBM Plex Sans JP", sans-serif;
         background: var(--bg);
         color: var(--ink);
         padding: 40px 44px;
@@ -302,3 +303,5 @@ These restate the design format (`design-format.md`) as quick reminders:
 - Where explanation is needed, write paragraphs led by their conclusion (topic sentence
   first) and order sections so understanding builds in stages — premise, then dependent
   detail, then result.
+- Define every symbolic label (`A-1`, codes, acronyms) in a footnote/glossary block at
+  the bottom; render the token the same way (monospace) in the body and the note.

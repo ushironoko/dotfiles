@@ -2,10 +2,10 @@
 
 This is the **default design format** for every SVG this skill produces. The reader
 must understand the report from its structure, hierarchy, and reading flow — not from
-color. Color is decoration; it never carries meaning. Apply all six rules below unless
+color. Color is decoration; it never carries meaning. Apply all seven rules below unless
 the user explicitly asks for a different style.
 
-## The six rules
+## The seven rules
 
 ### 1. Whitespace controls information density
 
@@ -60,6 +60,18 @@ the user explicitly asks for a different style.
   factor lists and tables out of the text, and write the remaining explanation as
   topic-sentence-first paragraphs in a deliberate order.
 
+### 7. Gloss every symbolic label
+
+- Any coded or abbreviated token that is not self-explanatory — a tag like `A-1`, a
+  reference ID, an acronym, a short status code — **must** be defined. Never leave the
+  reader to infer what a symbol stands for.
+- Collect the definitions in an annotation block at the **bottom** of the report (a
+  footnote list or glossary), ordered as the tokens first appear. Render the token the
+  same way in the body and the note (e.g. `A-1` in monospace in both) so the reader pairs
+  them by form, not color.
+- This extends rule 4's legend (glyph → word) to coded labels: every non-obvious mark in
+  the report has a written explanation the reader can find.
+
 ## Palette
 
 Two ramps. Pick light (reads as a document) or dark (reads as a console). Use the ink
@@ -94,7 +106,13 @@ sand `#9a8c6f`, moss `#6b7064`. Pick one and use it sparingly.
 
 ## Typography
 
-- One sans family (`'Noto Sans JP'`). Add one monospace family for code identifiers.
+- **Use `'IBM Plex Sans JP'` as the sans family** for all text — it covers Latin and
+  Japanese and is fetched from Google Fonts at render time (network required; see
+  `satoru-render.md`). This is the standard font for this format; do not substitute
+  another family unless the user asks.
+- For code identifiers, use the matching monospace `'IBM Plex Mono'`, with
+  `'IBM Plex Sans JP'` as the Japanese fallback:
+  `--mono: "IBM Plex Mono", "IBM Plex Sans JP", monospace;`.
 - Build hierarchy from **size + weight + letter-spacing + case**, never from color:
   - Eyebrow / section label: `11–12px`, weight `600–700`, `letter-spacing: 0.1–0.14em`,
     `text-transform: uppercase`, `--ink-muted`.
@@ -116,6 +134,9 @@ sand `#9a8c6f`, moss `#6b7064`. Pick one and use it sparingly.
   line legend mapping each glyph to its word. Color is not used to distinguish states.
 - **Table:** `border-collapse`, a hairline header underline, hairline row separators, no
   zebra fills. Align numbers right in a monospace column.
+- **Footnotes / glossary:** a block at the bottom, above any final caption, listing each
+  symbolic label (`A-1`, acronyms, codes) and its definition. A small `--ink-muted`
+  list, token in monospace, one entry per line, in first-appearance order (rule 7).
 
 A complete, render-verified HTML implementing every pattern above is in
 `html-authoring.md` ("Verified template"). Start from it.
