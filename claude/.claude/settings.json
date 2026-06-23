@@ -1,160 +1,160 @@
 {
-  "agentPushNotifEnabled" : true,
-  "alwaysThinkingEnabled" : true,
-  "effortLevel" : "xhigh",
-  "enableAllProjectMcpServers" : true,
-  "enabledPlugins" : {
-    "clangd-lsp@claude-plugins-official" : true,
-    "frontend-design@claude-plugins-official" : true,
-    "pyright-lsp@claude-plugins-official" : true,
-    "rust-analyzer-lsp@claude-plugins-official" : true,
-    "swift-lsp@claude-plugins-official" : true,
-    "typescript-lsp@claude-plugins-official" : true
+  "agentPushNotifEnabled": true,
+  "alwaysThinkingEnabled": true,
+  "effortLevel": "xhigh",
+  "enableAllProjectMcpServers": true,
+  "enabledPlugins": {
+    "clangd-lsp@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
+    "pyright-lsp@claude-plugins-official": true,
+    "rust-analyzer-lsp@claude-plugins-official": true,
+    "swift-lsp@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true
   },
-  "hooks" : {
-    "Notification" : [
+  "hooks": {
+    "Notification": [
       {
-        "hooks" : [
+        "hooks": [
           {
-            "async" : true,
-            "command" : "\/Applications\/asuku.app\/Contents\/MacOS\/asuku-hook notification",
-            "type" : "command"
+            "async": true,
+            "command": "\/Applications\/asuku.app\/Contents\/MacOS\/asuku-hook notification",
+            "type": "command"
           }
         ],
-        "matcher" : ".*"
+        "matcher": ".*"
       }
     ],
-    "PermissionRequest" : [
+    "PermissionRequest": [
       {
-        "hooks" : [
+        "hooks": [
           {
-            "command" : "\/Applications\/asuku.app\/Contents\/MacOS\/asuku-hook permission-request",
-            "timeout" : 300,
-            "type" : "command"
+            "command": "\/Applications\/asuku.app\/Contents\/MacOS\/asuku-hook permission-request",
+            "timeout": 300,
+            "type": "command"
           }
         ],
-        "matcher" : ".*"
+        "matcher": ".*"
       }
     ],
-    "PostToolUse" : [
+    "PostToolUse": [
       {
-        "hooks" : [
+        "hooks": [
           {
-            "command" : "jq -r '.tool_input.file_path | select(endswith(\".js\") or endswith(\".ts\"))' | ~\/.claude\/hooks\/post_tool_use\/coding_cycle.sh",
-            "timeout" : 10,
-            "type" : "command"
+            "command": "jq -r '.tool_input.file_path | select(endswith(\".js\") or endswith(\".ts\"))' | ~\/.claude\/hooks\/post_tool_use\/coding_cycle.sh",
+            "timeout": 10,
+            "type": "command"
           }
         ],
-        "matcher" : "Write|Edit|MultiEdit"
+        "matcher": "Write|Edit|MultiEdit"
       },
       {
-        "hooks" : [
+        "hooks": [
           {
-            "command" : "~\/.claude\/hooks\/post_tool_use\/type_safety_check.sh",
-            "statusMessage" : "Checking type safety...",
-            "timeout" : 10,
-            "type" : "command"
+            "command": "~\/.claude\/hooks\/post_tool_use\/type_safety_check.sh",
+            "statusMessage": "Checking type safety...",
+            "timeout": 10,
+            "type": "command"
           }
         ],
-        "matcher" : "Write|Edit"
+        "matcher": "Write|Edit"
       }
     ],
-    "PreToolUse" : [
+    "PreToolUse": [
       {
-        "hooks" : [
+        "hooks": [
           {
-            "command" : "~\/.claude\/hooks\/pre_tool_use\/codex_stage_guard.sh",
-            "timeout" : 10,
-            "type" : "command"
+            "command": "~\/.claude\/hooks\/pre_tool_use\/codex_stage_guard.sh",
+            "timeout": 10,
+            "type": "command"
           }
         ],
-        "matcher" : "Workflow"
+        "matcher": "Workflow"
       },
       {
-        "hooks" : [
+        "hooks": [
           {
-            "command" : "~\/.claude\/hooks\/pre_tool_use\/npm_script_preference.sh",
-            "timeout" : 10,
-            "type" : "command"
+            "command": "~\/.claude\/hooks\/pre_tool_use\/npm_script_preference.sh",
+            "timeout": 10,
+            "type": "command"
           }
         ],
-        "matcher" : "Bash"
+        "matcher": "Bash"
       }
     ],
-    "SessionStart" : [
+    "SessionStart": [
       {
-        "hooks" : [
+        "hooks": [
           {
-            "async" : true,
-            "command" : "~\/.claude\/hooks\/session_start\/statusline_checks.sh",
-            "timeout" : 600,
-            "type" : "command"
+            "async": true,
+            "command": "~\/.claude\/hooks\/session_start\/statusline_checks.sh",
+            "timeout": 600,
+            "type": "command"
           }
         ]
       }
     ],
-    "Stop" : [
+    "Stop": [
       {
-        "hooks" : [
+        "hooks": [
           {
-            "async" : true,
-            "command" : "~\/.claude\/hooks\/stop\/statusline_checks.sh",
-            "timeout" : 600,
-            "type" : "command"
+            "async": true,
+            "command": "~\/.claude\/hooks\/stop\/statusline_checks.sh",
+            "timeout": 600,
+            "type": "command"
           }
         ]
       }
     ],
-    "TaskCompleted" : [
+    "TaskCompleted": [
       {
-        "hooks" : [
+        "hooks": [
           {
-            "async" : true,
-            "command" : "~\/.claude\/hooks\/task-completed\/bit-issue-update.sh",
-            "timeout" : 30,
-            "type" : "command"
+            "async": true,
+            "command": "~\/.claude\/hooks\/task-completed\/bit-issue-update.sh",
+            "timeout": 30,
+            "type": "command"
           }
         ]
       }
     ],
-    "UserPromptSubmit" : [
+    "UserPromptSubmit": [
       {
-        "hooks" : [
+        "hooks": [
           {
-            "command" : "~\/.claude\/hooks\/user_prompt_submit\/ultracode_codex_context.sh",
-            "timeout" : 10,
-            "type" : "command"
+            "command": "~\/.claude\/hooks\/user_prompt_submit\/ultracode_codex_context.sh",
+            "timeout": 10,
+            "type": "command"
           }
         ],
-        "matcher" : ".*"
+        "matcher": ".*"
       }
     ],
-    "WorktreeCreate" : [
+    "WorktreeCreate": [
       {
-        "hooks" : [
+        "hooks": [
           {
-            "command" : "~\/.claude\/hooks\/worktree\/create.sh",
-            "timeout" : 30,
-            "type" : "command"
+            "command": "~\/.claude\/hooks\/worktree\/create.sh",
+            "timeout": 30,
+            "type": "command"
           }
         ]
       }
     ],
-    "WorktreeRemove" : [
+    "WorktreeRemove": [
       {
-        "hooks" : [
+        "hooks": [
           {
-            "command" : "~\/.claude\/hooks\/worktree\/remove.sh",
-            "timeout" : 15,
-            "type" : "command"
+            "command": "~\/.claude\/hooks\/worktree\/remove.sh",
+            "timeout": 15,
+            "type": "command"
           }
         ]
       }
     ]
   },
-  "language" : "Japanese",
-  "permissions" : {
-    "allow" : [
+  "language": "Japanese",
+  "permissions": {
+    "allow": [
       "Bash(pnpm:*)",
       "Bash(bun:*)",
       "Bash(cargo:*)",
@@ -178,8 +178,8 @@
       "Read(~\/.zshrc)",
       "mcp__mcpdoc"
     ],
-    "defaultMode" : "auto",
-    "deny" : [
+    "defaultMode": "auto",
+    "deny": [
       "Bash(bit issue claim:*)",
       "Bash(bit issue unclaim:*)",
       "Bash(bit issue claims:*)",
@@ -190,14 +190,14 @@
       "Bash(bit clone relay+*)"
     ]
   },
-  "plansDirectory" : ".\/plans",
-  "remoteControlAtStartup" : true,
-  "skipAutoPermissionPrompt" : true,
-  "skipWorkflowUsageWarning" : true,
-  "statusLine" : {
-    "command" : "'\/Users\/ushironoko\/Library\/Application Support\/QuotaGlance\/statusline-bridge.sh' --tee | '\/Applications\/asuku.app\/Contents\/MacOS\/asuku-hook' statusline | ~\/.claude\/statusline.sh",
-    "padding" : 0,
-    "type" : "command"
+  "plansDirectory": ".\/plans",
+  "remoteControlAtStartup": true,
+  "skipAutoPermissionPrompt": true,
+  "skipWorkflowUsageWarning": true,
+  "statusLine": {
+    "command": "'\/Users\/ushironoko\/Library\/Application Support\/QuotaGlance\/statusline-bridge.sh' --tee | '\/Applications\/asuku.app\/Contents\/MacOS\/asuku-hook' statusline | ~\/.claude\/statusline.sh",
+    "padding": 0,
+    "type": "command"
   },
-  "verbose" : true
+  "verbose": true
 }
