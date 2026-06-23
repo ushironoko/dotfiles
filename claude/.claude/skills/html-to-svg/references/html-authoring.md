@@ -5,6 +5,10 @@ quality of your HTML. Aim for a clean, information-dense, graphical layout — n
 of text. litehtml (satoru's layout engine) supports the common subset of HTML/CSS:
 flexbox, grid, borders, border-radius, gradients, tables, web fonts.
 
+**Follow the design format in `design-format.md` for every report** — a structure-first,
+low-chroma style where structure and reading flow (not color) carry the meaning. The
+template below already implements it; start from that template.
+
 ## Rules that matter for satoru
 
 - **No `<!DOCTYPE html>`.** Start at `<html>` (see the gotcha in `satoru-render.md`).
@@ -25,15 +29,19 @@ flexbox, grid, borders, border-radius, gradients, tables, web fonts.
 
 - **KPI cards:** a flex row of equal-width cards, each a label + a big value.
 - **Bar / progress chart:** a track `<div>` with a filled `<div>` whose `width: N%`
-  encodes the value; a gradient fill reads as a designed chart.
-- **Tables:** plain `<table>` with `border-collapse`, zebra rows, a header band.
-- **Sections:** a heading + subtitle, generous padding, a divider or card grouping.
-- **Donut/ring:** `conic-gradient` background on a circle with a centered hole.
+  encodes the value; a single muted accent fill, with the number printed alongside.
+- **Tables:** plain `<table>` with `border-collapse`, a hairline header underline and
+  hairline row separators (no zebra fills); numbers right-aligned in monospace.
+- **Sections:** a heading + subtitle, generous padding, a hairline divider between groups.
+- **Status list:** a glyph (`● ◐ ○`) + identifier + plain note, with a legend — state is
+  shown by glyph and word, never by color (see `design-format.md`, rule 4).
 
 ## Verified template (renders cleanly, Japanese + graphics)
 
-This exact HTML was rendered to SVG and PNG and verified visually. Adapt the content;
-keep the structure.
+This exact HTML was rendered to SVG and PNG and verified visually. It implements the
+design format in `design-format.md`: a low-chroma ink ramp with a single muted slate
+accent, hairline dividers, typographic hierarchy, code identifiers in monospace, and
+status shown by glyph + word rather than color. Adapt the content; keep the structure.
 
 ```html
 <html lang="ja">
@@ -45,101 +53,221 @@ keep the structure.
         padding: 0;
         box-sizing: border-box;
       }
+      :root {
+        --bg: #faf8f5;
+        --surface: #ffffff;
+        --hairline: #e4e0d8;
+        --ink-strong: #1b1a18;
+        --ink: #3d3b37;
+        --ink-muted: #6f6b64;
+        --accent: #5b6770;
+        --mono: "DejaVu Sans Mono", "Noto Sans JP", monospace;
+      }
       body {
         font-family: "Noto Sans JP", sans-serif;
-        background: #0f172a;
-        color: #e2e8f0;
-        padding: 32px;
+        background: var(--bg);
+        color: var(--ink);
+        padding: 40px 44px;
+        font-size: 13px;
+        line-height: 1.6;
+      }
+      .eyebrow {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--ink-muted);
+        margin-bottom: 6px;
       }
       h1 {
-        font-size: 24px;
-        color: #38bdf8;
-        margin-bottom: 4px;
+        font-size: 23px;
+        font-weight: 700;
+        color: var(--ink-strong);
+        letter-spacing: 0.01em;
       }
       .sub {
         font-size: 13px;
-        color: #94a3b8;
-        margin-bottom: 24px;
-      }
-      .cards {
-        display: flex;
-        gap: 16px;
-        margin-bottom: 24px;
-      }
-      .card {
-        flex: 1;
-        background: #1e293b;
-        border-radius: 10px;
-        padding: 16px;
-        border: 1px solid #334155;
-      }
-      .card .label {
-        font-size: 12px;
-        color: #94a3b8;
-      }
-      .card .value {
-        font-size: 28px;
-        font-weight: 700;
-        color: #f1f5f9;
+        color: var(--ink-muted);
         margin-top: 4px;
       }
-      .bar-row {
+      .rule {
+        height: 1px;
+        background: var(--hairline);
+        margin: 28px 0;
+      }
+      h2 {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--ink-muted);
+        margin-bottom: 16px;
+      }
+      .kpis {
         display: flex;
+      }
+      .kpi {
+        flex: 1;
+        padding: 0 20px;
+        border-left: 1px solid var(--hairline);
+      }
+      .kpi:first-child {
+        padding-left: 0;
+        border-left: none;
+      }
+      .kpi .label {
+        font-size: 12px;
+        color: var(--ink-muted);
+      }
+      .kpi .value {
+        font-size: 28px;
+        font-weight: 700;
+        color: var(--ink-strong);
+        margin-top: 6px;
+      }
+      .kpi .delta {
+        font-size: 12px;
+        color: var(--ink-muted);
+        margin-top: 4px;
+      }
+      .bars {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .bar-row {
+        display: grid;
+        grid-template-columns: 96px 1fr 56px;
         align-items: center;
-        gap: 12px;
-        margin-bottom: 10px;
+        gap: 16px;
       }
       .bar-name {
-        width: 90px;
         font-size: 13px;
+        color: var(--ink);
       }
       .bar-track {
-        flex: 1;
-        background: #1e293b;
-        border-radius: 6px;
-        height: 18px;
+        height: 8px;
+        background: var(--surface);
+        border: 1px solid var(--hairline);
         overflow: hidden;
       }
       .bar-fill {
         height: 100%;
-        background: linear-gradient(90deg, #38bdf8, #818cf8);
+        background: var(--accent);
+      }
+      .bar-val {
+        font-family: var(--mono);
+        font-size: 13px;
+        color: var(--ink);
+        text-align: right;
+      }
+      .status {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .status-row {
+        display: grid;
+        grid-template-columns: 18px 150px 1fr;
+        align-items: baseline;
+        gap: 12px;
+      }
+      .mark {
+        font-size: 13px;
+        color: var(--ink-strong);
+      }
+      .status-name {
+        font-family: var(--mono);
+        font-size: 13px;
+        color: var(--ink-strong);
+      }
+      .status-note {
+        font-size: 13px;
+        color: var(--ink-muted);
+      }
+      .legend {
+        margin-top: 16px;
+        font-size: 12px;
+        color: var(--ink-muted);
       }
     </style>
   </head>
   <body>
-    <h1>四半期レポート — 売上サマリー</h1>
+    <div class="eyebrow">四半期レポート</div>
+    <h1>売上サマリー</h1>
     <div class="sub">2026年Q2 / 単位: 百万円</div>
-    <div class="cards">
-      <div class="card">
+
+    <div class="rule"></div>
+
+    <h2>主要指標</h2>
+    <div class="kpis">
+      <div class="kpi">
         <div class="label">総売上</div>
         <div class="value">¥1,240</div>
+        <div class="delta">前年同期比 +18%</div>
       </div>
-      <div class="card">
-        <div class="label">前年同期比</div>
-        <div class="value">+18%</div>
-      </div>
-      <div class="card">
+      <div class="kpi">
         <div class="label">新規顧客</div>
-        <div class="value">342社</div>
+        <div class="value">342</div>
+        <div class="delta">前年同期比 +27%</div>
+      </div>
+      <div class="kpi">
+        <div class="label">解約率</div>
+        <div class="value">2.1%</div>
+        <div class="delta">前年同期比 −0.4pt</div>
       </div>
     </div>
-    <div class="bar-row">
-      <div class="bar-name">東日本</div>
-      <div class="bar-track">
-        <div class="bar-fill" style="width: 82%"></div>
+
+    <div class="rule"></div>
+
+    <h2>地域別売上</h2>
+    <div class="bars">
+      <div class="bar-row">
+        <div class="bar-name">東日本</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width: 82%"></div>
+        </div>
+        <div class="bar-val">¥508</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">西日本</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width: 64%"></div>
+        </div>
+        <div class="bar-val">¥397</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">海外</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width: 38%"></div>
+        </div>
+        <div class="bar-val">¥235</div>
       </div>
     </div>
-    <div class="bar-row">
-      <div class="bar-name">西日本</div>
-      <div class="bar-track">
-        <div class="bar-fill" style="width: 64%"></div>
+
+    <div class="rule"></div>
+
+    <h2>施策の状況</h2>
+    <div class="status">
+      <div class="status-row">
+        <div class="mark">●</div>
+        <div class="status-name">price_revision</div>
+        <div class="status-note">完了 — 全プランに適用済み</div>
+      </div>
+      <div class="status-row">
+        <div class="mark">◐</div>
+        <div class="status-name">onboarding_v2</div>
+        <div class="status-note">進行中 — 解約率の改善を計測中</div>
+      </div>
+      <div class="status-row">
+        <div class="mark">○</div>
+        <div class="status-name">overseas_expansion</div>
+        <div class="status-note">未着手 — Q3に着手予定</div>
       </div>
     </div>
-    <div class="bar-row">
-      <div class="bar-name">海外</div>
-      <div class="bar-track">
-        <div class="bar-fill" style="width: 38%"></div>
-      </div>
+    <div class="legend">
+      ● 完了 &nbsp; ◐ 進行中 &nbsp; ○ 未着手 —
+      状態は記号と文言で示し、色には依存しない
     </div>
   </body>
 </html>
@@ -156,9 +284,21 @@ the Google Fonts fetch succeeds — otherwise the text drops out. See `satoru-re
 
 ## Design notes
 
-- Dark backgrounds (`#0f172a`) with a bright accent read as a polished dashboard;
-  light themes (`#ffffff` / `#f8fafc`) read as a document. Pick to fit the report.
-- Keep a single accent color and a neutral text ramp; avoid more than ~4 colors.
-- Encode quantities visually (bar widths, ring fills), not just as numbers.
-- Leave breathing room: 16–32px padding, consistent gaps. Cramped layouts look generic.
-- For long reports, stack sections with clear headings rather than forcing one screen.
+These restate the design format (`design-format.md`) as quick reminders:
+
+- Pick light (reads as a document) or dark (reads as a console) from the ramps in
+  `design-format.md`. Keep one neutral ink ramp plus a single muted accent — no
+  saturated primaries, and never green/red/yellow/blue to mark meaning.
+- Carry meaning with structure, hierarchy, and top-to-bottom flow, not color. Encode
+  status with a glyph + word (`● ◐ ○`), not a colored dot alone.
+- Encode quantities by length (bar widths, ring fills) and print the number too; a
+  single neutral fill, never one color per series.
+- Build hierarchy from size/weight/letter-spacing/case. Put code identifiers in
+  monospace. Keep running text short — restructure anything past ~2 lines into a list.
+- Leave breathing room on one spacing scale (`4/8/16/24/32/40px`); gaps signal grouping.
+  Cramped layouts look generic.
+- For long reports, stack sections separated by hairline rules rather than forcing one
+  screen.
+- Where explanation is needed, write paragraphs led by their conclusion (topic sentence
+  first) and order sections so understanding builds in stages — premise, then dependent
+  detail, then result.

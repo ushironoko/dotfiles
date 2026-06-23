@@ -35,8 +35,11 @@ project convention it is installed with `bun install -g`, not mise/ubi.
 ## Workflow
 
 1. **Author the HTML.** Design a structured, graphical layout for the report content.
-   Use inline `<style>` and CSS-only graphics (flexbox/grid cards, gradient bars, tables).
-   See `references/html-authoring.md` for a tested template and design guidance.
+   Use inline `<style>` and CSS-only graphics (flexbox/grid, bars, tables).
+   **Follow the design format in `references/design-format.md`** — structure-first and
+   low-chroma: structure, hierarchy, and reading flow carry the meaning, not color
+   (no saturated primaries; no color-only labels). `references/html-authoring.md` has a
+   render-verified template that already implements it — start from that template.
    - Omit `<!DOCTYPE html>` — start at `<html>` (see the gotcha below).
    - For Japanese / any non-system text, set a web font, e.g.
      `font-family: 'Noto Sans JP', sans-serif;` — satoru fetches it from Google Fonts.
@@ -71,7 +74,12 @@ this is almost always the cause. Details and the local-font workaround are in
 
 ## References
 
+- `references/design-format.md` — the default design format: the six rules (whitespace,
+  structure, plain language, no color-coded labels, low-chroma palette, paragraph writing
+  in ordered sections), the palette ramps, typography scale, and the patterns that follow
+  them.
 - `references/satoru-render.md` — full CLI/API reference, all flags, the font/network
   requirement, the DOCTYPE gotcha, and other output formats.
-- `references/html-authoring.md` — a verified report HTML template and design guidance
-  (CSS-only charts, Japanese fonts, layout patterns).
+- `references/html-authoring.md` — a render-verified report HTML template (implementing
+  the design format) and authoring guidance (CSS-only charts, Japanese fonts, layout
+  patterns).
