@@ -1,158 +1,4 @@
 {
-  "agentPushNotifEnabled": true,
-  "alwaysThinkingEnabled": true,
-  "effortLevel": "xhigh",
-  "enableAllProjectMcpServers": true,
-  "enabledPlugins": {
-    "clangd-lsp@claude-plugins-official": true,
-    "frontend-design@claude-plugins-official": true,
-    "pyright-lsp@claude-plugins-official": true,
-    "rust-analyzer-lsp@claude-plugins-official": true,
-    "swift-lsp@claude-plugins-official": true,
-    "typescript-lsp@claude-plugins-official": true
-  },
-  "hooks": {
-    "Notification": [
-      {
-        "hooks": [
-          {
-            "async": true,
-            "command": "\/Applications\/asuku.app\/Contents\/MacOS\/asuku-hook notification",
-            "type": "command"
-          }
-        ],
-        "matcher": ".*"
-      }
-    ],
-    "PermissionRequest": [
-      {
-        "hooks": [
-          {
-            "command": "\/Applications\/asuku.app\/Contents\/MacOS\/asuku-hook permission-request",
-            "timeout": 300,
-            "type": "command"
-          }
-        ],
-        "matcher": ".*"
-      }
-    ],
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "command": "jq -r '.tool_input.file_path | select(endswith(\".js\") or endswith(\".ts\"))' | ~\/.claude\/hooks\/post_tool_use\/coding_cycle.sh",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Write|Edit|MultiEdit"
-      },
-      {
-        "hooks": [
-          {
-            "command": "~\/.claude\/hooks\/post_tool_use\/type_safety_check.sh",
-            "statusMessage": "Checking type safety...",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Write|Edit"
-      }
-    ],
-    "PreToolUse": [
-      {
-        "hooks": [
-          {
-            "command": "~\/.claude\/hooks\/pre_tool_use\/codex_stage_guard.sh",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Workflow"
-      },
-      {
-        "hooks": [
-          {
-            "command": "~\/.claude\/hooks\/pre_tool_use\/npm_script_preference.sh",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      }
-    ],
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "async": true,
-            "command": "~\/.claude\/hooks\/session_start\/statusline_checks.sh",
-            "timeout": 600,
-            "type": "command"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "async": true,
-            "command": "~\/.claude\/hooks\/stop\/statusline_checks.sh",
-            "timeout": 600,
-            "type": "command"
-          }
-        ]
-      }
-    ],
-    "TaskCompleted": [
-      {
-        "hooks": [
-          {
-            "async": true,
-            "command": "~\/.claude\/hooks\/task-completed\/bit-issue-update.sh",
-            "timeout": 30,
-            "type": "command"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "command": "~\/.claude\/hooks\/user_prompt_submit\/ultracode_codex_context.sh",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": ".*"
-      }
-    ],
-    "WorktreeCreate": [
-      {
-        "hooks": [
-          {
-            "command": "~\/.claude\/hooks\/worktree\/create.sh",
-            "timeout": 30,
-            "type": "command"
-          }
-        ]
-      }
-    ],
-    "WorktreeRemove": [
-      {
-        "hooks": [
-          {
-            "command": "~\/.claude\/hooks\/worktree\/remove.sh",
-            "timeout": 15,
-            "type": "command"
-          }
-        ]
-      }
-    ]
-  },
-  "language": "Japanese",
   "permissions": {
     "allow": [
       "Bash(pnpm:*)",
@@ -162,7 +8,7 @@
       "Bash(gh:*)",
       "Bash(mise:*)",
       "Bash(codex login status:*)",
-      "Bash(~\/.claude\/hooks\/lib\/codex-stage.sh:*)",
+      "Bash(~/.claude/hooks/lib/codex-stage.sh:*)",
       "Bash(bit issue init:*)",
       "Bash(bit issue create:*)",
       "Bash(bit issue list:*)",
@@ -174,11 +20,10 @@
       "Bash(bit issue comment:*)",
       "Bash(bit issue search:*)",
       "Read(**)",
-      "Read(~\/.bashrc)",
-      "Read(~\/.zshrc)",
+      "Read(~/.bashrc)",
+      "Read(~/.zshrc)",
       "mcp__mcpdoc"
     ],
-    "defaultMode": "auto",
     "deny": [
       "Bash(bit issue claim:*)",
       "Bash(bit issue unclaim:*)",
@@ -188,16 +33,172 @@
       "Bash(bit pr import:*)",
       "Bash(bit relay:*)",
       "Bash(bit clone relay+*)"
+    ],
+    "defaultMode": "auto"
+  },
+  "enableAllProjectMcpServers": true,
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/asuku.app/Contents/MacOS/asuku-hook notification",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Applications/asuku.app/Contents/MacOS/asuku-hook permission-request",
+            "timeout": 300
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path | select(endswith(\".js\") or endswith(\".ts\"))' | ~/.claude/hooks/post_tool_use/coding_cycle.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/post_tool_use/type_safety_check.sh",
+            "timeout": 10,
+            "statusMessage": "Checking type safety..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Workflow",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/pre_tool_use/codex_stage_guard.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/pre_tool_use/npm_script_preference.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session_start/statusline_checks.sh",
+            "timeout": 600,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/stop/statusline_checks.sh",
+            "timeout": 600,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/task-completed/bit-issue-update.sh",
+            "timeout": 30,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/user_prompt_submit/ultracode_codex_context.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/worktree/create.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "WorktreeRemove": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/worktree/remove.sh",
+            "timeout": 15
+          }
+        ]
+      }
     ]
   },
-  "plansDirectory": ".\/plans",
-  "remoteControlAtStartup": true,
-  "skipAutoPermissionPrompt": true,
-  "skipWorkflowUsageWarning": true,
   "statusLine": {
-    "command": "'\/Users\/ushironoko\/Library\/Application Support\/QuotaGlance\/statusline-bridge.sh' --tee | '\/Applications\/asuku.app\/Contents\/MacOS\/asuku-hook' statusline | ~\/.claude\/statusline.sh",
-    "padding": 0,
-    "type": "command"
+    "type": "command",
+    "command": "'/Users/ushironoko/Library/Application Support/QuotaGlance/statusline-bridge.sh' --tee | '/Applications/asuku.app/Contents/MacOS/asuku-hook' statusline | ~/.claude/statusline.sh",
+    "padding": 0
   },
-  "verbose": true
+  "enabledPlugins": {
+    "clangd-lsp@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
+    "pyright-lsp@claude-plugins-official": true,
+    "rust-analyzer-lsp@claude-plugins-official": true,
+    "swift-lsp@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true
+  },
+  "language": "Japanese",
+  "alwaysThinkingEnabled": true,
+  "effortLevel": "xhigh",
+  "plansDirectory": "./plans",
+  "tui": "default",
+  "skipWorkflowUsageWarning": true,
+  "verbose": true,
+  "remoteControlAtStartup": true,
+  "agentPushNotifEnabled": true,
+  "skipAutoPermissionPrompt": true
 }
