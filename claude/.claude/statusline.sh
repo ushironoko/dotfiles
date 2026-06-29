@@ -6,9 +6,9 @@ USED_PCT=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
 
 CONTEXT_DISPLAY=""
 if [ -n "$USED_PCT" ]; then
-    # Add auto-compact buffer (16.5%) to show effective usage
-    ADJUSTED_PCT=$(echo "$USED_PCT + 16.5" | bc)
-    USED_INT=$(printf "%.0f" "$ADJUSTED_PCT")
+    # Remaining context relative to the full window, matching /context's
+    # free-space figure (no auto-compact buffer adjustment).
+    USED_INT=$(printf "%.0f" "$USED_PCT")
 
     if [ "$USED_INT" -gt 100 ]; then
         USED_INT=100
