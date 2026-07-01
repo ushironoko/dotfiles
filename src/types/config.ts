@@ -37,13 +37,6 @@ interface MCPConfig {
   backupDir?: string;
 }
 
-// MCPDoc source interface (for mcpdoc command)
-interface MCPDocSource {
-  name: string;
-  llms_txt: string;
-  description?: string;
-}
-
 interface SymlinkOptions {
   dryRun?: boolean;
   force?: boolean;
@@ -85,7 +78,6 @@ export {
   type BackupConfig,
   type BackupInfo,
   type MCPConfig,
-  type MCPDocSource,
   type SymlinkOptions,
   type SymlinkStatus,
   type RestoreOptions,

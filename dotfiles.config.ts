@@ -60,11 +60,6 @@ export default defineConfig({
       type: "directory",
     },
     {
-      source: "./config/mcpdoc",
-      target: "~/.config/mcpdoc",
-      type: "directory",
-    },
-    {
       source: "./config/ghostty",
       target: "~/.config/ghostty",
       type: "directory",

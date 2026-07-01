@@ -21,8 +21,7 @@
       "Bash(bit issue search:*)",
       "Read(**)",
       "Read(~/.bashrc)",
-      "Read(~/.zshrc)",
-      "mcp__mcpdoc"
+      "Read(~/.zshrc)"
     ],
     "deny": [
       "Bash(bit issue claim:*)",

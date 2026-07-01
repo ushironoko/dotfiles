@@ -5,7 +5,6 @@ import { analyzeCommand } from "./commands/analyze";
 import { doctorCommand } from "./commands/doctor";
 import { installCommand } from "./commands/install";
 import { listCommand } from "./commands/list";
-import { mcpdocCommand } from "./commands/mcpdoc";
 import { restoreCommand } from "./commands/restore";
 
 const ARGV_SKIP_COUNT = 2;
@@ -22,8 +21,6 @@ if (command === "install") {
   await cli(args, listCommand);
 } else if (command === "doctor") {
   await cli(args, doctorCommand);
-} else if (command === "mcpdoc") {
-  await cli(args, mcpdocCommand);
 } else if (command === "analyze") {
   await cli(args, analyzeCommand);
 } else {
@@ -40,9 +37,6 @@ if (command === "install") {
   );
   console.log(
     `  ${colors.cyan("doctor")}   - Diagnose environment and configuration issues`,
-  );
-  console.log(
-    `  ${colors.cyan("mcpdoc")}   - Manage mcpdoc documentation sources`,
   );
   console.log(
     `  ${colors.cyan("analyze")}  - Analyze Claude Code operation logs`,

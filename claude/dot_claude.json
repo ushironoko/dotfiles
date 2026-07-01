@@ -1,17 +1,3 @@
 {
-  "mcpServers": {
-    "mcpdoc": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "mcpdoc",
-        "mcpdoc",
-        "--json",
-        "${HOME}/.config/mcpdoc/mcpdoc-sources.json",
-        "--transport",
-        "stdio"
-      ],
-      "description": "Documentation server for llms.txt files"
-    }
-  }
+  "mcpServers": {}
 }
