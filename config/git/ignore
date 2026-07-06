@@ -43,3 +43,5 @@ plans/
 node_modules/
 
 .serena/
+
+**/.claude/.cc-writes/

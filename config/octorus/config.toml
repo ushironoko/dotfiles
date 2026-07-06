@@ -4,7 +4,7 @@
 # editor = "vim"
 
 [diff]
-theme = "Dracula"
+theme = "base16-eighties.dark"
 # Number of spaces per tab character in diff view (minimum: 1)
 tab_width = 4
 

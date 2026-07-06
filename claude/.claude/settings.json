@@ -194,10 +194,11 @@
   "alwaysThinkingEnabled": true,
   "effortLevel": "xhigh",
   "plansDirectory": "./plans",
-  "tui": "default",
+  "tui": "fullscreen",
   "skipWorkflowUsageWarning": true,
   "verbose": true,
   "remoteControlAtStartup": true,
   "agentPushNotifEnabled": true,
-  "skipAutoPermissionPrompt": true
+  "skipAutoPermissionPrompt": true,
+  "model": "claude-fable-5[1m]"
 }

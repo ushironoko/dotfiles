@@ -16,18 +16,12 @@ if [ -n "$USED_PCT" ]; then
 
     REMAINING_INT=$((100 - USED_INT))
 
-    FILLED=$((REMAINING_INT / 10))
-    EMPTY=$((10 - FILLED))
-    BAR=""
-    for ((i=0; i<FILLED; i++)); do BAR+="█"; done
-    for ((i=0; i<EMPTY; i++)); do BAR+="░"; done
-
     if [ "$REMAINING_INT" -ge 30 ]; then
-        CONTEXT_DISPLAY="\033[32m${BAR} ${REMAINING_INT}%\033[0m"
+        CONTEXT_DISPLAY="\033[32m${REMAINING_INT}%\033[0m"
     elif [ "$REMAINING_INT" -ge 10 ]; then
-        CONTEXT_DISPLAY="\033[33m${BAR} ${REMAINING_INT}%\033[0m"
+        CONTEXT_DISPLAY="\033[33m${REMAINING_INT}%\033[0m"
     else
-        CONTEXT_DISPLAY="\033[31m${BAR} ${REMAINING_INT}%\033[0m"
+        CONTEXT_DISPLAY="\033[31m${REMAINING_INT}%\033[0m"
     fi
 fi
 
