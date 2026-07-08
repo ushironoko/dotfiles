@@ -3,6 +3,15 @@ input=$(cat)
 
 CURRENT_DIR=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // empty')
 USED_PCT=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
+MODEL_NAME=$(echo "$input" | jq -r '.model.display_name // empty')
+
+MODEL_DISPLAY=""
+if [ -n "$MODEL_NAME" ]; then
+    # Strip a trailing context-window qualifier like " (1M context)" so the
+    # statusline shows just the model name (e.g. "Opus 4.8").
+    MODEL_NAME=$(printf '%s' "$MODEL_NAME" | sed -E 's/ *\([^)]*context[^)]*\)$//I')
+    MODEL_DISPLAY="\033[36m${MODEL_NAME}\033[0m"
+fi
 
 CONTEXT_DISPLAY=""
 if [ -n "$USED_PCT" ]; then
@@ -104,6 +113,9 @@ if [ -n "$ORG_REPO" ]; then
     OUTPUT="${ORG_REPO} | ${DIR_NAME}${GIT_BRANCH}${GIT_DIFF}${CHECKS_DISPLAY}"
 else
     OUTPUT="${DIR_NAME}${GIT_BRANCH}${GIT_DIFF}${CHECKS_DISPLAY}"
+fi
+if [ -n "$MODEL_DISPLAY" ]; then
+    OUTPUT="$OUTPUT | $MODEL_DISPLAY"
 fi
 if [ -n "$CONTEXT_DISPLAY" ]; then
     OUTPUT="$OUTPUT | $CONTEXT_DISPLAY"
