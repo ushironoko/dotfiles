@@ -295,19 +295,31 @@ bit issue close <parent_id>
 ## Cross-Model Stages (ultracode)
 
 When the session runs in ultracode mode and you author multi-agent Workflow
-scripts for the work started here, include cross-model (codex) stages so the
-result is not blind to single-model-family biases:
+scripts for the work started here, codex (a non-Claude model family) is the
+DEFAULT for every fan-out subagent, so the result is not blind to
+single-model-family biases:
 
-- Every review/verification fan-out includes an `agentType: 'codex-reviewer'`
-  stage.
-- Competing implementation phases include an `agentType: 'codex-poc'` stage
-  spawned with `isolation: 'worktree'` — codex writes its PoC in its own
-  isolated worktree (a sibling of this session's worktree), and each PoC diff
-  is reviewed by the OTHER model family before judging.
+- Every review/verification fan-out subagent uses `agentType: 'codex-reviewer'`.
+  Differentiate lenses with codex `prompt` mode (a focused prompt on stdin);
+  `review` mode is a single holistic diff pass and does not take a focus.
+- Competing implementation PoCs use `agentType: 'codex-poc'` spawned with
+  `isolation: 'worktree'` — each codex PoC writes into its own isolated worktree
+  (a sibling of this session's worktree). Run several codex PoCs with different
+  approaches; each PoC diff is reviewed before judging.
+- Write-capable fan-out that is NOT a quarantined PoC uses
+  `agentType: 'codex-runner'` — it runs `codex-stage.sh run` (workspace-write) in
+  a directory you assign (the main checkout or a subdirectory), WITHOUT the
+  isolated-worktree requirement. Launch several in parallel, but partition their
+  write scope (distinct files/dirs) yourself — the wrapper does not lock the
+  tree, and changes stay uncommitted for your review. Use `codex-poc` instead
+  when the diff must stay quarantined, `codex-reviewer` for read-only review.
+- Claude subagents are permitted ONLY as optional additions (+α) that you (the
+  main Claude orchestrator) add at your own discretion — never as the mandatory
+  baseline roster. You still orchestrate, synthesize, and judge yourself.
 
 All codex calls go through `~/.claude/hooks/lib/codex-stage.sh`. For ready-made
-workflow script templates (review fan-out, dual-PoC cross-review), read
-`references/multi-model-workflows.md`.
+workflow script templates (codex-default review fan-out, competing codex PoCs),
+read `references/multi-model-workflows.md`.
 
 ## Worked Examples
 

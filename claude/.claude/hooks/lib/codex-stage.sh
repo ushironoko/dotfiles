@@ -28,6 +28,22 @@
 #       Prints `git status --porcelain` + `git diff --stat` of the worktree after
 #       the run so callers get a machine-checkable change summary.
 #
+#   codex-stage.sh run --dir <path> [--timeout <sec>] [--network]
+#       Like poc (workspace-write, task read from stdin) but WITHOUT the
+#       isolated-worktree requirement: --dir may be the main repository checkout
+#       or any subdirectory, as long as it is inside a git work tree (writes stay
+#       reviewable via git). For a write-capable codex subagent the orchestrator
+#       launches in parallel and places itself — the orchestrator owns
+#       collision-avoidance across concurrent runs (partition files/dirs so two
+#       runs never touch the same path). Same rails as poc (codex -a never exec
+#       --sandbox workspace-write -C <dir> -; no danger flags, no --add-dir, no
+#       -m). Prints a repo-wide `git status --porcelain` + `git diff --stat`
+#       after the run. Changes stay uncommitted for review. run does not accept
+#       --out (its output is returned on stdout) and uses exit 13, not poc's 14,
+#       for a non-git-work-tree target. Note: confinement of codex's edits to
+#       <dir> is codex's own workspace-write sandbox (writable root = the -C dir),
+#       not something this wrapper enforces beyond withholding --add-dir.
+#
 # Retry (all modes):
 #   --retry <n>        retries when codex fails with a rate-limit error
 #                      (default 1; 0 disables)
@@ -277,7 +293,40 @@ case $MODE in
     git -C "$TOPLEVEL" diff --stat
     ;;
 
+  run)
+    [ -d "$DIR" ] || die "no such directory: $DIR" 13
+    # Absolutize --dir so -C and the post-run git summary are unambiguous.
+    case $DIR in /*) ;; *) DIR="$PWD/$DIR" ;; esac
+    # Require a git work tree so writes stay reviewable — but, UNLIKE poc, the
+    # main repository checkout is allowed: run mode deliberately drops the
+    # isolated-linked-worktree refusal. Placement/isolation is the caller's job.
+    git -C "$DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+      || die "run mode requires a git work tree (for reviewability): $DIR" 13
+    TOPLEVEL=$(git -C "$DIR" rev-parse --show-toplevel)
+    # run's write surface is strictly --dir. --out/-o would let codex write its
+    # output file to a path absolutized against the caller's $PWD, outside that
+    # boundary — so run does not accept it. The caller captures codex's output
+    # from this wrapper's stdout instead.
+    [ -z "$OUT" ] \
+      || die "run mode does not support --out — codex output is returned on stdout" 13
+    buffer_stdin
+    NETWORK_OPT=""
+    [ "$NETWORK" -eq 1 ] && NETWORK_OPT="sandbox_workspace_write.network_access=true"
+    rc=0
+    run_codex "$PROMPT_FILE" codex -a never exec \
+      --sandbox workspace-write \
+      -C "$DIR" \
+      --ephemeral \
+      ${NETWORK_OPT:+-c "$NETWORK_OPT"} \
+      - || rc=$?
+    [ "$rc" -eq 0 ] || { report_failure "$rc"; exit "$rc"; }
+    echo ""
+    echo "--- codex-stage run: resulting changes in $TOPLEVEL ---"
+    git -C "$TOPLEVEL" status --porcelain
+    git -C "$TOPLEVEL" diff --stat
+    ;;
+
   *)
-    die "unknown mode: $MODE (expected review | prompt | poc)" 13
+    die "unknown mode: $MODE (expected review | prompt | poc | run)" 13
     ;;
 esac

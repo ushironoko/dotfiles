@@ -22,7 +22,7 @@ if [ -z "$SCRIPT" ]; then
 fi
 
 # Markers that count as a codex stage; codex-skip is the explicit opt-out.
-printf '%s' "$SCRIPT" | grep -qiE 'codex-reviewer|codex-poc|codex-stage|codex exec|codex-skip' && exit 0
+printf '%s' "$SCRIPT" | grep -qiE 'codex-reviewer|codex-poc|codex-runner|codex-stage|codex exec|codex-skip' && exit 0
 
 # codex is installed via bun; the hook shell may lack that PATH entry.
 command -v codex >/dev/null 2>&1 || {
@@ -35,7 +35,7 @@ if [ ! -f "$AUTH_CACHE" ] || [ -n "$(find "$AUTH_CACHE" -mmin +60 2>/dev/null)" 
   touch "$AUTH_CACHE"
 fi
 
-CTX='This workflow script contains no cross-model (codex) stage. ultracode workflows should include at least one: agentType "codex-reviewer" in review/verification fan-outs, agentType "codex-poc" (with isolation "worktree") for competing implementation PoCs, or a Bash stage calling ~/.claude/hooks/lib/codex-stage.sh for diff review. Templates: ~/.claude/skills/start-work/references/multi-model-workflows.md. If codex was intentionally omitted (trivial or non-review workflow, or the user opted out), proceed and add the comment "// codex-skip" to the script next time.'
+CTX='This workflow script contains no cross-model (codex) stage. In ultracode workflows, EVERY fan-out subagent should default to codex: agentType "codex-reviewer" for review/verification fan-outs, agentType "codex-poc" (with isolation "worktree") for competing implementation PoCs, or a Bash stage calling ~/.claude/hooks/lib/codex-stage.sh for diff review. Claude subagents belong only as optional additions (+α) you add at your own discretion, not as the default roster. Templates: ~/.claude/skills/start-work/references/multi-model-workflows.md. If codex was intentionally omitted (trivial or non-review workflow, or the user opted out), proceed and add the comment "// codex-skip" to the script next time.'
 
 jq -n --arg ctx "$CTX" '{
   hookSpecificOutput: {
