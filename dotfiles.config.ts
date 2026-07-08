@@ -40,6 +40,16 @@ export default defineConfig({
       },
     },
     {
+      // codex rewrites this file at runtime, filling it with machine-local
+      // state (absolute paths: [projects.*] trust, [mcp_servers.*], marketplace
+      // sources, notify, perPath). The codex-scrub git clean filter
+      // (.gitattributes + scripts/setup-git-filters.sh) drops anything with a
+      // quoted absolute path at commit time, so only portable settings are versioned.
+      source: "./codex/config.toml",
+      target: "~/.codex/config.toml",
+      type: "file",
+    },
+    {
       source: "./config/git",
       target: "~/.config/git",
       type: "directory",

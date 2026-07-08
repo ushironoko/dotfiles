@@ -277,6 +277,18 @@ echo ""
 echo "📦 Installing Node.js dependencies..."
 "$BUN_PATH" install
 
+# Configure repo-local git filters before any commit can happen.
+# The codex-scrub clean filter strips machine-local codex trust state
+# ([projects.*]) from codex/config.toml at commit time. Filter drivers live in
+# .git/config (never committed), so this must run once per clone.
+echo ""
+echo "🧹 Configuring git filters..."
+if bash "$SCRIPT_DIR/scripts/setup-git-filters.sh"; then
+    echo "✅ git filters configured"
+else
+    echo "⚠️  git filter setup failed — run 'bun run setup:git-filters' manually before committing"
+fi
+
 # Run the installation
 echo ""
 echo "🔗 Installing dotfiles..."

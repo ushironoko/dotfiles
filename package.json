@@ -14,7 +14,8 @@
     "format": "prettier --write .",
     "lint:fix": "oxlint --fix",
     "tsc": "tsgo --noEmit",
-    "run-all": "bun run format && bun run lint && bun run lint:sh && bun run tsc && bun test",
+    "setup:git-filters": "bash scripts/setup-git-filters.sh",
+    "run-all": "bun run setup:git-filters && bun run format && bun run lint && bun run lint:sh && bun run tsc && bun test",
     "install:local": "bun link"
   },
   "dependencies": {

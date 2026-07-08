@@ -101,3 +101,28 @@ Edit `dotfiles.config.ts` to manage your files:
 - **file**: Single file symlink
 - **directory**: Entire directory symlink
 - **selective**: Specific files with permissions
+
+## codex config (`~/.codex/config.toml`)
+
+`~/.codex/config.toml` is symlinked to `codex/config.toml`, but codex rewrites
+that file at runtime, filling it with machine-local state — `[projects."<path>"]`
+trust levels (absolute paths, including private/client repo names), `[mcp_servers.*]`
+tables wired to Codex.app paths, `[marketplaces.*]` sources, the `notify` helper
+path, and per-repo `[desktop...perPath]` prefs. A git **clean filter**
+(`codex-scrub`, `codex/scrub-config.awk`) drops anything carrying a quoted
+absolute path — plus every `[projects.*]`/`[mcp_servers.*]` table — at `git add`
+time. It filters by content, not a fixed section list, so machine state codex
+invents later is scrubbed too; URLs and relative paths are kept. The working
+tree keeps the live file untouched, so codex keeps functioning.
+
+The filter driver lives in `.git/config` (never committed), so it must be
+registered once per clone:
+
+```bash
+bun run setup:git-filters   # also run automatically by init.sh and run-all
+```
+
+`init.sh` runs it on initial setup and `bun run run-all` runs it before every
+pre-commit check, so under normal use no manual step is needed. If you commit
+`codex/config.toml` on a fresh clone without it, trust state would leak — the
+filter is set to `required = true` to fail loudly if the scrubber ever errors.

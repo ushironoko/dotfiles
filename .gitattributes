@@ -1,0 +1,8 @@
+# codex/config.toml is a live file that codex rewrites at runtime, filling it
+# with machine-local state — absolute paths in [projects.*] trust (incl. client
+# repos), [mcp_servers.*] (Codex.app paths), [marketplaces.*] sources, notify,
+# and [desktop...perPath]. The codex-scrub clean filter drops anything holding a
+# quoted absolute path (plus every [projects.*]/[mcp_servers.*] table) at
+# `git add` time so it never enters commits. Driver is defined per-checkout by
+# scripts/setup-git-filters.sh (wired into `bun run run-all`).
+codex/config.toml filter=codex-scrub
