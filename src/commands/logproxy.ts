@@ -3,6 +3,7 @@
 //   status    - 稼働状況・env 設定・ログ状況の確認
 //   tail      - 直近セッションのレコードを追尾表示
 //   prune     - 保存管理スイープ（idle gzip + 期限切れ削除）を1回実行
+//   show      - 指定ターンの文脈全文（system/tools/messages）を整形表示
 //   install   - launchd 常駐化 + health 確認後に settings.json の env を有効化
 //   uninstall - env を外して直結復帰 → agent 停止・plist 削除
 import { promises as fs } from "node:fs";
@@ -30,6 +31,11 @@ import {
 } from "../core/logproxy/settings-env.js";
 import { runInstall, runUninstall } from "../core/logproxy/install.js";
 import {
+  type RenderFormat,
+  renderContext,
+  selectRequestTurn,
+} from "../core/logproxy/render.js";
+import {
   DEFAULT_GZIP_IDLE_MINUTES,
   DEFAULT_HOST,
   DEFAULT_KEEP_DAYS,
@@ -53,9 +59,12 @@ const KNOWN_SUBCOMMANDS = new Set([
   "status",
   "tail",
   "prune",
+  "show",
   "install",
   "uninstall",
 ]);
+
+const VALID_FORMATS = new Set<RenderFormat>(["text", "json", "md"]);
 
 type Logger = ReturnType<typeof createLogger>;
 
@@ -294,6 +303,44 @@ const runTail = async (
   }
 };
 
+const runShow = async (
+  o: CommonOpts,
+  logger: Logger,
+  session: string | undefined,
+  turn: number | undefined,
+  format: RenderFormat,
+): Promise<void> => {
+  const file = await newestSessionFile(o.logDir, session);
+  if (!file) {
+    logger.warn(`no session log found in ${o.logDir}`);
+    return;
+  }
+  let records: LogRecord[];
+  try {
+    records = (await fs.readFile(join(o.logDir, file), "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as LogRecord);
+  } catch {
+    logger.error(`failed to read ${file}`);
+    return;
+  }
+  const requests = records.filter(
+    (r): r is RequestRecord => r.kind === "request",
+  );
+  const req = selectRequestTurn(requests, turn);
+  if (!req) {
+    logger.error(`turn out of range (1..${requests.length})`);
+    return;
+  }
+  const res = records.find(
+    (r): r is ResponseRecord =>
+      r.kind === "response" && r.record_id === req.record_id,
+  );
+  // レンダリング結果は本文なので logger ではなく素の stdout へ
+  console.log(renderContext(req, res, format));
+};
+
 export const logproxyCommand = define({
   name: "logproxy",
   description:
@@ -331,8 +378,19 @@ export const logproxyCommand = define({
       type: "number",
     },
     session: {
-      description: "Target session id (for tail)",
+      description: "Target session id (for tail/show)",
       short: "s",
+      type: "string",
+    },
+    turn: {
+      description: "Turn to show (1-based; default: latest)",
+      short: "t",
+      type: "number",
+    },
+    format: {
+      default: "text",
+      description: "show format: text | json | md",
+      short: "f",
       type: "string",
     },
     verbose: {
@@ -349,7 +407,7 @@ export const logproxyCommand = define({
     if (!KNOWN_SUBCOMMANDS.has(sub)) {
       logger.error(`unknown subcommand: ${sub}`);
       logger.info(
-        "subcommands: start | status | tail | prune | install | uninstall",
+        "subcommands: start | status | tail | prune | show | install | uninstall",
       );
       return;
     }
@@ -374,6 +432,12 @@ export const logproxyCommand = define({
       case "prune":
         await runPrune(o, logger);
         break;
+      case "show": {
+        const fmt = ctx.values.format as RenderFormat;
+        const format = VALID_FORMATS.has(fmt) ? fmt : "text";
+        await runShow(o, logger, ctx.values.session, ctx.values.turn, format);
+        break;
+      }
       case "install":
         await runInstallCmd(o, logger);
         break;
