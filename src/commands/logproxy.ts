@@ -1,16 +1,34 @@
 // logproxy コマンド: Claude Code の文脈を記録するローカル逆プロキシの操作。
-//   start  - プロキシを前景起動（launchd がこれを起動する / 手動検証にも使う）
-//   status - 稼働状況・env 設定・ログ状況の確認
-//   tail   - 直近セッションのレコードを追尾表示
-//   prune  - 保存管理スイープ（idle gzip + 期限切れ削除）を1回実行
+//   start     - プロキシを前景起動（launchd がこれを起動する / 手動検証にも使う）
+//   status    - 稼働状況・env 設定・ログ状況の確認
+//   tail      - 直近セッションのレコードを追尾表示
+//   prune     - 保存管理スイープ（idle gzip + 期限切れ削除）を1回実行
+//   install   - launchd 常駐化 + health 確認後に settings.json の env を有効化
+//   uninstall - env を外して直結復帰 → agent 停止・plist 削除
 import { promises as fs } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { define } from "../utils/command-helpers.js";
 import { createLogger } from "../utils/logger.js";
-import { expandPath } from "../utils/paths.js";
+import { expandPath, getDotfilesDir } from "../utils/paths.js";
 import { createLogWriter } from "../core/logproxy/log-writer.js";
 import { createProxyServer } from "../core/logproxy/proxy.js";
 import { runSweep } from "../core/logproxy/sweep.js";
+import {
+  bootout,
+  bootstrap,
+  type PlistParams,
+  portInUse,
+  removePlistFile,
+  renderPlist,
+  resolveBunPath,
+  writePlistFile,
+} from "../core/logproxy/launchd.js";
+import {
+  removeBaseUrlEnv,
+  setBaseUrlEnv,
+} from "../core/logproxy/settings-env.js";
+import { runInstall, runUninstall } from "../core/logproxy/install.js";
 import {
   DEFAULT_GZIP_IDLE_MINUTES,
   DEFAULT_HOST,
@@ -19,6 +37,7 @@ import {
   DEFAULT_PORT,
   DEFAULT_UPSTREAM,
   HEALTH_PATH,
+  LAUNCHD_LABEL,
   type LogRecord,
   type RequestRecord,
   type ResponseRecord,
@@ -26,7 +45,17 @@ import {
 
 const SWEEP_INTERVAL_MS = 3_600_000; // 毎時
 const TAIL_POLL_MS = 500;
-const KNOWN_SUBCOMMANDS = new Set(["start", "status", "tail", "prune"]);
+const HEALTH_POLL_ATTEMPTS = 20;
+const HEALTH_POLL_DELAY_MS = 250;
+const SETTINGS_PATH = "~/.claude/settings.json";
+const KNOWN_SUBCOMMANDS = new Set([
+  "start",
+  "status",
+  "tail",
+  "prune",
+  "install",
+  "uninstall",
+]);
 
 type Logger = ReturnType<typeof createLogger>;
 
@@ -39,7 +68,74 @@ interface CommonOpts {
   gzipIdleMinutes: number;
 }
 
-const settingsPath = (): string => expandPath("~/.claude/settings.json");
+const settingsPath = (): string => expandPath(SETTINGS_PATH);
+
+/** health が 200 を返すまでポーリング。上がらなければ false。 */
+const pollHealth = async (host: string, port: number): Promise<boolean> => {
+  for (let i = 0; i < HEALTH_POLL_ATTEMPTS; i++) {
+    try {
+      const res = await fetch(`http://${host}:${port}${HEALTH_PATH}`);
+      if (res.ok) return true;
+    } catch {
+      // まだ起動していない
+    }
+    await Bun.sleep(HEALTH_POLL_DELAY_MS);
+  }
+  return false;
+};
+
+const runInstallCmd = async (o: CommonOpts, logger: Logger): Promise<void> => {
+  if (await portInUse(o.port, o.host)) {
+    logger.error(`port ${o.port} is already in use; aborting install`);
+    return;
+  }
+  const bunPath = await resolveBunPath();
+  const repoRoot = getDotfilesDir();
+  const home = homedir();
+  const params: PlistParams = {
+    label: LAUNCHD_LABEL,
+    bunPath,
+    entryPath: join(repoRoot, "bin", "dotfiles"),
+    port: o.port,
+    host: o.host,
+    logDir: o.logDir,
+    workingDir: repoRoot,
+    home,
+    path: `${home}/.local/bin:${home}/.local/share/mise/shims:/usr/bin:/bin:/usr/sbin:/sbin`,
+    keepDays: o.keepDays,
+    gzipIdleMinutes: o.gzipIdleMinutes,
+  };
+  const url = `http://${o.host}:${o.port}`;
+  const result = await runInstall({
+    writePlist: async () => {
+      await fs.mkdir(o.logDir, { recursive: true });
+      return writePlistFile(LAUNCHD_LABEL, renderPlist(params));
+    },
+    bootstrap: (p) => bootstrap(p),
+    pollHealth: () => pollHealth(o.host, o.port),
+    writeEnv: () => setBaseUrlEnv(settingsPath(), url),
+    rollback: async () => {
+      await bootout(LAUNCHD_LABEL);
+      await removePlistFile(LAUNCHD_LABEL);
+    },
+    log: (m) => logger.info(m),
+  });
+  if (result.ok) {
+    logger.success(`logproxy installed & enabled at ${url}`);
+    logger.info("all Claude Code sessions now route through the proxy");
+  } else {
+    logger.error(`install aborted: ${result.reason} (settings.json untouched)`);
+  }
+};
+
+const runUninstallCmd = async (logger: Logger): Promise<void> => {
+  await runUninstall({
+    removeEnv: () => removeBaseUrlEnv(settingsPath()),
+    bootout: () => bootout(LAUNCHD_LABEL),
+    removePlist: () => removePlistFile(LAUNCHD_LABEL),
+  });
+  logger.success("logproxy uninstalled (env removed, agent stopped)");
+};
 
 const summarize = (rec: LogRecord): string => {
   if (rec.kind === "request") {
@@ -252,7 +348,9 @@ export const logproxyCommand = define({
     const sub = candidates[0] ?? "status";
     if (!KNOWN_SUBCOMMANDS.has(sub)) {
       logger.error(`unknown subcommand: ${sub}`);
-      logger.info("subcommands: start | status | tail | prune");
+      logger.info(
+        "subcommands: start | status | tail | prune | install | uninstall",
+      );
       return;
     }
     const o: CommonOpts = {
@@ -275,6 +373,12 @@ export const logproxyCommand = define({
         break;
       case "prune":
         await runPrune(o, logger);
+        break;
+      case "install":
+        await runInstallCmd(o, logger);
+        break;
+      case "uninstall":
+        await runUninstallCmd(logger);
         break;
     }
   },
