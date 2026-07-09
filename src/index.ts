@@ -5,6 +5,7 @@ import { analyzeCommand } from "./commands/analyze";
 import { doctorCommand } from "./commands/doctor";
 import { installCommand } from "./commands/install";
 import { listCommand } from "./commands/list";
+import { logproxyCommand } from "./commands/logproxy";
 import { restoreCommand } from "./commands/restore";
 
 const ARGV_SKIP_COUNT = 2;
@@ -23,6 +24,8 @@ if (command === "install") {
   await cli(args, doctorCommand);
 } else if (command === "analyze") {
   await cli(args, analyzeCommand);
+} else if (command === "logproxy") {
+  await cli(args, logproxyCommand);
 } else {
   // Show help if no command or unknown command
   console.log(colors.bold(colors.cyan("\nDotfiles Manager v2.0.0")));
@@ -40,6 +43,9 @@ if (command === "install") {
   );
   console.log(
     `  ${colors.cyan("analyze")}  - Analyze Claude Code operation logs`,
+  );
+  console.log(
+    `  ${colors.cyan("logproxy")} - Capture Claude Code context via a local reverse proxy`,
   );
   console.log(`\nUsage: ${colors.yellow("dotfiles <command> [options]")}`);
   console.log(

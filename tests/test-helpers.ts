@@ -74,3 +74,54 @@ export const createTestSymlink = async (
 ): Promise<void> => {
   await fs.symlink(target, link);
 };
+
+/** logproxy の統合テスト用に、受信リクエストを記録する実 Bun.serve モック上流を立てる。 */
+export interface ReceivedRequest {
+  method: string;
+  path: string;
+  headers: Record<string, string>;
+  body: string;
+}
+
+export interface MockUpstream {
+  url: string;
+  received: ReceivedRequest[];
+  close: () => Promise<void>;
+}
+
+export const startMockUpstream = async (
+  handler: (
+    req: Request,
+    received: ReceivedRequest,
+  ) => Response | Promise<Response>,
+): Promise<MockUpstream> => {
+  const received: ReceivedRequest[] = [];
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    idleTimeout: 30,
+    async fetch(req) {
+      const url = new URL(req.url);
+      const body = await req.text();
+      const headers: Record<string, string> = {};
+      req.headers.forEach((v, k) => {
+        headers[k] = v;
+      });
+      const rec: ReceivedRequest = {
+        method: req.method,
+        path: url.pathname + url.search,
+        headers,
+        body,
+      };
+      received.push(rec);
+      return handler(req, rec);
+    },
+  });
+  return {
+    url: `http://127.0.0.1:${server.port}`,
+    received,
+    close: async () => {
+      await server.stop(true);
+    },
+  };
+};
