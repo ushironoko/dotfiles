@@ -1,7 +1,7 @@
 // logproxy コマンド: Claude Code の文脈を記録するローカル逆プロキシの操作。
 //   start     - プロキシを前景起動（launchd がこれを起動する / 手動検証にも使う）
 //   status    - 稼働状況・env 設定・ログ状況の確認
-//   tail      - 直近セッションのレコードを追尾表示
+//   tail      - 直近セッションのレコードを追尾表示（--full で毎ターン文脈全文）
 //   prune     - 保存管理スイープ（idle gzip + 期限切れ削除）を1回実行
 //   show      - 指定ターンの文脈全文（system/tools/messages）を整形表示
 //   install   - launchd 常駐化 + health 確認後に settings.json の env を有効化
@@ -265,6 +265,8 @@ const runTail = async (
   o: CommonOpts,
   logger: Logger,
   session: string | undefined,
+  full: boolean,
+  format: RenderFormat,
 ): Promise<void> => {
   const file = await newestSessionFile(o.logDir, session);
   if (!file) {
@@ -272,15 +274,23 @@ const runTail = async (
     return;
   }
   const path = join(o.logDir, file);
-  logger.info(`tailing ${path}`);
+  logger.info(`tailing ${path}${full ? " (full)" : ""}`);
   let offset = 0;
   let residual = "";
   const emit = (line: string): void => {
     if (!line.trim()) return;
+    let rec: LogRecord;
     try {
-      console.log(summarize(JSON.parse(line) as LogRecord));
+      rec = JSON.parse(line) as LogRecord;
     } catch {
-      // 不完全な行は無視
+      return; // 不完全な行は無視
+    }
+    // --full: request が来るたびに文脈全文を描画。response は 1 行の usage。
+    if (full && rec.kind === "request") {
+      console.log(`\n${"━".repeat(64)}`);
+      console.log(renderContext(rec, undefined, format));
+    } else {
+      console.log(summarize(rec));
     }
   };
   // 既存分 + 追尾。Ctrl-C で終了。
@@ -389,9 +399,14 @@ export const logproxyCommand = define({
     },
     format: {
       default: "text",
-      description: "show format: text | json | md",
+      description: "show/tail --full format: text | json | md",
       short: "f",
       type: "string",
+    },
+    full: {
+      default: false,
+      description: "tail: render each new turn's full context (show-style)",
+      type: "boolean",
     },
     verbose: {
       default: false,
@@ -419,6 +434,8 @@ export const logproxyCommand = define({
       keepDays: ctx.values.keepDays,
       gzipIdleMinutes: ctx.values.gzipIdleMinutes,
     };
+    const fmt = ctx.values.format as RenderFormat;
+    const format: RenderFormat = VALID_FORMATS.has(fmt) ? fmt : "text";
     switch (sub) {
       case "start":
         await runStart(o, logger);
@@ -427,17 +444,14 @@ export const logproxyCommand = define({
         await runStatus(o, logger);
         break;
       case "tail":
-        await runTail(o, logger, ctx.values.session);
+        await runTail(o, logger, ctx.values.session, ctx.values.full, format);
         break;
       case "prune":
         await runPrune(o, logger);
         break;
-      case "show": {
-        const fmt = ctx.values.format as RenderFormat;
-        const format = VALID_FORMATS.has(fmt) ? fmt : "text";
+      case "show":
         await runShow(o, logger, ctx.values.session, ctx.values.turn, format);
         break;
-      }
       case "install":
         await runInstallCmd(o, logger);
         break;
