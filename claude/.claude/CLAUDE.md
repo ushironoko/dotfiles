@@ -30,11 +30,11 @@ Utilize `dig` skills for information gathering. Unearth information that users h
 
 ## Absolute Rules for Creating PRs
 
-- execute gh pr create before performing the following:
+- Do not execute gh pr create before performing the following:
   1. Verify the target repository using gh repo view --json nameWithOwner
   2. In the case of a fork, confirm that the PR is directed to the user's own repository and not the upstream repository
   3. Present the target repository name and branch name to the user and obtain explicit approval before execution
-- create a PR without user approval
+- Do not create a PR without user approval
 - In a forked repository, explicitly specify the user's repository using gh pr create -R <owner/repo>
 
 ## Protection of Confidential Information in Commit Messages and PR Descriptions
