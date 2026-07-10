@@ -90,6 +90,11 @@ export default defineConfig({
       type: "directory",
     },
     {
+      source: "./config/tmux",
+      target: "~/.config/tmux",
+      type: "directory",
+    },
+    {
       source: "./bin/dotfiles",
       target: "~/.local/bin/dotfiles",
       type: "file",
