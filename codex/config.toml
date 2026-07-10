@@ -1,7 +1,11 @@
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 model_reasoning_effort = "xhigh"
 personality = "pragmatic"
 service_tier = "fast"
+
+
+[notice]
+hide_rate_limit_model_nudge = true
 
 [notice.model_migrations]
 "gpt-5.1-codex-max" = "gpt-5.2-codex"
@@ -13,9 +17,6 @@ enabled = true
 enabled = true
 
 [plugins."presentations@openai-primary-runtime"]
-enabled = true
-
-[plugins."browser@openai-bundled"]
 enabled = true
 
 [plugins."computer-use@openai-bundled"]
@@ -30,11 +31,37 @@ enabled = true
 [plugins."template-creator@openai-primary-runtime"]
 enabled = true
 
+[plugins."sites@openai-bundled"]
+enabled = true
+
+[plugins."visualize@openai-bundled"]
+enabled = true
+
+[plugins."browser@openai-bundled"]
+enabled = true
+
+[tui]
+notifications = true
+notification_condition = "unfocused"
+notification_method = "auto"
+status_line = [
+  "project-name",
+  "current-dir",
+  "git-branch",
+  "branch-changes",
+  "task-progress",
+  "model-with-reasoning",
+  "context-remaining",
+]
+
 [tui.model_availability_nux]
 "gpt-5.5" = 4
+"gpt-5.6-sol" = 4
 
 [desktop]
 usePointerCursors = true
+followUpQueueMode = "queue"
+dock-icon-preference = "codex-system"
 
 [desktop.appearanceLightChromeTheme]
 accent = "#339cff"
@@ -69,4 +96,12 @@ global = "ghostty"
 
 [features]
 js_repl = false
+hooks = true
+multi_agent = true
+
+[agents]
+max_threads = 12
+max_depth = 1
+job_max_runtime_seconds = 1800
+interrupt_message = true
 
