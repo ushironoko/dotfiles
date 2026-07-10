@@ -116,12 +116,13 @@ changes, review and trust them with `/hooks` in Codex.
 that file at runtime, filling it with machine-local state — `[projects."<path>"]`
 trust levels (absolute paths, including private/client repo names), `[mcp_servers.*]`
 tables wired to Codex.app paths, `[marketplaces.*]` sources, the `notify` helper
-path, and per-repo `[desktop...perPath]` prefs. A git **clean filter**
+path, per-repo `[desktop...perPath]` prefs, and `[hooks.state]` approval hashes.
+A git **clean filter**
 (`codex-scrub`, `codex/scrub-config.awk`) drops anything carrying a quoted
-absolute path — plus every `[projects.*]`/`[mcp_servers.*]` table — at `git add`
-time. It filters by content, not a fixed section list, so machine state codex
-invents later is scrubbed too; URLs and relative paths are kept. The working
-tree keeps the live file untouched, so codex keeps functioning.
+absolute path, every `[projects.*]`/`[mcp_servers.*]` table, and the complete
+`[hooks.state]` tree at `git add` time. The path rule remains content-based so
+unknown machine state is scrubbed by default; URLs and relative paths are kept.
+The working tree keeps the live file untouched, so codex keeps functioning.
 
 The filter driver lives in `.git/config` (never committed), so it must be
 registered once per clone:

@@ -14,6 +14,8 @@
 #     absolute path ("/...) is dropped whole;
 #   - any top-level key line with a quoted absolute path (e.g. notify) is dropped;
 #   - [projects.*] and [mcp_servers.*] are always dropped, path or not.
+#   - [hooks.state] and its children are always dropped because trusted hashes
+#     are runtime approval state even when a future hook id has no absolute path.
 # Relative paths ("./x") and URLs ("https://x") are kept — the trigger is a
 # quote immediately followed by a slash, which only matches absolute paths here.
 #
@@ -40,6 +42,7 @@ BEGIN { n = 0; buf_has_path = 0; buf_force_drop = 0; in_section = 0 }
   buf[++n] = $0
   if ($0 ~ /"\//) buf_has_path = 1
   if ($0 ~ /^\[+(projects|mcp_servers)[.\]]/) buf_force_drop = 1
+  if ($0 ~ /^\[+hooks\.state([.\]]|$)/) buf_force_drop = 1
   next
 }
 
