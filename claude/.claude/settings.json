@@ -71,14 +71,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.file_path | select(endswith(\".js\") or endswith(\".ts\"))' | ~/.claude/hooks/post_tool_use/coding_cycle.sh",
+            "command": "~/.claude/hooks/post_tool_use/coding_cycle.sh",
             "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
+          },
           {
             "type": "command",
             "command": "~/.claude/hooks/post_tool_use/type_safety_check.sh",

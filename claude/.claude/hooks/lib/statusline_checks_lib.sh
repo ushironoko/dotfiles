@@ -41,7 +41,7 @@ find_project_root() {
             return 0
         fi
         if [ -f "$dir/package.json" ]; then
-            if [ -f "$dir/tsconfig.json" ] || [ -f "$dir/pnpm-lock.yaml" ] || [ -f "$dir/bun.lock" ]; then
+            if [ -f "$dir/tsconfig.json" ] || [ -f "$dir/pnpm-lock.yaml" ] || [ -f "$dir/bun.lock" ] || [ -f "$dir/bun.lockb" ]; then
                 echo "$dir"
                 return 0
             fi
@@ -62,7 +62,7 @@ detect_project_type() {
     elif [ -f "$root/moon.mod.json" ]; then
         echo "moonbit"
     elif [ -f "$root/package.json" ]; then
-        if [ -f "$root/tsconfig.json" ] || [ -f "$root/pnpm-lock.yaml" ] || [ -f "$root/bun.lock" ]; then
+        if [ -f "$root/tsconfig.json" ] || [ -f "$root/pnpm-lock.yaml" ] || [ -f "$root/bun.lock" ] || [ -f "$root/bun.lockb" ]; then
             echo "ts"
         fi
     fi
@@ -81,7 +81,7 @@ detect_package_manager() {
     local root=$1
     if [ -f "$root/pnpm-lock.yaml" ]; then
         echo "pnpm"
-    elif [ -f "$root/bun.lock" ]; then
+    elif [ -f "$root/bun.lock" ] || [ -f "$root/bun.lockb" ]; then
         echo "bun"
     fi
 }

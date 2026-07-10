@@ -265,7 +265,7 @@ Close task issues **before** removing the worktree. Reversing this order creates
 task done → TaskUpdate(task_id, completed) → TaskCompleted hook → bit issue close
 ```
 
-The hook matches the open issue containing `[task:<branch>:<task_id>]` in its title. It runs async, so it doesn't block the main agent.
+The hook matches the open issue containing `[task:<branch>#<seq>:<task_id>]` in its title (legacy `[task:<branch>:<task_id>]` titles still match as a fallback). It runs async, so it doesn't block the main agent.
 
 Fallback if the hook fails (async, so no error is raised):
 
