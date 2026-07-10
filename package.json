@@ -10,12 +10,15 @@
     "build": "bun build src/index.ts --outdir=dist --target=bun",
     "test": "bun test",
     "lint": "oxlint",
-    "lint:sh": "if command -v shellcheck >/dev/null 2>&1; then shellcheck -x bin/svgshow claude/.claude/statusline.sh claude/.claude/hooks/lib/statusline_checks_lib.sh claude/.claude/hooks/lib/statusline_checks_run.sh claude/.claude/hooks/session_start/statusline_checks.sh claude/.claude/hooks/stop/statusline_checks.sh; else echo 'shellcheck not installed; skipping shell lint. Install with: mise use -g github:koalaman/shellcheck'; fi",
+    "lint:sh": "if command -v shellcheck >/dev/null 2>&1; then shellcheck -x bin/svgshow claude/.claude/statusline.sh claude/.claude/hooks/lib/statusline_checks_lib.sh claude/.claude/hooks/lib/statusline_checks_run.sh claude/.claude/hooks/session_start/statusline_checks.sh claude/.claude/hooks/stop/statusline_checks.sh && find codex/hooks -type f -name '*.sh' -exec shellcheck -x {} +; else echo 'shellcheck not installed; skipping shell lint. Install with: mise use -g github:koalaman/shellcheck'; fi",
+    "sync:codex-agents": "bun scripts/sync-codex-agents.ts",
+    "check:codex-agents": "bun scripts/sync-codex-agents.ts --check",
+    "check:codex-rules": "bun scripts/check-codex-rules.ts",
     "format": "prettier --write .",
     "lint:fix": "oxlint --fix",
     "tsc": "tsgo --noEmit",
     "setup:git-filters": "bash scripts/setup-git-filters.sh",
-    "run-all": "bun run setup:git-filters && bun run format && bun run lint && bun run lint:sh && bun run tsc && bun test",
+    "run-all": "bun run setup:git-filters && bun run format && bun run check:codex-agents && bun run check:codex-rules && bun run lint && bun run lint:sh && bun run tsc && bun test",
     "install:local": "bun link"
   },
   "dependencies": {

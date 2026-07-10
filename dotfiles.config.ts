@@ -1,5 +1,53 @@
 import { defineConfig } from "./src/types/config";
 
+const codexAgentFiles = [
+  "codex-poc.toml",
+  "codex-reviewer.toml",
+  "codex-runner.toml",
+  "comment-reviewer.toml",
+  "rust-reviewer.toml",
+  "similarity.toml",
+  "tdd-reviewer.toml",
+];
+
+const codexHookFiles = [
+  "lib/statusline_checks_lib.sh",
+  "lib/statusline_checks_run.sh",
+  "lib/trusted_project.sh",
+  "permission_request/asuku.sh",
+  "post_tool_use/coding_cycle.sh",
+  "post_tool_use/type_safety_check.sh",
+  "pre_tool_use/bit_command_policy.sh",
+  "pre_tool_use/npm_script_preference.sh",
+  "session_start/statusline_checks.sh",
+  "stop/asuku_notification.sh",
+  "stop/statusline_checks.sh",
+  "task_completed/bit_issue_update.sh",
+  "user_prompt_submit/ultracode_context.sh",
+  "worktree/create.sh",
+  "worktree/remove.sh",
+];
+
+const sharedAgentSkills = [
+  "create-pr",
+  "dig",
+  "empirical-prompt-tuning",
+  "html-to-svg",
+  "mystery-audit",
+  "mystery-case",
+  "mystery-characters",
+  "mystery-novel",
+  "mystery-readers",
+  "mystery-world",
+  "octorus",
+  "output-learn",
+  "plan-review",
+  "restoring-session",
+  "smart-compact",
+  "start-work",
+  "write-session",
+];
+
 export default defineConfig({
   mappings: [
     {
@@ -48,6 +96,42 @@ export default defineConfig({
       source: "./codex/config.toml",
       target: "~/.codex/config.toml",
       type: "file",
+    },
+    {
+      source: "./codex/AGENTS.md",
+      target: "~/.codex/AGENTS.md",
+      type: "file",
+    },
+    {
+      source: "./codex/agents",
+      target: "~/.codex/agents",
+      type: "selective",
+      include: codexAgentFiles,
+    },
+    {
+      source: "./codex/hooks.json",
+      target: "~/.codex/hooks.json",
+      type: "file",
+    },
+    {
+      source: "./codex/hooks",
+      target: "~/.codex/hooks",
+      type: "selective",
+      include: codexHookFiles,
+    },
+    {
+      source: "./codex/rules/harness.rules",
+      target: "~/.codex/rules/harness.rules",
+      type: "file",
+    },
+    {
+      // Codex discovers personal skills under ~/.agents/skills and follows
+      // symlinked skill directories. Reuse the Claude skill source so both
+      // harnesses stay in sync without replacing Codex's bundled skills.
+      source: "./claude/.claude/skills",
+      target: "~/.agents/skills",
+      type: "selective",
+      include: sharedAgentSkills,
     },
     {
       source: "./config/git",

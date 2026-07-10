@@ -1,0 +1,45 @@
+# Portable restrictions mirrored from the Claude harness. These rules govern
+# commands that request execution outside the sandbox; the PreToolUse hook
+# applies the same policy before supported Bash calls inside the agent loop.
+
+prefix_rule(
+    pattern = ["bit", "issue", ["claim", "unclaim", "claims", "watch", "import"]],
+    decision = "forbidden",
+    justification = "Use local bit issue list/view/create/update/comment/close operations; relay-backed ownership and imports are disabled.",
+    match = [
+        "bit issue claim 12",
+        "bit issue unclaim 12",
+        "bit issue claims",
+        "bit issue watch",
+        "bit issue import ./issues.json",
+    ],
+    not_match = [
+        "bit issue list --open",
+        "bit issue view 12",
+        "bit issue update 12 --title done",
+    ],
+)
+
+prefix_rule(
+    pattern = ["bit", "pr", "import"],
+    decision = "forbidden",
+    justification = "PR imports can contact external services; use local bit issue operations instead.",
+    match = ["bit pr import 123"],
+)
+
+prefix_rule(
+    pattern = ["bit", "relay"],
+    decision = "forbidden",
+    justification = "Relay operations can transmit local issue data; keep this harness local-only.",
+    match = ["bit relay serve", "bit relay sync"],
+)
+
+# The exec-policy language cannot express the relay+* token wildcard used by
+# Claude permissions. Deny every clone here; the PreToolUse hook additionally
+# gives a relay-specific explanation when it can observe the shell command.
+prefix_rule(
+    pattern = ["bit", "clone"],
+    decision = "forbidden",
+    justification = "Clone through bit is disabled because relay-backed clone targets can transmit repository data.",
+    match = ["bit clone relay+ssh://example/repo", "bit clone local-target"],
+)

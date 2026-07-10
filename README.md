@@ -27,7 +27,7 @@ cd $(ghq root)/github.com/ushironoko/dotfiles
 
 Creates symbolic links from repository to system locations.
 
-- `-d, --dry-run`: Preview changes
+- `-d, --dryRun`: Preview changes
 - `-f, --force`: Force overwrite
 - `-s, --select`: Interactive selection
 - `-v, --verbose`: Detailed output
@@ -102,7 +102,15 @@ Edit `dotfiles.config.ts` to manage your files:
 - **directory**: Entire directory symlink
 - **selective**: Specific files with permissions
 
-## codex config (`~/.codex/config.toml`)
+## Codex harness
+
+The versioned [Codex harness](codex/README.md) installs global instructions,
+native custom agents, lifecycle hooks, command restrictions, and the shared
+Claude skills alongside `~/.codex/config.toml`. Each component is linked
+selectively so Codex runtime state and bundled skills remain intact. After hook
+changes, review and trust them with `/hooks` in Codex.
+
+### Live config (`~/.codex/config.toml`)
 
 `~/.codex/config.toml` is symlinked to `codex/config.toml`, but codex rewrites
 that file at runtime, filling it with machine-local state — `[projects."<path>"]`
