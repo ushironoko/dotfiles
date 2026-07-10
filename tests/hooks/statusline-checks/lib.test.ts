@@ -69,6 +69,15 @@ describe("find_project_root", () => {
     expect(result.stdout).toBe(root);
   });
 
+  test("finds TS root with a binary bun.lockb lockfile", async () => {
+    const root = await setupTestDirectory("lib-ts-lockb");
+    tmps.push(root);
+    await createTestFile(join(root, "package.json"), "{}");
+    await createTestFile(join(root, "bun.lockb"), "");
+    const result = await callShellFn("find_project_root", [root]);
+    expect(result.stdout).toBe(root);
+  });
+
   test("skips bare package.json without tsconfig or lockfile", async () => {
     const root = await setupTestDirectory("lib-ts-skip");
     tmps.push(root);
@@ -106,6 +115,15 @@ describe("detect_project_type", () => {
     tmps.push(root);
     await createTestFile(join(root, "package.json"), "{}");
     await createTestFile(join(root, "tsconfig.json"), "{}");
+    const result = await callShellFn("detect_project_type", [root]);
+    expect(result.stdout).toBe("ts");
+  });
+
+  test("returns ts for package.json + bun.lockb", async () => {
+    const root = await setupTestDirectory("type-ts-lockb");
+    tmps.push(root);
+    await createTestFile(join(root, "package.json"), "{}");
+    await createTestFile(join(root, "bun.lockb"), "");
     const result = await callShellFn("detect_project_type", [root]);
     expect(result.stdout).toBe("ts");
   });
@@ -159,6 +177,14 @@ describe("detect_package_manager", () => {
     const root = await setupTestDirectory("pm-bun");
     tmps.push(root);
     await createTestFile(join(root, "bun.lock"), "");
+    const result = await callShellFn("detect_package_manager", [root]);
+    expect(result.stdout).toBe("bun");
+  });
+
+  test("bun.lockb -> bun", async () => {
+    const root = await setupTestDirectory("pm-bun-lockb");
+    tmps.push(root);
+    await createTestFile(join(root, "bun.lockb"), "");
     const result = await callShellFn("detect_package_manager", [root]);
     expect(result.stdout).toBe("bun");
   });

@@ -12,7 +12,7 @@ Utilize `dig` skills for information gathering. Unearth information that users h
 - Before PlanExit, review the created plan file using the `plan-review` skill before showing it to the user
 - Use `start-work` skill for non-trivial changes
 - Specify exact versions: `module@5.5.1` (NOT `^5.0.0` or `@latest`)
-- Commit to git until explicitly instructed by the user
+- Do not commit to git until explicitly instructed by the user
 
 ## TypeScript Projects
 
