@@ -1,0 +1,258 @@
+// Zellij configuration
+// https://zellij.dev/documentation/
+
+// General
+// copy_command: selection text arrives on stdin; the hook forwards it to
+// pbcopy and captures it for translate-popup.sh (prefix t). Zellij splits
+// this string on spaces with NO shell and NO quote handling
+// (CopyCommand::new in zellij-server), so it must stay quote-free; `sh -c`
+// is what expands $HOME. Zellij also kills the command after 1 second.
+
+copy_command "sh -c $HOME/.config/zellij/copy-capture.sh"
+scroll_buffer_size 100000
+show_startup_tips false
+show_release_notes false
+theme "ushironoko"
+default_layout "default"
+
+// Keybindings
+// tmux-compatible prefix workflow: Ctrl+b is the ONLY key taken at the top
+// level so in-pane apps (helix, Claude Code, fzf's Ctrl+T, zsh) keep theirs.
+// Every one-shot action returns to Normal; arrow-key resize stays in Tmux
+// mode so it can repeat (like tmux bind -r), leave with Esc/Enter.
+
+keybinds clear-defaults=true {
+    normal {
+        bind "Ctrl b" { SwitchToMode "Tmux"; }
+    }
+    tmux {
+        // double-press sends a literal Ctrl+b to the pane
+        bind "Ctrl b" { Write 2; SwitchToMode "Normal"; }
+        bind "Esc" { SwitchToMode "Normal"; }
+        bind "Enter" { SwitchToMode "Normal"; }
+
+        // Splits open in the current pane's cwd (zellij default)
+        bind "|" { NewPane "Right"; SwitchToMode "Normal"; }
+        bind "-" { NewPane "Down"; SwitchToMode "Normal"; }
+
+        // Vim-style pane navigation
+        bind "h" { MoveFocus "Left"; SwitchToMode "Normal"; }
+        bind "j" { MoveFocus "Down"; SwitchToMode "Normal"; }
+        bind "k" { MoveFocus "Up"; SwitchToMode "Normal"; }
+        bind "l" { MoveFocus "Right"; SwitchToMode "Normal"; }
+
+        // Pane resize (repeatable while in Tmux mode)
+        bind "Left" { Resize "Increase Left"; }
+        bind "Down" { Resize "Increase Down"; }
+        bind "Up" { Resize "Increase Up"; }
+        bind "Right" { Resize "Increase Right"; }
+
+        // Tabs (windows)
+        bind "c" { NewTab; SwitchToMode "Normal"; }
+        bind "n" { GoToNextTab; SwitchToMode "Normal"; }
+        bind "p" { GoToPreviousTab; SwitchToMode "Normal"; }
+        bind "1" { GoToTab 1; SwitchToMode "Normal"; }
+        bind "2" { GoToTab 2; SwitchToMode "Normal"; }
+        bind "3" { GoToTab 3; SwitchToMode "Normal"; }
+        bind "4" { GoToTab 4; SwitchToMode "Normal"; }
+        bind "5" { GoToTab 5; SwitchToMode "Normal"; }
+        bind "6" { GoToTab 6; SwitchToMode "Normal"; }
+        bind "7" { GoToTab 7; SwitchToMode "Normal"; }
+        bind "8" { GoToTab 8; SwitchToMode "Normal"; }
+        bind "9" { GoToTab 9; SwitchToMode "Normal"; }
+        bind "," { SwitchToMode "RenameTab"; TabNameInput 0; }
+
+        bind "z" { ToggleFocusFullscreen; SwitchToMode "Normal"; }
+        bind "x" { CloseFocus; SwitchToMode "Normal"; }
+        bind "d" { Detach; }
+
+        // Scrollback (copy-mode equivalent; `e` inside opens $EDITOR)
+        bind "[" { SwitchToMode "Scroll"; }
+
+        // Translate the last mouse selection with claude (see
+        // copy-capture.sh / translate-popup.sh). t / T / Ctrl+t all work so
+        // a still-held Ctrl after the prefix doesn't miss.
+        bind "t" "T" "Ctrl t" {
+            Run "sh" "-c" "$HOME/.config/zellij/translate-popup.sh" {
+                floating true
+                width "80%"
+                height "60%"
+                close_on_exit true
+                name "translate | Enter to close"
+            }
+            SwitchToMode "Normal"
+        }
+
+        // Session switcher (no detach-on-destroy equivalent in zellij)
+        bind "w" {
+            LaunchOrFocusPlugin "session-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "Normal"
+        }
+    }
+    scroll {
+        bind "q" { ScrollToBottom; SwitchToMode "Normal"; }
+        bind "Esc" { ScrollToBottom; SwitchToMode "Normal"; }
+        bind "j" "Down" { ScrollDown; }
+        bind "k" "Up" { ScrollUp; }
+        bind "Ctrl d" { HalfPageScrollDown; }
+        bind "Ctrl u" { HalfPageScrollUp; }
+        bind "Ctrl f" "PageDown" { PageScrollDown; }
+        bind "PageUp" { PageScrollUp; }
+        bind "g" { ScrollToTop; }
+        bind "G" { ScrollToBottom; }
+        bind "/" { SwitchToMode "EnterSearch"; SearchInput 0; }
+        bind "e" { EditScrollback; SwitchToMode "Normal"; }
+    }
+    entersearch {
+        bind "Enter" { SwitchToMode "Search"; }
+        bind "Esc" { SearchInput 27; SwitchToMode "Scroll"; }
+        bind "Ctrl c" { SearchInput 27; SwitchToMode "Scroll"; }
+    }
+    search {
+        bind "q" { ScrollToBottom; SwitchToMode "Normal"; }
+        bind "Esc" { ScrollToBottom; SwitchToMode "Normal"; }
+        bind "n" { Search "down"; }
+        bind "N" { Search "up"; }
+        bind "j" "Down" { ScrollDown; }
+        bind "k" "Up" { ScrollUp; }
+        bind "Ctrl d" { HalfPageScrollDown; }
+        bind "Ctrl u" { HalfPageScrollUp; }
+        bind "/" { SwitchToMode "EnterSearch"; SearchInput 0; }
+        bind "c" { SearchToggleOption "CaseSensitivity"; }
+        bind "o" { SearchToggleOption "WholeWord"; }
+        bind "w" { SearchToggleOption "Wrap"; }
+        bind "e" { EditScrollback; SwitchToMode "Normal"; }
+    }
+    renametab {
+        bind "Enter" { SwitchToMode "Normal"; }
+        bind "Esc" { UndoRenameTab; SwitchToMode "Normal"; }
+    }
+    renamepane {
+        bind "Enter" { SwitchToMode "Normal"; }
+        bind "Esc" { UndoRenamePane; SwitchToMode "Normal"; }
+    }
+}
+
+// Theme
+// Matches the Ghostty palette: bg #1c1918, accent #00aeb9,
+// active pane border #ff6600, inactive border #393f4c (0.42+ styling spec)
+
+themes {
+    ushironoko {
+        text_unselected {
+            base "#c9c7c5"
+            background "#1c1918"
+            emphasis_0 "#ff6600"
+            emphasis_1 "#00aeb9"
+            emphasis_2 "#00aeb9"
+            emphasis_3 "#ff6600"
+        }
+        text_selected {
+            base "#1c1918"
+            background "#00aeb9"
+            emphasis_0 "#ff6600"
+            emphasis_1 "#1c1918"
+            emphasis_2 "#1c1918"
+            emphasis_3 "#ff6600"
+        }
+        ribbon_unselected {
+            base "#c9c7c5"
+            background "#393f4c"
+            emphasis_0 "#ff6600"
+            emphasis_1 "#c9c7c5"
+            emphasis_2 "#c9c7c5"
+            emphasis_3 "#c9c7c5"
+        }
+        ribbon_selected {
+            base "#1c1918"
+            background "#00aeb9"
+            emphasis_0 "#ff6600"
+            emphasis_1 "#1c1918"
+            emphasis_2 "#1c1918"
+            emphasis_3 "#1c1918"
+        }
+        table_title {
+            base "#00aeb9"
+            background "#1c1918"
+            emphasis_0 "#ff6600"
+            emphasis_1 "#00aeb9"
+            emphasis_2 "#00aeb9"
+            emphasis_3 "#00aeb9"
+        }
+        table_cell_unselected {
+            base "#c9c7c5"
+            background "#1c1918"
+            emphasis_0 "#ff6600"
+            emphasis_1 "#00aeb9"
+            emphasis_2 "#00aeb9"
+            emphasis_3 "#00aeb9"
+        }
+        table_cell_selected {
+            base "#1c1918"
+            background "#00aeb9"
+            emphasis_0 "#ff6600"
+            emphasis_1 "#1c1918"
+            emphasis_2 "#1c1918"
+            emphasis_3 "#1c1918"
+        }
+        list_unselected {
+            base "#c9c7c5"
+            background "#1c1918"
+            emphasis_0 "#ff6600"
+            emphasis_1 "#00aeb9"
+            emphasis_2 "#00aeb9"
+            emphasis_3 "#00aeb9"
+        }
+        list_selected {
+            base "#1c1918"
+            background "#00aeb9"
+            emphasis_0 "#ff6600"
+            emphasis_1 "#1c1918"
+            emphasis_2 "#1c1918"
+            emphasis_3 "#1c1918"
+        }
+        frame_unselected {
+            base "#393f4c"
+            background "#1c1918"
+            emphasis_0 "#00aeb9"
+            emphasis_1 "#393f4c"
+            emphasis_2 "#393f4c"
+            emphasis_3 "#393f4c"
+        }
+        frame_selected {
+            base "#ff6600"
+            background "#1c1918"
+            emphasis_0 "#00aeb9"
+            emphasis_1 "#ff6600"
+            emphasis_2 "#ff6600"
+            emphasis_3 "#ff6600"
+        }
+        frame_highlight {
+            base "#00aeb9"
+            background "#1c1918"
+            emphasis_0 "#ff6600"
+            emphasis_1 "#00aeb9"
+            emphasis_2 "#00aeb9"
+            emphasis_3 "#00aeb9"
+        }
+        exit_code_success {
+            base "#00aeb9"
+            background "#1c1918"
+            emphasis_0 "#00aeb9"
+            emphasis_1 "#00aeb9"
+            emphasis_2 "#00aeb9"
+            emphasis_3 "#00aeb9"
+        }
+        exit_code_error {
+            base "#ff6600"
+            background "#1c1918"
+            emphasis_0 "#ff6600"
+            emphasis_1 "#ff6600"
+            emphasis_2 "#ff6600"
+            emphasis_3 "#ff6600"
+        }
+    }
+}

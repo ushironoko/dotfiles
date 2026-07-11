@@ -23,8 +23,8 @@ bun run lint:fix   # Auto-fix lint issues
 # Type checking (using tsgo --noEmit)
 bun run tsc
 
-# Pre-commit check (runs format, lint, typecheck, and tests)
-bun run prepare
+# Pre-commit check (runs format, codex checks, lint, shell lint, typecheck, and tests)
+bun run run-all
 
 # Development/manual execution
 bun run src/index.ts install --dry-run  # Preview installation

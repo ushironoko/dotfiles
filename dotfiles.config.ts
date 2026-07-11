@@ -168,8 +168,8 @@ export default defineConfig({
       type: "directory",
     },
     {
-      source: "./config/tmux",
-      target: "~/.config/tmux",
+      source: "./config/zellij",
+      target: "~/.config/zellij",
       type: "directory",
     },
     {
