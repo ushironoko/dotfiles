@@ -22,7 +22,7 @@ ffmpeg = "8.0.1"
 "github:charmbracelet/glow" = "2.1.2"
 gcloud = "567.0.0"
 "github:koalaman/shellcheck" = "v0.10.0"
-tmux = "3.6a"
+zellij = "0.44.3"
 
 [settings]
 experimental = true

@@ -1,0 +1,32 @@
+// Default layout: regular panes + zjstatus bottom bar
+// Reproduces the previous tmux status bar: session name on the left (an
+// accent block appears while the Ctrl+b prefix is active), window list in
+// the center with a zoom icon on fullscreen, empty right side.
+
+layout {
+    default_tab_template {
+        children
+        pane size=1 borderless=true {
+            plugin location="file:~/.config/zellij/plugins/zjstatus.wasm" {
+                format_left "{mode}#[fg=#00aeb9,bg=#1c1918,bold] {session} "
+                format_center "{tabs}"
+                format_right ""
+                format_space "#[bg=#1c1918]"
+                hide_frame_for_single_pane "false"
+
+                mode_normal "#[bg=#1c1918]"
+                mode_tmux "#[bg=#00aeb9,fg=#1c1918,bold] ^B "
+                mode_scroll "#[bg=#ff6600,fg=#1c1918,bold] SCROLL "
+                mode_search "#[bg=#ff6600,fg=#1c1918,bold] SEARCH "
+                mode_enter_search "#[bg=#ff6600,fg=#1c1918,bold] SEARCH "
+                mode_rename_tab "#[bg=#393f4c,fg=#ffffff] RENAME "
+                mode_rename_pane "#[bg=#393f4c,fg=#ffffff] RENAME "
+                mode_default_to_mode "normal"
+
+                tab_normal "#[fg=#00aeb9,bg=#1c1918,dim] {index}:{name}{fullscreen_indicator} "
+                tab_active "#[fg=#00aeb9,bg=#1c1918,bold] {index}:{name}{fullscreen_indicator} "
+                tab_fullscreen_indicator " 󰊓"
+            }
+        }
+    }
+}
