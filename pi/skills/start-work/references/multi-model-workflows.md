@@ -22,7 +22,8 @@ shapes:
 
 The `workflow` tool takes one declarative JSON plan:
 
-```json
+```jsonc
+// Shape reference (not a runnable plan — "a | b" marks the allowed values)
 {
   "stages": [
     {
@@ -35,11 +36,11 @@ The `workflow` tool takes one declarative JSON plan:
           "task": "full task prompt",
           "cwd": "/optional/absolute/working/dir",
           "isolation": "worktree",
-          "writeScope": ["path", "..."]
-        }
-      ]
-    }
-  ]
+          "writeScope": ["path", "..."],
+        },
+      ],
+    },
+  ],
 }
 ```
 
@@ -69,8 +70,16 @@ The plan validator rejects violations — these are contracts, not advice:
   non-overlapping.
 - A failing task degrades its stage (the stage is reported as FAILED) instead
   of aborting the workflow. Synthesis and judging over the reported results
-  are the PARENT agent's job — either a final `"mode": "single"` stage in the
-  plan, or you yourself after the tool returns.
+  are the PARENT agent's job: do them yourself after the tool returns. A
+  `"mode": "single"` stage is NOT a parent stand-in — it spawns an agent like
+  any other task and requires an explicit `agentType` naming an existing
+  `~/.claude/agents/*.md` definition (the validator rejects single-mode tasks
+  without one).
+- Child pi processes do NOT inherit the parent session's model. An agent
+  whose frontmatter has no `model:` key runs on pi's GLOBAL default model —
+  which may be a different provider entirely. Any agent whose family matters
+  (e.g. a Claude +α lens) must pin `model: <provider>/<model-id>` in its
+  frontmatter.
 
 ## Ground rules you still own
 
@@ -100,14 +109,15 @@ validator:
   already reports such a task as FAILED without aborting the workflow —
   proceed with whatever results you have and state the coverage gap in the
   synthesis.
-- To add a Claude +α task to a fan-out stage, append a task with a
-  Claude-family `agentType` (e.g. `"claude"`) — only when a same-family lens
-  adds value codex can't (e.g. a cross-model Claude review of a codex PoC).
-  The codex baseline must remain in the roster.
+- To add a Claude +α task to a fan-out stage, append a task whose `agentType`
+  names an existing `~/.claude/agents/*.md` definition with a pinned
+  Claude-family `model:` — only when a same-family lens adds value codex
+  can't (e.g. a cross-model Claude review of a codex PoC). The codex baseline
+  must remain in the roster.
 
 ## Template A: codex-default review fan-out
 
-Every reviewer is codex; a final single-mode stage synthesizes. Replace
+Every reviewer is codex; you synthesize after the tool returns. Replace
 `<REPO>` with the absolute path to the repo or worktree under review.
 
 ```json
@@ -130,32 +140,29 @@ Every reviewer is codex; a final single-mode stage synthesizes. Replace
           "task": "Review the uncommitted changes in <REPO> for CONVENTION VIOLATIONS and risky patterns only. Run codex in prompt mode: printf '%s' 'Read the uncommitted diff (git diff) in this repository and report ONLY convention violations and risky patterns, each with file:line.' | ~/.claude/hooks/lib/codex-stage.sh prompt --dir <REPO> --timeout 600 (Bash timeout 600000 ms). Label the report reviewer=codex:conventions."
         }
       ]
-    },
-    {
-      "mode": "single",
-      "name": "synthesize",
-      "tasks": [
-        {
-          "task": "Synthesize the review reports from the previous stage. Rank cross-lens DISAGREEMENTS first (issues one lens found and the others missed), then agreements by severity. If any reviewer task was reported FAILED (e.g. rate-limited), state the coverage gap explicitly."
-        }
-      ]
     }
   ]
 }
 ```
 
-To add a Claude +α lens, append one more task to the fan-out roster (the codex
-baseline stays):
+After the tool returns, synthesize the reported results yourself: rank
+cross-lens DISAGREEMENTS first (issues one lens found and the others missed),
+then agreements by severity. If any reviewer task was reported FAILED (e.g.
+rate-limited), state the coverage gap explicitly. Synthesis is the parent's
+role — do not delegate it to a plan stage.
+
+To add a Claude +α lens, append one more task to the fan-out roster (the
+codex baseline stays). The `agentType` must name an existing
+`~/.claude/agents/*.md` definition whose frontmatter PINS a Claude-family
+model (child pi processes do not inherit the parent's model; an unpinned
+agent runs on the global default provider):
 
 ```json
 {
-  "agentType": "claude",
+  "agentType": "<your-claude-lens-agent>",
   "task": "Review the uncommitted changes in <REPO> through a <domain> lens only. Report each finding with severity and file:line. Label the report reviewer=claude:<lens>."
 }
 ```
-
-You may also drop the single-mode stage and synthesize the reported results
-yourself after the tool returns — synthesis is the parent's role either way.
 
 ## Template B: competing codex PoCs
 
@@ -196,25 +203,22 @@ verification).
           "task": "Review the PoC labeled builder=codex:robust from the implement stage. Take the worktree absolute path from that task's report, then run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir <that worktree> (Bash timeout 600000 ms). Report findings with severity and file:line; note builder=codex:robust."
         }
       ]
-    },
-    {
-      "mode": "single",
-      "name": "judge",
-      "tasks": [
-        {
-          "task": "Competing PoCs implemented the same spec with different approaches; each diff was reviewed. Recommend ONE PoC to adopt (with required fixes) and say what to graft from the losers. NEVER merge anything — each diff stays in its worktree for a human decision; list the worktree absolute paths in the verdict."
-        }
-      ]
     }
   ]
 }
 ```
 
+Judge the outcome yourself after the tool returns: recommend ONE PoC to adopt
+(with required fixes) and say what to graft from the losers. NEVER merge
+anything — each diff stays in its worktree for a human decision; list the
+worktree absolute paths in the verdict. Judging is the parent's role — do not
+delegate it to a plan stage.
+
 The PoC worktree paths are engine-assigned and only known from the implement
 stage reports. If the review tasks need concrete paths embedded rather than
 referenced through the prior stage's report, split into two `workflow` calls:
 run the implement stage alone, read the reported worktree paths, then issue
-the review + judge plan with the paths filled in.
+the review plan with the paths filled in.
 
 An optional Claude PoC is +α: append to the implement roster a Claude-family
 task with `"isolation": "worktree"` — the codex PoCs remain the mandatory

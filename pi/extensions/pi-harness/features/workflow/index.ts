@@ -23,6 +23,7 @@ import {
 import { loadAgents } from "../subagent/loader";
 import {
   capText,
+  PER_TASK_OUTPUT_CAP,
   spawnAgent,
   type SpawnFunction,
   type SpawnResult,
@@ -175,20 +176,42 @@ const failureLabel = (result: SpawnResult): string => {
     : `stopReason ${result.stopReason}`;
 };
 
-const describeTaskReport = (report: WorkflowTaskReport): string => {
+// The report text shares one PER_TASK_OUTPUT_CAP budget across every task; a
+// single prefix-preserving cap would let one oversized early output erase
+// later tasks (including PoC worktree paths the parent needs for judging).
+// Headers and worktree identities are never subject to the output budget.
+const REPORT_OVERHEAD_BYTES = 2_048;
+const REPORT_TASK_HEADER_ALLOWANCE = 256;
+const MIN_TASK_OUTPUT_BUDGET = 512;
+
+const taskOutputBudget = (taskCount: number): number => {
+  const available =
+    PER_TASK_OUTPUT_CAP -
+    REPORT_OVERHEAD_BYTES -
+    taskCount * REPORT_TASK_HEADER_ALLOWANCE;
+  return Math.max(
+    MIN_TASK_OUTPUT_BUDGET,
+    Math.floor(available / Math.max(1, taskCount)),
+  );
+};
+
+const describeTaskReport = (
+  report: WorkflowTaskReport,
+  outputBudget: number,
+): string => {
   const worktreeSuffix =
     report.worktree === undefined
       ? ""
       : ` (worktree: ${report.worktree} — left in place)`;
   if (isSpawnFailure(report.result)) {
-    return `### [${report.agentType}] FAILED${worktreeSuffix}\n\n${report.result.errorMessage}`;
+    return `### [${report.agentType}] FAILED${worktreeSuffix}\n\n${capText(report.result.errorMessage, outputBudget)}`;
   }
   if (report.result.failed) {
     const output =
       report.result.stderr || report.result.output || "(no output)";
-    return `### [${report.agentType}] FAILED (${failureLabel(report.result)})${worktreeSuffix}\n\n${output}`;
+    return `### [${report.agentType}] FAILED (${failureLabel(report.result)})${worktreeSuffix}\n\n${capText(output, outputBudget)}`;
   }
-  return `### [${report.agentType}] succeeded${worktreeSuffix}\n\n${report.result.output || "(no output)"}`;
+  return `### [${report.agentType}] succeeded${worktreeSuffix}\n\n${capText(report.result.output || "(no output)", outputBudget)}`;
 };
 
 const setupWorkflow = (
@@ -310,9 +333,12 @@ const setupWorkflow = (
         (report) => report.worktree !== undefined,
       );
 
+      const outputBudget = taskOutputBudget(total);
       const sections = stageReports.map((stage, index) => {
         const title = stage.name ?? `Stage ${index + 1}`;
-        const body = stage.tasks.map(describeTaskReport).join("\n\n");
+        const body = stage.tasks
+          .map((report) => describeTaskReport(report, outputBudget))
+          .join("\n\n");
         return `## ${title} (${stage.mode})\n\n${body}`;
       });
       const worktreeNote = hasWorktrees

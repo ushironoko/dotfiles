@@ -267,6 +267,42 @@ describe("pi-harness workflow", () => {
     expect(details.total).toBe(2);
   });
 
+  test("oversized outputs share the report budget so every task stays represented", async () => {
+    const home = await makeTempDirectory("pi-workflow-budget");
+    await writeAgents(home, ["codex-reviewer"]);
+    const { spawnFn } = makeSpawnFn((taskArg) =>
+      taskArg.includes("lens one")
+        ? { text: `ALPHA-${"a".repeat(60_000)}` }
+        : { text: `BRAVO-${"b".repeat(60_000)}` },
+    );
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), { spawnFn });
+
+    const result = await executeTool(
+      findWorkflowTool(pi.tools),
+      {
+        stages: [
+          {
+            mode: "fanout",
+            tasks: [
+              { agentType: "codex-reviewer", task: "lens one" },
+              { agentType: "codex-reviewer", task: "lens two" },
+            ],
+          },
+        ],
+      },
+      pi.ctx,
+    );
+
+    const { text } = getResult(result);
+    // A single prefix-preserving cap would let the first 50KB output erase
+    // the second task entirely; both identities and output heads must stay.
+    expect(text).toContain("ALPHA-");
+    expect(text).toContain("BRAVO-");
+    expect(text.match(/### \[codex-reviewer\]/g)).toHaveLength(2);
+    expect(text).toContain("2/2");
+  });
+
   test("continues on individual task failure and reports the degradation", async () => {
     const home = await makeTempDirectory("pi-workflow-degrade");
     await writeAgents(home, ["codex-reviewer"]);

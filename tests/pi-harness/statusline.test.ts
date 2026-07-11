@@ -201,6 +201,31 @@ describe("pi-harness statusline feature", () => {
     ]);
   });
 
+  test("directory-valued project markers are ignored like the shell's -f test", async () => {
+    const home = await makeTempDirectory("pi-statusline-dirmarker");
+    const project = join(home, "repo");
+    // Markers exist but as DIRECTORIES; statusline_checks_lib.sh uses [ -f ]
+    // so it walks past this root — the TS port must agree or the two
+    // harnesses would read different cache files for the same cwd.
+    await fs.mkdir(join(project, "package.json"), { recursive: true });
+    await fs.mkdir(join(project, "tsconfig.json"), { recursive: true });
+    await fs.mkdir(join(project, "Cargo.toml"), { recursive: true });
+    const cacheDir = join(home, "cache");
+    await seedCache(cacheDir, project, sampleCache());
+    const spawnDetached: DetachedSpawnFunction = () => {};
+
+    const pi = createFakePi({ cwd: project });
+    setupStatusline(pi, makeConfig(home, []), {
+      cacheDir,
+      spawnDetached,
+      getBranch: async () => "main",
+    });
+
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    // No project root detected → the seeded cache must NOT be read.
+    expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toEqual(["(main)"]);
+  });
+
   test("outside a detected project the widget falls back to the branch", async () => {
     const home = await makeTempDirectory("pi-statusline-noproject");
     const plainDir = join(home, "plain");

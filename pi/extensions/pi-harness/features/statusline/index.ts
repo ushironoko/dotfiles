@@ -13,7 +13,7 @@
  */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -34,22 +34,33 @@ interface StatuslineDeps {
   getBranch?: (cwd: string) => Promise<string | undefined>;
 }
 
+// The shell library tests markers with [ -f ] (regular file, symlinks
+// followed); existsSync would also accept directories and make the two
+// harnesses disagree on the project root — and therefore on the cache file.
+const isRegularFile = (path: string): boolean => {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+};
+
 /** TS port of find_project_root in statusline_checks_lib.sh. */
 const findProjectRoot = (start: string): string | undefined => {
   let dir = start;
   for (;;) {
     if (
-      existsSync(join(dir, "Cargo.toml")) ||
-      existsSync(join(dir, "moon.mod.json"))
+      isRegularFile(join(dir, "Cargo.toml")) ||
+      isRegularFile(join(dir, "moon.mod.json"))
     ) {
       return dir;
     }
     if (
-      existsSync(join(dir, "package.json")) &&
-      (existsSync(join(dir, "tsconfig.json")) ||
-        existsSync(join(dir, "pnpm-lock.yaml")) ||
-        existsSync(join(dir, "bun.lock")) ||
-        existsSync(join(dir, "bun.lockb")))
+      isRegularFile(join(dir, "package.json")) &&
+      (isRegularFile(join(dir, "tsconfig.json")) ||
+        isRegularFile(join(dir, "pnpm-lock.yaml")) ||
+        isRegularFile(join(dir, "bun.lock")) ||
+        isRegularFile(join(dir, "bun.lockb")))
     ) {
       return dir;
     }

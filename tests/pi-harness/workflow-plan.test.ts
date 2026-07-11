@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   CODEX_AGENT_TYPES,
   DEFAULT_FANOUT_AGENT_TYPE,
@@ -302,5 +304,43 @@ describe("codex-runner writeScope", () => {
         fanout([runnerTask(["packages/a/**"]), reviewerTask()]),
       ]),
     );
+  });
+});
+
+describe("multi-model-workflows.md templates", () => {
+  // The skill reference is the user-facing contract for this validator; a
+  // template the validator rejects is a doc bug (found by review: single-mode
+  // stages without agentType shipped in Templates A/B).
+  test("every complete plan template passes the validator", () => {
+    const source = readFileSync(
+      join(
+        import.meta.dir,
+        "../../pi/skills/start-work/references/multi-model-workflows.md",
+      ),
+      "utf8",
+    );
+    const fences = [...source.matchAll(/```json\n([\s\S]*?)```/g)].map(
+      (match) => match[1],
+    );
+    expect(fences.length).toBeGreaterThanOrEqual(3);
+    const plans = fences
+      .map((fence) => JSON.parse(fence))
+      .filter(
+        (parsed): parsed is Record<string, unknown> =>
+          typeof parsed === "object" &&
+          parsed !== null &&
+          Array.isArray((parsed as Record<string, unknown>).stages),
+      );
+    // Templates A, B, C are the complete plans; fragments (single-task
+    // examples) carry no stages and are exercised only as valid JSON above.
+    expect(plans.length).toBeGreaterThanOrEqual(3);
+    for (const candidate of plans) {
+      const result = validateWorkflowPlan(candidate);
+      if (!result.ok) {
+        throw new Error(
+          `template rejected by validator: ${result.errors.join("; ")}`,
+        );
+      }
+    }
   });
 });

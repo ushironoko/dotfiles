@@ -76,10 +76,10 @@ interface ProcessOutcome {
 const defaultSpawn: SpawnFunction = (command, args, options) =>
   spawn(command, args, options);
 
-const capText = (value: string): string => {
-  if (Buffer.byteLength(value, "utf8") <= PER_TASK_OUTPUT_CAP) return value;
+const capText = (value: string, cap: number = PER_TASK_OUTPUT_CAP): string => {
+  if (Buffer.byteLength(value, "utf8") <= cap) return value;
 
-  const contentCap = PER_TASK_OUTPUT_CAP - Buffer.byteLength(TRUNCATION_MARKER);
+  const contentCap = Math.max(0, cap - Buffer.byteLength(TRUNCATION_MARKER));
   let low = 0;
   let high = value.length;
   while (low < high) {
