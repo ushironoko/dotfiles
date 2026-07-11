@@ -138,7 +138,7 @@ keybinds clear-defaults=true {
 
 // Theme
 // Matches the Ghostty palette: bg #1c1918, accent #00aeb9,
-// active pane border #ff6600, inactive border #393f4c (0.42+ styling spec)
+// active pane border #00aeb9, inactive border #393f4c (0.42+ styling spec)
 
 themes {
     ushironoko {
@@ -223,12 +223,12 @@ themes {
             emphasis_3 "#393f4c"
         }
         frame_selected {
-            base "#ff6600"
+            base "#00aeb9"
             background "#1c1918"
-            emphasis_0 "#00aeb9"
-            emphasis_1 "#ff6600"
-            emphasis_2 "#ff6600"
-            emphasis_3 "#ff6600"
+            emphasis_0 "#ff6600"
+            emphasis_1 "#00aeb9"
+            emphasis_2 "#00aeb9"
+            emphasis_3 "#00aeb9"
         }
         frame_highlight {
             base "#00aeb9"
