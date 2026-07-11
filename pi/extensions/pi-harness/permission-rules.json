@@ -1,0 +1,45 @@
+{
+  "deny": [
+    {
+      "source": "Bash(bit issue claim:*)",
+      "pattern": "^bit\\s+issue\\s+claim\\b",
+      "reason": "bit issue claim は禁止です"
+    },
+    {
+      "source": "Bash(bit issue unclaim:*)",
+      "pattern": "^bit\\s+issue\\s+unclaim\\b",
+      "reason": "bit issue unclaim は禁止です"
+    },
+    {
+      "source": "Bash(bit issue claims:*)",
+      "pattern": "^bit\\s+issue\\s+claims\\b",
+      "reason": "bit issue claims は禁止です"
+    },
+    {
+      "source": "Bash(bit issue watch:*)",
+      "pattern": "^bit\\s+issue\\s+watch\\b",
+      "reason": "bit issue watch は禁止です"
+    },
+    {
+      "source": "Bash(bit issue import:*)",
+      "pattern": "^bit\\s+issue\\s+import\\b",
+      "reason": "bit issue import は禁止です"
+    },
+    {
+      "source": "Bash(bit pr import:*)",
+      "pattern": "^bit\\s+pr\\s+import\\b",
+      "reason": "bit pr import は禁止です"
+    },
+    {
+      "source": "Bash(bit relay:*)",
+      "pattern": "^bit\\s+relay\\b",
+      "reason": "bit relay は禁止です"
+    },
+    {
+      "source": "Bash(bit clone relay+*)",
+      "pattern": "^bit\\s+clone\\s+relay\\+",
+      "reason": "bit clone relay+ は禁止です"
+    }
+  ],
+  "ask": []
+}

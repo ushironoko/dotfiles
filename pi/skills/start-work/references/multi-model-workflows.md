@@ -1,0 +1,289 @@
+# Multi-Model Workflow Plans (codex-default, Claude +α)
+
+Plan templates for the pi-harness `workflow` tool, where OpenAI codex (a
+non-Claude model family) is the DEFAULT for every fan-out task. Claude tasks
+appear ONLY as optional additions (+α) that you — the parent agent — add at
+your own discretion; you still orchestrate, synthesize, and judge. Three plan
+shapes:
+
+1. **Codex-default review fan-out** — every reviewer is `codex-reviewer`; lens
+   diversity comes from codex `prompt` mode. Optional Claude lenses are +α.
+2. **Competing codex PoCs** — several `codex-poc` tasks implement the same spec
+   with different approaches, each in an engine-provisioned isolated worktree;
+   each diff is reviewed and the parent agent judges. An optional Claude PoC
+   is +α.
+3. **Parallel codex-runner writes** — several `codex-runner` tasks each perform
+   a write task in a directory you place them in (the main checkout or a
+   subdirectory), with engine-validated disjoint `writeScope`s; the aggregate
+   diff is then reviewed. Use this when the work is a set of independent edits
+   rather than competing whole-spec PoCs.
+
+## Plan shape
+
+The `workflow` tool takes one declarative JSON plan:
+
+```json
+{
+  "stages": [
+    {
+      "mode": "fanout | single",
+      "name": "optional stage name",
+      "codexSkip": false,
+      "tasks": [
+        {
+          "agentType": "codex-reviewer | codex-poc | codex-runner | <claude-family>",
+          "task": "full task prompt",
+          "cwd": "/optional/absolute/working/dir",
+          "isolation": "worktree",
+          "writeScope": ["path", "..."]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Agent definitions come from `~/.claude/agents/*.md` — `codex-reviewer`,
+`codex-poc`, and `codex-runner` are defined there and internally invoke
+`~/.claude/hooks/lib/codex-stage.sh`.
+
+## Engine-enforced rules
+
+The plan validator rejects violations — these are contracts, not advice:
+
+- Stages run sequentially. Fan-out tasks within a stage run 4-concurrent.
+  Max 8 tasks per stage, max 8 stages.
+- A fan-out task without `agentType` defaults to `codex-reviewer`.
+- A fan-out stage whose roster contains no codex-family task
+  (`codex-reviewer` / `codex-runner` / `codex-poc`) is REJECTED unless the
+  stage sets `"codexSkip": true`. That flag is an explicit user opt-out — set
+  it only when the USER asked to omit codex. Claude-family tasks are allowed
+  only alongside a codex baseline (+α), never as the roster by themselves.
+- `agentType: "codex-poc"` REQUIRES `"isolation": "worktree"`. The engine
+  auto-provisions a dedicated linked worktree per such task and assigns it as
+  that task's cwd — `cwd` cannot be set manually together with `isolation`.
+  Created worktrees are reported and left in place; the engine never merges or
+  auto-removes them.
+- Two or more `codex-runner` tasks in one fan-out stage must EACH declare
+  `writeScope`, all in one path style (all relative or all absolute), pairwise
+  non-overlapping.
+- A failing task degrades its stage (the stage is reported as FAILED) instead
+  of aborting the workflow. Synthesis and judging over the reported results
+  are the PARENT agent's job — either a final `"mode": "single"` stage in the
+  plan, or you yourself after the tool returns.
+
+## Ground rules you still own
+
+Enforced by the codex wrapper and by your task prompts, not by the plan
+validator:
+
+- All codex invocations go through `~/.claude/hooks/lib/codex-stage.sh`
+  (auth preflight, portable timeout, `--ephemeral` for parallel safety, never
+  `-m` — `~/.codex/config.toml` owns model selection).
+- For codex reviewer lens diversity use `prompt` mode (a focused prompt on
+  stdin); `review` mode is a single holistic diff pass and takes no focus, so
+  use it at most once per fan-out stage.
+- The wrapper refuses (exit 14) to run `poc` workspace-write against anything
+  but an isolated worktree — the engine's worktree provisioning satisfies
+  this; never try to point a `codex-poc` at the main checkout.
+- `codex-runner` write confinement is codex-sandbox-enforced (writable root =
+  the `--dir` target), so it depends on `~/.codex/config.toml` not widening
+  `writable_roots`. The engine validates that declared `writeScope`s are
+  disjoint, but the wrapper does not lock the tree — keep each task prompt
+  explicit about touching only its own scope. Changes stay uncommitted; never
+  auto-commit or merge. The wrapper's post-run summary is repo-wide, so under
+  parallel same-checkout runs only the aggregate review is authoritative
+  (per-runner diffstats overlap).
+- Never auto-merge a PoC diff; it stays in its worktree for a human decision.
+- Degrade gracefully on rate limits: the wrapper retries rate-limited runs
+  with backoff (`--retry`, default 1) and exits 15 when exhausted. The engine
+  already reports such a task as FAILED without aborting the workflow —
+  proceed with whatever results you have and state the coverage gap in the
+  synthesis.
+- To add a Claude +α task to a fan-out stage, append a task with a
+  Claude-family `agentType` (e.g. `"claude"`) — only when a same-family lens
+  adds value codex can't (e.g. a cross-model Claude review of a codex PoC).
+  The codex baseline must remain in the roster.
+
+## Template A: codex-default review fan-out
+
+Every reviewer is codex; a final single-mode stage synthesizes. Replace
+`<REPO>` with the absolute path to the repo or worktree under review.
+
+```json
+{
+  "stages": [
+    {
+      "mode": "fanout",
+      "name": "review",
+      "tasks": [
+        {
+          "agentType": "codex-reviewer",
+          "task": "Holistically review the uncommitted changes in <REPO>. Run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir <REPO> (Bash timeout 600000 ms). Report codex's findings faithfully, each with severity (Critical|High|Medium|Low), file:line, problem, and suggestion. Label the report reviewer=codex:holistic."
+        },
+        {
+          "agentType": "codex-reviewer",
+          "task": "Review the uncommitted changes in <REPO> for CORRECTNESS BUGS only. Run codex in prompt mode: printf '%s' 'Read the uncommitted diff (git diff) in this repository and report ONLY correctness bugs — logic errors, missing cases, broken invariants, off-by-one — each with file:line.' | ~/.claude/hooks/lib/codex-stage.sh prompt --dir <REPO> --timeout 600 (Bash timeout 600000 ms). Label the report reviewer=codex:correctness."
+        },
+        {
+          "agentType": "codex-reviewer",
+          "task": "Review the uncommitted changes in <REPO> for CONVENTION VIOLATIONS and risky patterns only. Run codex in prompt mode: printf '%s' 'Read the uncommitted diff (git diff) in this repository and report ONLY convention violations and risky patterns, each with file:line.' | ~/.claude/hooks/lib/codex-stage.sh prompt --dir <REPO> --timeout 600 (Bash timeout 600000 ms). Label the report reviewer=codex:conventions."
+        }
+      ]
+    },
+    {
+      "mode": "single",
+      "name": "synthesize",
+      "tasks": [
+        {
+          "task": "Synthesize the review reports from the previous stage. Rank cross-lens DISAGREEMENTS first (issues one lens found and the others missed), then agreements by severity. If any reviewer task was reported FAILED (e.g. rate-limited), state the coverage gap explicitly."
+        }
+      ]
+    }
+  ]
+}
+```
+
+To add a Claude +α lens, append one more task to the fan-out roster (the codex
+baseline stays):
+
+```json
+{
+  "agentType": "claude",
+  "task": "Review the uncommitted changes in <REPO> through a <domain> lens only. Report each finding with severity and file:line. Label the report reviewer=claude:<lens>."
+}
+```
+
+You may also drop the single-mode stage and synthesize the reported results
+yourself after the tool returns — synthesis is the parent's role either way.
+
+## Template B: competing codex PoCs
+
+Each `codex-poc` task gets its own engine-provisioned isolated worktree (do
+not set `cwd` on these tasks). Give each PoC a DIFFERENT approach angle.
+Replace `<SPEC>` with the implementation spec (goal, constraints, files,
+verification).
+
+```json
+{
+  "stages": [
+    {
+      "mode": "fanout",
+      "name": "implement",
+      "tasks": [
+        {
+          "agentType": "codex-poc",
+          "isolation": "worktree",
+          "task": "Delegate this spec to codex: <SPEC>. Approach guidance: prefer the smallest, most direct change. Your cwd is an isolated worktree — follow your Execution Flow (codex-stage.sh poc). Report builder=codex:direct, the worktree absolute path (git rev-parse --show-toplevel), a summary, and git diff --stat."
+        },
+        {
+          "agentType": "codex-poc",
+          "isolation": "worktree",
+          "task": "Delegate this spec to codex: <SPEC>. Approach guidance: prefer the most robust, defensively-validated design. Your cwd is an isolated worktree — follow your Execution Flow (codex-stage.sh poc). Report builder=codex:robust, the worktree absolute path (git rev-parse --show-toplevel), a summary, and git diff --stat."
+        }
+      ]
+    },
+    {
+      "mode": "fanout",
+      "name": "review",
+      "tasks": [
+        {
+          "agentType": "codex-reviewer",
+          "task": "Review the PoC labeled builder=codex:direct from the implement stage. Take the worktree absolute path from that task's report, then run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir <that worktree> (Bash timeout 600000 ms). Report findings with severity and file:line; note builder=codex:direct."
+        },
+        {
+          "agentType": "codex-reviewer",
+          "task": "Review the PoC labeled builder=codex:robust from the implement stage. Take the worktree absolute path from that task's report, then run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir <that worktree> (Bash timeout 600000 ms). Report findings with severity and file:line; note builder=codex:robust."
+        }
+      ]
+    },
+    {
+      "mode": "single",
+      "name": "judge",
+      "tasks": [
+        {
+          "task": "Competing PoCs implemented the same spec with different approaches; each diff was reviewed. Recommend ONE PoC to adopt (with required fixes) and say what to graft from the losers. NEVER merge anything — each diff stays in its worktree for a human decision; list the worktree absolute paths in the verdict."
+        }
+      ]
+    }
+  ]
+}
+```
+
+The PoC worktree paths are engine-assigned and only known from the implement
+stage reports. If the review tasks need concrete paths embedded rather than
+referenced through the prior stage's report, split into two `workflow` calls:
+run the implement stage alone, read the reported worktree paths, then issue
+the review + judge plan with the paths filled in.
+
+An optional Claude PoC is +α: append to the implement roster a Claude-family
+task with `"isolation": "worktree"` — the codex PoCs remain the mandatory
+baseline. A Claude review of a codex PoC is likewise a discretionary +α in the
+review stage (cross-model coverage).
+
+## Template C: parallel codex-runner writes
+
+Independent write tasks in the SAME checkout; you place each runner (`cwd`)
+and declare its `writeScope`. With two or more runners in one stage, every
+runner must declare `writeScope`, all in one path style (here: all relative),
+pairwise non-overlapping — the engine rejects the plan otherwise. Replace
+`<REPO>` with the absolute path to the repo or worktree the runners write
+into.
+
+```json
+{
+  "stages": [
+    {
+      "mode": "fanout",
+      "name": "write",
+      "tasks": [
+        {
+          "agentType": "codex-runner",
+          "cwd": "<REPO>/packages/a",
+          "writeScope": ["packages/a"],
+          "task": "Delegate this write task to codex, scoped to <REPO>/packages/a (--dir). Touch ONLY files under packages/a; do not write outside it. Spec: <what to create/modify under packages/a, and how to verify>. Run: ~/.claude/hooks/lib/codex-stage.sh run --dir <REPO>/packages/a --timeout 600 (task on stdin; Bash timeout 600000 ms). Report codex's summary, git diff --stat, and status (complete or incomplete)."
+        },
+        {
+          "agentType": "codex-runner",
+          "cwd": "<REPO>/packages/b",
+          "writeScope": ["packages/b"],
+          "task": "Delegate this write task to codex, scoped to <REPO>/packages/b (--dir). Touch ONLY files under packages/b; do not write outside it. Spec: <what to create/modify under packages/b, and how to verify>. Run: ~/.claude/hooks/lib/codex-stage.sh run --dir <REPO>/packages/b --timeout 600 (task on stdin; Bash timeout 600000 ms). Report codex's summary, git diff --stat, and status (complete or incomplete)."
+        }
+      ]
+    },
+    {
+      "mode": "fanout",
+      "name": "review",
+      "tasks": [
+        {
+          "agentType": "codex-reviewer",
+          "task": "Review the aggregate uncommitted changes in <REPO>. Run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir <REPO> (Bash timeout 600000 ms). This aggregate review is the authoritative view of the parallel writes (per-runner diffstats overlap). Report findings with severity and file:line."
+        }
+      ]
+    }
+  ]
+}
+```
+
+Stages are barriers, so the review stage starts only after ALL writes finished
+— exactly what an aggregate review needs. Point each runner's `cwd` / `--dir`
+at its own subdirectory when possible: that confinement is
+codex-sandbox-enforced (writable root = the `--dir` target). Nothing is
+committed — you decide what to keep from the aggregate diff.
+
+## Wrapper quick reference
+
+```bash
+~/.claude/hooks/lib/codex-stage.sh review [--uncommitted | --base <branch> | --commit <sha>] --dir <abs> [--timeout <sec>]
+~/.claude/hooks/lib/codex-stage.sh prompt [--dir <abs>] [--timeout <sec>]   # prompt on stdin, read-only
+~/.claude/hooks/lib/codex-stage.sh poc --worktree <abs> [--timeout <sec>] [--network]   # spec on stdin, workspace-write, isolated worktree only
+~/.claude/hooks/lib/codex-stage.sh run --dir <abs> [--timeout <sec>] [--network]   # task on stdin, workspace-write, main checkout or subdir allowed (no --out)
+```
+
+All modes also accept `--retry <n>` / `--retry-wait <sec>` (rate-limit backoff;
+defaults 1 / 30).
+
+Exit codes: 0 ok / 11 codex missing / 12 unauthenticated (`codex login`) /
+13 usage (also `run`'s non-git-work-tree target) / 14 not an isolated worktree
+(`poc`) / 15 rate limited (retryable) / 124 timed out. Any other non-zero code
+is codex's own, passed through.

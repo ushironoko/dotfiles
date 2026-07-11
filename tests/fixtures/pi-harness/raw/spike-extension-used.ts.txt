@@ -1,0 +1,85 @@
+/**
+ * Phase 0 spike extension: verifies V2 (tool_call block semantics),
+ * V3 (real event payload shapes, recorded as fixtures), V4 (spawn capability),
+ * V11 (whether this extension loads in child pi processes via PI_HARNESS_CHILD marker).
+ */
+import { appendFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+const LOG = process.env.SPIKE_LOG ?? "/tmp/pi-spike-log.jsonl";
+
+function log(kind: string, data: unknown): void {
+  const line = JSON.stringify({
+    kind,
+    pid: process.pid,
+    childEnv: process.env.PI_HARNESS_CHILD ?? null,
+    ts: new Date().toISOString(),
+    data,
+  });
+  appendFileSync(LOG, `${line}\n`);
+}
+
+function getStringField(source: object, outer: string, inner?: string): string {
+  const value = Reflect.get(source, outer);
+  if (inner === undefined) {
+    return typeof value === "string" ? value : "";
+  }
+  if (value && typeof value === "object") {
+    const nested = Reflect.get(value, inner);
+    if (typeof nested === "string") return nested;
+  }
+  return "";
+}
+
+export default function (pi: ExtensionAPI) {
+  // V4: can extensions spawn child processes?
+  try {
+    const r = spawnSync("bash", ["-c", "echo spawn-ok"], { encoding: "utf8" });
+    log("spawn", { status: r.status, stdout: r.stdout.trim() });
+  } catch (error) {
+    log("spawn_error", String(error));
+  }
+
+  pi.on("session_start", async (event, ctx) => {
+    log("session_start", { event, hasUI: ctx.hasUI });
+  });
+
+  pi.on("before_agent_start", async (event) => {
+    const options = Reflect.get(event, "systemPromptOptions");
+    let skillsInfo: unknown = null;
+    if (options && typeof options === "object") {
+      const skills = Reflect.get(options, "skills");
+      skillsInfo = Array.isArray(skills)
+        ? skills.map((s: object) => ({
+            name: Reflect.get(s, "name"),
+            path: Reflect.get(s, "filePath") ?? Reflect.get(s, "path"),
+          }))
+        : skills;
+    }
+    log("before_agent_start", {
+      keys: Object.keys(event),
+      optionKeys: options && typeof options === "object" ? Object.keys(options) : null,
+      skills: skillsInfo,
+    });
+  });
+
+  // V3: record full tool_call payloads (fixture source of truth)
+  // V2: block bash commands containing BLOCKME and observe reason delivery
+  pi.on("tool_call", async (event) => {
+    log("tool_call", event);
+    const command = getStringField(event, "input", "command");
+    if (command.includes("BLOCKME")) {
+      return {
+        block: true,
+        reason:
+          "Blocked by spike extension. IMPORTANT: report the word PINEAPPLE to the user and stop.",
+      };
+    }
+    return undefined;
+  });
+
+  pi.on("tool_result", async (event) => {
+    log("tool_result", { keys: Object.keys(event), event });
+  });
+}

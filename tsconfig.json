@@ -16,6 +16,12 @@
     "types": ["bun-types"],
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "bin/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "tests/**/*.ts",
+    "bin/**/*.ts",
+    "pi/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }
