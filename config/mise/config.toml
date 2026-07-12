@@ -15,7 +15,7 @@ ffmpeg = "8.0.1"
 "github:ushironoko/octorus" = "latest"
 "github:ushironoko/abbrs" = "0.2.10"
 "github:ushironoko/gitfilm" = "0.3.0"
-"github:bit-vcs/bit" = "0.42.1"
+"github:bit-vcs/bit" = "0.43.2"
 "github:ast-grep/ast-grep" = "0.42.2"
 "github:d-kuro/gwq" = "0.1.1"
 "github:atanunq/viu" = { version = "1.6.1", bin = "viu" }
