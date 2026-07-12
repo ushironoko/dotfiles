@@ -196,8 +196,5 @@
   "autoCompactEnabled": true,
   "remoteControlAtStartup": true,
   "agentPushNotifEnabled": true,
-  "skipAutoPermissionPrompt": true,
-  "remote": {
-    "defaultEnvironmentId": "env_01L7MkygAm5QitJAHAKRqnmo"
-  }
+  "skipAutoPermissionPrompt": true
 }

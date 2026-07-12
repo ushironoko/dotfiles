@@ -7,3 +7,10 @@
 # `git add` time. Driver is defined per-checkout by scripts/setup-git-filters.sh
 # (wired into `bun run run-all`).
 codex/config.toml filter=codex-scrub
+
+# claude/.claude/settings.json is likewise live: Claude Code writes
+# machine/account-local runtime state into it (the top-level "remote" key,
+# e.g. defaultEnvironmentId). The claude-scrub clean filter drops that key at
+# `git add` time while the working tree keeps the live value. Driver is
+# registered per-checkout by scripts/setup-git-filters.sh.
+claude/.claude/settings.json filter=claude-scrub
