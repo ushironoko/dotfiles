@@ -255,7 +255,10 @@ const findDeselectedMappings = (
           );
           if (existingDeselected && existingDeselected.include) {
             if (!existingDeselected.include.includes(parts[2])) {
-              existingDeselected.include.push(parts[2]);
+              existingDeselected.include = [
+                ...existingDeselected.include,
+                parts[2],
+              ];
             }
           } else {
             deselectedMappings.push({

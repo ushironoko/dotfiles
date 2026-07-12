@@ -8,7 +8,7 @@ const codexAgentFiles = [
   "rust-reviewer.toml",
   "similarity.toml",
   "tdd-reviewer.toml",
-];
+] as const;
 
 const codexHookFiles = [
   "lib/statusline_checks_lib.sh",
@@ -26,7 +26,7 @@ const codexHookFiles = [
   "user_prompt_submit/ultracode_context.sh",
   "worktree/create.sh",
   "worktree/remove.sh",
-];
+] as const;
 
 const sharedAgentSkills = [
   "create-pr",
@@ -40,7 +40,7 @@ const sharedAgentSkills = [
   "smart-compact",
   "start-work",
   "write-session",
-];
+] as const;
 
 // pi-vocabulary forks of harness-specific skills. pi discovers
 // ~/.pi/agent/skills BEFORE ~/.agents/skills and keeps the first skill on a
@@ -53,7 +53,7 @@ const piForkedSkills = [
   "smart-compact",
   "start-work",
   "write-session",
-];
+] as const;
 
 export default defineConfig({
   mappings: [

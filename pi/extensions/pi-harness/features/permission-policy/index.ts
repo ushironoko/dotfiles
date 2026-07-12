@@ -18,6 +18,9 @@ const readPermissionRules = (): string | undefined => {
 const MALFORMED_REASON =
   "permission-policy: bash ツール入力が不正なため実行をブロックしました（command が文字列ではありません）";
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
 const setupPermissionPolicy = (pi: PiLike, _config: HarnessConfig): void => {
   const rules = loadRules(readPermissionRules());
 
@@ -26,10 +29,7 @@ const setupPermissionPolicy = (pi: PiLike, _config: HarnessConfig): void => {
 
     try {
       const input: unknown = event.input;
-      const command =
-        input !== null && typeof input === "object" && !Array.isArray(input)
-          ? (input as Record<string, unknown>).command
-          : undefined;
+      const command = isRecord(input) ? input.command : undefined;
       // A bash call whose command is missing or not a string is malformed;
       // the safety floor blocks it instead of letting it through (fail-closed).
       if (typeof command !== "string") {

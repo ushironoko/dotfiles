@@ -69,6 +69,10 @@ export const scopesOverlap = (a: string, b: string): boolean => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
+const isNonEmptyStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) &&
+  value.every((entry) => typeof entry === "string" && entry.trim() !== "");
+
 const isCodexAgentType = (agentType: string): boolean =>
   (CODEX_AGENT_TYPES as readonly string[]).includes(agentType);
 
@@ -87,9 +91,11 @@ const validateTask = (
     return { errors: [`${label}: must be an object`] };
   }
 
-  const taskText = value.task;
-  if (typeof taskText !== "string" || taskText.trim() === "") {
+  let taskText: string | undefined;
+  if (typeof value.task !== "string" || value.task.trim() === "") {
     errors.push(`${label}.task: must be a non-empty string`);
+  } else {
+    taskText = value.task;
   }
 
   let agentType: string | undefined;
@@ -126,15 +132,10 @@ const validateTask = (
 
   let writeScope: string[] | undefined;
   if (value.writeScope !== undefined) {
-    if (
-      !Array.isArray(value.writeScope) ||
-      value.writeScope.some(
-        (entry) => typeof entry !== "string" || entry.trim() === "",
-      )
-    ) {
+    if (!isNonEmptyStringArray(value.writeScope)) {
       errors.push(`${label}.writeScope: must be an array of non-empty strings`);
     } else {
-      writeScope = value.writeScope as string[];
+      writeScope = value.writeScope;
     }
   }
 
@@ -149,11 +150,13 @@ const validateTask = (
     );
   }
 
-  if (errors.length > 0 || agentType === undefined) return { errors };
+  if (errors.length > 0 || agentType === undefined || taskText === undefined) {
+    return { errors };
+  }
   return {
     task: {
       agentType,
-      task: taskText as string,
+      task: taskText,
       ...(cwd === undefined ? {} : { cwd }),
       ...(isolation === undefined ? {} : { isolation }),
       ...(writeScope === undefined ? {} : { writeScope }),

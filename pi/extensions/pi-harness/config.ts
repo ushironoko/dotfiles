@@ -47,19 +47,20 @@ export interface HarnessConfig {
   paths: HarnessPaths;
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
 function readLocalToggles(
   localConfigFile: string,
 ): Partial<Record<ToggleableFeature, boolean>> {
   try {
     const parsed: unknown = JSON.parse(readFileSync(localConfigFile, "utf8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-      return {};
-    const features = (parsed as Record<string, unknown>).features;
-    if (!features || typeof features !== "object" || Array.isArray(features))
-      return {};
+    if (!isRecord(parsed)) return {};
+    const features = parsed.features;
+    if (!isRecord(features)) return {};
     const overrides: Partial<Record<ToggleableFeature, boolean>> = {};
     for (const name of TOGGLEABLE_FEATURES) {
-      const value = (features as Record<string, unknown>)[name];
+      const value = features[name];
       if (typeof value === "boolean") overrides[name] = value;
     }
     return overrides;
@@ -75,7 +76,7 @@ export function loadConfig(
   const isChild = env.PI_HARNESS_CHILD === "1";
   const overrides = readLocalToggles(paths.localConfigFile);
 
-  const features = {} as Record<ToggleableFeature, boolean>;
+  const features: Record<ToggleableFeature, boolean> = { ...DEFAULT_TOGGLES };
   for (const name of TOGGLEABLE_FEATURES) {
     const enabled = overrides[name] ?? DEFAULT_TOGGLES[name];
     features[name] = isChild

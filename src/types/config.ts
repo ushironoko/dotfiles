@@ -12,9 +12,9 @@ interface FileMapping {
   source: string;
   target: string;
   type: "file" | "directory" | "selective";
-  include?: string[];
-  files?: string[]; // Alternative to include for backward compatibility
-  exclude?: string[];
+  include?: readonly string[];
+  files?: readonly string[]; // Alternative to include for backward compatibility
+  exclude?: readonly string[];
   permissions?: string | Record<string, string>;
 }
 
