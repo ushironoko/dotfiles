@@ -140,3 +140,11 @@ expansion = "claude --enable-auto-mode"
 [[abbr]]
 keyword = "og"
 expansion = "or --git-ops"
+
+[[abbr]]
+keyword = "lpt"
+expansion = "dotfiles logproxy tail --full --session "
+
+[[abbr]]
+keyword = "zl"
+expansion = "zellij"
