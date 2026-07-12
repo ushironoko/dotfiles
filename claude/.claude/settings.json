@@ -1,7 +1,4 @@
 {
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"
-  },
   "permissions": {
     "allow": [
       "Bash(pnpm:*)",
@@ -199,5 +196,8 @@
   "autoCompactEnabled": true,
   "remoteControlAtStartup": true,
   "agentPushNotifEnabled": true,
-  "skipAutoPermissionPrompt": true
+  "skipAutoPermissionPrompt": true,
+  "remote": {
+    "defaultEnvironmentId": "env_01L7MkygAm5QitJAHAKRqnmo"
+  }
 }
