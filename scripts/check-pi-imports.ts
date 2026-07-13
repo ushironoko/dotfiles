@@ -4,8 +4,11 @@
  * outside its own directory. Allowed imports:
  *   (a) relative paths that stay inside pi/extensions/pi-harness
  *   (b) node: builtins
- *   (c) typebox (runtime, ships with pi)
- *   (d) @earendil-works/* — type-only imports (import type ...)
+ *   (c) @earendil-works/* — type-only imports (import type ...)
+ *
+ * Tool parameter schemas are compiled ahead-of-time from tskm (pi/schemas/)
+ * into committed parameters.generated.ts files, so the extension imports plain
+ * JSON Schema objects relatively and needs no schema-library runtime import.
  */
 import { Glob } from "bun";
 import { readFile } from "node:fs/promises";
@@ -26,7 +29,6 @@ for await (const file of glob.scan(EXTENSION_ROOT)) {
     if (specifier === undefined) continue;
 
     if (specifier.startsWith("node:")) continue;
-    if (specifier === "typebox" || specifier.startsWith("typebox/")) continue;
     if (specifier.startsWith("@earendil-works/")) {
       if (!isTypeOnly) {
         violations.push(

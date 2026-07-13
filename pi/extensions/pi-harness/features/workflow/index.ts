@@ -12,7 +12,6 @@
  *   Created worktrees are never merged or removed by the engine.
  */
 import { randomUUID } from "node:crypto";
-import { Type } from "typebox";
 import type { HarnessConfig } from "../../config";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import type { AgentDefinition } from "../../lib/agent-md";
@@ -28,17 +27,14 @@ import {
   type SpawnFunction,
   type SpawnResult,
 } from "../subagent/spawn";
+import { WorkflowParameters } from "./parameters.generated";
 import {
-  DEFAULT_FANOUT_AGENT_TYPE,
-  MAX_STAGE_TASKS,
-  MAX_WORKFLOW_STAGES,
   validateWorkflowPlan,
   type WorkflowStagePlan,
   type WorkflowTaskPlan,
 } from "./plan";
 
 const MAX_CONCURRENCY = 4;
-const optional = Type.Optional;
 
 interface SetupWorkflowOptions {
   spawnFn?: SpawnFunction;
@@ -70,54 +66,6 @@ interface WorkflowDetails {
   succeeded: number;
   total: number;
 }
-
-const WorkflowTaskParameters = Type.Object({
-  agentType: optional(
-    Type.String({
-      description: `Agent to run; fan-out tasks default to ${DEFAULT_FANOUT_AGENT_TYPE} (codex mandate)`,
-    }),
-  ),
-  task: Type.String({ description: "Task delegated to the agent" }),
-  cwd: optional(
-    Type.String({
-      description: "Working directory (not allowed with isolation)",
-    }),
-  ),
-  isolation: optional(
-    Type.Literal("worktree", {
-      description:
-        "Provision an isolated linked worktree as the task cwd (required for codex-poc)",
-    }),
-  ),
-  writeScope: optional(
-    Type.Array(Type.String(), {
-      description:
-        "Paths this task may write; required and pairwise disjoint for parallel codex-runner tasks",
-    }),
-  ),
-});
-
-const WorkflowStageParameters = Type.Object({
-  name: optional(Type.String({ description: "Stage label for the report" })),
-  mode: Type.Union([Type.Literal("fanout"), Type.Literal("single")]),
-  codexSkip: optional(
-    Type.Boolean({
-      description:
-        "Explicit user opt-out from the codex mandate for this fan-out stage",
-    }),
-  ),
-  tasks: Type.Array(WorkflowTaskParameters, {
-    description: "Tasks in this stage",
-    maxItems: MAX_STAGE_TASKS,
-  }),
-});
-
-const WorkflowParameters = Type.Object({
-  stages: Type.Array(WorkflowStageParameters, {
-    description: "Stages executed sequentially",
-    maxItems: MAX_WORKFLOW_STAGES,
-  }),
-});
 
 const isAborted = (signal: AbortSignal | undefined): boolean =>
   signal !== undefined && "aborted" in signal && signal.aborted === true;

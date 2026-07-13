@@ -1,8 +1,9 @@
-import { Type } from "typebox";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import type { HarnessConfig } from "../../config";
 import type { AgentDefinition } from "../../lib/agent-md";
 import { loadAgents } from "./loader";
+import { MAX_CHAIN_DEPTH, MAX_PARALLEL_TASKS } from "./limits";
+import { SubagentParameters } from "./parameters.generated";
 import {
   capText,
   spawnAgent,
@@ -10,10 +11,7 @@ import {
   type SpawnResult,
 } from "./spawn";
 
-const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
-const MAX_CHAIN_DEPTH = 8; // chain depth cap, matches MAX_PARALLEL_TASKS (plan: MAX_CHAIN_DEPTH)
-const optional = Type.Optional;
 
 interface TaskItem {
   agent: string;
@@ -47,48 +45,6 @@ interface AbortControllerLike {
   signal: AbortSignal;
   abort(): void;
 }
-
-const TaskItemSchema = Type.Object({
-  agent: Type.String({ description: "Name of the agent to invoke" }),
-  task: Type.String({ description: "Task to delegate to the agent" }),
-  cwd: optional(
-    Type.String({ description: "Working directory for the agent process" }),
-  ),
-});
-
-const ChainItemSchema = Type.Object({
-  agent: Type.String({ description: "Name of the agent to invoke" }),
-  task: Type.String({
-    description: "Task with an optional {previous} placeholder",
-  }),
-  cwd: optional(
-    Type.String({ description: "Working directory for the agent process" }),
-  ),
-});
-
-const SubagentParameters = Type.Object({
-  agent: optional(
-    Type.String({ description: "Name of the agent for single mode" }),
-  ),
-  task: optional(
-    Type.String({ description: "Task to delegate for single mode" }),
-  ),
-  tasks: optional(
-    Type.Array(TaskItemSchema, {
-      description: "Tasks to run in parallel",
-      maxItems: MAX_PARALLEL_TASKS,
-    }),
-  ),
-  chain: optional(
-    Type.Array(ChainItemSchema, {
-      description: "Tasks to run sequentially",
-      maxItems: MAX_CHAIN_DEPTH,
-    }),
-  ),
-  cwd: optional(
-    Type.String({ description: "Working directory for single mode" }),
-  ),
-});
 
 const findAgent = (
   agents: AgentDefinition[],

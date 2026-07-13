@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { lstat, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { Type } from "typebox";
 import type { HarnessConfig } from "../../config";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import { runHook as defaultRunHook } from "../../lib/run-hook";
@@ -11,6 +10,11 @@ import {
   buildWorktreeRemovePayload,
   matchesTaskMarker,
 } from "./lifecycle";
+import {
+  TaskCompletedParameters,
+  WorktreeCreateParameters,
+  WorktreeRemoveParameters,
+} from "./parameters.generated";
 
 interface CommandResult {
   exitCode: number;
@@ -42,25 +46,6 @@ const COMMAND_TERM_GRACE_MS = 2_000;
 const HOOK_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 65_536;
 const ERROR_TAIL_LENGTH = 4_096;
-const { Optional: optionalSchema } = Type;
-
-const WorktreeCreateParameters = Type.Object({
-  name: Type.String({ description: "Branch name for the new worktree" }),
-});
-
-const WorktreeRemoveParameters = Type.Object({
-  path: Type.String({ description: "Absolute path of the linked worktree" }),
-  confirmed: Type.Boolean({
-    description: "True only after the user explicitly approved removal",
-  }),
-});
-
-const TaskCompletedParameters = Type.Object({
-  task_id: Type.String({ description: "Stable task compatibility id" }),
-  task_subject: optionalSchema(
-    Type.String({ description: "Human-readable completed task subject" }),
-  ),
-});
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);

@@ -50,6 +50,31 @@ toggleable), then hook-bridge and the rest. Feature toggles live in
 Child pi processes spawned by subagent/workflow receive `PI_HARNESS_CHILD=1`
 and keep only the safety layer (no recursion, no duplicate notifications).
 
+## Tool parameter schemas (tskm AOT)
+
+Tool parameter schemas are authored in tskm under `pi/schemas/` and compiled
+ahead-of-time to committed plain JSON Schema objects
+(`features/*/parameters.generated.ts`). The extension imports those generated
+objects relatively and has **no schema-library runtime dependency** (tskm is a
+devDependency only; the direct typebox dependency was removed — typebox now
+survives only transitively via pi). This keeps the extension self-contained
+(`check:pi-imports`).
+
+Workflow after editing any `pi/schemas/*.ts`:
+
+```bash
+bun run gen:pi-schemas     # regenerate the committed *.generated.ts
+bun run check:pi-schemas   # drift gate: in-memory regen must match committed
+```
+
+`bun test` alone does NOT catch a source edit that forgot regeneration — the
+`check:pi-schemas` drift gate (wired into `run-all`, before the mutating
+`format`) is load-bearing for that. The drift gate only asserts
+_regeneratability_; the _semantic_ contract (descriptions, required sets,
+`maxItems`, object openness) is pinned separately by
+`tests/pi-harness/schema-contract.test.ts` (equivalence to the pre-migration
+typebox baseline + acceptance/rejection through pi's real `validateToolArguments`).
+
 ## Claude hook lifecycle mapping
 
 | Claude Code                          | pi-harness                                                                   |

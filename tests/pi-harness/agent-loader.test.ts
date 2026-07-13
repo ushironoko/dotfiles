@@ -3,6 +3,7 @@ import { promises as fs, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import setupSubagent from "../../pi/extensions/pi-harness/features/subagent/index";
+import { MAX_CHAIN_DEPTH } from "../../pi/extensions/pi-harness/features/subagent/limits";
 import { loadAgents } from "../../pi/extensions/pi-harness/features/subagent/loader";
 import {
   PER_TASK_OUTPUT_CAP,
@@ -267,7 +268,7 @@ describe("pi-harness subagent", () => {
     expect(loadAgents(join(directory, "missing"))).toEqual([]);
   });
 
-  test("registers one subagent tool with a TypeBox object schema", async () => {
+  test("registers one subagent tool with a JSON Schema object", async () => {
     const home = await makeTempDirectory("pi-subagent-schema");
     const pi = createFakePi();
 
@@ -458,7 +459,8 @@ describe("pi-harness subagent", () => {
     }
     const { chain } = parameters.properties;
     if (!isRecord(chain)) throw new Error("Expected chain schema");
-    expect(chain.maxItems).toBe(8);
+    // The advertised cap must equal the runtime cap this test exercises.
+    expect(chain.maxItems).toBe(MAX_CHAIN_DEPTH);
 
     const execution = executeTool(
       pi.tools[0],
