@@ -76,6 +76,7 @@ interface ScriptedResponse {
   text?: string;
   stderr?: string;
   code?: number;
+  stopReason?: string;
 }
 
 interface RecordedSpawn {
@@ -96,7 +97,9 @@ const createScriptedProcess = (script: ScriptedResponse): SpawnedProcess => {
   setTimeout(() => {
     if (script.text !== undefined) {
       for (const listener of stdoutListeners) {
-        listener(assistantEvent(script.text));
+        listener(
+          assistantEvent(script.text, { stopReason: script.stopReason }),
+        );
       }
     }
     if (script.stderr !== undefined) {
@@ -344,6 +347,40 @@ describe("pi-harness workflow", () => {
     expect(failed).toBeDefined();
   });
 
+  test("treats a length-truncated task (exit 0) as failed, not counted as succeeded", async () => {
+    const home = await makeTempDirectory("pi-workflow-length");
+    await writeAgents(home, ["codex-reviewer"]);
+    const { spawnFn } = makeSpawnFn((taskArg) =>
+      taskArg.includes("overflow")
+        ? { text: "half an answer", stopReason: "length", code: 0 }
+        : { text: "survivor" },
+    );
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), { spawnFn });
+
+    const result = await executeTool(
+      findWorkflowTool(pi.tools),
+      {
+        stages: [
+          {
+            mode: "fanout",
+            tasks: [
+              { agentType: "codex-reviewer", task: "healthy lens" },
+              { agentType: "codex-reviewer", task: "overflow lens" },
+            ],
+          },
+        ],
+      },
+      pi.ctx,
+    );
+
+    const { text, details } = getResult(result);
+    expect(text).toContain("1/2");
+    expect(text).toContain("FAILED");
+    expect(text).toContain("stopReason length");
+    expect(details.succeeded).toBe(1);
+  });
+
   test("provisions an isolated worktree for codex-poc and leaves it in place", async () => {
     const home = await makeTempDirectory("pi-workflow-poc");
     await writeAgents(home, ["codex-poc"]);
@@ -526,6 +563,38 @@ describe("pi-harness workflow", () => {
       ),
     ).rejects.toThrow(/abort/i);
     expect(records).toHaveLength(0);
+  });
+
+  test("a mid-flight abort does not spawn not-yet-started tasks", async () => {
+    const home = await makeTempDirectory("pi-workflow-abort-midflight");
+    await writeAgents(home, ["codex-reviewer"]);
+    const controller = createTestAbortController();
+    // Abort as soon as the first task spawns; later tasks that a worker has not
+    // pulled yet must never start.
+    const { records, spawnFn } = makeSpawnFn(() => {
+      controller.abort();
+      return { text: "partial" };
+    });
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), { spawnFn });
+
+    const tasks = Array.from({ length: 8 }, (_unused, index) => ({
+      agentType: "codex-reviewer",
+      task: `lens ${index}`,
+    }));
+
+    await expect(
+      executeTool(
+        findWorkflowTool(pi.tools),
+        { stages: [{ mode: "fanout", tasks }] },
+        pi.ctx,
+        controller.signal,
+      ),
+    ).rejects.toThrow(/abort/i);
+    // Some early tasks may already be in flight, but the run must stop pulling
+    // new work, so strictly fewer than all 8 tasks ever spawn.
+    expect(records.length).toBeGreaterThanOrEqual(1);
+    expect(records.length).toBeLessThan(tasks.length);
   });
 });
 

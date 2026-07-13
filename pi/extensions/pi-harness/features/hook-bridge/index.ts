@@ -7,7 +7,7 @@ import {
   makePreToolUseStdin,
   makeUserPromptSubmitStdin,
 } from "../../lib/claude-hook-io";
-import type { PiLike } from "../../lib/pi-like";
+import type { CtxLike, PiLike } from "../../lib/pi-like";
 import { runHook } from "../../lib/run-hook";
 import { mapToolCall } from "../../lib/tool-map";
 import { isTrustedRoot } from "../../lib/trust";
@@ -35,9 +35,16 @@ export default function setupHookBridge(
   const registry = config.isChild
     ? fullRegistry.filter((spec) => spec.stage === "tool_call")
     : fullRegistry;
-  const cwd = options?.cwd ?? process.cwd();
+  // Resolve the working directory per event, not once at setup: on a resumed
+  // session the init-time process.cwd() can point at a different repository
+  // than the one the event fired in, which would run trust checks, path
+  // resolution, and formatter/typecheck hooks against the wrong tree
+  // (review finding).
+  const resolveCwd = (ctx: CtxLike): string =>
+    ctx.cwd ?? options?.cwd ?? process.cwd();
 
   pi.on("tool_call", async (event, ctx) => {
+    const cwd = resolveCwd(ctx);
     const invocation = mapToolCall(event.toolName, event.input);
     const specs = selectMatchingSpecs(
       registry,
@@ -82,6 +89,7 @@ export default function setupHookBridge(
   pi.on("tool_result", async (event, ctx) => {
     if (event.isError) return undefined;
 
+    const cwd = resolveCwd(ctx);
     const invocation = mapToolCall(event.toolName, readToolResultInput(event));
     const specs = selectMatchingSpecs(
       registry,
@@ -127,7 +135,8 @@ export default function setupHookBridge(
     return appendToolResultText(event.content, additions);
   });
 
-  pi.on("before_agent_start", async (event) => {
+  pi.on("before_agent_start", async (event, ctx) => {
+    const cwd = resolveCwd(ctx);
     const specs = selectMatchingSpecs(registry, "before_agent_start");
     for (const spec of specs) {
       const raw = await runHook(

@@ -57,6 +57,11 @@ describe("scopeRoot", () => {
     ["src/**/*.ts", "src"],
     ["*.ts", ""],
     ["/abs/path/**", "/abs/path"],
+    // Lexical normalization: "./" prefix and "//" collapse to the same root.
+    ["./src/**", "src"],
+    ["src//x/**", "src/x"],
+    ["././src/**", "src"],
+    ["/abs//path/**", "/abs/path"],
   ])("scopeRoot(%j) === %j", (entry, expected) => {
     expect(scopeRoot(entry)).toBe(expected);
   });
@@ -73,6 +78,10 @@ describe("scopesOverlap", () => {
     ["*.ts", "packages/a/**", true],
     ["/repo/a/**", "/repo/a/x.ts", true],
     ["/repo/a/**", "/repo/b/**", false],
+    // Path aliasing must not defeat the disjointness check.
+    ["src/**", "./src/**", true],
+    ["src//x/**", "src/x/**", true],
+    ["./packages/a/**", "packages/a/sub/**", true],
   ])("scopesOverlap(%j, %j) === %j", (a, b, expected) => {
     expect(scopesOverlap(a, b)).toBe(expected);
   });
@@ -294,6 +303,32 @@ describe("codex-runner writeScope", () => {
         ]),
       ]),
       "absolute",
+    );
+  });
+
+  test("detects overlap between aliased writeScope spellings", () => {
+    // "./packages/a/**" and "packages/a/**" are the same directory: parallel
+    // runners writing there would corrupt the tree, so this must be rejected.
+    expectErrors(
+      plan([
+        fanout([
+          runnerTask(["./packages/a/**"]),
+          runnerTask(["packages/a/**"]),
+        ]),
+      ]),
+      "overlap",
+    );
+  });
+
+  test('rejects writeScope entries containing ".." segments', () => {
+    expectErrors(
+      plan([
+        fanout([
+          runnerTask(["packages/a/../b/**"]),
+          runnerTask(["packages/c/**"]),
+        ]),
+      ]),
+      '".." segments',
     );
   });
 

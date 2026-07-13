@@ -44,6 +44,22 @@ export type WorkflowPlanValidation =
 const GLOB_CHARS = /[*?[{]/;
 
 /**
+ * Lexically normalize a literal path prefix so that different spellings of the
+ * same directory compare equal: drop empty segments (from "//") and "."
+ * segments, preserving a leading "/" for absolute paths. ".." is intentionally
+ * NOT resolved here — validateTask rejects it up front, since lexical ".."
+ * resolution is unsound under symlinks.
+ */
+const normalizeLiteralPrefix = (prefix: string): string => {
+  const absolute = prefix.startsWith("/");
+  const segments = prefix
+    .split("/")
+    .filter((segment) => segment !== "" && segment !== ".");
+  const joined = segments.join("/");
+  return absolute ? `/${joined}` : joined;
+};
+
+/**
  * Longest literal directory prefix of a glob-ish scope entry. "" means the
  * entry can match anywhere (e.g. "*.ts") and therefore overlaps everything.
  */
@@ -52,8 +68,11 @@ export const scopeRoot = (entry: string): string => {
   const literal = match === null ? entry : entry.slice(0, match.index);
   const cut =
     match === null ? literal : literal.slice(0, literal.lastIndexOf("/") + 1);
-  return cut.replace(/\/+$/, "");
+  return normalizeLiteralPrefix(cut);
 };
+
+const hasDotDotSegment = (entry: string): boolean =>
+  entry.split("/").includes("..");
 
 export const scopesOverlap = (a: string, b: string): boolean => {
   const rootA = scopeRoot(a);
@@ -134,6 +153,13 @@ const validateTask = (
   if (value.writeScope !== undefined) {
     if (!isNonEmptyStringArray(value.writeScope)) {
       errors.push(`${label}.writeScope: must be an array of non-empty strings`);
+    } else if (value.writeScope.some(hasDotDotSegment)) {
+      // Reject rather than lexically resolve: "packages/a/../b" can escape its
+      // apparent root under a symlink, so overlap checks on a resolved path
+      // would be unsound (review finding).
+      errors.push(
+        `${label}.writeScope: entries must not contain ".." segments`,
+      );
     } else {
       writeScope = value.writeScope;
     }

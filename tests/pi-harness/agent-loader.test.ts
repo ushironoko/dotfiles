@@ -538,6 +538,30 @@ describe("pi-harness subagent", () => {
     );
   });
 
+  test("treats message_end stopReason length as a failed tool call even on exit 0", async () => {
+    const home = await makeTempDirectory("pi-subagent-stop-length");
+    await writeAgent(home);
+    const spawnFn: SpawnFunction = () => {
+      const controller = createFakeProcess();
+      queueMicrotask(() => {
+        controller.emitStdout(
+          assistantEvent("partial output", { stopReason: "length" }),
+        );
+        controller.close(0);
+      });
+      return controller.process;
+    };
+    const pi = createFakePi({ cwd: home });
+    setupSubagent(pi, makeConfig(home), { spawnFn });
+
+    const execution = executeTool(
+      pi.tools[0],
+      { agent: "worker", task: "Overflow the token budget" },
+      pi.ctx,
+    );
+    await expect(execution).rejects.toThrow(/stopReason length/);
+  });
+
   test("substitutes {previous} verbatim in a chain even when the prior output has $ sequences", async () => {
     const home = await makeTempDirectory("pi-subagent-chain-dollar");
     await writeAgent(home);

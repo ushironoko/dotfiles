@@ -11,6 +11,15 @@ const PER_TASK_OUTPUT_CAP = 50 * 1024;
 const LINE_DROP_CAP = PER_TASK_OUTPUT_CAP * 4;
 const SIGTERM_GRACE_MS = 2000;
 const TRUNCATION_MARKER = "\n\n[Output truncated.]";
+// A child that stopped for one of these reasons did NOT finish its task, even
+// when it exits 0. "length" (token/output limit) truncates the response
+// mid-flight, so treating it as success would silently count a partial result
+// (review finding).
+const FAILED_STOP_REASONS: ReadonlySet<string> = new Set([
+  "error",
+  "aborted",
+  "length",
+]);
 
 interface ReadableLike {
   on(event: "data", listener: (chunk: string) => void): ReadableLike;
@@ -372,7 +381,8 @@ const spawnAgent = async (
 
     if (aborted) throw new Error("Subagent was aborted");
 
-    const failedStopReason = stopReason === "error" || stopReason === "aborted";
+    const failedStopReason =
+      stopReason !== undefined && FAILED_STOP_REASONS.has(stopReason);
     const failed =
       outcome.exitCode === null || outcome.exitCode !== 0 || failedStopReason;
     return {

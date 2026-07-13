@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import { join, resolve } from "node:path";
 import type { HarnessConfig } from "../../../pi/extensions/pi-harness/config";
 import setupHookBridge from "../../../pi/extensions/pi-harness/features/hook-bridge/index";
@@ -190,6 +190,91 @@ describe("pi-harness hook bridge", () => {
       prompt: "please review this normally",
     });
     expect(ignored).toBeUndefined();
+  });
+
+  test("resolves the hook cwd from the event ctx, not the setup-time cwd", async () => {
+    const initDir = await makeTempDirectory("pi-hook-cwd-init");
+    const eventDir = await makeTempDirectory("pi-hook-cwd-event");
+    const outFile = join(eventDir, "received.json");
+    const script = join(initDir, "capture.sh");
+    await fs.writeFile(
+      script,
+      [
+        "#!/usr/bin/env bash",
+        `cat > ${JSON.stringify(outFile)}`,
+        "printf '%s' '{}'",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const pi = createFakePi({ cwd: initDir });
+    setupHookBridge(pi, makeConfig(initDir), {
+      cwd: initDir,
+      registry: [makeSpec("capture", "before_agent_start", script)],
+    });
+
+    // A resumed session fires the event from a different repository than the
+    // one process.cwd() pointed at during setup.
+    pi.ctx.cwd = eventDir;
+    await pi.emitBeforeAgentStart({
+      type: "before_agent_start",
+      prompt: "hello",
+    });
+
+    const payload = JSON.parse(await fs.readFile(outFile, "utf8")) as {
+      cwd: string;
+    };
+    expect(payload.cwd).toBe(eventDir);
+  });
+
+  test("evaluates requiresTrust against the event ctx.cwd", async () => {
+    const untrustedDir = await makeTempDirectory("pi-hook-trust-untrusted");
+    const trustedDir = await makeTempDirectory("pi-hook-trust-trusted");
+    const marker = join(trustedDir, "ran.txt");
+    const script = join(untrustedDir, "trust.sh");
+    await fs.writeFile(
+      script,
+      [
+        "#!/usr/bin/env bash",
+        "cat > /dev/null",
+        `touch ${JSON.stringify(marker)}`,
+        "printf '%s' '{}'",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const event = {
+      type: "tool_result" as const,
+      toolName: "bash",
+      toolCallId: "trust-1",
+      input: { command: "echo hi" },
+      content: [{ type: "text" as const, text: "hi" }],
+      isError: false,
+    };
+    const registry = [
+      makeSpec("trust", "tool_result", script, { requiresTrust: true }),
+    ];
+
+    // ctx.cwd is the TRUSTED dir → the requiresTrust hook runs, even though the
+    // setup-time cwd was the untrusted dir.
+    const trustedPi = createFakePi({ cwd: trustedDir });
+    setupHookBridge(trustedPi, makeConfig(untrustedDir, [trustedDir]), {
+      cwd: untrustedDir,
+      registry,
+    });
+    await trustedPi.emitToolResult(event);
+    expect(existsSync(marker)).toBe(true);
+
+    await fs.rm(marker, { force: true });
+
+    // ctx.cwd is the UNTRUSTED dir → the hook is skipped, even though the
+    // setup-time cwd was the trusted dir (proves ctx.cwd wins over options.cwd).
+    const untrustedPi = createFakePi({ cwd: untrustedDir });
+    setupHookBridge(untrustedPi, makeConfig(untrustedDir, [trustedDir]), {
+      cwd: trustedDir,
+      registry,
+    });
+    await untrustedPi.emitToolResult(event);
+    expect(existsSync(marker)).toBe(false);
   });
 
   test("trust-gates coding_cycle and runs it safely in a trusted project", async () => {

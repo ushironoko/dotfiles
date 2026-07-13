@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { parseAgentMarkdown, type AgentDefinition } from "../../lib/agent-md";
+import { capText } from "./spawn";
 
 const loadAgents = (dir: string): AgentDefinition[] => {
   if (!existsSync(dir)) return [];
@@ -31,4 +32,21 @@ const loadAgents = (dir: string): AgentDefinition[] => {
   return agents;
 };
 
-export { loadAgents };
+// Shared agent lookup for both the subagent and workflow features (previously
+// duplicated as findAgent/resolveAgent). Throws with the available names when
+// the requested agent is unknown.
+const findAgent = (
+  agents: AgentDefinition[],
+  name: string,
+): AgentDefinition => {
+  const agent = agents.find((candidate) => candidate.name === name);
+  if (agent !== undefined) return agent;
+  const available = agents.map((candidate) => candidate.name).join(", ");
+  throw new Error(
+    capText(
+      `Unknown agent: "${name}". Available agents: ${available || "none"}.`,
+    ),
+  );
+};
+
+export { findAgent, loadAgents };

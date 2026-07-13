@@ -317,6 +317,10 @@ describe("bit-task tool registration", () => {
           if (args.includes("--git-common-dir")) {
             return { exitCode: 0, stdout: `${common}\n`, stderr: "" };
           }
+          if (args.includes("--show-toplevel")) {
+            // Session cwd is the main repo, distinct from the removal target.
+            return { exitCode: 0, stdout: `${repo}\n`, stderr: "" };
+          }
           listCalls += 1;
           return {
             exitCode: 0,
@@ -336,6 +340,105 @@ describe("bit-task tool registration", () => {
           pi.ctx,
         ),
       ).rejects.toThrow(/postcondition failed; directory still exists/i);
+    } finally {
+      await cleanupTestDirectory(directory);
+    }
+  });
+
+  test("refuses to remove the worktree containing the current session checkout", async () => {
+    const directory = await setupTestDirectory("pi-bit-task-self-remove", [
+      "repo",
+      "linked",
+      "common.git",
+    ]);
+    try {
+      const repo = await fs.realpath(join(directory, "repo"));
+      const linked = await fs.realpath(join(directory, "linked"));
+      const common = await fs.realpath(join(directory, "common.git"));
+      let removeCalled = false;
+      // The session is running INSIDE the linked worktree it asks to remove.
+      const pi = createFakePi({ cwd: linked });
+      setupBitTask(pi, makeConfig(), {
+        cwd: linked,
+        runHook: async () => {
+          removeCalled = true;
+          return { exitCode: 0, timedOut: false, stdout: "", stderr: "" };
+        },
+        runCommand: async (_command, args) => {
+          if (args.includes("--git-common-dir")) {
+            return { exitCode: 0, stdout: `${common}\n`, stderr: "" };
+          }
+          if (args.includes("--show-toplevel")) {
+            return { exitCode: 0, stdout: `${linked}\n`, stderr: "" };
+          }
+          return {
+            exitCode: 0,
+            stdout: `worktree ${repo}\n\nworktree ${linked}\n`,
+            stderr: "",
+          };
+        },
+      });
+
+      await expect(
+        executeTool(
+          getTool(pi.tools, "worktree_remove"),
+          { path: linked, confirmed: true },
+          pi.ctx,
+        ),
+      ).rejects.toThrow(/worktree containing the current session checkout/i);
+      // The removal hook must never fire, so the worktree stays registered.
+      expect(removeCalled).toBe(false);
+    } finally {
+      await cleanupTestDirectory(directory);
+    }
+  });
+
+  test("removes a different linked worktree while running inside another", async () => {
+    const directory = await setupTestDirectory("pi-bit-task-other-remove", [
+      "repo",
+      "linkedA",
+      "linkedB",
+      "common.git",
+    ]);
+    try {
+      const repo = await fs.realpath(join(directory, "repo"));
+      const linkedA = await fs.realpath(join(directory, "linkedA"));
+      const linkedB = await fs.realpath(join(directory, "linkedB"));
+      const common = await fs.realpath(join(directory, "common.git"));
+      let removedB = false;
+      const pi = createFakePi({ cwd: linkedA });
+      setupBitTask(pi, makeConfig(), {
+        cwd: linkedA,
+        runHook: async () => {
+          await fs.rm(linkedB, { recursive: true, force: true });
+          removedB = true;
+          return { exitCode: 0, timedOut: false, stdout: "", stderr: "" };
+        },
+        runCommand: async (_command, args) => {
+          if (args.includes("--git-common-dir")) {
+            return { exitCode: 0, stdout: `${common}\n`, stderr: "" };
+          }
+          if (args.includes("--show-toplevel")) {
+            // Session cwd is linkedA — distinct from the removal target linkedB.
+            return { exitCode: 0, stdout: `${linkedA}\n`, stderr: "" };
+          }
+          return {
+            exitCode: 0,
+            stdout: removedB
+              ? `worktree ${repo}\n\nworktree ${linkedA}\n`
+              : `worktree ${repo}\n\nworktree ${linkedA}\n\nworktree ${linkedB}\n`,
+            stderr: "",
+          };
+        },
+      });
+
+      const result = await executeTool(
+        getTool(pi.tools, "worktree_remove"),
+        { path: linkedB, confirmed: true },
+        pi.ctx,
+      );
+      expect(readTextResult(result)).toContain("Removed worktree");
+      expect(removedB).toBe(true);
     } finally {
       await cleanupTestDirectory(directory);
     }

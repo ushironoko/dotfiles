@@ -429,6 +429,39 @@ export default function setupBitTask(
         }
       };
 
+      // The top-level of the SESSION cwd: if the caller is running inside the
+      // worktree it asked to remove, this equals canonicalPath and the removal
+      // would delete the running checkout out from under itself. Guarding only
+      // registeredPaths[0] (the main checkout) misses this when the session is
+      // itself in a linked worktree (review finding).
+      const resolveTopLevel = async (phase: string): Promise<string> => {
+        let result: CommandResult;
+        try {
+          result = await invokeCommand(
+            "git",
+            ["rev-parse", "--path-format=absolute", "--show-toplevel"],
+            { cwd, env: childEnv(), timeoutMs: COMMAND_TIMEOUT_MS },
+          );
+        } catch (error) {
+          throw new Error(
+            `worktree_remove ${phase} failed: could not start Git top-level resolution: ${errorMessage(error)}`,
+          );
+        }
+        const rawPath = result.stdout.trim();
+        if (result.exitCode !== 0 || rawPath === "") {
+          throw new Error(
+            `worktree_remove ${phase} failed: ${commandFailure("could not resolve Git top-level", result).message}`,
+          );
+        }
+        try {
+          return await realpath(rawPath);
+        } catch (error) {
+          throw new Error(
+            `worktree_remove ${phase} failed: could not canonicalize Git top-level ${rawPath}: ${errorMessage(error)}`,
+          );
+        }
+      };
+
       const currentCommonDir = await resolveCommonDir(undefined, "validation");
       const targetCommonDir = await resolveCommonDir(
         canonicalPath,
@@ -464,6 +497,12 @@ export default function setupBitTask(
           `worktree_remove refuses to remove the current repository checkout: ${canonicalPath}`,
         );
       }
+      const currentTopLevel = await resolveTopLevel("validation");
+      if (canonicalPath === currentTopLevel) {
+        throw new Error(
+          `worktree_remove refuses to remove the worktree containing the current session checkout: ${canonicalPath}`,
+        );
+      }
       if (!registeredPaths.includes(canonicalPath)) {
         throw new Error(
           `worktree_remove requires a registered linked worktree of the current repository: ${canonicalPath}`,
@@ -497,6 +536,15 @@ export default function setupBitTask(
       ) {
         throw new Error(
           `worktree_remove pre-spawn verification failed: Git common directory identity changed for ${canonicalPath}`,
+        );
+      }
+      const recheckedTopLevel = await resolveTopLevel("pre-spawn verification");
+      if (
+        recheckedTopLevel === canonicalPath ||
+        recheckedTopLevel !== currentTopLevel
+      ) {
+        throw new Error(
+          `worktree_remove pre-spawn verification failed: the current session checkout resolves to ${recheckedTopLevel}`,
         );
       }
 

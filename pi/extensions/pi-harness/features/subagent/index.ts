@@ -1,8 +1,7 @@
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import type { HarnessConfig } from "../../config";
-import type { AgentDefinition } from "../../lib/agent-md";
 import { replacePrevious } from "../../lib/placeholder";
-import { loadAgents } from "./loader";
+import { findAgent, loadAgents } from "./loader";
 import { MAX_CHAIN_DEPTH, MAX_PARALLEL_TASKS } from "./limits";
 import { SubagentParameters } from "./parameters.generated";
 import {
@@ -46,20 +45,6 @@ interface AbortControllerLike {
   signal: AbortSignal;
   abort(): void;
 }
-
-const findAgent = (
-  agents: AgentDefinition[],
-  name: string,
-): AgentDefinition => {
-  const agent = agents.find((candidate) => candidate.name === name);
-  if (agent !== undefined) return agent;
-  const available = agents.map((candidate) => candidate.name).join(", ");
-  throw new Error(
-    capText(
-      `Unknown agent: "${name}". Available agents: ${available || "none"}.`,
-    ),
-  );
-};
 
 const isAborted = (signal: AbortSignal | undefined): boolean =>
   signal !== undefined && "aborted" in signal && signal.aborted === true;

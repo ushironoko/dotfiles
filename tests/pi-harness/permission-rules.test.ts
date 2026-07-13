@@ -212,3 +212,167 @@ describe("loadRules fail-closed behavior", () => {
     );
   });
 });
+
+describe("evaluateCommand compound-command scanning", () => {
+  const floor = loadRules(undefined);
+  const verdictOf = (command: string) =>
+    evaluateCommand(command, floor).verdict;
+
+  // The finding: a benign prefix used to hide a denied/destructive command.
+  test.each([
+    ["echo ok; bit issue claim 123", "bit issue claim は禁止です"],
+    ["cd / && bit relay serve", "bit relay は禁止です"],
+    ["true || bit issue unclaim 5", "bit issue unclaim は禁止です"],
+    ["echo x | bit issue claim", "bit issue claim は禁止です"],
+    ["bit issue claim &", "bit issue claim は禁止です"],
+    ["cd /tmp\nbit pr import 7", "bit pr import は禁止です"],
+    ["(bit issue claim)", "bit issue claim は禁止です"],
+    ["{ bit issue claim; }", "bit issue claim は禁止です"],
+  ])("denies denied command after a benign prefix: %s", (command, reason) => {
+    expect(evaluateCommand(command, floor)).toEqual({
+      verdict: "deny",
+      reason,
+    });
+  });
+
+  test.each([
+    "echo ok && rm -rf /tmp/x",
+    "cd /tmp && git reset --hard HEAD~1",
+    "true; git push origin main --force",
+    "make build && git clean -fd",
+  ])("asks for a destructive command after a benign prefix: %s", (command) => {
+    expect(verdictOf(command)).toBe("ask");
+  });
+
+  // Quoting / escaping must NOT create a phantom denied segment.
+  test.each([
+    'echo "a; bit issue claim"',
+    "echo 'a; bit issue claim'",
+    "echo ok\\; bit_issue_claim",
+    'git commit -m "wip; bit issue claim later"',
+    "echo ok # ; bit issue claim",
+    "echo ok # bit relay serve",
+  ])("does not deny a quoted/escaped/commented operator: %s", (command) => {
+    expect(verdictOf(command)).toBe("default-continue");
+  });
+
+  // Separator obfuscation via $IFS still resolves to the denied command.
+  test.each([
+    "bit${IFS}issue${IFS}claim",
+    "bit$IFS issue claim",
+    "echo ok; bit${IFS}relay${IFS}serve",
+  ])("normalizes $IFS separators: %s", (command) => {
+    expect(verdictOf(command)).toBe("deny");
+  });
+
+  // Command substitution content is evaluated recursively.
+  test.each([
+    "echo $(bit issue claim)",
+    "echo `bit issue claim`",
+    "echo $(echo $(bit issue claim))",
+    "diff <(bit issue claim) other",
+    'echo "$(bit issue claim)"',
+  ])("recurses into command substitutions: %s", (command) => {
+    expect(verdictOf(command)).toBe("deny");
+  });
+
+  // Structurally unparseable input fails closed.
+  test.each([
+    'echo "unterminated',
+    "echo 'unterminated",
+    "echo $(bit issue claim",
+    "echo `bit issue claim",
+    "echo ${unterminated",
+  ])("denies unparseable input: %s", (command) => {
+    expect(verdictOf(command)).toBe("deny");
+  });
+
+  // Opaque executors cannot be inspected statically → ask.
+  test.each([
+    'eval "bit issue claim"',
+    'sh -c "bit issue claim"',
+    'bash -c "rm -rf /"',
+    "echo x | xargs rm",
+  ])("asks for opaque executors: %s", (command) => {
+    expect(verdictOf(command)).toBe("ask");
+  });
+
+  // Transparent wrappers and assignments are stripped before matching.
+  test.each([
+    "sudo bit issue claim",
+    "env bit issue claim",
+    "FOO=bar bit issue claim",
+    "FOO=bar sudo bit issue claim",
+    "nice bit relay serve",
+  ])("strips wrappers/assignments before the rule floor: %s", (command) => {
+    expect(verdictOf(command)).toBe("deny");
+  });
+
+  test("asks for a destructive command behind sudo", () => {
+    expect(verdictOf("sudo rm -rf /")).toBe("ask");
+  });
+
+  // Benign compound commands stay untouched.
+  test.each([
+    "cd /tmp && ls -la",
+    "git status && git log --oneline",
+    "echo one; echo two; echo three",
+    "cat file | grep foo | wc -l",
+    "bit issue list --open && echo done",
+  ])("continues benign compound commands: %s", (command) => {
+    expect(verdictOf(command)).toBe("default-continue");
+  });
+
+  test("combines to deny across mixed segments (deny wins over ask)", () => {
+    expect(verdictOf("rm -rf /tmp/x && bit issue claim")).toBe("deny");
+  });
+
+  test("allow only wins when every segment is allowed", () => {
+    const rules = loadRules(
+      JSON.stringify({
+        deny: [],
+        allow: [{ pattern: "^git reset --hard" }],
+        ask: [],
+      }),
+    );
+    // Both segments allowed → allow.
+    expect(
+      evaluateCommand(
+        "git reset --hard HEAD~1 && git reset --hard HEAD~2",
+        rules,
+      ).verdict,
+    ).toBe("allow");
+    // One allowed, one plain → proceeds as default-continue.
+    expect(
+      evaluateCommand("git reset --hard HEAD~1 && echo done", rules).verdict,
+    ).toBe("default-continue");
+  });
+});
+
+describe("permission-policy compound bypass integration", () => {
+  test("blocks a denied command hidden behind a benign prefix", async () => {
+    const pi = createPermissionPi();
+
+    expect(
+      await pi.emitToolCall(bashCall("echo ok; bit issue claim 123")),
+    ).toEqual({ block: true, reason: "bit issue claim は禁止です" });
+  });
+
+  test("blocks unparseable bash input (fail-closed)", async () => {
+    const pi = createPermissionPi();
+
+    expect(await pi.emitToolCall(bashCall('echo "unterminated'))).toEqual({
+      block: true,
+      reason: expect.stringContaining("解析できませんでした"),
+    });
+  });
+
+  test("confirms a destructive command hidden behind a benign prefix", async () => {
+    const pi = createPermissionPi();
+    pi.queueConfirm(false);
+
+    expect(
+      await pi.emitToolCall(bashCall("cd /tmp && git reset --hard HEAD~1")),
+    ).toEqual({ block: true, reason: expect.any(String) });
+  });
+});

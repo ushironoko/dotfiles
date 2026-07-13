@@ -14,13 +14,12 @@
 import { randomUUID } from "node:crypto";
 import type { HarnessConfig } from "../../config";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
-import type { AgentDefinition } from "../../lib/agent-md";
 import {
   createValidatedWorktree,
   makeWorktreeCreator,
 } from "../bit-task/index";
 import { replacePrevious } from "../../lib/placeholder";
-import { loadAgents } from "../subagent/loader";
+import { findAgent, loadAgents } from "../subagent/loader";
 import {
   capText,
   PER_TASK_OUTPUT_CAP,
@@ -74,20 +73,6 @@ const isAborted = (signal: AbortSignal | undefined): boolean =>
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-const resolveAgent = (
-  agents: AgentDefinition[],
-  name: string,
-): AgentDefinition => {
-  const agent = agents.find((candidate) => candidate.name === name);
-  if (agent !== undefined) return agent;
-  const available = agents.map((candidate) => candidate.name).join(", ");
-  throw new Error(
-    capText(
-      `Unknown agent: "${name}". Available agents: ${available || "none"}.`,
-    ),
-  );
-};
-
 const isSpawnFailure = (
   result: SpawnResult | SpawnFailure,
 ): result is SpawnFailure => !("exitCode" in result);
@@ -96,13 +81,24 @@ const runWithConcurrency = async <Item>(
   items: readonly Item[],
   limit: number,
   run: (item: Item, index: number) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<void> => {
   let nextIndex = 0;
   const worker = async () => {
-    while (nextIndex < items.length) {
+    // Stop pulling new items the moment the run is aborted: a mid-flight abort
+    // must not start tasks that had not begun yet (review finding).
+    while (nextIndex < items.length && !isAborted(signal)) {
       const index = nextIndex;
       nextIndex += 1;
-      await run(items[index], index);
+      try {
+        await run(items[index], index);
+      } catch (error) {
+        // An abort surfaced from run() unwinds this worker gracefully; other
+        // in-flight tasks settle and the caller re-checks the signal. Any other
+        // error is a genuine defect and must propagate.
+        if (isAborted(signal)) return;
+        throw error;
+      }
     }
   };
   await Promise.all(
@@ -225,7 +221,7 @@ const setupWorkflow = (
       // effect: an unknown agent in stage 3 must not leave stages 1-2 ran.
       const agents = loadAgents(config.paths.claudeAgentsDir);
       for (const stage of validation.stages) {
-        for (const task of stage.tasks) resolveAgent(agents, task.agentType);
+        for (const task of stage.tasks) findAgent(agents, task.agentType);
       }
 
       const defaultCwd = ctx.cwd ?? process.cwd();
@@ -269,6 +265,9 @@ const setupWorkflow = (
         // task result.
         const worktrees: (string | undefined)[] = [];
         for (const [taskIndex, task] of stage.tasks.entries()) {
+          // A mid-flight abort must not provision worktrees for tasks that
+          // have not started; check before each (potentially slow) creation.
+          if (isAborted(signal)) throw new Error("Workflow was aborted");
           worktrees[taskIndex] =
             task.isolation === "worktree"
               ? await createWorktree(
@@ -277,12 +276,15 @@ const setupWorkflow = (
                 )
               : undefined;
         }
+        if (isAborted(signal)) throw new Error("Workflow was aborted");
 
         const taskReports: WorkflowTaskReport[] = [];
         const runTask = async (
           task: WorkflowTaskPlan,
           taskIndex: number,
         ): Promise<void> => {
+          // Do not spawn a task that was cancelled before it started.
+          if (isAborted(signal)) throw new Error("Workflow was aborted");
           const cwd = worktrees[taskIndex] ?? task.cwd ?? defaultCwd;
           // Substitute {previous} for the injected prior-stage digest. The
           // report keeps the original task.task (base.task); the expanded text
@@ -298,7 +300,7 @@ const setupWorkflow = (
           };
           try {
             const result = await spawnAgent(
-              resolveAgent(agents, task.agentType),
+              findAgent(agents, task.agentType),
               taskText,
               {
                 cwd,
@@ -310,13 +312,21 @@ const setupWorkflow = (
             );
             taskReports[taskIndex] = { ...base, result };
           } catch (error) {
+            // An abort is a cancellation, not a degradable task failure: let it
+            // unwind the stage instead of recording a spurious FAILED report.
+            if (isAborted(signal)) {
+              throw error instanceof Error ? error : new Error(String(error));
+            }
             taskReports[taskIndex] = {
               ...base,
               result: { failed: true, errorMessage: errorMessage(error) },
             };
           }
         };
-        await runWithConcurrency(stage.tasks, MAX_CONCURRENCY, runTask);
+        await runWithConcurrency(stage.tasks, MAX_CONCURRENCY, runTask, signal);
+        // A stage cancelled mid-flight leaves gaps in taskReports; do not
+        // record a partial stage — unwind instead.
+        if (isAborted(signal)) throw new Error("Workflow was aborted");
 
         stageReports.push({
           ...(stage.name === undefined ? {} : { name: stage.name }),
