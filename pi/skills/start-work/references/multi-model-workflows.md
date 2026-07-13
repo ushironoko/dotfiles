@@ -75,6 +75,16 @@ The plan validator rejects violations — these are contracts, not advice:
   any other task and requires an explicit `agentType` naming an existing
   `~/.claude/agents/*.md` definition (the validator rejects single-mode tasks
   without one).
+- A task's `task` string may contain the reserved placeholder `{previous}`.
+  At run time the engine replaces every `{previous}` with a digest of ALL
+  already-completed stages, in declaration order, including failed tasks and
+  any created worktree absolute paths — so a later review stage can read the
+  paths a prior implement stage produced WITHOUT a second `workflow` call.
+  First-stage tasks expand it to `(no prior stages)`. The digest is fenced as
+  untrusted reference data (not instructions) and is size-capped, so with many
+  prior tasks the tail may be truncated. `{previous}` is a reserved token with
+  no literal escape. Tasks in the same stage never see each other's output —
+  only completed prior stages.
 - Child pi processes do NOT inherit the parent session's model. An agent
   whose frontmatter has no `model:` key runs on pi's GLOBAL default model —
   which may be a different provider entirely. Any agent whose family matters
@@ -196,11 +206,11 @@ verification).
       "tasks": [
         {
           "agentType": "codex-reviewer",
-          "task": "Review the PoC labeled builder=codex:direct from the implement stage. Take the worktree absolute path from that task's report, then run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir <that worktree> (Bash timeout 600000 ms). Report findings with severity and file:line; note builder=codex:direct."
+          "task": "The implement stage's PoC reports (with each builder's worktree absolute path) follow:\n{previous}\nReview the PoC labeled builder=codex:direct: find its worktree absolute path in the reports above, then run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir <that worktree> (Bash timeout 600000 ms). Report findings with severity and file:line; note builder=codex:direct."
         },
         {
           "agentType": "codex-reviewer",
-          "task": "Review the PoC labeled builder=codex:robust from the implement stage. Take the worktree absolute path from that task's report, then run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir <that worktree> (Bash timeout 600000 ms). Report findings with severity and file:line; note builder=codex:robust."
+          "task": "The implement stage's PoC reports (with each builder's worktree absolute path) follow:\n{previous}\nReview the PoC labeled builder=codex:robust: find its worktree absolute path in the reports above, then run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir <that worktree> (Bash timeout 600000 ms). Report findings with severity and file:line; note builder=codex:robust."
         }
       ]
     }
@@ -214,11 +224,11 @@ anything — each diff stays in its worktree for a human decision; list the
 worktree absolute paths in the verdict. Judging is the parent's role — do not
 delegate it to a plan stage.
 
-The PoC worktree paths are engine-assigned and only known from the implement
-stage reports. If the review tasks need concrete paths embedded rather than
-referenced through the prior stage's report, split into two `workflow` calls:
-run the implement stage alone, read the reported worktree paths, then issue
-the review plan with the paths filled in.
+The PoC worktree paths are engine-assigned and unknown when you write the plan,
+so the review tasks reference them through `{previous}` — the engine splices the
+implement stage's reports (including each worktree absolute path) into the
+review prompts at run time. This keeps the implement→review flow in a single
+`workflow` call.
 
 An optional Claude PoC is +α: append to the implement roster a Claude-family
 task with `"isolation": "worktree"` — the codex PoCs remain the mandatory

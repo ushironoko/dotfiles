@@ -1,6 +1,7 @@
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import type { HarnessConfig } from "../../config";
 import type { AgentDefinition } from "../../lib/agent-md";
+import { replacePrevious } from "../../lib/placeholder";
 import { loadAgents } from "./loader";
 import { MAX_CHAIN_DEPTH, MAX_PARALLEL_TASKS } from "./limits";
 import { SubagentParameters } from "./parameters.generated";
@@ -292,7 +293,7 @@ const setupSubagent = (
         for (const step of params.chain) {
           const result = await runTask({
             ...step,
-            task: step.task.replace(/\{previous\}/g, previous),
+            task: replacePrevious(step.task, previous),
           });
           assertSuccessful(result);
           results.push(result);

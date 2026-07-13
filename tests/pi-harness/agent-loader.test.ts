@@ -538,6 +538,42 @@ describe("pi-harness subagent", () => {
     );
   });
 
+  test("substitutes {previous} verbatim in a chain even when the prior output has $ sequences", async () => {
+    const home = await makeTempDirectory("pi-subagent-chain-dollar");
+    await writeAgent(home);
+    const taskArgs: string[] = [];
+    const spawnFn: SpawnFunction = (_command, args) => {
+      const taskArg = args[args.length - 1] ?? "";
+      taskArgs.push(taskArg);
+      const controller = createFakeProcess();
+      queueMicrotask(() => {
+        // A literal String.replace(pattern, output) would expand these.
+        controller.emitStdout(
+          assistantEvent(taskArg.includes("STEP1") ? "A$&B$$C$`D$'E" : "done"),
+        );
+        controller.close(0);
+      });
+      return controller.process;
+    };
+    const pi = createFakePi({ cwd: home });
+    setupSubagent(pi, makeConfig(home), { spawnFn });
+
+    await executeTool(
+      pi.tools[0],
+      {
+        chain: [
+          { agent: "worker", task: "STEP1" },
+          { agent: "worker", task: "consume {previous}" },
+        ],
+      },
+      pi.ctx,
+    );
+
+    const second = taskArgs.find((arg) => arg.includes("consume"));
+    expect(second).toContain("A$&B$$C$`D$'E");
+    expect(second).not.toContain("{previous}");
+  });
+
   test("treats a signaled child exit as failure and reports the signal", async () => {
     const home = await makeTempDirectory("pi-subagent-signaled");
     await writeAgent(home);
