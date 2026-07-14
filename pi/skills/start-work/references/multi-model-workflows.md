@@ -124,6 +124,14 @@ validator:
   Claude-family `model:` — only when a same-family lens adds value codex
   can't (e.g. a cross-model Claude review of a codex PoC). The codex baseline
   must remain in the roster.
+- Cross-model vs fresh-context: a review is _cross-model_ only when the
+  reviewer's family differs from the author's (Claude parent + codex reviewers,
+  or a Claude lens over a codex PoC). Same-family review (codex parent + codex
+  reviewers, or a Claude lens over Claude work) is _fresh-context_ — it catches
+  context/anchoring bias, not model-family blind spots. Since a `model:`-less
+  agent runs on pi's global default, do not assume cross-model coverage from the
+  roster alone; pin `model:` where family matters and label the coverage you
+  actually obtained in the synthesis.
 
 ## Template A: codex-default review fan-out
 

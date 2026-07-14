@@ -345,6 +345,17 @@ cross-model ground rules in code:
   baseline, never the roster by themselves. You (the parent agent) still
   orchestrate, synthesize, and judge.
 
+**Cross-model vs fresh-context.** A codex-default fan-out gives true
+_cross-model_ coverage only when the reviewer's model family differs from the
+author's — e.g. a Claude parent orchestrating codex reviewers, or a Claude +α
+lens over a codex PoC. When author and reviewer share a family (a codex parent
+with codex reviewers, or a Claude lens over Claude-authored work) the review is
+_fresh-context_: a new context window of the same family, which catches
+context/anchoring bias but NOT model-family blind spots. Child agents run on
+pi's global default model unless their frontmatter pins `model:`, so pin it on
+any agent whose family the coverage depends on, and say which kind of coverage a
+stage actually provided when you synthesize.
+
 Example plan (review fan-out + a judge stage):
 
 ```json
