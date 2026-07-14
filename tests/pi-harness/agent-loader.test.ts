@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { promises as fs, readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, promises as fs, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import setupSubagent from "../../pi/extensions/pi-harness/features/subagent/index";
@@ -228,6 +229,16 @@ const waitFor = async (condition: () => boolean): Promise<void> => {
     await Bun.sleep(1);
   }
   throw new Error("Timed out waiting for condition");
+};
+
+const isProcessAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // ESRCH = gone; EPERM = alive but not signalable by us (still alive).
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 };
 
 afterEach(async () => {
@@ -644,6 +655,62 @@ describe("pi-harness subagent", () => {
     expect(controllers[0]?.killSignals).toEqual(["SIGTERM", "SIGKILL"]);
     controllers[0]?.close(null, "SIGKILL");
     await expect(execution).rejects.toThrow("Subagent was aborted");
+  });
+
+  test("aborting a real subagent SIGKILLs the whole process group, reaping a SIGTERM-ignoring grandchild", async () => {
+    const home = await makeTempDirectory("pi-subagent-group-kill");
+    await writeAgent(home);
+    const pidFile = join(home, "grandchild.pid");
+    // A fake "pi": spawns a grandchild that ignores SIGTERM (and loops so
+    // killing its inner sleep does not end it), records its own pid, emits an
+    // assistant line, then lingers. Only a group SIGKILL can reap the
+    // grandchild.
+    const script = join(home, "fake-pi.sh");
+    await fs.writeFile(
+      script,
+      [
+        "#!/bin/bash",
+        `( trap '' TERM; echo $BASHPID > ${JSON.stringify(pidFile)}; while true; do sleep 1; done ) &`,
+        `printf '%s' ${JSON.stringify(assistantEvent("working"))}`,
+        "sleep 30",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    // Real detached process (mirrors defaultSpawn) so the group kill applies.
+    const spawnFn: SpawnFunction = (_command, _args, options) =>
+      spawn("bash", [script], options);
+
+    const pi = createFakePi({ cwd: home });
+    setupSubagent(pi, makeConfig(home), { spawnFn, termGraceMs: 50 });
+    const abortController = createTestAbortController();
+    const execution = executeTool(
+      pi.tools[0],
+      { agent: "worker", task: "spawn a stubborn grandchild" },
+      pi.ctx,
+      abortController.signal,
+    );
+
+    await waitFor(() => existsSync(pidFile));
+    const grandchildPid = Number((await fs.readFile(pidFile, "utf8")).trim());
+    try {
+      expect(grandchildPid).toBeGreaterThan(0);
+      expect(isProcessAlive(grandchildPid)).toBe(true);
+
+      abortController.abort();
+      await expect(execution).rejects.toThrow("Subagent was aborted");
+
+      await waitFor(() => !isProcessAlive(grandchildPid));
+      expect(isProcessAlive(grandchildPid)).toBe(false);
+    } finally {
+      if (isProcessAlive(grandchildPid)) {
+        try {
+          process.kill(grandchildPid, "SIGKILL");
+        } catch {
+          // best-effort cleanup
+        }
+      }
+    }
   });
 
   test("parallel failure stops the queue and aborts in-flight siblings", async () => {

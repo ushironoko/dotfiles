@@ -35,6 +35,7 @@ interface SpawnedProcess {
   on(event: "error", listener: (error: Error) => void): SpawnedProcess;
   kill(signal?: NodeJS.Signals): boolean;
   readonly killed: boolean;
+  readonly pid?: number;
 }
 
 interface SpawnLaunchOptions {
@@ -42,7 +43,28 @@ interface SpawnLaunchOptions {
   env: NodeJS.ProcessEnv;
   shell: false;
   stdio: ["ignore", "pipe", "pipe"];
+  // Own process group so aborting can SIGKILL the whole tree (a pi child may
+  // spawn grandchildren that ignore SIGTERM); kill(-pid) reaps them.
+  detached: true;
 }
+
+// Signal the child's whole process group when possible so grandchildren that
+// ignore SIGTERM (or outlive the leader) are still reaped; fall back to the
+// direct child when the pid is unavailable (e.g. a test double). ESRCH means
+// the group is already gone — treat as success.
+const killGroup = (child: SpawnedProcess, signal: NodeJS.Signals): boolean => {
+  const pid = child.pid;
+  if (typeof pid === "number" && pid > 0) {
+    try {
+      process.kill(-pid, signal);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+      return child.kill(signal);
+    }
+  }
+  return child.kill(signal);
+};
 
 type SpawnFunction = (
   command: string,
@@ -237,6 +259,7 @@ const spawnAgent = async (
       outcome = await new Promise<ProcessOutcome>((resolve, reject) => {
         let settled = false;
         let closed = false;
+        let sigkillSent = false;
         let termTimer: ReturnType<typeof setTimeout> | undefined;
 
         const clearTermTimer = () => {
@@ -258,6 +281,7 @@ const spawnAgent = async (
             env: { ...process.env, PI_HARNESS_CHILD: "1" },
             shell: false,
             stdio: ["ignore", "pipe", "pipe"],
+            detached: true,
           });
         } catch (error) {
           // Synchronous spawn failures flow into tool results; cap the
@@ -318,8 +342,9 @@ const spawnAgent = async (
         };
 
         const forceKill = () => {
-          if (closed || settled) return;
-          if (!child.kill("SIGKILL")) {
+          if (settled || sigkillSent) return;
+          sigkillSent = true;
+          if (!killGroup(child, "SIGKILL")) {
             stderrAccumulator.append(
               "Failed to terminate subagent with SIGKILL.",
             );
@@ -330,7 +355,7 @@ const spawnAgent = async (
         abortHandler = () => {
           if (aborted || settled) return;
           aborted = true;
-          if (!child.kill("SIGTERM")) {
+          if (!killGroup(child, "SIGTERM")) {
             forceKill();
             return;
           }
@@ -348,6 +373,13 @@ const spawnAgent = async (
           closed = true;
           if (!skippingOversizedLine && buffer.trim() !== "") {
             processLine(buffer);
+          }
+          // On abort the leader can exit while SIGTERM-ignoring grandchildren
+          // linger in its process group; SIGKILL the group to reap them,
+          // independent of the leader's close.
+          if (aborted && !sigkillSent) {
+            sigkillSent = true;
+            killGroup(child, "SIGKILL");
           }
           settle({ exitCode: code, signal: signal ?? undefined });
         });
