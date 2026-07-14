@@ -9,7 +9,8 @@
  * queue flushed serially; overflow drops records and the drop count is
  * logged instead of blocking the event loop.
  */
-import { appendFile, mkdir, readdir, rm } from "node:fs/promises";
+import { constants } from "node:fs";
+import { mkdir, open, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { HarnessConfig } from "../../config";
 import type { PiLike } from "../../lib/pi-like";
@@ -22,6 +23,17 @@ import {
 
 const MAX_QUEUE = 256;
 const RETENTION_DAYS = 14;
+
+// Optional open flags degrade to 0 on platforms that lack them.
+const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+const O_NONBLOCK = constants.O_NONBLOCK ?? 0;
+const O_DIRECTORY = constants.O_DIRECTORY ?? 0;
+const LOG_OPEN_FLAGS =
+  constants.O_CREAT |
+  constants.O_WRONLY |
+  constants.O_APPEND |
+  O_NOFOLLOW |
+  O_NONBLOCK;
 
 interface ProviderLogDeps {
   now?: () => Date;
@@ -58,28 +70,94 @@ export default function setupProviderLog(
     }
   };
 
+  // Enforce 0700 on the log dir even when it already exists (mkdir's mode only
+  // applies on creation), verifying via an fd we own that it is a real
+  // directory rather than a swapped-in symlink.
+  const ensureLogDir = async (): Promise<boolean> => {
+    try {
+      await mkdir(logDir, { recursive: true, mode: 0o700 });
+    } catch {
+      return false;
+    }
+    let handle;
+    try {
+      handle = await open(
+        logDir,
+        constants.O_RDONLY | O_DIRECTORY | O_NOFOLLOW,
+      );
+    } catch {
+      return false;
+    }
+    try {
+      const stats = await handle.stat();
+      if (!stats.isDirectory()) return false;
+      if ((stats.mode & 0o777) !== 0o700) await handle.chmod(0o700);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      await handle.close();
+    }
+  };
+
+  // Append through an fd we fstat-verify: O_NOFOLLOW rejects a symlinked final
+  // component, O_NONBLOCK avoids blocking forever on a pre-existing FIFO, and the
+  // fstat rejects anything that is not a regular file. Enforces exact 0600 even
+  // on a pre-existing file. (Full openat/dir-fd binding is unavailable in Node,
+  // so a parent-directory swap remains a documented residual for this
+  // default-off feature.)
+  const writeLogLines = async (data: string): Promise<boolean> => {
+    let handle;
+    try {
+      handle = await open(
+        join(logDir, logFileName(now())),
+        LOG_OPEN_FLAGS,
+        0o600,
+      );
+    } catch {
+      return false;
+    }
+    try {
+      const stats = await handle.stat();
+      if (!stats.isFile()) return false;
+      if ((stats.mode & 0o777) !== 0o600) await handle.chmod(0o600);
+      await handle.write(data);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      await handle.close();
+    }
+  };
+
   const flush = async (): Promise<void> => {
     if (queue.length === 0 && dropped === 0) return;
-    const lines = queue.splice(0);
-    if (dropped > 0) {
-      lines.push(
-        JSON.stringify({
-          ts: now().toISOString(),
-          kind: "drops",
-          count: dropped,
-        }),
-      );
-      dropped = 0;
+    const records = queue.splice(0);
+    const pendingDrops = dropped;
+    dropped = 0;
+    // Everything lost if this flush cannot write; re-counted as drops so a later
+    // flush reports them once the sink is writable again.
+    const lostOnFailure = pendingDrops + records.length;
+    const payload =
+      pendingDrops > 0
+        ? [
+            ...records,
+            JSON.stringify({
+              ts: now().toISOString(),
+              kind: "drops",
+              count: pendingDrops,
+            }),
+          ]
+        : records;
+
+    if (!(await ensureLogDir())) {
+      dropped += lostOnFailure;
+      return;
     }
-    await mkdir(logDir, { recursive: true, mode: 0o700 });
     await applyRetention();
-    await appendFile(
-      join(logDir, logFileName(now())),
-      `${lines.join("\n")}\n`,
-      {
-        mode: 0o600,
-      },
-    );
+    if (!(await writeLogLines(`${payload.join("\n")}\n`))) {
+      dropped += lostOnFailure;
+    }
   };
 
   const enqueue = (line: string): void => {

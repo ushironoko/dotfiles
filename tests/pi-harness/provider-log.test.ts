@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import setupProviderLog from "../../pi/extensions/pi-harness/features/provider-log/index";
 import {
@@ -170,5 +170,66 @@ describe("pi-harness provider-log feature", () => {
     await expect(fs.access(expired)).rejects.toThrow();
     // Throws if retention removed the file it should have kept.
     await fs.access(kept);
+  });
+
+  test("enforces 0700 on a pre-existing loose log directory", async () => {
+    const home = await makeTempDirectory("pi-provider-dirperm");
+    const config = makeConfig(home);
+    await fs.mkdir(config.paths.logDir, { recursive: true });
+    await fs.chmod(config.paths.logDir, 0o755);
+
+    const pi = createFakePi({ cwd: home });
+    setupProviderLog(pi, config, { now: () => NOW });
+    await pi.emitBeforeProviderRequest({ type: "before_provider_request" });
+    await pi.emitSessionShutdown();
+
+    expect((await fs.stat(config.paths.logDir)).mode & 0o777).toBe(0o700);
+  });
+
+  test("enforces 0600 on a pre-existing loose log file", async () => {
+    const home = await makeTempDirectory("pi-provider-fileperm");
+    const config = makeConfig(home);
+    const logFile = join(config.paths.logDir, "provider-2026-07-11.jsonl");
+    await fs.mkdir(config.paths.logDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(logFile, "");
+    await fs.chmod(logFile, 0o644);
+
+    const pi = createFakePi({ cwd: home });
+    setupProviderLog(pi, config, { now: () => NOW });
+    await pi.emitBeforeProviderRequest({ type: "before_provider_request" });
+    await pi.emitSessionShutdown();
+
+    expect((await fs.stat(logFile)).mode & 0o777).toBe(0o600);
+  });
+
+  test("refuses to follow a symlinked log file and never touches its target", async () => {
+    const home = await makeTempDirectory("pi-provider-symlink");
+    const config = makeConfig(home);
+    const logFile = join(config.paths.logDir, "provider-2026-07-11.jsonl");
+    const victim = join(home, "victim.txt");
+    await fs.mkdir(config.paths.logDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(victim, "original");
+    await fs.symlink(victim, logFile);
+
+    const pi = createFakePi({ cwd: home });
+    setupProviderLog(pi, config, { now: () => NOW });
+    await pi.emitBeforeProviderRequest({ type: "before_provider_request" });
+    await pi.emitSessionShutdown(); // must not throw
+
+    expect(await fs.readFile(victim, "utf8")).toBe("original");
+  });
+
+  test("session_shutdown resolves even when the log dir cannot be created", async () => {
+    const home = await makeTempDirectory("pi-provider-unwritable");
+    const config = makeConfig(home);
+    // A regular file sits where the log dir should be → mkdir fails → the flush
+    // drops the records instead of throwing.
+    await fs.mkdir(dirname(config.paths.logDir), { recursive: true });
+    await fs.writeFile(config.paths.logDir, "not a dir");
+
+    const pi = createFakePi({ cwd: home });
+    setupProviderLog(pi, config, { now: () => NOW });
+    await pi.emitBeforeProviderRequest({ type: "before_provider_request" });
+    await expect(pi.emitSessionShutdown()).resolves.toBeUndefined();
   });
 });
