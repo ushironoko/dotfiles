@@ -287,11 +287,12 @@ describe("evaluateCommand compound-command scanning", () => {
     expect(verdictOf(command)).toBe("deny");
   });
 
-  // Opaque executors cannot be inspected statically → ask.
+  // Opaque executors that cannot be statically inspected → ask.
   test.each([
-    'eval "bit issue claim"',
-    'sh -c "bit issue claim"',
-    'bash -c "rm -rf /"',
+    'eval "bit issue claim"', // eval body is re-parsed dynamically; not recursed
+    'bash -c "rm -rf /"', // interpreter -c body recurses to a destructive ask
+    'sh -c "$CMD"', // interpreter -c body is opaque → nothing to inspect
+    'sh -c "echo hi"', // interpreter -c body is benign → stays opaque-executor ask
     "echo x | xargs rm",
   ])("asks for opaque executors: %s", (command) => {
     expect(verdictOf(command)).toBe("ask");
@@ -527,6 +528,95 @@ describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", ()
     expect(evaluateCommand("git reset --hard HEAD~1", rules).verdict).toBe(
       "allow",
     );
+  });
+});
+
+describe("evaluateCommand normalization bypasses (#7:1)", () => {
+  const floor = loadRules(undefined);
+  const verdictOf = (command: string) =>
+    evaluateCommand(command, floor).verdict;
+
+  // Absolute/relative-path spellings of a floor command are basename-normalized
+  // so an abs-path executor cannot dodge the deny floor.
+  test.each([
+    ["/usr/bin/bit relay serve", "bit relay は禁止です"],
+    ["/bin/bit issue claim 1", "bit issue claim は禁止です"],
+    ["~/bin/bit relay sync", "bit relay は禁止です"],
+    ["sudo /usr/bin/bit relay serve", "bit relay は禁止です"],
+    ["/usr/bin/sudo bit relay serve", "bit relay は禁止です"],
+  ])("denies path-spelled floor command: %s", (command, reason) => {
+    expect(evaluateCommand(command, floor)).toEqual({
+      verdict: "deny",
+      reason,
+    });
+  });
+
+  // A shell interpreter's concrete `-c` body is evaluated: a denied body is
+  // denied, not downgraded to an opaque-executor ask.
+  test.each([
+    ["sh -c 'bit relay sync'", "bit relay は禁止です"],
+    ["/bin/sh -c 'bit relay sync'", "bit relay は禁止です"],
+    ['bash -c "bit issue claim 1"', "bit issue claim は禁止です"],
+    ["env /bin/zsh -c 'bit issue unclaim 9'", "bit issue unclaim は禁止です"],
+  ])("denies interpreter -c with a denied body: %s", (command, reason) => {
+    expect(evaluateCommand(command, floor)).toEqual({
+      verdict: "deny",
+      reason,
+    });
+  });
+
+  // bit global option / repo / hub spellings fold to the real subcommand.
+  test.each([
+    ["bit -C /repo relay sync", "bit relay は禁止です"],
+    ["bit -C . issue claim 1", "bit issue claim は禁止です"],
+    ["bit repo relay serve", "bit relay は禁止です"],
+    ["bit repo issue claim 2", "bit issue claim は禁止です"],
+    ["bit hub issue claim 1", "bit issue claim は禁止です"],
+    ["bit hub pr import 5", "bit pr import は禁止です"],
+    ["bit hub sync", "bit relay は禁止です"],
+    ["bit hub serve", "bit relay は禁止です"],
+    ["bit -C /repo repo relay sync", "bit relay は禁止です"],
+  ])("denies bit alias/option spelling: %s", (command, reason) => {
+    expect(evaluateCommand(command, floor)).toEqual({
+      verdict: "deny",
+      reason,
+    });
+  });
+
+  // clone relay+ is denied even when options precede the operand.
+  test.each([
+    "bit clone relay+ssh://x",
+    "bit clone --depth 1 relay+ssh://x",
+    "bit clone -- relay+ssh://x",
+    "bit repo clone relay+ssh://x",
+    "bit -C /repo clone --bare relay+ssh://x",
+  ])("denies clone relay+ regardless of option position: %s", (command) => {
+    expect(evaluateCommand(command, floor)).toEqual({
+      verdict: "deny",
+      reason: "bit clone relay+ は禁止です",
+    });
+  });
+
+  // Abs-path bit with a dynamic subcommand still escalates to ask.
+  test.each(['/usr/bin/bit issue "$op"', 'bit -C /repo issue "$op"'])(
+    "escalates path/aliased bit with dynamic subcommand to ask: %s",
+    (command) => {
+      expect(verdictOf(command)).toBe("ask");
+    },
+  );
+
+  // Normalization must NOT over-block benign path/alias spellings: a known head
+  // with a benign grammar stays default-continue, matching its bare form.
+  test.each([
+    "/usr/bin/git status",
+    "/usr/bin/bit issue list --open",
+    "bit -C /repo issue list --open",
+    "bit repo status",
+    "bit clone https://example.test/x",
+    "bit clone --depth 1 https://example.test/x",
+    "/bin/ls -la",
+  ])("keeps benign path/alias spelling default-continue: %s", (command) => {
+    expect(verdictOf(command)).toBe("default-continue");
   });
 });
 

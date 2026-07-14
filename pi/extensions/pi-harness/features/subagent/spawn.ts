@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentDefinition } from "../../lib/agent-md";
+import { sanitizeChildEnv } from "../../lib/child-env";
 
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 // Parser-protection ceiling: lines beyond this are dropped unparsed. Kept
@@ -278,7 +279,11 @@ const spawnAgent = async (
         try {
           child = spawnFn("pi", args, {
             cwd: options.cwd,
-            env: { ...process.env, PI_HARNESS_CHILD: "1" },
+            env: sanitizeChildEnv(
+              process.env,
+              { PI_HARNESS_CHILD: "1" },
+              { cwd: options.cwd },
+            ),
             shell: false,
             stdio: ["ignore", "pipe", "pipe"],
             detached: true,

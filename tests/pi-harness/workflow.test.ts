@@ -900,3 +900,59 @@ describe("pi-harness workflow {previous} injection", () => {
     expect(review(records).taskArg).toContain("## Stage 1");
   });
 });
+
+describe("pi-harness workflow cwd boundary (#7:3)", () => {
+  const cwdPlan = (cwd: string): Record<string, unknown> => ({
+    stages: [
+      {
+        mode: "single",
+        tasks: [{ agentType: "codex-reviewer", task: "t", cwd }],
+      },
+    ],
+  });
+
+  test("rejects a task cwd that fails the boundary check before any spawn", async () => {
+    const home = await makeTempDirectory("pi-workflow-cwd-reject");
+    await writeAgents(home, ["codex-reviewer"]);
+    const { records, spawnFn } = makeSpawnFn(() => ({ text: "x" }));
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      validateCwd: async () => ({
+        ok: false,
+        reason: "outside the workflow root",
+      }),
+    });
+
+    await expect(
+      executeTool(
+        findWorkflowTool(pi.tools),
+        cwdPlan(join(home, "sub")),
+        pi.ctx,
+      ),
+    ).rejects.toThrow("cwd rejected");
+    expect(records).toHaveLength(0);
+  });
+
+  test("runs a task whose cwd passes the boundary check", async () => {
+    const home = await makeTempDirectory("pi-workflow-cwd-accept");
+    await writeAgents(home, ["codex-reviewer"]);
+    const sub = join(home, "packages", "a");
+    await fs.mkdir(sub, { recursive: true });
+    const { records, spawnFn } = makeSpawnFn(() => ({ text: "ok" }));
+    const pi = createFakePi({ cwd: home });
+    const seen: [string, string][] = [];
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      validateCwd: async (candidate, root) => {
+        seen.push([candidate, root]);
+        return { ok: true };
+      },
+    });
+
+    await executeTool(findWorkflowTool(pi.tools), cwdPlan(sub), pi.ctx);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.options.cwd).toBe(sub);
+    expect(seen).toEqual([[sub, home]]);
+  });
+});

@@ -1,9 +1,10 @@
 import {
+  interpreterConcreteArg,
   isOpaqueExecutor,
   normalizeSegment,
+  type NormalizedSegment,
   scanCommand,
   speculativeFloor,
-  type Segment,
 } from "./scan";
 
 interface DenyRule {
@@ -302,17 +303,37 @@ const OPAQUE_EXECUTOR_REASON =
 const POTENTIALLY_SENSITIVE_REASON =
   "動的展開・未対応構文により、禁止/破壊的コマンドにならないと静的に判定できないため確認が必要です";
 
+// Structural deny for a bit invocation that a `^`-anchored regex cannot express
+// robustly: `bit clone` with a `relay+…` operand in ANY position (options may
+// precede it, so `bit clone --depth 1 relay+x` must not slip past). The head and
+// wrappers are already normalized by normalizeSegment.
+const structuralBitDeny = (seg: NormalizedSegment): string | undefined => {
+  const words = seg.words;
+  if (words[0] !== "bit" || words[1] !== "clone") return undefined;
+  for (let i = 2; i < words.length; i += 1) {
+    if (!seg.opaque.has(i) && words[i].startsWith("relay+")) {
+      return "bit clone relay+ は禁止です";
+    }
+  }
+  return undefined;
+};
+
 // One simple command. Precedence: concrete DENY > built-in DENY-potential
 // (unsuppressable by user allow — the data-leak floor) > user ALLOW > concrete
 // ASK > built-in ASK-potential > opaque executor > default-continue.
-const evaluateSegment = (segment: Segment, rules: LoadedRules): Verdict => {
-  const normalized = normalizeSegment(segment);
+const evaluateNormalized = (
+  normalized: NormalizedSegment,
+  rules: LoadedRules,
+): Verdict => {
   if (normalized.words.length === 0) return { verdict: "default-continue" };
   const command = normalized.words.join(" ");
   const potential = speculativeFloor(normalized);
 
   const denied = rules.deny.find((rule) => rule.pattern.test(command));
   if (denied !== undefined) return { verdict: "deny", reason: denied.reason };
+
+  const structural = structuralBitDeny(normalized);
+  if (structural !== undefined) return { verdict: "deny", reason: structural };
 
   if (potential === "deny") {
     return { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON };
@@ -376,7 +397,14 @@ const evaluateCommandInner = (
   if (!scanned.ok) return { verdict: "deny", reason: UNPARSEABLE_REASON };
   const verdicts: Verdict[] = [];
   for (const segment of scanned.segments) {
-    verdicts.push(evaluateSegment(segment, rules));
+    const normalized = normalizeSegment(segment);
+    verdicts.push(evaluateNormalized(normalized, rules));
+    // `sh -c '<script>'` runs exactly <script>; evaluate it so a denied body
+    // (e.g. `bit relay sync`) is denied instead of downgraded to an opaque ask.
+    const inner = interpreterConcreteArg(normalized);
+    if (inner !== undefined) {
+      verdicts.push(evaluateCommandInner(inner, rules, depth + 1));
+    }
   }
   for (const sub of scanned.subs) {
     verdicts.push(evaluateCommandInner(sub, rules, depth + 1));

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { lstat, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import type { HarnessConfig } from "../../config";
+import { sanitizeChildEnv } from "../../lib/child-env";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import { runHook as defaultRunHook } from "../../lib/run-hook";
 import {
@@ -94,7 +95,7 @@ const runCommand: RunCommand = (command, args, options) =>
   new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: { ...process.env, ...options.env },
+      env: sanitizeChildEnv(process.env, options.env, { cwd: options.cwd }),
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
     });

@@ -82,6 +82,12 @@ describe("scopesOverlap", () => {
     ["src/**", "./src/**", true],
     ["src//x/**", "src/x/**", true],
     ["./packages/a/**", "packages/a/sub/**", true],
+    // Case-folded: on a case-insensitive volume these are the same directory,
+    // so they must be treated as overlapping (conservative over-detection).
+    ["src/A/**", "src/a/**", true],
+    ["packages/A/**", "packages/a/sub/**", true],
+    // Case folding must not make genuinely-distinct siblings collide.
+    ["packages/a/**", "packages/B/**", false],
   ])("scopesOverlap(%j, %j) === %j", (a, b, expected) => {
     expect(scopesOverlap(a, b)).toBe(expected);
   });

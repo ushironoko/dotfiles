@@ -5,6 +5,7 @@
  * must never surface as an error in the conversation.
  */
 import { spawn } from "node:child_process";
+import { sanitizeChildEnv } from "./child-env";
 
 export interface DetachedSpawnOptions {
   cwd?: string;
@@ -26,7 +27,7 @@ export const launchDetached: DetachedSpawnFunction = (
   try {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: options.env,
+      env: sanitizeChildEnv(process.env, options.env, { cwd: options.cwd }),
       detached: true,
       stdio: [
         options.stdin === undefined ? "ignore" : "pipe",

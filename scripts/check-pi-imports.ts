@@ -14,7 +14,7 @@
  * transpiler and never reach the checks.)
  */
 import { Glob } from "bun";
-import { readFile } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 
 export const EXTENSION_ROOT = resolve(
@@ -86,9 +86,12 @@ const skipBraces = (source: string, start: number): number => {
 const isIdentChar = (c: string | undefined): boolean =>
   c !== undefined && /[A-Za-z0-9_$]/.test(c);
 
-// import()/require()/require.resolve() whose argument is NOT a string literal.
-// Bun.Transpiler omits these (it only reports literal specifiers), and a
-// non-literal specifier cannot be verified, so it fails closed.
+// Runtime import escape hatches the Transpiler cannot verify statically:
+//  - import()/require()/require.resolve() with a NON-literal argument (the
+//    specifier is unknowable → fail closed), and
+//  - any use of `createRequire` (it manufactures a require() the Transpiler's
+//    import scan never sees, so a repo-external module could be loaded through
+//    it — its mere presence is a violation).
 const findNonLiteralDynamicCalls = (source: string): string[] => {
   const found: string[] = [];
   const n = source.length;
@@ -113,34 +116,43 @@ const findNonLiteralDynamicCalls = (source: string): string[] => {
       i = skipTemplate(source, i);
       continue;
     }
-    const match = /^(import|require)/.exec(source.slice(i));
-    if (
-      match &&
-      !isIdentChar(source[i - 1]) &&
-      source[i - 1] !== "." &&
-      !isIdentChar(source[i + match[0].length])
-    ) {
+    const match = /^(import|require|createRequire)/.exec(source.slice(i));
+    if (match) {
       const keyword = match[1];
-      let j = i + keyword.length;
-      let kind = keyword === "import" ? "dynamic import()" : "require()";
-      if (keyword === "require") {
-        const resolveMatch = /^\s*\.\s*resolve\b/.exec(source.slice(j));
-        if (resolveMatch) {
-          j += resolveMatch[0].length;
-          kind = "require.resolve()";
+      // `foo.import`/`foo.require` are property accesses, not the keyword — but
+      // `Module.createRequire` IS the escape hatch, so it skips the dot guard.
+      const dotOk = keyword === "createRequire" || source[i - 1] !== ".";
+      if (
+        !isIdentChar(source[i - 1]) &&
+        dotOk &&
+        !isIdentChar(source[i + keyword.length])
+      ) {
+        if (keyword === "createRequire") {
+          found.push("createRequire()");
+          i += keyword.length;
+          continue;
         }
-      }
-      while (j < n && /\s/.test(source[j])) j += 1;
-      if (source[j] === "(") {
-        let k = j + 1;
-        while (k < n && /\s/.test(source[k])) k += 1;
-        const argChar = source[k];
-        if (argChar !== '"' && argChar !== "'" && argChar !== "`") {
-          found.push(kind);
+        let j = i + keyword.length;
+        let kind = keyword === "import" ? "dynamic import()" : "require()";
+        if (keyword === "require") {
+          const resolveMatch = /^\s*\.\s*resolve\b/.exec(source.slice(j));
+          if (resolveMatch) {
+            j += resolveMatch[0].length;
+            kind = "require.resolve()";
+          }
         }
+        while (j < n && /\s/.test(source[j])) j += 1;
+        if (source[j] === "(") {
+          let k = j + 1;
+          while (k < n && /\s/.test(source[k])) k += 1;
+          const argChar = source[k];
+          if (argChar !== '"' && argChar !== "'" && argChar !== "`") {
+            found.push(kind);
+          }
+        }
+        i += keyword.length;
+        continue;
       }
-      i += keyword.length;
-      continue;
     }
     i += 1;
   }
@@ -151,6 +163,7 @@ export const collectViolations = (
   relFile: string,
   absFile: string,
   source: string,
+  root: string = EXTENSION_ROOT,
 ): string[] => {
   const violations: string[] = [];
 
@@ -189,7 +202,7 @@ export const collectViolations = (
     }
     if (specifier.startsWith(".")) {
       const target = resolve(dirname(absFile), specifier);
-      if (relative(EXTENSION_ROOT, target).startsWith("..")) {
+      if (relative(root, target).startsWith("..")) {
         violations.push(
           `${relFile}: relative import escapes the extension root (${specifier})`,
         );
@@ -201,21 +214,66 @@ export const collectViolations = (
 
   for (const kind of findNonLiteralDynamicCalls(source)) {
     violations.push(
-      `${relFile}: non-literal ${kind} cannot be verified for self-containment`,
+      kind === "createRequire()"
+        ? `${relFile}: createRequire() bypasses the static import gate (self-containment)`
+        : `${relFile}: non-literal ${kind} cannot be verified for self-containment`,
     );
   }
 
   return violations;
 };
 
-if (import.meta.main) {
+/**
+ * Enumerate every leaf under `root` — including dotfiles, symlinks, and broken
+ * symlinks, which the default glob silently skips — and collect violations:
+ *  - a symlink whose target escapes the root pulls in external code (violation);
+ *    a broken symlink cannot be verified (fail closed);
+ *  - every regular `.ts` file is analyzed for disallowed imports.
+ */
+export const scanExtension = async (root: string): Promise<string[]> => {
   const violations: string[] = [];
-  const glob = new Glob("**/*.ts");
-  for await (const file of glob.scan(EXTENSION_ROOT)) {
-    const absFile = join(EXTENSION_ROOT, file);
-    const source = await readFile(absFile, "utf8");
-    violations.push(...collectViolations(file, absFile, source));
+  const glob = new Glob("**/*");
+  for await (const entry of glob.scan({
+    cwd: root,
+    dot: true,
+    onlyFiles: false,
+    followSymlinks: false,
+  })) {
+    const absEntry = join(root, entry);
+    let info;
+    try {
+      info = await lstat(absEntry);
+    } catch (error) {
+      violations.push(`${entry}: could not lstat (${String(error)})`);
+      continue;
+    }
+    if (info.isSymbolicLink()) {
+      let target: string;
+      try {
+        target = await realpath(absEntry);
+      } catch {
+        violations.push(
+          `${entry}: broken symlink (self-containment cannot be verified)`,
+        );
+        continue;
+      }
+      if (relative(root, target).startsWith("..")) {
+        violations.push(
+          `${entry}: symlink escapes the extension root (${target})`,
+        );
+      }
+      // Do not fall through to analyze the target as a normal file.
+      continue;
+    }
+    if (!info.isFile() || !entry.endsWith(".ts")) continue;
+    const source = await readFile(absEntry, "utf8");
+    violations.push(...collectViolations(entry, absEntry, source, root));
   }
+  return violations;
+};
+
+if (import.meta.main) {
+  const violations = await scanExtension(EXTENSION_ROOT);
 
   if (violations.length > 0) {
     console.error("check-pi-imports: self-containment violations:");

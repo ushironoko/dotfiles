@@ -8,6 +8,7 @@
  * - detached fire-and-forget mode discards output and never blocks the caller
  */
 import { spawn } from "node:child_process";
+import { sanitizeChildEnv } from "./child-env";
 import type { RawHookResult } from "./claude-hook-io";
 
 export interface RunHookOptions {
@@ -42,7 +43,7 @@ export function runHook(
   return new Promise((resolve) => {
     const child = spawn("bash", [scriptPath], {
       cwd: options.cwd,
-      env: { ...process.env, ...options.env },
+      env: sanitizeChildEnv(process.env, options.env, { cwd: options.cwd }),
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });
@@ -105,7 +106,7 @@ export function fireDetachedHook(
 ): void {
   const child = spawn("bash", [scriptPath], {
     cwd: options.cwd,
-    env: { ...process.env, ...options.env },
+    env: sanitizeChildEnv(process.env, options.env, { cwd: options.cwd }),
     stdio: ["pipe", "ignore", "ignore"],
     detached: true,
   });

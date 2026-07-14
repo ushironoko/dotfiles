@@ -18,6 +18,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { HarnessConfig } from "../../config";
+import { sanitizeChildEnv } from "../../lib/child-env";
 import { launchDetached, type DetachedSpawnFunction } from "../../lib/detached";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import { matchedTrustedRoot } from "../../lib/trust";
@@ -82,7 +83,7 @@ const defaultGetBranch = (cwd: string): Promise<string | undefined> =>
     execFile(
       "git",
       ["branch", "--show-current"],
-      { cwd, timeout: 2_000 },
+      { cwd, timeout: 2_000, env: sanitizeChildEnv(process.env, {}, { cwd }) },
       (error, stdout) => {
         if (error !== null || typeof stdout !== "string") {
           resolve(undefined);

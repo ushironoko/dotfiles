@@ -75,8 +75,12 @@ const hasDotDotSegment = (entry: string): boolean =>
   entry.split("/").includes("..");
 
 export const scopesOverlap = (a: string, b: string): boolean => {
-  const rootA = scopeRoot(a);
-  const rootB = scopeRoot(b);
+  // Compare case-folded: on a case-insensitive volume `src/A` and `src/a` are
+  // the same directory, so parallel runners scoped to them WOULD collide. Folding
+  // over-detects on a case-sensitive volume, but over-rejection is the safe
+  // direction for a write-disjointness guard (a corrupt tree is worse).
+  const rootA = scopeRoot(a).toLowerCase();
+  const rootB = scopeRoot(b).toLowerCase();
   if (rootA === "" || rootB === "") return true;
   return (
     rootA === rootB ||

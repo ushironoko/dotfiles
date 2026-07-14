@@ -792,16 +792,115 @@ export interface NormalizedSegment {
   readonly headOpaque: boolean;
 }
 
+// A head written as a path (`/usr/bin/bit`, `~/bin/sh`, `./x`) runs the same
+// program as its basename; normalizing to the basename closes the "reach a
+// floor command by its absolute path" bypass without enumerating install dirs.
+const isPathHead = (word: string): boolean =>
+  word.includes("/") || word.startsWith("~");
+const basenameOf = (word: string): string => {
+  const idx = word.lastIndexOf("/");
+  return idx === -1 ? word : word.slice(idx + 1);
+};
+
+// bit global options that carry a value / are inert, and its command wrappers.
+// Stripping these before the deny floor stops `bit -C x relay`, `bit repo
+// relay`, and `bit hub issue claim` from dodging rules anchored on the real
+// subcommand. `hub sync|serve` is the relay alias, so it folds to `relay`.
+const BIT_GLOBAL_WITH_ARG: ReadonlySet<string> = new Set(["-C"]);
+const BIT_GLOBAL_FLAG: ReadonlySet<string> = new Set([
+  "-v",
+  "--version",
+  "-h",
+  "--help",
+]);
+
+type KeptWord = { readonly from: number } | { readonly literal: string };
+
+const normalizeBitWords = (
+  words: readonly string[],
+  opaque: ReadonlySet<number>,
+  opaqueUnquoted: ReadonlySet<number>,
+): { words: string[]; opaque: Set<number>; opaqueUnquoted: Set<number> } => {
+  const kept: KeptWord[] = [{ from: 0 }]; // "bit"
+  const n = words.length;
+  let i = 1;
+
+  const stripGlobals = (): void => {
+    while (i < n && !opaque.has(i)) {
+      const w = words[i];
+      if (BIT_GLOBAL_WITH_ARG.has(w)) {
+        i += 2; // drop the option and its value operand
+        continue;
+      }
+      if (BIT_GLOBAL_FLAG.has(w)) {
+        i += 1;
+        continue;
+      }
+      break;
+    }
+  };
+
+  stripGlobals();
+  let guard = 0;
+  while (i < n && !opaque.has(i) && guard < 16) {
+    guard += 1;
+    const w = words[i];
+    if (w === "repo") {
+      // `bit repo <cmd>` re-dispatches <cmd> as a regular bit command.
+      i += 1;
+      stripGlobals();
+      continue;
+    }
+    if (w === "hub") {
+      const next = words[i + 1];
+      if ((next === "sync" || next === "serve") && !opaque.has(i + 1)) {
+        // `bit hub sync|serve` ≡ `bit relay sync|serve`.
+        kept.push({ literal: "relay" });
+        i += 1; // consume "hub"; sync|serve stays as the following operand
+        break;
+      }
+      i += 1; // drop the deprecated `hub` alias
+      stripGlobals();
+      continue;
+    }
+    break;
+  }
+  for (let j = i; j < n; j += 1) kept.push({ from: j });
+
+  const outWords: string[] = [];
+  const outOpaque = new Set<number>();
+  const outOpaqueUnquoted = new Set<number>();
+  kept.forEach((k, idx) => {
+    if ("literal" in k) {
+      outWords.push(k.literal);
+      return;
+    }
+    outWords.push(words[k.from]);
+    if (opaque.has(k.from)) outOpaque.add(idx);
+    if (opaqueUnquoted.has(k.from)) outOpaqueUnquoted.add(idx);
+  });
+  return {
+    words: outWords,
+    opaque: outOpaque,
+    opaqueUnquoted: outOpaqueUnquoted,
+  };
+};
+
 // Strip leading assignments / wrappers / reserved words so the floor sees the
 // real command head; report `headOpaque` when the head is statically unknown
 // (an opaque head, or a dangling `-option` left by a wrapper we cannot fully
-// parse → fail-closed).
+// parse → fail-closed). The concrete head and bit-wrapper words are normalized
+// (basename + bit global/alias folding) so path spellings and equivalent bit
+// invocations map to the same floor as their canonical form.
 export const normalizeSegment = (segment: Segment): NormalizedSegment => {
   let start = 0;
   while (start < segment.words.length) {
-    const head = segment.words[start];
+    const raw = segment.words[start];
     if (segment.opaque.has(start)) break; // opaque head — stop, handle below
-    if (head === "{" || ASSIGNMENT_PREFIX.test(head) || STRIP_WORDS.has(head)) {
+    // Compare STRIP_WORDS against the basename so `/usr/bin/sudo bit relay`
+    // still has its wrapper stripped.
+    const base = isPathHead(raw) ? basenameOf(raw) : raw;
+    if (raw === "{" || ASSIGNMENT_PREFIX.test(raw) || STRIP_WORDS.has(base)) {
       start += 1;
       continue;
     }
@@ -809,14 +908,31 @@ export const normalizeSegment = (segment: Segment): NormalizedSegment => {
   }
 
   const shift = start;
-  const words = segment.words.slice(shift);
   const remap = (set: ReadonlySet<number>): Set<number> => {
     const out = new Set<number>();
     for (const idx of set) if (idx >= shift) out.add(idx - shift);
     return out;
   };
-  const opaque = remap(segment.opaque);
-  const opaqueUnquoted = remap(segment.opaqueUnquoted);
+  let words: readonly string[] = segment.words.slice(shift);
+  let opaque: ReadonlySet<number> = remap(segment.opaque);
+  let opaqueUnquoted: ReadonlySet<number> = remap(segment.opaqueUnquoted);
+
+  // Basename-normalize a concrete path-form head (opaque heads are left for
+  // speculativeFloor). Length is unchanged, so opaque indices stay valid.
+  const rawHead = words[0];
+  if (rawHead !== undefined && !opaque.has(0) && isPathHead(rawHead)) {
+    words = [basenameOf(rawHead), ...words.slice(1)];
+  }
+
+  // Fold bit global options / repo / hub so the deny floor sees the real
+  // subcommand (this rewrites indices, so remap the opaque sets too).
+  if (words[0] === "bit") {
+    const folded = normalizeBitWords(words, opaque, opaqueUnquoted);
+    words = folded.words;
+    opaque = folded.opaque;
+    opaqueUnquoted = folded.opaqueUnquoted;
+  }
+
   const head = words[0];
   const headOpaque =
     words.length > 0 &&
@@ -964,4 +1080,26 @@ export const isOpaqueExecutor = (words: readonly string[]): boolean => {
     return words.slice(1).some((w) => w === "-c");
   }
   return false;
+};
+
+// For a shell interpreter (`sh`/`bash`/… — head already basename-normalized)
+// invoked as `-c <script>`, return the concrete script string so the caller can
+// evaluate it recursively (so `sh -c 'bit relay sync'` is denied, not merely
+// asked). Returns undefined when the head is not an interpreter, there is no
+// `-c`, or its argument is opaque/absent (nothing to inspect statically).
+export const interpreterConcreteArg = (
+  seg: NormalizedSegment,
+): string | undefined => {
+  const head = seg.words[0];
+  if (head === undefined || !SHELL_INTERPRETERS.has(head)) return undefined;
+  for (let i = 1; i < seg.words.length; i += 1) {
+    if (seg.opaque.has(i)) continue;
+    const w = seg.words[i];
+    if (isShortFlag(w) && w.slice(1).includes("c")) {
+      const arg = seg.words[i + 1];
+      if (arg !== undefined && !seg.opaque.has(i + 1)) return arg;
+      return undefined;
+    }
+  }
+  return undefined;
 };

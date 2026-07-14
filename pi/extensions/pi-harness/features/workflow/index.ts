@@ -15,6 +15,10 @@ import { randomUUID } from "node:crypto";
 import type { HarnessConfig } from "../../config";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import {
+  type CwdBoundaryResult,
+  validateCwdWithinRepo,
+} from "../../lib/repo-boundary";
+import {
   createValidatedWorktree,
   makeWorktreeCreator,
 } from "../bit-task/index";
@@ -40,6 +44,10 @@ interface SetupWorkflowOptions {
   spawnFn?: SpawnFunction;
   termGraceMs?: number;
   createWorktree?: (cwd: string, name: string) => Promise<string>;
+  validateCwd?: (
+    candidateCwd: string,
+    rootCwd: string,
+  ) => Promise<CwdBoundaryResult>;
 }
 
 interface SpawnFailure {
@@ -225,6 +233,25 @@ const setupWorkflow = (
       }
 
       const defaultCwd = ctx.cwd ?? process.cwd();
+
+      // Pre-flight every explicit task cwd before any side effect: an unvalidated
+      // cwd is passed straight to the spawned child, so verify it resolves inside
+      // the workflow root's own repository (realpath containment + same git
+      // identity; a nested distinct repo is rejected). Tasks with no cwd inherit
+      // defaultCwd; isolation:"worktree" tasks have no cwd (plan.ts enforces it).
+      const validateCwd = options.validateCwd ?? validateCwdWithinRepo;
+      for (const stage of validation.stages) {
+        for (const task of stage.tasks) {
+          if (task.cwd === undefined) continue;
+          const boundary = await validateCwd(task.cwd, defaultCwd);
+          if (!boundary.ok) {
+            throw new Error(
+              capText(`workflow cwd rejected: ${boundary.reason ?? task.cwd}`),
+            );
+          }
+        }
+      }
+
       const createWorktree =
         options.createWorktree ??
         ((cwd: string, name: string) =>
