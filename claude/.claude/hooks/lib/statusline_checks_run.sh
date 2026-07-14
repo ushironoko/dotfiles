@@ -1,6 +1,9 @@
 #!/bin/bash
 # Background runner for statusline lint/typecheck/test checks.
-# Argument: project cwd (any path within or at the project root).
+# Arguments:
+#   $1 project cwd (any path within or at the project root)
+#   $2 (optional) canonical trusted-root boundary — the discovered project root
+#      must stay within it, else the run is refused (fail-closed).
 # Behaviour: detect project, acquire lockdir, execute TTL-expired checks
 # sequentially, write JSON cache atomically. All stdout/stderr from checks
 # is discarded so that callers running this under `async: true` hooks
@@ -9,6 +12,7 @@
 set -u
 
 PROJECT_ROOT_ARG=${1:-}
+TRUST_BOUNDARY=${2:-}
 [ -z "$PROJECT_ROOT_ARG" ] && exit 0
 
 LIB_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -17,6 +21,19 @@ source "$LIB_DIR/statusline_checks_lib.sh"
 
 PROJECT_ROOT=$(find_project_root "$PROJECT_ROOT_ARG")
 [ -z "$PROJECT_ROOT" ] && exit 0
+
+# Trust boundary: this runner executes repository-defined commands, so a project
+# root discovered by walking up from the cwd must not escape the canonical
+# trusted root the caller verified. Without this, a missing in-trust marker lets
+# find_project_root ascend into an untrusted parent and run its scripts (TOCTOU).
+if [ -n "$TRUST_BOUNDARY" ]; then
+    canon_root=$(cd "$PROJECT_ROOT" 2>/dev/null && pwd -P) || exit 0
+    canon_boundary=$(cd "$TRUST_BOUNDARY" 2>/dev/null && pwd -P) || exit 0
+    case "$canon_root" in
+        "$canon_boundary" | "$canon_boundary"/*) : ;;
+        *) exit 0 ;;
+    esac
+fi
 
 LANG_TYPE=$(detect_project_type "$PROJECT_ROOT")
 [ -z "$LANG_TYPE" ] && exit 0

@@ -51,23 +51,39 @@ export function isPathWithin(candidate: string, root: string): boolean {
 }
 
 /**
+ * Returns the CANONICAL trusted root that contains `cwd` (symlinks resolved on
+ * both sides), or undefined when `cwd` is not within any trusted root. Callers
+ * that spawn repository-defined commands pass this canonical root down as a
+ * boundary so a shell-side project-root re-discovery cannot ascend past it into
+ * an untrusted parent (statusline TOCTOU fix). Any resolution failure is
+ * treated as untrusted.
+ */
+export function matchedTrustedRoot(
+  cwd: string,
+  config: TrustConfig,
+): string | undefined {
+  let realCwd: string;
+  try {
+    realCwd = realpathSync(cwd);
+  } catch {
+    return undefined;
+  }
+  for (const root of config.trustedRoots) {
+    try {
+      const realRoot = realpathSync(root);
+      if (isPathWithin(realCwd, realRoot)) return realRoot;
+    } catch {
+      // Unresolvable root entries never grant trust.
+    }
+  }
+  return undefined;
+}
+
+/**
  * Resolves symlinks on both sides before comparing so a symlinked cwd cannot
  * escape into (or fake membership of) a trusted root. Any resolution failure
  * is treated as untrusted.
  */
 export function isTrustedRoot(cwd: string, config: TrustConfig): boolean {
-  let realCwd: string;
-  try {
-    realCwd = realpathSync(cwd);
-  } catch {
-    return false;
-  }
-  for (const root of config.trustedRoots) {
-    try {
-      if (isPathWithin(realCwd, realpathSync(root))) return true;
-    } catch {
-      // Unresolvable root entries never grant trust.
-    }
-  }
-  return false;
+  return matchedTrustedRoot(cwd, config) !== undefined;
 }

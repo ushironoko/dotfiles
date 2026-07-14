@@ -153,6 +153,52 @@ describe("pi-harness statusline feature", () => {
     expect(captured).toBe(project);
   });
 
+  test("passes the canonical trusted root to the runner as a boundary", async () => {
+    const home = await makeTempDirectory("pi-statusline-boundary");
+    const project = join(home, "repo");
+    await fs.mkdir(project, { recursive: true });
+    await markAsProject(project);
+    const captureFile = join(home, "runner-args.txt");
+    const runner = join(
+      resolvePaths(home).claudeHooksDir,
+      "lib/statusline_checks_run.sh",
+    );
+    await fs.mkdir(dirname(runner), { recursive: true });
+    await fs.writeFile(
+      runner,
+      [
+        "#!/bin/bash",
+        `printf '%s\\n%s\\n' "$1" "$2" > "${captureFile}.tmp"`,
+        `mv "${captureFile}.tmp" "${captureFile}"`,
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const pi = createFakePi({ cwd: project });
+    setupStatusline(pi, makeConfig(home, [project]), {
+      cacheDir: join(home, "cache"),
+      getBranch: async () => undefined,
+    });
+
+    await pi.emitAgentSettled();
+    await waitFor(async () => {
+      try {
+        await fs.access(captureFile);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    const [cwdArg, boundaryArg] = (await fs.readFile(captureFile, "utf8"))
+      .trim()
+      .split("\n");
+    expect(cwdArg).toBe(project);
+    // The boundary is the canonical (realpath'd) trusted root containing cwd.
+    expect(await fs.realpath(boundaryArg ?? "")).toBe(
+      await fs.realpath(project),
+    );
+  });
+
   test("an untrusted root never launches the runner but still renders", async () => {
     const home = await makeTempDirectory("pi-statusline-untrusted");
     const project = join(home, "repo");

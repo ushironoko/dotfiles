@@ -20,7 +20,7 @@ import { dirname, join } from "node:path";
 import type { HarnessConfig } from "../../config";
 import { launchDetached, type DetachedSpawnFunction } from "../../lib/detached";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
-import { isTrustedRoot } from "../../lib/trust";
+import { matchedTrustedRoot } from "../../lib/trust";
 import {
   parseStatuslineCache,
   renderStatusline,
@@ -108,12 +108,14 @@ export default function setupStatusline(
 
   const refresh = async (ctx: CtxLike, launchChecks: boolean) => {
     const cwd = ctx.cwd ?? process.cwd();
-    if (
-      launchChecks &&
-      isTrustedRoot(cwd, config.trust) &&
-      existsSync(runner)
-    ) {
-      spawnDetached("bash", [runner, cwd], { cwd });
+    // Pass the canonical trusted root down as a boundary: the runner executes
+    // repository-defined commands, and its own find_project_root can otherwise
+    // ascend past the trusted root into an untrusted parent (review finding).
+    const trustedRoot = launchChecks
+      ? matchedTrustedRoot(cwd, config.trust)
+      : undefined;
+    if (trustedRoot !== undefined && existsSync(runner)) {
+      spawnDetached("bash", [runner, cwd, trustedRoot], { cwd });
     }
 
     if (ctx.ui.setWidget === undefined) return;
