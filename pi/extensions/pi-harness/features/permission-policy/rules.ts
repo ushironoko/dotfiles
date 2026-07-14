@@ -1,3 +1,11 @@
+import {
+  isOpaqueExecutor,
+  normalizeSegment,
+  scanCommand,
+  speculativeFloor,
+  type Segment,
+} from "./scan";
+
 interface DenyRule {
   readonly source?: string;
   readonly pattern: RegExp;
@@ -283,498 +291,31 @@ const loadRules = (jsonText: string | undefined): LoadedRules => {
   };
 };
 
-// --- Compound-command scanning (safety-floor bypass fix) ---------------------
-//
-// evaluateCommand used to test the WHOLE command string against `^`-anchored
-// rules, so a benign prefix hid the rest: `echo ok; bit issue claim` slipped
-// past the deny floor. The scanner below splits the command into simple
-// commands (respecting quotes/escapes/comments), recurses into command
-// substitutions, and evaluates each unit independently. Anything it cannot
-// parse structurally is denied (fail-closed).
+// --- Verdict evaluation ------------------------------------------------------
 
-const SUB_PLACEHOLDER = "";
 const MAX_SUBSTITUTION_DEPTH = 20;
-
-const WRAPPER_WORDS: ReadonlySet<string> = new Set([
-  "sudo",
-  "env",
-  "command",
-  "nohup",
-  "time",
-  "nice",
-]);
-
-const OPAQUE_HEAD_WORDS: ReadonlySet<string> = new Set(["eval", "xargs"]);
-
-const SHELL_INTERPRETERS: ReadonlySet<string> = new Set([
-  "sh",
-  "bash",
-  "zsh",
-  "dash",
-  "ksh",
-]);
-
-const ASSIGNMENT_PREFIX = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 const UNPARSEABLE_REASON =
   "permission-policy: コマンドを解析できませんでした（引用符または括弧が不整合のため fail-closed でブロックしました）";
 const OPAQUE_EXECUTOR_REASON =
   "不透明な実行子（eval / sh -c / xargs 等）は内容を静的に検査できないため確認が必要です";
+const POTENTIALLY_SENSITIVE_REASON =
+  "動的展開・未対応構文により、禁止/破壊的コマンドにならないと静的に判定できないため確認が必要です";
 
-interface Balanced {
-  readonly inner: string;
-  readonly end: number;
-}
+// One simple command. Precedence: concrete DENY > built-in DENY-potential
+// (unsuppressable by user allow — the data-leak floor) > user ALLOW > concrete
+// ASK > built-in ASK-potential > opaque executor > default-continue.
+const evaluateSegment = (segment: Segment, rules: LoadedRules): Verdict => {
+  const normalized = normalizeSegment(segment);
+  if (normalized.words.length === 0) return { verdict: "default-continue" };
+  const command = normalized.words.join(" ");
+  const potential = speculativeFloor(normalized);
 
-// Find the matching close for an open delimiter, skipping quoted spans and
-// nested pairs. Returns undefined on imbalance so callers can fail closed.
-const readBalanced = (
-  text: string,
-  openIndex: number,
-  open: string,
-  close: string,
-): Balanced | undefined => {
-  let depth = 1;
-  let j = openIndex + 1;
-  while (j < text.length) {
-    const c = text[j];
-    if (c === "\\") {
-      j += 2;
-      continue;
-    }
-    if (c === "'") {
-      const k = text.indexOf("'", j + 1);
-      if (k === -1) return undefined;
-      j = k + 1;
-      continue;
-    }
-    if (c === '"') {
-      j += 1;
-      while (j < text.length && text[j] !== '"') {
-        j += text[j] === "\\" ? 2 : 1;
-      }
-      if (j >= text.length) return undefined;
-      j += 1;
-      continue;
-    }
-    if (c === "`") {
-      j += 1;
-      while (j < text.length && text[j] !== "`") {
-        j += text[j] === "\\" ? 2 : 1;
-      }
-      if (j >= text.length) return undefined;
-      j += 1;
-      continue;
-    }
-    if (c === open) {
-      depth += 1;
-      j += 1;
-      continue;
-    }
-    if (c === close) {
-      depth -= 1;
-      if (depth === 0) {
-        return { inner: text.slice(openIndex + 1, j), end: j + 1 };
-      }
-      j += 1;
-      continue;
-    }
-    j += 1;
-  }
-  return undefined;
-};
-
-const readBacktick = (text: string, index: number): Balanced | undefined => {
-  let j = index + 1;
-  while (j < text.length) {
-    const c = text[j];
-    if (c === "\\") {
-      j += 2;
-      continue;
-    }
-    if (c === "`") return { inner: text.slice(index + 1, j), end: j + 1 };
-    j += 1;
-  }
-  return undefined;
-};
-
-const ANSI_C_SIMPLE: Readonly<Record<string, string>> = {
-  n: "\n",
-  t: "\t",
-  r: "\r",
-  f: "\f",
-  v: "\v",
-  a: "\x07",
-  b: "\b",
-  e: "\x1b",
-  E: "\x1b",
-  "\\": "\\",
-  "'": "'",
-  '"': '"',
-  "?": "?",
-};
-
-interface AnsiResult {
-  readonly decoded: string;
-  readonly end: number;
-}
-
-// $'...' ANSI-C quoting. Decoded only so the literal content is matched
-// correctly; its whitespace stays inside the word (it is quoted).
-const readAnsiC = (
-  text: string,
-  quoteIndex: number,
-): AnsiResult | undefined => {
-  let j = quoteIndex + 1;
-  let out = "";
-  while (j < text.length) {
-    const c = text[j];
-    if (c === "'") return { decoded: out, end: j + 1 };
-    if (c === "\\") {
-      const n = text[j + 1];
-      if (n === undefined) {
-        out += "\\";
-        j += 1;
-        continue;
-      }
-      const simple = ANSI_C_SIMPLE[n];
-      if (simple !== undefined) {
-        out += simple;
-        j += 2;
-        continue;
-      }
-      if (n === "x") {
-        const hex = /^[0-9A-Fa-f]{1,2}/.exec(text.slice(j + 2));
-        if (hex) {
-          out += String.fromCharCode(parseInt(hex[0], 16));
-          j += 2 + hex[0].length;
-          continue;
-        }
-      }
-      if (n === "u" || n === "U") {
-        const re = n === "u" ? /^[0-9A-Fa-f]{1,4}/ : /^[0-9A-Fa-f]{1,8}/;
-        const hex = re.exec(text.slice(j + 2));
-        if (hex) {
-          out += String.fromCodePoint(parseInt(hex[0], 16));
-          j += 2 + hex[0].length;
-          continue;
-        }
-      }
-      if (n >= "0" && n <= "7") {
-        const oct = /^[0-7]{1,3}/.exec(text.slice(j + 1));
-        if (oct) {
-          out += String.fromCharCode(parseInt(oct[0], 8));
-          j += 1 + oct[0].length;
-          continue;
-        }
-      }
-      out += n;
-      j += 2;
-      continue;
-    }
-    out += c;
-    j += 1;
-  }
-  return undefined;
-};
-
-interface DollarResult {
-  readonly append: string;
-  readonly sub?: string;
-  // An unquoted $IFS / ${IFS} expands to whitespace and splits words.
-  readonly boundary: boolean;
-  readonly end: number;
-}
-
-const readDollar = (text: string, index: number): DollarResult | undefined => {
-  const n = text[index + 1];
-  if (n === "(") {
-    // $(( ... )) is arithmetic, not a command; $( ... ) is a substitution.
-    const arithmetic = text[index + 2] === "(";
-    const bal = readBalanced(text, index + 1, "(", ")");
-    if (bal === undefined) return undefined;
-    return arithmetic
-      ? { append: SUB_PLACEHOLDER, boundary: false, end: bal.end }
-      : {
-          append: SUB_PLACEHOLDER,
-          sub: bal.inner,
-          boundary: false,
-          end: bal.end,
-        };
-  }
-  if (n === "{") {
-    const bal = readBalanced(text, index + 1, "{", "}");
-    if (bal === undefined) return undefined;
-    if (bal.inner === "IFS")
-      return { append: "", boundary: true, end: bal.end };
-    return { append: SUB_PLACEHOLDER, boundary: false, end: bal.end };
-  }
-  if (n === "'") {
-    const ansi = readAnsiC(text, index + 1);
-    if (ansi === undefined) return undefined;
-    return { append: ansi.decoded, boundary: false, end: ansi.end };
-  }
-  const nameMatch = /^[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(index + 1));
-  if (nameMatch) {
-    const name = nameMatch[0];
-    if (name === "IFS") {
-      return { append: "", boundary: true, end: index + 1 + name.length };
-    }
-    return {
-      append: SUB_PLACEHOLDER,
-      boundary: false,
-      end: index + 1 + name.length,
-    };
-  }
-  if (n !== undefined && "?$!#@*-0123456789".includes(n)) {
-    return { append: SUB_PLACEHOLDER, boundary: false, end: index + 2 };
-  }
-  return { append: "$", boundary: false, end: index + 1 };
-};
-
-interface DoubleQuoteResult {
-  readonly literal: string;
-  readonly subs: readonly string[];
-  readonly end: number;
-}
-
-const readDoubleQuote = (
-  text: string,
-  index: number,
-): DoubleQuoteResult | undefined => {
-  let j = index + 1;
-  let literal = "";
-  const subs: string[] = [];
-  while (j < text.length) {
-    const c = text[j];
-    if (c === '"') return { literal, subs, end: j + 1 };
-    if (c === "\\") {
-      const n = text[j + 1];
-      if (n === undefined) return undefined;
-      if (n === '"' || n === "\\" || n === "$" || n === "`") {
-        literal += n;
-        j += 2;
-        continue;
-      }
-      if (n === "\n") {
-        j += 2;
-        continue;
-      }
-      literal += "\\";
-      j += 1;
-      continue;
-    }
-    if (c === "$") {
-      const dollar = readDollar(text, j);
-      if (dollar === undefined) return undefined;
-      literal += dollar.boundary ? " " : dollar.append;
-      if (dollar.sub !== undefined) subs.push(dollar.sub);
-      j = dollar.end;
-      continue;
-    }
-    if (c === "`") {
-      const back = readBacktick(text, j);
-      if (back === undefined) return undefined;
-      subs.push(back.inner);
-      literal += SUB_PLACEHOLDER;
-      j = back.end;
-      continue;
-    }
-    literal += c;
-    j += 1;
-  }
-  return undefined;
-};
-
-interface ScanResult {
-  readonly segments: readonly (readonly string[])[];
-  readonly subs: readonly string[];
-  readonly ok: boolean;
-}
-
-// Tokenize a command line into simple-command segments (each a list of words)
-// plus the raw text of every command substitution to evaluate recursively.
-const scan = (command: string): ScanResult => {
-  const segments: string[][] = [];
-  const subs: string[] = [];
-  let words: string[] = [];
-  let word = "";
-  let atWordStart = true;
-  let i = 0;
-
-  const flushWord = (): void => {
-    if (word !== "") {
-      words.push(word);
-      word = "";
-    }
-  };
-  const flushSegment = (): void => {
-    flushWord();
-    if (words.length > 0) {
-      segments.push(words);
-      words = [];
-    }
-  };
-  const fail = (): ScanResult => ({ segments, subs, ok: false });
-
-  while (i < command.length) {
-    const c = command[i];
-
-    if (c === "\\") {
-      const n = command[i + 1];
-      if (n === undefined) {
-        word += "\\";
-        i += 1;
-        atWordStart = false;
-        continue;
-      }
-      if (n === "\n") {
-        i += 2;
-        continue;
-      }
-      word += n;
-      i += 2;
-      atWordStart = false;
-      continue;
-    }
-
-    if (c === "'") {
-      const k = command.indexOf("'", i + 1);
-      if (k === -1) return fail();
-      word += command.slice(i + 1, k);
-      i = k + 1;
-      atWordStart = false;
-      continue;
-    }
-
-    if (c === '"') {
-      const dq = readDoubleQuote(command, i);
-      if (dq === undefined) return fail();
-      word += dq.literal;
-      subs.push(...dq.subs);
-      i = dq.end;
-      atWordStart = false;
-      continue;
-    }
-
-    if (c === "$") {
-      const dollar = readDollar(command, i);
-      if (dollar === undefined) return fail();
-      if (dollar.boundary) {
-        flushWord();
-        atWordStart = true;
-        i = dollar.end;
-        continue;
-      }
-      word += dollar.append;
-      if (dollar.sub !== undefined) subs.push(dollar.sub);
-      i = dollar.end;
-      atWordStart = false;
-      continue;
-    }
-
-    if (c === "`") {
-      const back = readBacktick(command, i);
-      if (back === undefined) return fail();
-      subs.push(back.inner);
-      word += SUB_PLACEHOLDER;
-      i = back.end;
-      atWordStart = false;
-      continue;
-    }
-
-    if (c === "<" || c === ">") {
-      if (command[i + 1] === "(") {
-        const bal = readBalanced(command, i + 1, "(", ")");
-        if (bal === undefined) return fail();
-        subs.push(bal.inner);
-        word += SUB_PLACEHOLDER;
-        i = bal.end;
-        atWordStart = false;
-        continue;
-      }
-      // Redirection operator: a word boundary; skip the operator run so the
-      // target becomes its own (harmless) word.
-      flushWord();
-      i += 1;
-      while (
-        i < command.length &&
-        (command[i] === "<" || command[i] === ">" || command[i] === "&")
-      ) {
-        i += 1;
-      }
-      atWordStart = true;
-      continue;
-    }
-
-    if (c === " " || c === "\t") {
-      flushWord();
-      i += 1;
-      atWordStart = true;
-      continue;
-    }
-
-    if (c === "\n" || c === "\r") {
-      flushSegment();
-      i += 1;
-      atWordStart = true;
-      continue;
-    }
-
-    if (c === "#" && atWordStart) {
-      const nl = command.indexOf("\n", i);
-      i = nl === -1 ? command.length : nl;
-      continue;
-    }
-
-    if (c === ";") {
-      flushSegment();
-      i += 1;
-      if (command[i] === ";") i += 1;
-      if (command[i] === "&") i += 1;
-      atWordStart = true;
-      continue;
-    }
-
-    if (c === "&") {
-      flushSegment();
-      i += 1;
-      if (command[i] === "&") i += 1;
-      atWordStart = true;
-      continue;
-    }
-
-    if (c === "|") {
-      flushSegment();
-      i += 1;
-      if (command[i] === "|" || command[i] === "&") i += 1;
-      atWordStart = true;
-      continue;
-    }
-
-    if (c === "(" || c === ")") {
-      flushSegment();
-      i += 1;
-      atWordStart = true;
-      continue;
-    }
-
-    word += c;
-    atWordStart = false;
-    i += 1;
-  }
-
-  flushSegment();
-  return { segments, subs, ok: true };
-};
-
-const evaluateSegmentString = (
-  command: string,
-  rules: LoadedRules,
-): Verdict => {
   const denied = rules.deny.find((rule) => rule.pattern.test(command));
-  if (denied !== undefined) {
-    return { verdict: "deny", reason: denied.reason };
+  if (denied !== undefined) return { verdict: "deny", reason: denied.reason };
+
+  if (potential === "deny") {
+    return { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON };
   }
 
   const allowed = rules.allow.find((rule) => rule.pattern.test(command));
@@ -785,56 +326,17 @@ const evaluateSegmentString = (
   }
 
   const asked = rules.ask.find((rule) => rule.pattern.test(command));
-  if (asked !== undefined) {
-    return { verdict: "ask", reason: asked.reason };
+  if (asked !== undefined) return { verdict: "ask", reason: asked.reason };
+
+  if (potential === "ask") {
+    return { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON };
+  }
+
+  if (isOpaqueExecutor(normalized.words)) {
+    return { verdict: "ask", reason: OPAQUE_EXECUTOR_REASON };
   }
 
   return { verdict: "default-continue" };
-};
-
-// A leading `{` group opener, VAR=value assignments, and transparent wrappers
-// (sudo/env/...) do not change WHICH command runs, so strip them before the
-// `^`-anchored rules see the real command word.
-const stripLeading = (words: readonly string[]): readonly string[] => {
-  let result = words;
-  while (result.length > 0) {
-    const head = result[0];
-    if (
-      head === "{" ||
-      ASSIGNMENT_PREFIX.test(head) ||
-      WRAPPER_WORDS.has(head)
-    ) {
-      result = result.slice(1);
-      continue;
-    }
-    break;
-  }
-  return result;
-};
-
-const isOpaqueExecutor = (words: readonly string[]): boolean => {
-  const head = words[0];
-  if (head === undefined) return false;
-  if (OPAQUE_HEAD_WORDS.has(head)) return true;
-  if (SHELL_INTERPRETERS.has(head)) {
-    return words.slice(1).some((w) => w === "-c");
-  }
-  return false;
-};
-
-const evaluateSegment = (
-  words: readonly string[],
-  rules: LoadedRules,
-): Verdict => {
-  const effective = stripLeading(words);
-  if (effective.length === 0) return { verdict: "default-continue" };
-  const command = effective.join(" ");
-  const ruleVerdict = evaluateSegmentString(command, rules);
-  if (ruleVerdict.verdict !== "default-continue") return ruleVerdict;
-  if (isOpaqueExecutor(effective)) {
-    return { verdict: "ask", reason: OPAQUE_EXECUTOR_REASON };
-  }
-  return ruleVerdict;
 };
 
 const VERDICT_RANK: Readonly<Record<Verdict["verdict"], number>> = {
@@ -870,7 +372,7 @@ const evaluateCommandInner = (
   if (depth > MAX_SUBSTITUTION_DEPTH) {
     return { verdict: "deny", reason: UNPARSEABLE_REASON };
   }
-  const scanned = scan(command);
+  const scanned = scanCommand(command);
   if (!scanned.ok) return { verdict: "deny", reason: UNPARSEABLE_REASON };
   const verdicts: Verdict[] = [];
   for (const segment of scanned.segments) {

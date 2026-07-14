@@ -1,0 +1,967 @@
+/**
+ * Shell-command tokenizer + speculative floor analysis for the permission
+ * policy. `rules.ts` owns the concrete `^`-anchored regex floor and the final
+ * verdict precedence; this module owns:
+ *
+ *  - `scanCommand`: split a command line into simple-command segments
+ *    (quote/escape/comment/redirection/here-doc aware) plus the raw text of
+ *    every command substitution (including those nested in ${…}/$((…))) to
+ *    recurse into. Structurally unparseable input → `ok:false` (caller denies).
+ *  - `normalizeSegment`: strip leading assignments / wrappers / reserved words
+ *    and report whether the resulting head is statically unknown.
+ *  - `speculativeFloor`: "could this segment become a built-in floor command
+ *    that its concrete text does not already match?" Used to fail closed on
+ *    dynamic/unsupported syntax in a sensitive-head segment.
+ *
+ * A statically-unknown word position (unresolved expansion, or brace/glob) is
+ * tracked per word in `opaque` (+ `opaqueUnquoted` when it can word-split). The
+ * sentinel char `OPAQUE` only keeps such a word non-empty and inert for concrete
+ * matching; the index sets are authoritative for speculation.
+ */
+
+// Private-use sentinel: not in any rule's vocabulary, not a real path/flag, and
+// `\S` so it preserves `\s+` word gaps and never causes a false concrete match.
+const OPAQUE = "";
+
+const ASSIGNMENT_PREFIX = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const FD_VAR = /^\{[A-Za-z_][A-Za-z0-9_]*\}$/;
+
+// Leading words that do not change WHICH command runs → stripped before the
+// floor sees the real head: group opener, transparent wrappers, exec/command/
+// builtin, and reserved words that can precede a command.
+const STRIP_WORDS: ReadonlySet<string> = new Set([
+  "{",
+  "!",
+  "sudo",
+  "env",
+  "command",
+  "builtin",
+  "exec",
+  "nohup",
+  "time",
+  "nice",
+  "then",
+  "do",
+  "else",
+  "elif",
+  "in",
+  "if",
+  "while",
+  "until",
+  "for",
+  "case",
+  "select",
+  "function",
+]);
+
+// Command names the built-in floor guards (every built-in rule is `^`-anchored
+// on one of these). Keep in lockstep with rules.ts BUILT_IN_*_DEFINITIONS and
+// with FLOOR_SHAPES below (a cross-check test asserts agreement).
+const SENSITIVE_HEADS: ReadonlySet<string> = new Set([
+  "bit",
+  "git",
+  "rm",
+  "chmod",
+]);
+
+const OPAQUE_HEAD_WORDS: ReadonlySet<string> = new Set(["eval", "xargs"]);
+const SHELL_INTERPRETERS: ReadonlySet<string> = new Set([
+  "sh",
+  "bash",
+  "zsh",
+  "dash",
+  "ksh",
+]);
+
+export interface Segment {
+  readonly words: readonly string[];
+  readonly opaque: ReadonlySet<number>;
+  readonly opaqueUnquoted: ReadonlySet<number>;
+}
+
+export interface ScanResult {
+  readonly segments: readonly Segment[];
+  readonly subs: readonly string[];
+  readonly ok: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Balanced / quoted readers
+// ---------------------------------------------------------------------------
+
+interface Balanced {
+  readonly inner: string;
+  readonly end: number;
+}
+
+const readBalanced = (
+  text: string,
+  openIndex: number,
+  open: string,
+  close: string,
+): Balanced | undefined => {
+  let depth = 1;
+  let j = openIndex + 1;
+  while (j < text.length) {
+    const c = text[j];
+    if (c === "\\") {
+      j += 2;
+      continue;
+    }
+    if (c === "'") {
+      const k = text.indexOf("'", j + 1);
+      if (k === -1) return undefined;
+      j = k + 1;
+      continue;
+    }
+    if (c === '"') {
+      j += 1;
+      while (j < text.length && text[j] !== '"') {
+        j += text[j] === "\\" ? 2 : 1;
+      }
+      if (j >= text.length) return undefined;
+      j += 1;
+      continue;
+    }
+    if (c === "`") {
+      j += 1;
+      while (j < text.length && text[j] !== "`") {
+        j += text[j] === "\\" ? 2 : 1;
+      }
+      if (j >= text.length) return undefined;
+      j += 1;
+      continue;
+    }
+    if (c === open) {
+      depth += 1;
+      j += 1;
+      continue;
+    }
+    if (c === close) {
+      depth -= 1;
+      if (depth === 0)
+        return { inner: text.slice(openIndex + 1, j), end: j + 1 };
+      j += 1;
+      continue;
+    }
+    j += 1;
+  }
+  return undefined;
+};
+
+const readBacktick = (text: string, index: number): Balanced | undefined => {
+  let j = index + 1;
+  while (j < text.length) {
+    const c = text[j];
+    if (c === "\\") {
+      j += 2;
+      continue;
+    }
+    if (c === "`") return { inner: text.slice(index + 1, j), end: j + 1 };
+    j += 1;
+  }
+  return undefined;
+};
+
+const ANSI_C_SIMPLE: Readonly<Record<string, string>> = {
+  n: "\n",
+  t: "\t",
+  r: "\r",
+  f: "\f",
+  v: "\v",
+  a: "\x07",
+  b: "\b",
+  e: "\x1b",
+  E: "\x1b",
+  "\\": "\\",
+  "'": "'",
+  '"': '"',
+  "?": "?",
+};
+
+interface AnsiResult {
+  readonly decoded: string;
+  readonly end: number;
+}
+
+// $'…' ANSI-C quoting — decoded to a known literal (not opaque; its content is
+// statically known and its whitespace stays inside the word).
+const readAnsiC = (
+  text: string,
+  quoteIndex: number,
+): AnsiResult | undefined => {
+  let j = quoteIndex + 1;
+  let out = "";
+  while (j < text.length) {
+    const c = text[j];
+    if (c === "'") return { decoded: out, end: j + 1 };
+    if (c === "\\") {
+      const n = text[j + 1];
+      if (n === undefined) {
+        out += "\\";
+        j += 1;
+        continue;
+      }
+      const simple = ANSI_C_SIMPLE[n];
+      if (simple !== undefined) {
+        out += simple;
+        j += 2;
+        continue;
+      }
+      if (n === "x") {
+        const hex = /^[0-9A-Fa-f]{1,2}/.exec(text.slice(j + 2));
+        if (hex) {
+          out += String.fromCharCode(parseInt(hex[0], 16));
+          j += 2 + hex[0].length;
+          continue;
+        }
+      }
+      if (n === "u" || n === "U") {
+        const re = n === "u" ? /^[0-9A-Fa-f]{1,4}/ : /^[0-9A-Fa-f]{1,8}/;
+        const hex = re.exec(text.slice(j + 2));
+        if (hex) {
+          out += String.fromCodePoint(parseInt(hex[0], 16));
+          j += 2 + hex[0].length;
+          continue;
+        }
+      }
+      if (n >= "0" && n <= "7") {
+        const oct = /^[0-7]{1,3}/.exec(text.slice(j + 1));
+        if (oct) {
+          out += String.fromCharCode(parseInt(oct[0], 8));
+          j += 1 + oct[0].length;
+          continue;
+        }
+      }
+      out += n;
+      j += 2;
+      continue;
+    }
+    out += c;
+    j += 1;
+  }
+  return undefined;
+};
+
+interface DollarResult {
+  readonly append: string;
+  // Command substitutions to recurse (also collected from inside ${…}/$((…))).
+  readonly subs: readonly string[];
+  readonly boundary: boolean; // unquoted $IFS / ${IFS} → word boundary
+  readonly opaque: boolean; // statically-unknown value
+  readonly end: number;
+}
+
+const readDollar = (text: string, index: number): DollarResult | undefined => {
+  const n = text[index + 1];
+  if (n === "(") {
+    const arithmetic = text[index + 2] === "(";
+    const bal = readBalanced(text, index + 1, "(", ")");
+    if (bal === undefined) return undefined;
+    // Arithmetic is not a command, but a $(…) can be nested inside it and DOES
+    // run; recurse into the inner text either way.
+    return {
+      append: OPAQUE,
+      subs: arithmetic ? extractSubs(bal.inner) : [bal.inner],
+      boundary: false,
+      opaque: true,
+      end: bal.end,
+    };
+  }
+  if (n === "{") {
+    const bal = readBalanced(text, index + 1, "{", "}");
+    if (bal === undefined) return undefined;
+    if (bal.inner === "IFS") {
+      return {
+        append: "",
+        subs: [],
+        boundary: true,
+        opaque: false,
+        end: bal.end,
+      };
+    }
+    // ${x:-$(cmd)} etc. — a substitution inside a parameter expansion still
+    // executes; recurse into any command substitutions found within.
+    return {
+      append: OPAQUE,
+      subs: extractSubs(bal.inner),
+      boundary: false,
+      opaque: true,
+      end: bal.end,
+    };
+  }
+  if (n === "'") {
+    const ansi = readAnsiC(text, index + 1);
+    if (ansi === undefined) return undefined;
+    return {
+      append: ansi.decoded,
+      subs: [],
+      boundary: false,
+      opaque: false,
+      end: ansi.end,
+    };
+  }
+  const nameMatch = /^[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(index + 1));
+  if (nameMatch) {
+    const name = nameMatch[0];
+    if (name === "IFS") {
+      return {
+        append: "",
+        subs: [],
+        boundary: true,
+        opaque: false,
+        end: index + 1 + name.length,
+      };
+    }
+    return {
+      append: OPAQUE,
+      subs: [],
+      boundary: false,
+      opaque: true,
+      end: index + 1 + name.length,
+    };
+  }
+  if (n !== undefined && "?$!#@*-0123456789".includes(n)) {
+    return {
+      append: OPAQUE,
+      subs: [],
+      boundary: false,
+      opaque: true,
+      end: index + 2,
+    };
+  }
+  return {
+    append: "$",
+    subs: [],
+    boundary: false,
+    opaque: false,
+    end: index + 1,
+  };
+};
+
+interface DoubleQuoteResult {
+  readonly literal: string;
+  readonly subs: readonly string[];
+  readonly opaque: boolean; // contained an expansion (quoted → single word)
+  readonly end: number;
+}
+
+const readDoubleQuote = (
+  text: string,
+  index: number,
+): DoubleQuoteResult | undefined => {
+  let j = index + 1;
+  let literal = "";
+  const subs: string[] = [];
+  let opaque = false;
+  while (j < text.length) {
+    const c = text[j];
+    if (c === '"') return { literal, subs, opaque, end: j + 1 };
+    if (c === "\\") {
+      const escaped = text[j + 1];
+      if (escaped === undefined) return undefined;
+      if (
+        escaped === '"' ||
+        escaped === "\\" ||
+        escaped === "$" ||
+        escaped === "`"
+      ) {
+        literal += escaped;
+        j += 2;
+        continue;
+      }
+      if (escaped === "\n") {
+        j += 2;
+        continue;
+      }
+      literal += "\\";
+      j += 1;
+      continue;
+    }
+    if (c === "$") {
+      const dollar = readDollar(text, j);
+      if (dollar === undefined) return undefined;
+      literal += dollar.boundary ? " " : dollar.append;
+      subs.push(...dollar.subs);
+      if (dollar.opaque) opaque = true;
+      j = dollar.end;
+      continue;
+    }
+    if (c === "`") {
+      const back = readBacktick(text, j);
+      if (back === undefined) return undefined;
+      subs.push(back.inner);
+      literal += OPAQUE;
+      opaque = true;
+      j = back.end;
+      continue;
+    }
+    literal += c;
+    j += 1;
+  }
+  return undefined;
+};
+
+// Pull the raw text of every top-level command substitution out of a fragment
+// (used for ${…}/$((…)) interiors). Best-effort: on a malformed fragment the
+// caller still recurses whatever was found.
+const extractSubs = (fragment: string): string[] => {
+  const found: string[] = [];
+  let i = 0;
+  while (i < fragment.length) {
+    const c = fragment[i];
+    if (c === "\\") {
+      i += 2;
+      continue;
+    }
+    if (c === "'") {
+      const k = fragment.indexOf("'", i + 1);
+      if (k === -1) break;
+      i = k + 1;
+      continue;
+    }
+    if (c === "`") {
+      const back = readBacktick(fragment, i);
+      if (back === undefined) break;
+      found.push(back.inner);
+      i = back.end;
+      continue;
+    }
+    if (c === "$" && fragment[i + 1] === "(" && fragment[i + 2] !== "(") {
+      const bal = readBalanced(fragment, i + 1, "(", ")");
+      if (bal === undefined) break;
+      found.push(bal.inner);
+      i = bal.end;
+      continue;
+    }
+    i += 1;
+  }
+  return found;
+};
+
+// ---------------------------------------------------------------------------
+// Tokenizer
+// ---------------------------------------------------------------------------
+
+const BRACE_GLOB = /[*?[]/;
+
+const isBraceExpansion = (text: string, at: number): boolean => {
+  // text[at] === "{"; a brace EXPANSION contains a top-level "," or ".." before
+  // the matching "}". (A plain "{" is treated as a literal char.)
+  let depth = 1;
+  let j = at + 1;
+  while (j < text.length) {
+    const c = text[j];
+    if (c === "\\") {
+      j += 2;
+      continue;
+    }
+    if (c === "{") depth += 1;
+    else if (c === "}") {
+      depth -= 1;
+      if (depth === 0) return false;
+    } else if (
+      depth === 1 &&
+      (c === "," || (c === "." && text[j + 1] === "."))
+    ) {
+      return true;
+    }
+    j += 1;
+  }
+  return false;
+};
+
+export const scanCommand = (command: string): ScanResult => {
+  const segments: Segment[] = [];
+  const subs: string[] = [];
+  let words: string[] = [];
+  let opaque = new Set<number>();
+  let opaqueUnquoted = new Set<number>();
+  let word = "";
+  let wordStarted = false;
+  let wordOpaque = false;
+  let wordOpaqueUnquoted = false;
+  let atWordStart = true;
+  let pendingRedirectTarget = false;
+  let i = 0;
+
+  const resetWord = (): void => {
+    word = "";
+    wordStarted = false;
+    wordOpaque = false;
+    wordOpaqueUnquoted = false;
+  };
+  const flushWord = (): void => {
+    if (!wordStarted && word === "") return;
+    if (pendingRedirectTarget) {
+      // This word is a redirect target (data, not a command word); drop it.
+      pendingRedirectTarget = false;
+      resetWord();
+      return;
+    }
+    const index = words.length;
+    words.push(word);
+    if (wordOpaque) opaque.add(index);
+    if (wordOpaqueUnquoted) opaqueUnquoted.add(index);
+    resetWord();
+  };
+  const flushSegment = (): void => {
+    flushWord();
+    pendingRedirectTarget = false;
+    if (words.length > 0) {
+      segments.push({ words, opaque, opaqueUnquoted });
+      words = [];
+      opaque = new Set<number>();
+      opaqueUnquoted = new Set<number>();
+    }
+  };
+  const fail = (): ScanResult => ({ segments, subs, ok: false });
+  const markOpaque = (unquoted: boolean): void => {
+    wordStarted = true;
+    wordOpaque = true;
+    if (unquoted) wordOpaqueUnquoted = true;
+  };
+
+  while (i < command.length) {
+    const c = command[i];
+
+    if (c === "\\") {
+      const n = command[i + 1];
+      if (n === undefined) {
+        word += "\\";
+        wordStarted = true;
+        atWordStart = false;
+        i += 1;
+        continue;
+      }
+      if (n === "\n") {
+        i += 2;
+        continue;
+      }
+      word += n;
+      wordStarted = true;
+      atWordStart = false;
+      i += 2;
+      continue;
+    }
+
+    if (c === "'") {
+      const k = command.indexOf("'", i + 1);
+      if (k === -1) return fail();
+      word += command.slice(i + 1, k);
+      wordStarted = true;
+      atWordStart = false;
+      i = k + 1;
+      continue;
+    }
+
+    if (c === '"') {
+      const dq = readDoubleQuote(command, i);
+      if (dq === undefined) return fail();
+      word += dq.literal;
+      wordStarted = true;
+      subs.push(...dq.subs);
+      if (dq.opaque) wordOpaque = true; // quoted: not word-splitting
+      atWordStart = false;
+      i = dq.end;
+      continue;
+    }
+
+    if (c === "$") {
+      const dollar = readDollar(command, i);
+      if (dollar === undefined) return fail();
+      subs.push(...dollar.subs);
+      if (dollar.boundary) {
+        flushWord();
+        atWordStart = true;
+        i = dollar.end;
+        continue;
+      }
+      word += dollar.append;
+      wordStarted = true;
+      if (dollar.opaque) markOpaque(true);
+      atWordStart = false;
+      i = dollar.end;
+      continue;
+    }
+
+    if (c === "`") {
+      const back = readBacktick(command, i);
+      if (back === undefined) return fail();
+      subs.push(back.inner);
+      word += OPAQUE;
+      markOpaque(true);
+      atWordStart = false;
+      i = back.end;
+      continue;
+    }
+
+    if (c === "<" || c === ">") {
+      if (command[i + 1] === "(") {
+        const bal = readBalanced(command, i + 1, "(", ")");
+        if (bal === undefined) return fail();
+        subs.push(bal.inner);
+        word += OPAQUE;
+        markOpaque(true);
+        atWordStart = false;
+        i = bal.end;
+        continue;
+      }
+      // Here-doc: skip the body (data), recurse substitutions in an unquoted one.
+      if (c === "<" && command[i + 1] === "<" && command[i + 2] !== "<") {
+        i = consumeHereDoc(command, i, subs);
+        // The fd digit / {var} designator before "<<" is not a command word.
+        if (word.length > 0 && (/^\d+$/.test(word) || FD_VAR.test(word))) {
+          resetWord();
+        } else {
+          flushWord();
+        }
+        atWordStart = true;
+        continue;
+      }
+      // Ordinary redirection: drop a leading fd designator, skip the operator
+      // run, and mark the following word as the (discarded) target.
+      if (word.length > 0 && (/^\d+$/.test(word) || FD_VAR.test(word))) {
+        resetWord();
+      } else {
+        flushWord();
+      }
+      i += 1;
+      while (i < command.length && (command[i] === "<" || command[i] === ">")) {
+        i += 1;
+      }
+      if (command[i] === "|") i += 1; // >|
+      if (command[i] === "&") {
+        // fd-dup (>&1, <&-): the target is consumed inline, not a word.
+        i += 1;
+        while (i < command.length && /[0-9-]/.test(command[i])) i += 1;
+      } else {
+        pendingRedirectTarget = true;
+      }
+      atWordStart = true;
+      continue;
+    }
+
+    if (c === " " || c === "\t") {
+      flushWord();
+      atWordStart = true;
+      i += 1;
+      continue;
+    }
+
+    if (c === "\n" || c === "\r") {
+      flushSegment();
+      atWordStart = true;
+      i += 1;
+      continue;
+    }
+
+    if (c === "#" && atWordStart) {
+      const nl = command.indexOf("\n", i);
+      i = nl === -1 ? command.length : nl;
+      continue;
+    }
+
+    if (c === ";") {
+      flushSegment();
+      i += 1;
+      if (command[i] === ";") i += 1;
+      if (command[i] === "&") i += 1;
+      atWordStart = true;
+      continue;
+    }
+
+    if (c === "&") {
+      // &> / &>> redirect-all — a redirection, not a background operator.
+      if (command[i + 1] === ">") {
+        flushWord();
+        i += 2;
+        if (command[i] === ">") i += 1;
+        pendingRedirectTarget = true;
+        atWordStart = true;
+        continue;
+      }
+      flushSegment();
+      i += 1;
+      if (command[i] === "&") i += 1;
+      atWordStart = true;
+      continue;
+    }
+
+    if (c === "|") {
+      flushSegment();
+      i += 1;
+      if (command[i] === "|" || command[i] === "&") i += 1;
+      atWordStart = true;
+      continue;
+    }
+
+    if (c === "(" || c === ")") {
+      flushSegment();
+      i += 1;
+      atWordStart = true;
+      continue;
+    }
+
+    // Brace expansion / glob: statically-unknown expansion (unquoted).
+    if (c === "{" && isBraceExpansion(command, i)) {
+      word += c;
+      markOpaque(true);
+      atWordStart = false;
+      i += 1;
+      continue;
+    }
+    if (BRACE_GLOB.test(c)) {
+      word += c;
+      markOpaque(true);
+      atWordStart = false;
+      i += 1;
+      continue;
+    }
+
+    word += c;
+    wordStarted = true;
+    atWordStart = false;
+    i += 1;
+  }
+
+  flushSegment();
+  return { segments, subs, ok: true };
+};
+
+// Skip a here-doc body. Returns the index at/after the terminator line. For an
+// unquoted delimiter, command substitutions in the body still execute → recurse.
+const consumeHereDoc = (
+  command: string,
+  start: number,
+  subs: string[],
+): number => {
+  // command[start] === "<", command[start+1] === "<"
+  let i = start + 2;
+  if (command[i] === "-") i += 1;
+  while (i < command.length && (command[i] === " " || command[i] === "\t"))
+    i += 1;
+  let quoted = false;
+  let delim = "";
+  // Delimiter word: may be quoted (<<'EOF' / <<"EOF" / <<\EOF → literal body).
+  while (i < command.length) {
+    const c = command[i];
+    if (c === "'" || c === '"') {
+      quoted = true;
+      const k = command.indexOf(c, i + 1);
+      if (k === -1) return command.length;
+      delim += command.slice(i + 1, k);
+      i = k + 1;
+      continue;
+    }
+    if (c === "\\") {
+      quoted = true;
+      delim += command[i + 1] ?? "";
+      i += 2;
+      continue;
+    }
+    if (/[\s;&|<>()]/.test(c)) break;
+    delim += c;
+    i += 1;
+  }
+  if (delim === "") return i;
+  // Advance to the next line, then scan body lines until a line === delim.
+  const nl = command.indexOf("\n", i);
+  if (nl === -1) return command.length;
+  let lineStart = nl + 1;
+  while (lineStart <= command.length) {
+    let lineEnd = command.indexOf("\n", lineStart);
+    if (lineEnd === -1) lineEnd = command.length;
+    const line = command.slice(lineStart, lineEnd);
+    if (line.trim() === delim) return lineEnd;
+    if (!quoted) subs.push(...extractSubs(line));
+    if (lineEnd === command.length) return command.length;
+    lineStart = lineEnd + 1;
+  }
+  return command.length;
+};
+
+// ---------------------------------------------------------------------------
+// Head normalization
+// ---------------------------------------------------------------------------
+
+export interface NormalizedSegment {
+  readonly words: readonly string[];
+  readonly opaque: ReadonlySet<number>;
+  readonly opaqueUnquoted: ReadonlySet<number>;
+  readonly headOpaque: boolean;
+}
+
+// Strip leading assignments / wrappers / reserved words so the floor sees the
+// real command head; report `headOpaque` when the head is statically unknown
+// (an opaque head, or a dangling `-option` left by a wrapper we cannot fully
+// parse → fail-closed).
+export const normalizeSegment = (segment: Segment): NormalizedSegment => {
+  let start = 0;
+  while (start < segment.words.length) {
+    const head = segment.words[start];
+    if (segment.opaque.has(start)) break; // opaque head — stop, handle below
+    if (head === "{" || ASSIGNMENT_PREFIX.test(head) || STRIP_WORDS.has(head)) {
+      start += 1;
+      continue;
+    }
+    break;
+  }
+
+  const shift = start;
+  const words = segment.words.slice(shift);
+  const remap = (set: ReadonlySet<number>): Set<number> => {
+    const out = new Set<number>();
+    for (const idx of set) if (idx >= shift) out.add(idx - shift);
+    return out;
+  };
+  const opaque = remap(segment.opaque);
+  const opaqueUnquoted = remap(segment.opaqueUnquoted);
+  const head = words[0];
+  const headOpaque =
+    words.length > 0 &&
+    (opaque.has(0) || (head !== undefined && head.startsWith("-")));
+  return { words, opaque, opaqueUnquoted, headOpaque };
+};
+
+// ---------------------------------------------------------------------------
+// Speculative floor (structured shapes)
+// ---------------------------------------------------------------------------
+
+type TokenPred = (token: string) => boolean;
+
+interface FloorShape {
+  readonly kind: "deny" | "ask";
+  readonly prefix: readonly string[]; // required leading tokens (literal-or-opaque)
+  readonly flags?: readonly string[]; // required flag LETTERS (literal-only)
+  readonly tokens?: readonly TokenPred[]; // required exact tokens (literal-only)
+  readonly operands?: readonly TokenPred[]; // required operands (literal-or-opaque)
+}
+
+const isHard: TokenPred = (t) => t === "--hard";
+const isForce: TokenPred = (t) => t === "--force" || t === "-f";
+const isBigR: TokenPred = (t) => t === "-R";
+const is777: TokenPred = (t) => t === "777";
+const isAbsPath: TokenPred = (t) => t.startsWith("/") || t.startsWith("~");
+const isRelayPlus: TokenPred = (t) => t.startsWith("relay+");
+
+const isShortFlag = (t: string): boolean =>
+  t.startsWith("-") && !t.startsWith("--");
+const flagHasLetter = (t: string, letter: string): boolean =>
+  isShortFlag(t) && t.slice(1).includes(letter);
+
+// Mirrors rules.ts BUILT_IN_DENY_DEFINITIONS / BUILT_IN_ASK_DEFINITIONS. DENY
+// shapes let opaque fill discriminating positions (data-leak floor → aggressive);
+// ASK shapes require the DANGER flags/tokens to be LITERAL (so `git push origin
+// "$branch"` is not force-asked), and let opaque fill only operand slots
+// (so `rm -rf "$dir"` / `chmod -R "$m" /x` still ask). See R4.
+const FLOOR_SHAPES: readonly FloorShape[] = [
+  { kind: "deny", prefix: ["bit", "issue", "claim"] },
+  { kind: "deny", prefix: ["bit", "issue", "unclaim"] },
+  { kind: "deny", prefix: ["bit", "issue", "claims"] },
+  { kind: "deny", prefix: ["bit", "issue", "watch"] },
+  { kind: "deny", prefix: ["bit", "issue", "import"] },
+  { kind: "deny", prefix: ["bit", "pr", "import"] },
+  { kind: "deny", prefix: ["bit", "relay"] },
+  { kind: "deny", prefix: ["bit", "clone"], operands: [isRelayPlus] },
+  { kind: "ask", prefix: ["rm"], flags: ["r", "f"], operands: [isAbsPath] },
+  { kind: "ask", prefix: ["git", "reset"], tokens: [isHard] },
+  { kind: "ask", prefix: ["git", "push"], tokens: [isForce] },
+  { kind: "ask", prefix: ["git", "clean"], flags: ["f", "d"] },
+  { kind: "ask", prefix: ["chmod"], tokens: [isBigR], operands: [is777] },
+];
+
+interface PrefixMatch {
+  readonly rest: number; // first word index after the prefix
+  readonly usedUnquoted: boolean;
+}
+
+const matchPrefix = (
+  seg: NormalizedSegment,
+  prefix: readonly string[],
+): PrefixMatch | undefined => {
+  let wi = 0;
+  for (const token of prefix) {
+    if (wi >= seg.words.length) return undefined;
+    if (seg.opaque.has(wi)) {
+      if (seg.opaqueUnquoted.has(wi))
+        return { rest: wi + 1, usedUnquoted: true };
+      wi += 1; // quoted opaque matches exactly one prefix token
+      continue;
+    }
+    if (seg.words[wi] === token) {
+      wi += 1;
+      continue;
+    }
+    return undefined;
+  }
+  return { rest: wi, usedUnquoted: false };
+};
+
+const shapeCouldMatch = (
+  seg: NormalizedSegment,
+  shape: FloorShape,
+): boolean => {
+  const matched = matchPrefix(seg, shape.prefix);
+  if (matched === undefined) return false;
+  // An unquoted opaque used for the prefix can word-split into anything that
+  // follows → treat the shape as satisfiable (fail-closed).
+  if (matched.usedUnquoted) return true;
+
+  const restStart = matched.rest;
+  const restIndices: number[] = [];
+  for (let i = restStart; i < seg.words.length; i += 1) restIndices.push(i);
+  const literalIndices = restIndices.filter((i) => !seg.opaque.has(i));
+  const opaqueRest = restIndices.filter((i) => seg.opaque.has(i)).length;
+
+  // Danger flags must be present LITERALLY (opaque cannot supply them).
+  if (shape.flags) {
+    const covered = shape.flags.every((letter) =>
+      literalIndices.some((i) => flagHasLetter(seg.words[i], letter)),
+    );
+    if (!covered) return false;
+  }
+  for (const pred of shape.tokens ?? []) {
+    if (!literalIndices.some((i) => pred(seg.words[i]))) return false;
+  }
+  // Operand slots may be filled by a literal OR one opaque token each.
+  let operandSlots = 0;
+  for (const pred of shape.operands ?? []) {
+    if (!literalIndices.some((i) => pred(seg.words[i]))) operandSlots += 1;
+  }
+  return operandSlots <= opaqueRest;
+};
+
+/**
+ * Does this segment plausibly *become* a built-in floor command that its
+ * concrete text does not already match? Returns the highest floor kind at risk,
+ * or null. Only sensitive-head segments with an opaque token are speculated
+ * over — a benign literal head can never match the `^`-anchored floor.
+ */
+export const speculativeFloor = (
+  seg: NormalizedSegment,
+): "deny" | "ask" | null => {
+  // headOpaque can hold with no expansions (a dangling `-option` left by a
+  // wrapper we cannot fully parse), so check it before the opaque short-circuit.
+  if (seg.headOpaque) return "deny"; // unknown head could be any floor command
+  if (seg.opaque.size === 0) return null;
+  const head = seg.words[0];
+  if (head === undefined || !SENSITIVE_HEADS.has(head)) return null;
+  let ask = false;
+  for (const shape of FLOOR_SHAPES) {
+    if (!shapeCouldMatch(seg, shape)) continue;
+    if (shape.kind === "deny") return "deny";
+    ask = true;
+  }
+  return ask ? "ask" : null;
+};
+
+export const isOpaqueExecutor = (words: readonly string[]): boolean => {
+  const head = words[0];
+  if (head === undefined) return false;
+  if (OPAQUE_HEAD_WORDS.has(head)) return true;
+  if (SHELL_INTERPRETERS.has(head)) {
+    return words.slice(1).some((w) => w === "-c");
+  }
+  return false;
+};

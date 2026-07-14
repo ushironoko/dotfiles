@@ -376,3 +376,188 @@ describe("permission-policy compound bypass integration", () => {
     ).toEqual({ block: true, reason: expect.any(String) });
   });
 });
+
+describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", () => {
+  const floor = loadRules(undefined);
+  const verdictOf = (command: string) =>
+    evaluateCommand(command, floor).verdict;
+  // Distinctive fragment of POTENTIALLY_SENSITIVE_REASON.
+  const SPECULATIVE = "動的展開";
+
+  // A denied/dangerous command whose discriminator is produced by an
+  // unresolved expansion, brace/glob, redirection prefix, reserved word, or
+  // opaque head must not slip through. deny-family → ask (not certain);
+  // concrete-after-normalization → deny.
+  test.each([
+    // dynamic expansion at a discriminating position (bit deny family → ask)
+    'bit issue "$op"',
+    "bit issue $(printf claim)",
+    "bit issue `printf claim`",
+    'bit issue "${SUB}"',
+    "bit issue ${x:-claim}",
+    'bit pr "$sub"',
+    'bit "$x"',
+    'bit clone "$target"',
+    // brace / glob expansion
+    "bit issue c{l,}aim",
+    "bit issue cl?im",
+    // opaque / ambiguous head
+    "$cmd issue claim",
+    "sudo -n bit issue claim",
+    // destructive with literal danger flags + opaque operand
+    'rm -rf "$dir"',
+    'chmod -R "$mode" /etc',
+  ])("escalates to ask: %s", (command) => {
+    expect(evaluateCommand(command, floor)).toEqual({
+      verdict: "ask",
+      reason: expect.stringContaining(SPECULATIVE),
+    });
+  });
+
+  // Concrete after normalization (redirection stripped, reserved word stripped,
+  // nested substitution recursed) → hard deny.
+  test.each([
+    "2>/tmp/x bit issue claim",
+    "{fd}>/tmp/x bit issue claim",
+    ">out bit relay serve",
+    "bit issue claim >/tmp/x",
+    "bit issue claim &>/tmp/x",
+    "bit relay serve >|out",
+    "exec bit issue claim",
+    "! bit issue claim",
+    "then bit issue claim",
+    "if bit issue claim; then :; fi",
+    "echo ok\nbit issue claim",
+    'echo "${x:-$(bit issue claim)}"',
+    "echo $(( $(bit issue claim) + 0 ))",
+    "bit issue $(bit issue claim)",
+    // backslash / ANSI-C obfuscation decodes to the literal keyword
+    "b\\it issue claim",
+    "bit issue cl\\aim",
+    "bit issue $'claim'",
+    // an unquoted here-doc body substitution still executes → caught
+    "cat <<EOF\n$(bit issue claim)\nEOF",
+  ])("denies after normalization/recursion: %s", (command) => {
+    expect(verdictOf(command)).toBe("deny");
+  });
+
+  // A here-doc body is data, not commands — it must not be denied.
+  test.each([
+    "cat <<EOF\nbit issue claim\nEOF",
+    "cat <<'EOF'\nbit issue claim\nEOF",
+  ])("treats a here-doc body as data: %s", (command) => {
+    expect(verdictOf(command)).toBe("default-continue");
+  });
+
+  // Documented ASK-family residuals: an opaque DANGER flag (not an operand) is
+  // NOT escalated, so `git push origin "$branch"` stays quiet. These stay
+  // default-continue by design (R-series in scan.ts).
+  test.each(['git clean "$a" "$b"', 'git push a b c d e f g "$force"'])(
+    "accepts opaque-danger-flag residual: %s",
+    (command) => {
+      expect(verdictOf(command)).toBe("default-continue");
+    },
+  );
+
+  // False-positive guards — these MUST stay default-continue or subagents break.
+  test.each([
+    'git commit -m "$msg"',
+    'git commit -m "$a" "$b"',
+    'git log --oneline "$ref"',
+    'git checkout "$branch"',
+    'git push origin "$branch"',
+    'bit issue view "$id"',
+    'bit issue list "$filter"',
+    'bit list "$x"',
+    "bit clone https://example.test/x",
+    'echo "$x"',
+    'cat "$f"',
+    'cd "$dir" && make',
+    'grep "$pat" file',
+    'rm -f "$f"',
+    'rm "$path"',
+    "rm *.log",
+    'chmod "$mode" file',
+    'chmod 644 "$f"',
+    'echo hi > "$out"',
+    "cat file 2>&1",
+    "echo hi 1>&2",
+    "make 2>&1 | grep x",
+    "ls {a,b}.ts",
+    "echo *.ts",
+  ])("stays default-continue (no over-ask): %s", (command) => {
+    expect(verdictOf(command)).toBe("default-continue");
+  });
+
+  test("cross-segment: a speculative ask elevates the whole command", () => {
+    expect(verdictOf('echo "$x" && bit issue "$op"')).toBe("ask");
+  });
+
+  test("IFS separators combine with a trailing opaque subcommand", () => {
+    expect(verdictOf('bit${IFS}issue${IFS}"$op"')).toBe("ask");
+  });
+
+  test("empty quoted redirect target does not swallow the command", () => {
+    expect(verdictOf("<<<'' bit issue claim")).toBe("deny");
+  });
+
+  // The mandatory data-leak floor cannot be suppressed by a user allow rule.
+  test("built-in deny-potential beats a user allow rule", () => {
+    const rules = loadRules(
+      JSON.stringify({
+        deny: [],
+        allow: [{ pattern: "^bit\\s+issue" }],
+        ask: [],
+      }),
+    );
+    expect(evaluateCommand('bit issue "$op"', rules)).toEqual({
+      verdict: "ask",
+      reason: expect.stringContaining(SPECULATIVE),
+    });
+  });
+
+  test("a user allow rule still suppresses the concrete destructive default", () => {
+    const rules = loadRules(
+      JSON.stringify({
+        deny: [],
+        allow: [{ pattern: "^git reset --hard" }],
+        ask: [],
+      }),
+    );
+    expect(evaluateCommand("git reset --hard HEAD~1", rules).verdict).toBe(
+      "allow",
+    );
+  });
+});
+
+describe("permission-policy #6:1 integration", () => {
+  test("blocks a dynamic-subcommand denied command in a non-interactive session", async () => {
+    const pi = createPermissionPi(false);
+    expect(await pi.emitToolCall(bashCall('bit issue "$op"'))).toEqual({
+      block: true,
+      reason: expect.stringContaining("動的展開"),
+    });
+  });
+
+  test("confirms the same command interactively", async () => {
+    const accepted = createPermissionPi(true);
+    accepted.queueConfirm(true);
+    expect(
+      await accepted.emitToolCall(bashCall('bit issue "$op"')),
+    ).toBeUndefined();
+
+    const rejected = createPermissionPi(true);
+    rejected.queueConfirm(false);
+    expect(await rejected.emitToolCall(bashCall('bit issue "$op"'))).toEqual({
+      block: true,
+      reason: expect.any(String),
+    });
+  });
+
+  test("blocks a redirection-prefixed denied command", async () => {
+    const pi = createPermissionPi();
+    expect(await pi.emitToolCall(bashCall("2>/tmp/x bit issue claim"))).toEqual(
+      { block: true, reason: "bit issue claim は禁止です" },
+    );
+  });
+});
