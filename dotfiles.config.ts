@@ -8,7 +8,7 @@ const codexAgentFiles = [
   "rust-reviewer.toml",
   "similarity.toml",
   "tdd-reviewer.toml",
-];
+] as const;
 
 const codexHookFiles = [
   "lib/statusline_checks_lib.sh",
@@ -26,7 +26,7 @@ const codexHookFiles = [
   "user_prompt_submit/ultracode_context.sh",
   "worktree/create.sh",
   "worktree/remove.sh",
-];
+] as const;
 
 const sharedAgentSkills = [
   "create-pr",
@@ -40,7 +40,20 @@ const sharedAgentSkills = [
   "smart-compact",
   "start-work",
   "write-session",
-];
+] as const;
+
+// pi-vocabulary forks of harness-specific skills. pi discovers
+// ~/.pi/agent/skills BEFORE ~/.agents/skills and keeps the first skill on a
+// name collision (pi 0.80.6 docs/skills.md), so these shadow the shared
+// Claude-vocabulary versions for pi only.
+const piForkedSkills = [
+  "dig",
+  "plan-review",
+  "restoring-session",
+  "smart-compact",
+  "start-work",
+  "write-session",
+] as const;
 
 export default defineConfig({
   mappings: [
@@ -122,10 +135,26 @@ export default defineConfig({
       // Codex discovers personal skills under ~/.agents/skills and follows
       // symlinked skill directories. Reuse the Claude skill source so both
       // harnesses stay in sync without replacing Codex's bundled skills.
+      // pi also auto-discovers this path (verified on 0.80.6), so the same
+      // link serves three harnesses.
       source: "./claude/.claude/skills",
       target: "~/.agents/skills",
       type: "selective",
       include: sharedAgentSkills,
+    },
+    {
+      // pi auto-discovers ~/.pi/agent/extensions/*/index.ts. Only this child
+      // directory is linked — ~/.pi/agent itself stays machine-local
+      // (auth.json, settings.json, sessions are rewritten by pi at runtime).
+      source: "./pi/extensions/pi-harness",
+      target: "~/.pi/agent/extensions/pi-harness",
+      type: "directory",
+    },
+    {
+      source: "./pi/skills",
+      target: "~/.pi/agent/skills",
+      type: "selective",
+      include: piForkedSkills,
     },
     {
       source: "./config/git",

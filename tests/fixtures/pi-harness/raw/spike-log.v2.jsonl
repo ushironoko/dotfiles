@@ -1,0 +1,4 @@
+{"kind":"spawn","pid":42467,"childEnv":null,"ts":"2026-07-10T09:27:15.008Z","data":{"status":0,"stdout":"spawn-ok"}}
+{"kind":"session_start","pid":42467,"childEnv":null,"ts":"2026-07-10T09:27:15.013Z","data":{"event":{"type":"session_start","reason":"startup"},"hasUI":false}}
+{"kind":"before_agent_start","pid":42467,"childEnv":null,"ts":"2026-07-10T09:27:15.013Z","data":{"keys":["type","prompt","images","systemPrompt","systemPromptOptions"]}}
+{"kind":"tool_call","pid":42467,"childEnv":null,"ts":"2026-07-10T09:27:18.035Z","data":{"type":"tool_call","toolName":"bash","toolCallId":"call_grUEKkTbDI34SVl1hhRE7Aq6|fc_070583f8f8c2716c016a50baf5dbc481988c04752d54c8f725","input":{"command":"echo BLOCKME-hello"}}}

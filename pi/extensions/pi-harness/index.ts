@@ -1,0 +1,40 @@
+/**
+ * pi-harness umbrella extension entry point.
+ *
+ * Single auto-discovery entry (~/.pi/agent/extensions/pi-harness/index.ts via
+ * dotfiles symlink). Features are composed in an explicit order because pi
+ * chains tool_call handlers in registration order: the permission policy must
+ * evaluate before the hook bridge and everything else.
+ *
+ * In child pi processes (PI_HARNESS_CHILD=1) only the safety layer stays
+ * active — see config.ts.
+ */
+import type { PiLike } from "./lib/pi-like";
+import { loadConfig } from "./config";
+import setupPermissionPolicy from "./features/permission-policy/index";
+import setupHookBridge from "./features/hook-bridge/index";
+import setupSubagent from "./features/subagent/index";
+import setupWorkflow from "./features/workflow/index";
+import setupBitTask from "./features/bit-task/index";
+import setupStatusline from "./features/statusline/index";
+import setupProviderLog from "./features/provider-log/index";
+import setupAsukuNotify from "./features/asuku-notify/index";
+
+// The parameter is typed against the narrowed PiLike seam instead of pi's
+// ExtensionAPI: pi invokes this default export at runtime (jiti, no type
+// boundary), and depending only on PiLike keeps pi 0.80.x API churn localized
+// to lib/pi-like.ts. Shapes verified against tests/fixtures/pi-harness/raw/.
+export default function (pi: PiLike) {
+  const config = loadConfig();
+
+  // Safety floor first — never toggleable, present in child profiles too.
+  setupPermissionPolicy(pi, config);
+
+  if (config.features["hook-bridge"]) setupHookBridge(pi, config);
+  if (config.features.subagent) setupSubagent(pi, config);
+  if (config.features.workflow) setupWorkflow(pi, config);
+  if (config.features["bit-task"]) setupBitTask(pi, config);
+  if (config.features.statusline) setupStatusline(pi, config);
+  if (config.features["provider-log"]) setupProviderLog(pi, config);
+  if (config.features["asuku-notify"]) setupAsukuNotify(pi, config);
+}

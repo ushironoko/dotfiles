@@ -326,3 +326,68 @@ describe.skipIf(!e2eMoonbit)("runner: moonbit fixture (gated)", () => {
     expect(cache!.label).toBe("MB");
   }, 60000);
 });
+
+const runRunnerBounded = async (
+  projectDir: string,
+  boundary: string,
+  env: Record<string, string> = {},
+): Promise<{ exitCode: number }> => {
+  const proc = Bun.spawn(["bash", RUNNER, projectDir, boundary], {
+    env: { ...process.env, ...env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  await new Response(proc.stdout).text();
+  await new Response(proc.stderr).text();
+  return { exitCode: await proc.exited };
+};
+
+describe("runner: trust boundary", () => {
+  const tmps: string[] = [];
+  afterEach(async () => {
+    await Promise.all(tmps.splice(0).map(cleanupTestDirectory));
+  });
+
+  // The project marker lives in the (untrusted) parent; the trusted boundary is
+  // the child the caller verified. find_project_root ascends to the parent, so
+  // the runner must refuse and write no cache.
+  const seedParentMarkerChildCwd = async (
+    tmp: string,
+  ): Promise<{ parent: string; child: string; cacheDir: string }> => {
+    const parent = join(tmp, "parent");
+    const child = join(parent, "child");
+    await fs.mkdir(child, { recursive: true });
+    await fs.writeFile(join(parent, "package.json"), JSON.stringify({}));
+    await fs.writeFile(join(parent, "bun.lock"), "");
+    return { parent, child, cacheDir: join(tmp, "cache") };
+  };
+
+  test("refuses when the discovered project root escapes the boundary", async () => {
+    const tmp = await setupTestDirectory("run-boundary-escape");
+    tmps.push(tmp);
+    const { child, cacheDir } = await seedParentMarkerChildCwd(tmp);
+
+    const r = await runRunnerBounded(child, child, {
+      STATUSLINE_CACHE_DIR: cacheDir,
+      STATUSLINE_NOW_OVERRIDE: "2000",
+    });
+    expect(r.exitCode).toBe(0);
+    // The parent (untrusted) root's checks must never run.
+    expect(await readCache(cacheDir)).toBeNull();
+  });
+
+  test("runs when the discovered project root is within the boundary", async () => {
+    const tmp = await setupTestDirectory("run-boundary-ok");
+    tmps.push(tmp);
+    const { parent, child, cacheDir } = await seedParentMarkerChildCwd(tmp);
+
+    const r = await runRunnerBounded(child, parent, {
+      STATUSLINE_CACHE_DIR: cacheDir,
+      STATUSLINE_NOW_OVERRIDE: "2000",
+    });
+    expect(r.exitCode).toBe(0);
+    const cache = await readCache(cacheDir);
+    expect(cache).not.toBeNull();
+    expect(cache!.project_root).toBe(parent);
+  });
+});

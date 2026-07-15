@@ -1,0 +1,175 @@
+{
+  "subagent": {
+    "type": "object",
+    "properties": {
+      "agent": {
+        "type": "string",
+        "description": "Name of the agent for single mode"
+      },
+      "task": {
+        "type": "string",
+        "description": "Task to delegate for single mode"
+      },
+      "tasks": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["agent", "task"],
+          "properties": {
+            "agent": {
+              "type": "string",
+              "description": "Name of the agent to invoke"
+            },
+            "task": {
+              "type": "string",
+              "description": "Task to delegate to the agent"
+            },
+            "cwd": {
+              "type": "string",
+              "description": "Working directory for the agent process"
+            }
+          }
+        },
+        "description": "Tasks to run in parallel",
+        "maxItems": 8
+      },
+      "chain": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["agent", "task"],
+          "properties": {
+            "agent": {
+              "type": "string",
+              "description": "Name of the agent to invoke"
+            },
+            "task": {
+              "type": "string",
+              "description": "Task with an optional {previous} placeholder"
+            },
+            "cwd": {
+              "type": "string",
+              "description": "Working directory for the agent process"
+            }
+          }
+        },
+        "description": "Tasks to run sequentially",
+        "maxItems": 8
+      },
+      "cwd": {
+        "type": "string",
+        "description": "Working directory for single mode"
+      }
+    }
+  },
+  "worktree_create": {
+    "type": "object",
+    "required": ["name"],
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Branch name for the new worktree"
+      }
+    }
+  },
+  "worktree_remove": {
+    "type": "object",
+    "required": ["path", "confirmed"],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Absolute path of the linked worktree"
+      },
+      "confirmed": {
+        "type": "boolean",
+        "description": "True only after the user explicitly approved removal"
+      }
+    }
+  },
+  "task_completed": {
+    "type": "object",
+    "required": ["task_id"],
+    "properties": {
+      "task_id": {
+        "type": "string",
+        "description": "Stable task compatibility id"
+      },
+      "task_subject": {
+        "type": "string",
+        "description": "Human-readable completed task subject"
+      }
+    }
+  },
+  "workflow": {
+    "type": "object",
+    "required": ["stages"],
+    "properties": {
+      "stages": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["mode", "tasks"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Stage label for the report"
+            },
+            "mode": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "fanout"
+                },
+                {
+                  "type": "string",
+                  "const": "single"
+                }
+              ]
+            },
+            "codexSkip": {
+              "type": "boolean",
+              "description": "Explicit user opt-out from the codex mandate for this fan-out stage"
+            },
+            "tasks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["task"],
+                "properties": {
+                  "agentType": {
+                    "type": "string",
+                    "description": "Agent to run; fan-out tasks default to codex-reviewer (codex mandate)"
+                  },
+                  "task": {
+                    "type": "string",
+                    "description": "Task delegated to the agent"
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "description": "Working directory (not allowed with isolation)"
+                  },
+                  "isolation": {
+                    "type": "string",
+                    "const": "worktree",
+                    "description": "Provision an isolated linked worktree as the task cwd (required for codex-poc)"
+                  },
+                  "writeScope": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Paths this task may write; required and pairwise disjoint for parallel codex-runner tasks"
+                  }
+                }
+              },
+              "description": "Tasks in this stage",
+              "maxItems": 8
+            }
+          }
+        },
+        "description": "Stages executed sequentially",
+        "maxItems": 8
+      }
+    }
+  }
+}
