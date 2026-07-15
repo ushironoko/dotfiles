@@ -34,6 +34,12 @@ deployment with `bun run src/index.ts install -d` before applying it.
 | `WorktreeCreate`    | Native App worktree, or explicit create-and-reopen adapter  |
 | `WorktreeRemove`    | Native cleanup, or confirmed clean managed-worktree adapter |
 
+The Codex-native ultracode hook ignores prompts when
+`PI_CODING_AGENT=true`. pi sets that marker on its subprocesses and handles the
+prompt through pi-harness, preventing a delegated Codex CLI from starting a
+second orchestration layer. Direct Codex CLI sessions still receive the native
+ultracode context.
+
 Codex 0.144.1 does not provide the last four Claude event names, asynchronous
 command handlers, or command-rendered status lines. The compatibility layer
 preserves their outcomes without registering unsupported handlers. The TUI
