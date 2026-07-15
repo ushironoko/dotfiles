@@ -2,8 +2,11 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import type { AgentDefinition } from "../../lib/agent-md";
 import { sanitizeChildEnv } from "../../lib/child-env";
+import type { ChildObservation } from "../child-runs/model";
+import { createChildProtocolParser } from "../child-runs/protocol";
 
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 // Parser-protection ceiling: lines beyond this are dropped unparsed. Kept
@@ -23,7 +26,10 @@ const FAILED_STOP_REASONS: ReadonlySet<string> = new Set([
 ]);
 
 interface ReadableLike {
-  on(event: "data", listener: (chunk: string) => void): ReadableLike;
+  on(
+    event: "data",
+    listener: (chunk: string | Uint8Array) => void,
+  ): ReadableLike;
 }
 
 interface SpawnedProcess {
@@ -78,6 +84,7 @@ interface SpawnAgentOptions {
   signal?: AbortSignal;
   spawnFn?: SpawnFunction;
   onUpdate?: (text: string) => void;
+  observe?: (observation: ChildObservation) => void;
   termGraceMs?: number;
 }
 
@@ -92,12 +99,6 @@ interface SpawnResult {
   errorMessage?: string;
   signal?: string;
   failed: boolean;
-}
-
-interface MessageEndEvent {
-  text?: string;
-  stopReason?: string;
-  errorMessage?: string;
 }
 
 interface ProcessOutcome {
@@ -163,51 +164,6 @@ const writePromptToTempFile = async (
   return { directory, filePath };
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const getString = (
-  primary: Record<string, unknown>,
-  secondary: Record<string, unknown> | undefined,
-  key: string,
-): string | undefined => {
-  const primaryValue = primary[key];
-  if (typeof primaryValue === "string") return capText(primaryValue);
-  const secondaryValue = secondary?.[key];
-  return typeof secondaryValue === "string"
-    ? capText(secondaryValue)
-    : undefined;
-};
-
-const parseMessageEndEvent = (line: string): MessageEndEvent | undefined => {
-  let event: unknown;
-  try {
-    event = JSON.parse(line);
-  } catch {
-    return undefined;
-  }
-  if (!isRecord(event) || event.type !== "message_end") return undefined;
-  const message = isRecord(event.message) ? event.message : undefined;
-  const parsed: MessageEndEvent = {
-    stopReason: getString(event, message, "stopReason"),
-    errorMessage: getString(event, message, "errorMessage"),
-  };
-
-  if (message?.role === "assistant" && Array.isArray(message.content)) {
-    for (const part of message.content) {
-      if (
-        isRecord(part) &&
-        part.type === "text" &&
-        typeof part.text === "string"
-      ) {
-        parsed.text = capText(part.text);
-        break;
-      }
-    }
-  }
-  return parsed;
-};
-
 const isAborted = (signal: AbortSignal | undefined): boolean =>
   signal !== undefined && "aborted" in signal && signal.aborted === true;
 
@@ -250,6 +206,15 @@ const spawnAgent = async (
     let output = "";
     let buffer = "";
     let skippingOversizedLine = false;
+    const decoder = new StringDecoder("utf8");
+    const observe = (observation: ChildObservation): void => {
+      try {
+        options.observe?.(observation);
+      } catch {
+        // Browser instrumentation must not affect child execution.
+      }
+    };
+    const protocol = createChildProtocolParser({ observe });
     let aborted = false;
     let abortHandler: (() => void) | undefined;
     let stopReason: string | undefined;
@@ -295,24 +260,24 @@ const spawnAgent = async (
           return;
         }
 
+        observe({ type: "process_started", at: Date.now() });
+
         const processLine = (line: string) => {
-          if (line.trim() === "") return;
-          const event = parseMessageEndEvent(line);
+          const event = protocol.processLine(line);
           if (event === undefined) return;
-          const {
-            stopReason: eventStopReason,
-            errorMessage: eventErrorMessage,
-            text,
-          } = event;
-          if (eventStopReason !== undefined) stopReason = eventStopReason;
-          if (eventErrorMessage !== undefined) errorMessage = eventErrorMessage;
-          if (text === undefined) return;
-          output = text;
-          options.onUpdate?.(text);
+          if (event.stopReason !== undefined) {
+            stopReason = capText(event.stopReason);
+          }
+          if (event.errorMessage !== undefined) {
+            errorMessage = capText(event.errorMessage);
+          }
+          if (event.text === undefined) return;
+          output = capText(event.text);
+          options.onUpdate?.(output);
         };
 
-        const processStdoutChunk = (chunk: string) => {
-          let remaining = chunk.toString();
+        const processDecodedChunk = (decoded: string) => {
+          let remaining = decoded;
           while (remaining !== "") {
             if (skippingOversizedLine) {
               const newlineIndex = remaining.indexOf("\n");
@@ -328,8 +293,8 @@ const spawnAgent = async (
               // Drop complete oversized lines before parsing so the cap
               // bounds transient allocations too, not just retained state.
               if (Buffer.byteLength(line, "utf8") <= LINE_DROP_CAP) {
-                processLine(line);
-              }
+                processLine(line.endsWith("\r") ? line.slice(0, -1) : line);
+              } else protocol.oversizedLine();
               buffer = "";
               remaining = remaining.slice(newlineIndex + 1);
               continue;
@@ -339,6 +304,7 @@ const spawnAgent = async (
             if (Buffer.byteLength(candidate, "utf8") > LINE_DROP_CAP) {
               buffer = "";
               skippingOversizedLine = true;
+              protocol.oversizedLine();
             } else {
               buffer = candidate;
             }
@@ -370,15 +336,29 @@ const spawnAgent = async (
           unrefTimer(termTimer);
         };
 
-        child.stdout.on("data", processStdoutChunk);
+        child.stdout.on("data", (chunk) => {
+          processDecodedChunk(
+            typeof chunk === "string"
+              ? chunk
+              : decoder.write(Buffer.from(chunk)),
+          );
+        });
         child.stderr.on("data", (chunk) => {
           stderrAccumulator.append(chunk.toString());
         });
         child.on("close", (code, signal) => {
           closed = true;
+          const finalDecoded = decoder.end();
+          if (finalDecoded !== "") processDecodedChunk(finalDecoded);
           if (!skippingOversizedLine && buffer.trim() !== "") {
-            processLine(buffer);
+            processLine(buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer);
           }
+          observe({
+            type: "process_exit",
+            at: Date.now(),
+            exitCode: code,
+            signal: signal ?? undefined,
+          });
           // On abort the leader can exit while SIGTERM-ignoring grandchildren
           // linger in its process group; SIGKILL the group to reap them,
           // independent of the leader's close.
@@ -390,6 +370,11 @@ const spawnAgent = async (
         });
         child.on("error", (error) => {
           stderrAccumulator.append(error.message);
+          observe({
+            type: "process_exit",
+            at: Date.now(),
+            exitCode: 1,
+          });
           settle({ exitCode: 1 });
         });
 

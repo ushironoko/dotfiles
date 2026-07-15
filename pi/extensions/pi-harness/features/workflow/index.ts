@@ -13,6 +13,9 @@
  */
 import { randomUUID } from "node:crypto";
 import type { HarnessConfig } from "../../config";
+import type { ChildObservation } from "../child-runs/model";
+import { renderChildRunsResult } from "../child-runs/presentation";
+import { ChildRunRegistry } from "../child-runs/registry";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import {
   type CwdBoundaryResult,
@@ -40,6 +43,11 @@ import {
 
 const MAX_CONCURRENCY = 4;
 
+interface ChildRunsIntegration {
+  registry: ChildRunRegistry;
+  ensureVisible(ctx: CtxLike): void;
+}
+
 interface SetupWorkflowOptions {
   spawnFn?: SpawnFunction;
   termGraceMs?: number;
@@ -48,6 +56,7 @@ interface SetupWorkflowOptions {
     candidateCwd: string,
     rootCwd: string,
   ) => Promise<CwdBoundaryResult>;
+  childRuns?: ChildRunsIntegration;
 }
 
 interface SpawnFailure {
@@ -201,14 +210,14 @@ const setupWorkflow = (
   config: HarnessConfig,
   options: SetupWorkflowOptions = {},
 ): void => {
-  pi.registerTool({
+  const tool = {
     name: "workflow",
     label: "Workflow",
     description:
       'Run a staged multi-agent workflow (ultracode-equivalent). Fan-out stages default to the codex agent family; the engine enforces codex-poc worktree isolation and disjoint codex-runner writeScopes, and never merges or removes created worktrees. A task may reference prior stages with the reserved placeholder {previous}: at run time it expands to a digest of every already-completed stage in declaration order (including failures and any worktree paths), so e.g. a later review stage can read the paths a prior implement stage created. {previous} is a reserved token (no literal escape); tasks in the first stage expand it to "(no prior stages)".',
     parameters: WorkflowParameters,
     async execute(
-      _toolCallId: string,
+      toolCallId: string,
       params: unknown,
       signal: AbortSignal | undefined,
       onUpdate: unknown,
@@ -256,147 +265,272 @@ const setupWorkflow = (
         options.createWorktree ??
         ((cwd: string, name: string) =>
           createValidatedWorktree(makeWorktreeCreator(config), cwd, name));
+      const childRuns = options.childRuns;
+      const started = childRuns?.registry.beginInvocation({
+        toolCallId,
+        source: "workflow",
+        label: "workflow",
+        runs: validation.stages.flatMap((stage, stageIndex) =>
+          stage.tasks.map((task, taskIndex) => ({
+            agent: task.agentType,
+            task: task.task,
+            taskIndex,
+            stageIndex,
+            stageName: stage.name,
+          })),
+        ),
+      });
+      const invocationId = started?.invocationId;
+      const runIdsByStage: string[][] = [];
+      let flatRunIndex = 0;
+      for (const stage of validation.stages) {
+        runIdsByStage.push(
+          stage.tasks
+            .map(() => started?.runIds[flatRunIndex++])
+            .filter((runId): runId is string => runId !== undefined),
+        );
+      }
+      if (started !== undefined) childRuns?.ensureVisible(ctx);
+
+      let lastUpdateText = "Workflow started";
       const emitUpdate =
         typeof onUpdate === "function"
-          ? (text: string) =>
-              onUpdate({ content: [{ type: "text", text: capText(text) }] })
-          : undefined;
-
-      const stageReports: WorkflowStageReport[] = [];
-      for (const [stageIndex, stage] of validation.stages.entries()) {
-        if (isAborted(signal)) throw new Error("Workflow was aborted");
-
-        // Digest of every already-completed stage, spliced into this stage's
-        // tasks wherever they contain {previous}. Computed before this stage's
-        // reports are pushed, so a task never sees its own or its siblings'
-        // output — only prior stages, in declaration order, failures included.
-        const priorTaskCount = stageReports.reduce(
-          (count, report) => count + report.tasks.length,
-          0,
-        );
-        const previous =
-          stageReports.length === 0
-            ? "(no prior stages)"
-            : wrapUntrusted(
-                capText(
-                  renderStageDigest(
-                    stageReports,
-                    taskOutputBudget(priorTaskCount),
-                  ),
-                  MAX_PREVIOUS_DIGEST_BYTES,
-                ),
-              );
-
-        // Provision worktrees sequentially before the stage runs; a
-        // provisioning failure is an environment error, not a degradable
-        // task result.
-        const worktrees: (string | undefined)[] = [];
-        for (const [taskIndex, task] of stage.tasks.entries()) {
-          // A mid-flight abort must not provision worktrees for tasks that
-          // have not started; check before each (potentially slow) creation.
-          if (isAborted(signal)) throw new Error("Workflow was aborted");
-          worktrees[taskIndex] =
-            task.isolation === "worktree"
-              ? await createWorktree(
-                  defaultCwd,
-                  worktreeBranchName(stageIndex, taskIndex),
-                )
-              : undefined;
-        }
-        if (isAborted(signal)) throw new Error("Workflow was aborted");
-
-        const taskReports: WorkflowTaskReport[] = [];
-        const runTask = async (
-          task: WorkflowTaskPlan,
-          taskIndex: number,
-        ): Promise<void> => {
-          // Do not spawn a task that was cancelled before it started.
-          if (isAborted(signal)) throw new Error("Workflow was aborted");
-          const cwd = worktrees[taskIndex] ?? task.cwd ?? defaultCwd;
-          // Substitute {previous} for the injected prior-stage digest. The
-          // report keeps the original task.task (base.task); the expanded text
-          // is what the child receives (and is recorded on SpawnResult.task).
-          const taskText = replacePrevious(task.task, previous);
-          const base = {
-            agentType: task.agentType,
-            task: task.task,
-            cwd,
-            ...(worktrees[taskIndex] === undefined
-              ? {}
-              : { worktree: worktrees[taskIndex] }),
-          };
-          try {
-            const result = await spawnAgent(
-              findAgent(agents, task.agentType),
-              taskText,
-              {
-                cwd,
-                signal,
-                spawnFn: options.spawnFn,
-                onUpdate: emitUpdate,
-                termGraceMs: options.termGraceMs,
-              },
-            );
-            taskReports[taskIndex] = { ...base, result };
-          } catch (error) {
-            // An abort is a cancellation, not a degradable task failure: let it
-            // unwind the stage instead of recording a spurious FAILED report.
-            if (isAborted(signal)) {
-              throw error instanceof Error ? error : new Error(String(error));
+          ? (text: string) => {
+              lastUpdateText = text;
+              const details =
+                invocationId === undefined
+                  ? undefined
+                  : childRuns?.registry.getUpdateDetails(invocationId);
+              onUpdate({
+                content: [{ type: "text", text: capText(text) }],
+                ...(details === undefined ? {} : { details }),
+              });
             }
-            taskReports[taskIndex] = {
-              ...base,
-              result: { failed: true, errorMessage: errorMessage(error) },
-            };
+          : undefined;
+      emitUpdate?.(lastUpdateText);
+
+      const observeFor =
+        (runId: string | undefined) => (observation: ChildObservation) => {
+          if (runId === undefined || childRuns === undefined) return;
+          childRuns.registry.observe(runId, observation);
+          if (observation.type !== "assistant_draft") {
+            emitUpdate?.(lastUpdateText);
           }
         };
-        await runWithConcurrency(stage.tasks, MAX_CONCURRENCY, runTask, signal);
-        // A stage cancelled mid-flight leaves gaps in taskReports; do not
-        // record a partial stage — unwind instead.
+
+      const stageReports: WorkflowStageReport[] = [];
+      try {
+        for (const [stageIndex, stage] of validation.stages.entries()) {
+          if (isAborted(signal)) throw new Error("Workflow was aborted");
+
+          // Digest of every already-completed stage, spliced into this stage's
+          // tasks wherever they contain {previous}. Computed before this stage's
+          // reports are pushed, so a task never sees its own or its siblings'
+          // output — only prior stages, in declaration order, failures included.
+          const priorTaskCount = stageReports.reduce(
+            (count, report) => count + report.tasks.length,
+            0,
+          );
+          const previous =
+            stageReports.length === 0
+              ? "(no prior stages)"
+              : wrapUntrusted(
+                  capText(
+                    renderStageDigest(
+                      stageReports,
+                      taskOutputBudget(priorTaskCount),
+                    ),
+                    MAX_PREVIOUS_DIGEST_BYTES,
+                  ),
+                );
+
+          // Provision worktrees sequentially before the stage runs; a
+          // provisioning failure is an environment error, not a degradable
+          // task result.
+          const worktrees: (string | undefined)[] = [];
+          for (const [taskIndex, task] of stage.tasks.entries()) {
+            // A mid-flight abort must not provision worktrees for tasks that
+            // have not started; check before each (potentially slow) creation.
+            if (isAborted(signal)) throw new Error("Workflow was aborted");
+            try {
+              worktrees[taskIndex] =
+                task.isolation === "worktree"
+                  ? await createWorktree(
+                      defaultCwd,
+                      worktreeBranchName(stageIndex, taskIndex),
+                    )
+                  : undefined;
+            } catch (error) {
+              const runId = runIdsByStage[stageIndex]?.[taskIndex];
+              if (runId !== undefined) {
+                childRuns?.registry.finishRun(runId, {
+                  status: "failed",
+                  reason: "setup-error",
+                });
+              }
+              throw error;
+            }
+          }
+          if (isAborted(signal)) throw new Error("Workflow was aborted");
+
+          const taskReports: WorkflowTaskReport[] = [];
+          const runTask = async (
+            task: WorkflowTaskPlan,
+            taskIndex: number,
+          ): Promise<void> => {
+            // Do not spawn a task that was cancelled before it started.
+            if (isAborted(signal)) throw new Error("Workflow was aborted");
+            const cwd = worktrees[taskIndex] ?? task.cwd ?? defaultCwd;
+            const runId = runIdsByStage[stageIndex]?.[taskIndex];
+            // Substitute {previous} for the injected prior-stage digest. The
+            // report keeps the original task.task (base.task); the expanded text
+            // is what the child receives (and is recorded on SpawnResult.task).
+            const taskText = replacePrevious(task.task, previous);
+            const base = {
+              agentType: task.agentType,
+              task: task.task,
+              cwd,
+              ...(worktrees[taskIndex] === undefined
+                ? {}
+                : { worktree: worktrees[taskIndex] }),
+            };
+            try {
+              const result = await spawnAgent(
+                findAgent(agents, task.agentType),
+                taskText,
+                {
+                  cwd,
+                  signal,
+                  spawnFn: options.spawnFn,
+                  onUpdate: emitUpdate,
+                  observe: observeFor(runId),
+                  termGraceMs: options.termGraceMs,
+                },
+              );
+              if (runId !== undefined) {
+                let reason:
+                  | "length"
+                  | "model-error"
+                  | "model-aborted"
+                  | "spawn-error"
+                  | "completed" = "completed";
+                if (result.stopReason === "length") reason = "length";
+                else if (result.stopReason === "aborted") {
+                  reason = "model-aborted";
+                } else if (result.stopReason === "error") {
+                  reason = "model-error";
+                } else if (result.failed) reason = "spawn-error";
+                childRuns?.registry.finishRun(runId, {
+                  status:
+                    result.stopReason === "aborted"
+                      ? "aborted"
+                      : result.failed
+                        ? "failed"
+                        : "succeeded",
+                  reason,
+                  exitCode: result.exitCode,
+                  signal: result.signal,
+                  stopReason: result.stopReason,
+                  model: result.model,
+                });
+              }
+              taskReports[taskIndex] = { ...base, result };
+            } catch (error) {
+              // An abort is a cancellation, not a degradable task failure: let it
+              // unwind the stage instead of recording a spurious FAILED report.
+              if (isAborted(signal)) {
+                if (runId !== undefined) {
+                  childRuns?.registry.finishRun(runId, {
+                    status: "aborted",
+                    reason: "parent-abort",
+                  });
+                }
+                throw error instanceof Error ? error : new Error(String(error));
+              }
+              if (runId !== undefined) {
+                const status = childRuns?.registry.getRunStatus(runId);
+                childRuns?.registry.finishRun(runId, {
+                  status: "failed",
+                  reason: status === "running" ? "spawn-error" : "setup-error",
+                });
+              }
+              taskReports[taskIndex] = {
+                ...base,
+                result: { failed: true, errorMessage: errorMessage(error) },
+              };
+            }
+          };
+          await runWithConcurrency(
+            stage.tasks,
+            MAX_CONCURRENCY,
+            runTask,
+            signal,
+          );
+          // A stage cancelled mid-flight leaves gaps in taskReports; do not
+          // record a partial stage — unwind instead.
+          if (isAborted(signal)) throw new Error("Workflow was aborted");
+
+          stageReports.push({
+            ...(stage.name === undefined ? {} : { name: stage.name }),
+            mode: stage.mode,
+            tasks: taskReports,
+          });
+        }
+
         if (isAborted(signal)) throw new Error("Workflow was aborted");
 
-        stageReports.push({
-          ...(stage.name === undefined ? {} : { name: stage.name }),
-          mode: stage.mode,
-          tasks: taskReports,
-        });
+        const allReports = stageReports.flatMap((stage) => stage.tasks);
+        const total = allReports.length;
+        const succeeded = allReports.filter(
+          (report) => !isSpawnFailure(report.result) && !report.result.failed,
+        ).length;
+        const hasWorktrees = allReports.some(
+          (report) => report.worktree !== undefined,
+        );
+
+        const stageDigest = renderStageDigest(
+          stageReports,
+          taskOutputBudget(total),
+        );
+        const worktreeNote = hasWorktrees
+          ? "\n\nWorktrees are left in place for review; never merged automatically. Removal requires the user-approved worktree_remove tool."
+          : "";
+        const summary = `Workflow completed: ${succeeded}/${total} tasks succeeded across ${stageReports.length} stage(s).`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: capText(`${summary}\n\n${stageDigest}${worktreeNote}`),
+            },
+          ],
+          details: {
+            stages: stageReports,
+            succeeded,
+            total,
+          } satisfies WorkflowDetails,
+        };
+      } finally {
+        if (invocationId !== undefined && childRuns !== undefined) {
+          const aborted = isAborted(signal);
+          childRuns.registry.terminalizeInvocation(
+            invocationId,
+            {
+              status: aborted ? "aborted" : "skipped",
+              reason: aborted ? "parent-abort" : "dependency-failed",
+            },
+            {
+              status: aborted ? "aborted" : "failed",
+              reason: aborted ? "parent-abort" : "setup-error",
+            },
+          );
+          emitUpdate?.(lastUpdateText);
+        }
       }
-
-      if (isAborted(signal)) throw new Error("Workflow was aborted");
-
-      const allReports = stageReports.flatMap((stage) => stage.tasks);
-      const total = allReports.length;
-      const succeeded = allReports.filter(
-        (report) => !isSpawnFailure(report.result) && !report.result.failed,
-      ).length;
-      const hasWorktrees = allReports.some(
-        (report) => report.worktree !== undefined,
-      );
-
-      const stageDigest = renderStageDigest(
-        stageReports,
-        taskOutputBudget(total),
-      );
-      const worktreeNote = hasWorktrees
-        ? "\n\nWorktrees are left in place for review; never merged automatically. Removal requires the user-approved worktree_remove tool."
-        : "";
-      const summary = `Workflow completed: ${succeeded}/${total} tasks succeeded across ${stageReports.length} stage(s).`;
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: capText(`${summary}\n\n${stageDigest}${worktreeNote}`),
-          },
-        ],
-        details: {
-          stages: stageReports,
-          succeeded,
-          total,
-        } satisfies WorkflowDetails,
-      };
     },
-  });
+    renderResult: renderChildRunsResult,
+  };
+  pi.registerTool(tool);
 };
 
 export default setupWorkflow;
