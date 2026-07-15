@@ -95,7 +95,7 @@ typebox baseline + acceptance/rejection through pi's real `validateToolArguments
 | AskUserQuestion                      | exact-name `AskUserQuestion` compatibility tool                              |
 | Notification (asuku)                 | asuku-notify feature (`agent_settled`, detached)                             |
 | permissions.deny                     | permission-policy rules (fail-closed)                                        |
-| statusLine                           | statusline feature (`setWidget`)                                             |
+| statusLine                           | statusline feature (Claude-equivalent custom footer)                         |
 | logproxy                             | provider-log feature (opt-in, reduced scope)                                 |
 
 Known gaps vs Claude Code: no auto mode (server-side classifier is Claude
@@ -175,12 +175,13 @@ Automated coverage lives in `tests/pi-harness/` + `tests/hooks/pi-harness/`
       poc worktree auto-provisioned via gwq; workflow→codex-stage.sh
       roundtrip returns (2026-07-11)
 - [x] Phase 5: statusline runner launches only for trusted roots (cache JSON
-      written); provider-log stays off until opted in, JSONL 0700/0600 when
-      on; asuku binary spawn path verified
+      written); custom footer mirrors Claude's repo/directory/branch/diff,
+      checks, model, and remaining-context fields; provider-log stays off until
+      opted in, JSONL 0700/0600 when on; asuku binary spawn path verified
 - [x] Phase 6: pi-vocabulary `start-work` walks worktree_create → bit issue
       creation → task_completed close-verified on a real repo (2026-07-11);
       fork shadows the shared skill on name collision (V7 settled)
-- [ ] TUI-only: status widget renders in an interactive pi session
-      (`session_start`); asuku toast visually confirmed
+- [ ] TUI-only: Claude-equivalent custom footer renders in an interactive pi
+      session (`session_start`); asuku toast visually confirmed
 - [ ] Anthropic-transport provider-log response records (once extra-usage
       balance exists)
