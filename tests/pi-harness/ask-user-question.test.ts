@@ -456,6 +456,25 @@ describe("pi-harness AskUserQuestion termination", () => {
     expect(pi.selectDialogs).toHaveLength(0);
   });
 
+  test.each([false, true])(
+    "rejects duplicate option labels before opening UI (multiSelect=%s)",
+    async (multiSelect) => {
+      const pi = setup();
+      const input = question({
+        multiSelect,
+        options: [
+          { label: "Same", description: "first meaning" },
+          { label: "Same", description: "second meaning" },
+        ],
+      });
+
+      await expect(execute(pi, [input])).rejects.toThrow(
+        "duplicate option label",
+      );
+      expect(pi.selectDialogs).toHaveLength(0);
+    },
+  );
+
   test("rejects an unknown UI response", async () => {
     const pi = setup();
     pi.ctx.ui.select = async () => "not one of the rendered choices";

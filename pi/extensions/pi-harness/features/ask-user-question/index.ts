@@ -70,6 +70,7 @@ const requireParameters = (params: unknown): AskUserQuestionInput => {
         `AskUserQuestion question ${questionIndex + 1} requires two to four options`,
       );
     }
+    const labels = new Set<string>();
     for (const [optionIndex, rawOption] of rawQuestion.options.entries()) {
       if (
         !isRecord(rawOption) ||
@@ -82,6 +83,12 @@ const requireParameters = (params: unknown): AskUserQuestionInput => {
           `AskUserQuestion question ${questionIndex + 1} option ${optionIndex + 1} has invalid fields`,
         );
       }
+      if (labels.has(rawOption.label)) {
+        throw new Error(
+          `AskUserQuestion question ${questionIndex + 1} has duplicate option label: ${rawOption.label}`,
+        );
+      }
+      labels.add(rawOption.label);
     }
   }
 
