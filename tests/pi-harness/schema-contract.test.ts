@@ -23,6 +23,7 @@ import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import setupBitTask from "../../pi/extensions/pi-harness/features/bit-task/index";
 import setupSubagent from "../../pi/extensions/pi-harness/features/subagent/index";
 import setupWorkflow from "../../pi/extensions/pi-harness/features/workflow/index";
+import setupAskUserQuestion from "../../pi/extensions/pi-harness/features/ask-user-question/index";
 import type { ToolDefLike } from "../../pi/extensions/pi-harness/lib/pi-like";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import { createFakePi } from "./fake-pi";
@@ -38,6 +39,7 @@ const makeConfig = (): HarnessConfig => ({
     statusline: true,
     "provider-log": false,
     "asuku-notify": true,
+    "ask-user-question": true,
   },
   trust: { trustedRoots: [] },
   paths: resolvePaths("/tmp/pi-schema-contract-home"),
@@ -49,6 +51,7 @@ const registeredTools = (): Map<string, ToolDefLike> => {
   setupSubagent(pi, makeConfig());
   setupBitTask(pi, makeConfig());
   setupWorkflow(pi, makeConfig());
+  setupAskUserQuestion(pi);
   return new Map(pi.tools.map((tool) => [tool.name, tool]));
 };
 
@@ -146,6 +149,78 @@ describe("schema contract: registered shape (snapshot)", () => {
     `);
   });
 
+  test("AskUserQuestion preserves Claude cardinalities and optional preview", () => {
+    expect(parametersOf("AskUserQuestion")).toMatchInlineSnapshot(`
+      {
+        "additionalProperties": true,
+        "properties": {
+          "questions": {
+            "description": "One to four questions to ask in a single call",
+            "items": {
+              "additionalProperties": true,
+              "properties": {
+                "header": {
+                  "description": "Short label for the question",
+                  "type": "string",
+                },
+                "multiSelect": {
+                  "description": "Whether the user may select multiple options",
+                  "type": "boolean",
+                },
+                "options": {
+                  "description": "Choices presented to the user; Other is added automatically",
+                  "items": {
+                    "additionalProperties": true,
+                    "properties": {
+                      "description": {
+                        "description": "Explanation shown alongside the option",
+                        "type": "string",
+                      },
+                      "label": {
+                        "description": "Display label for the option",
+                        "type": "string",
+                      },
+                      "preview": {
+                        "description": "Optional preview associated with selecting the option",
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "label",
+                      "description",
+                    ],
+                    "type": "object",
+                  },
+                  "maxItems": 4,
+                  "minItems": 2,
+                  "type": "array",
+                },
+                "question": {
+                  "description": "The complete question to ask",
+                  "type": "string",
+                },
+              },
+              "required": [
+                "question",
+                "header",
+                "multiSelect",
+                "options",
+              ],
+              "type": "object",
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "type": "array",
+          },
+        },
+        "required": [
+          "questions",
+        ],
+        "type": "object",
+      }
+    `);
+  });
+
   test("workflow stage mode is an anyOf of const literals", () => {
     const params = parametersOf("workflow") as Record<string, unknown>;
     const stages = (params.properties as Record<string, unknown>)
@@ -219,6 +294,45 @@ describe("schema contract: pi validator accepts/rejects (real path)", () => {
     const tooMany = Array.from({ length: 9 }, () => ({ task: "t" }));
     expect(() =>
       validate("workflow", { stages: [{ mode: "fanout", tasks: tooMany }] }),
+    ).toThrow();
+  });
+
+  test("validates the AskUserQuestion compatibility contract", () => {
+    const option = { label: "A", description: "first", preview: "preview" };
+    const validQuestion = {
+      question: "Choose?",
+      header: "a header longer than twelve characters",
+      multiSelect: false,
+      options: [option, { label: "B", description: "second" }],
+      futureQuestionField: true,
+    };
+
+    expect(() =>
+      validate("AskUserQuestion", {
+        questions: [validQuestion],
+        futureRootField: true,
+      }),
+    ).not.toThrow();
+    expect(() => validate("AskUserQuestion", { questions: [] })).toThrow();
+    expect(() =>
+      validate("AskUserQuestion", {
+        questions: Array.from({ length: 5 }, () => validQuestion),
+      }),
+    ).toThrow();
+    expect(() =>
+      validate("AskUserQuestion", {
+        questions: [{ ...validQuestion, options: [option] }],
+      }),
+    ).toThrow();
+    expect(() =>
+      validate("AskUserQuestion", {
+        questions: [
+          {
+            ...validQuestion,
+            options: Array.from({ length: 5 }, () => option),
+          },
+        ],
+      }),
     ).toThrow();
   });
 });

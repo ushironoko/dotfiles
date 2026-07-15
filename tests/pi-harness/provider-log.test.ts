@@ -34,6 +34,7 @@ const makeConfig = (home: string): HarnessConfig => ({
     statusline: true,
     "provider-log": true,
     "asuku-notify": true,
+    "ask-user-question": true,
   },
   trust: { trustedRoots: [] },
   paths: resolvePaths(home),

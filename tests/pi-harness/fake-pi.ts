@@ -19,6 +19,7 @@ import type {
   AgentStartInjection,
   BeforeAgentStartEvent,
   CtxLike,
+  DialogOptionsLike,
   GenericEvent,
   NotifyLevel,
   PiEventHandler,
@@ -35,6 +36,18 @@ import type {
 interface Notification {
   message: string;
   level: NotifyLevel;
+}
+
+interface SelectDialog {
+  title: string;
+  options: string[];
+  dialogOptions?: DialogOptionsLike;
+}
+
+interface InputDialog {
+  title: string;
+  placeholder?: string;
+  dialogOptions?: DialogOptionsLike;
 }
 
 interface HandlerStore {
@@ -71,6 +84,13 @@ export interface FakePi extends PiLike {
   readonly widgets: Map<string, string[] | undefined>;
   /** Queue a response for the next ctx.ui.confirm call (defaults to false). */
   queueConfirm(answer: boolean): void;
+  /** Select the zero-based option on the next ctx.ui.select call. */
+  queueSelectIndex(index: number | undefined): void;
+  /** Queue text (or cancellation) for the next ctx.ui.input call. */
+  queueInput(answer: string | undefined): void;
+  /** Dialogs captured at the UI boundary. */
+  readonly selectDialogs: SelectDialog[];
+  readonly inputDialogs: InputDialog[];
   /** Context handed to every handler; mutate hasUI to simulate print mode. */
   readonly ctx: CtxLike & { hasUI: boolean };
 }
@@ -92,12 +112,29 @@ export function createFakePi(
   const notifications: Notification[] = [];
   const widgets = new Map<string, string[] | undefined>();
   const confirmQueue: boolean[] = [];
+  const selectQueue: { index: number | undefined }[] = [];
+  const inputQueue: { answer: string | undefined }[] = [];
+  const selectDialogs: SelectDialog[] = [];
+  const inputDialogs: InputDialog[] = [];
 
   const ctx: CtxLike & { hasUI: boolean } = {
     hasUI: options.hasUI ?? true,
     cwd: options.cwd,
     ui: {
+      select: async (title, choices, dialogOptions) => {
+        selectDialogs.push({
+          title,
+          options: [...choices],
+          dialogOptions,
+        });
+        const reply = selectQueue.shift();
+        return reply?.index === undefined ? undefined : choices[reply.index];
+      },
       confirm: async () => confirmQueue.shift() ?? false,
+      input: async (title, placeholder, dialogOptions) => {
+        inputDialogs.push({ title, placeholder, dialogOptions });
+        return inputQueue.shift()?.answer;
+      },
       notify: (message, level) => {
         notifications.push({ message, level: level ?? "info" });
       },
@@ -184,6 +221,14 @@ export function createFakePi(
     queueConfirm(answer) {
       confirmQueue.push(answer);
     },
+    queueSelectIndex(index) {
+      selectQueue.push({ index });
+    },
+    queueInput(answer) {
+      inputQueue.push({ answer });
+    },
+    selectDialogs,
+    inputDialogs,
     ctx,
   };
 }

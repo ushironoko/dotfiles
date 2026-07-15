@@ -10,7 +10,7 @@
  * active — see config.ts.
  */
 import type { PiLike } from "./lib/pi-like";
-import { loadConfig } from "./config";
+import { loadConfig, type HarnessConfig } from "./config";
 import setupPermissionPolicy from "./features/permission-policy/index";
 import setupHookBridge from "./features/hook-bridge/index";
 import setupSubagent from "./features/subagent/index";
@@ -19,14 +19,13 @@ import setupBitTask from "./features/bit-task/index";
 import setupStatusline from "./features/statusline/index";
 import setupProviderLog from "./features/provider-log/index";
 import setupAsukuNotify from "./features/asuku-notify/index";
+import setupAskUserQuestion from "./features/ask-user-question/index";
 
 // The parameter is typed against the narrowed PiLike seam instead of pi's
 // ExtensionAPI: pi invokes this default export at runtime (jiti, no type
 // boundary), and depending only on PiLike keeps pi 0.80.x API churn localized
 // to lib/pi-like.ts. Shapes verified against tests/fixtures/pi-harness/raw/.
-export default function (pi: PiLike) {
-  const config = loadConfig();
-
+const setupHarness = (pi: PiLike, config: HarnessConfig): void => {
   // Safety floor first — never toggleable, present in child profiles too.
   setupPermissionPolicy(pi, config);
 
@@ -37,4 +36,12 @@ export default function (pi: PiLike) {
   if (config.features.statusline) setupStatusline(pi, config);
   if (config.features["provider-log"]) setupProviderLog(pi, config);
   if (config.features["asuku-notify"]) setupAsukuNotify(pi, config);
-}
+  if (config.features["ask-user-question"]) setupAskUserQuestion(pi);
+};
+
+const piHarness = (pi: PiLike): void => {
+  setupHarness(pi, loadConfig());
+};
+
+export { setupHarness };
+export default piHarness;

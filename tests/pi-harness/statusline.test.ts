@@ -39,6 +39,7 @@ const makeConfig = (
     statusline: true,
     "provider-log": false,
     "asuku-notify": true,
+    "ask-user-question": true,
   },
   trust: { trustedRoots },
   paths: resolvePaths(home),

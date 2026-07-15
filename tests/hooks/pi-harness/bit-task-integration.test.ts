@@ -72,6 +72,7 @@ const makeConfig = (home: string): HarnessConfig => ({
     statusline: true,
     "provider-log": false,
     "asuku-notify": true,
+    "ask-user-question": true,
   },
   trust: { trustedRoots: [] },
   paths: { ...resolvePaths(home), codexHooksDir: CODEX_HOOKS },

@@ -22,6 +22,7 @@ export const TOGGLEABLE_FEATURES = [
   "statusline",
   "provider-log",
   "asuku-notify",
+  "ask-user-question",
 ] as const;
 
 export type ToggleableFeature = (typeof TOGGLEABLE_FEATURES)[number];
@@ -38,6 +39,7 @@ const DEFAULT_TOGGLES: Record<ToggleableFeature, boolean> = {
   statusline: true,
   "provider-log": false,
   "asuku-notify": true,
+  "ask-user-question": true,
 };
 
 export interface HarnessConfig {

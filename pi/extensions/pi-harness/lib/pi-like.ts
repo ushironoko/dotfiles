@@ -98,8 +98,27 @@ export interface PiEventResultMap {
 
 export type NotifyLevel = "info" | "warning" | "error";
 
+export interface DialogOptionsLike {
+  signal?: AbortSignal;
+  timeout?: number;
+}
+
 export interface UiLike {
-  confirm(title: string, message: string): Promise<boolean>;
+  select(
+    title: string,
+    options: string[],
+    dialogOptions?: DialogOptionsLike,
+  ): Promise<string | undefined>;
+  confirm(
+    title: string,
+    message: string,
+    dialogOptions?: DialogOptionsLike,
+  ): Promise<boolean>;
+  input(
+    title: string,
+    placeholder?: string,
+    dialogOptions?: DialogOptionsLike,
+  ): Promise<string | undefined>;
   notify(message: string, level?: NotifyLevel): void;
   setWidget?(key: string, lines: string[] | undefined): void;
   setFooter?(text: string | undefined): void;
@@ -120,6 +139,9 @@ export interface ToolDefLike {
   name: string;
   label?: string;
   description: string;
+  promptSnippet?: string;
+  promptGuidelines?: string[];
+  executionMode?: "parallel" | "sequential";
   parameters: unknown;
   execute: (
     toolCallId: string,
