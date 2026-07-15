@@ -955,4 +955,46 @@ describe("pi-harness workflow cwd boundary (#7:3)", () => {
     expect(records[0]?.options.cwd).toBe(sub);
     expect(seen).toEqual([[sub, home]]);
   });
+
+  test("a bad cwd in a later stage aborts before any earlier stage spawns", async () => {
+    const home = await makeTempDirectory("pi-workflow-cwd-multistage");
+    await writeAgents(home, ["codex-reviewer"]);
+    const { records, spawnFn } = makeSpawnFn(() => ({ text: "x" }));
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      // Only the stage-2 task carries a cwd; reject it.
+      validateCwd: async () => ({
+        ok: false,
+        reason: "outside the workflow root",
+      }),
+    });
+
+    await expect(
+      executeTool(
+        findWorkflowTool(pi.tools),
+        {
+          stages: [
+            {
+              mode: "fanout",
+              tasks: [{ agentType: "codex-reviewer", task: "stage1" }],
+            },
+            {
+              mode: "single",
+              tasks: [
+                {
+                  agentType: "codex-reviewer",
+                  task: "stage2",
+                  cwd: join(home, "sub"),
+                },
+              ],
+            },
+          ],
+        },
+        pi.ctx,
+      ),
+    ).rejects.toThrow("cwd rejected");
+    // The whole plan is pre-flighted before execution, so stage 1 never ran.
+    expect(records).toHaveLength(0);
+  });
 });

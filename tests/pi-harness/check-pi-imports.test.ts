@@ -92,8 +92,9 @@ describe("check-pi-imports self-containment analysis", () => {
     'const s = "createRequire is a function";',
     "// createRequire(import.meta.url)",
     "const myCreateRequireHelper = () => 1;",
+    "const s = `use createRequire here`;",
   ])(
-    "does not flag createRequire in a string/comment/identifier: %s",
+    "does not flag createRequire in a string/comment/template/identifier: %s",
     (source) => {
       expect(check(source)).toEqual([]);
     },
@@ -144,5 +145,23 @@ describe("check-pi-imports scanExtension enumeration", () => {
     await writeFile(join(root, "a.ts"), 'import { x } from "./b";\n');
     await writeFile(join(root, "b.ts"), "export const x = 1;\n");
     expect(await scanExtension(root)).toEqual([]);
+  });
+
+  test("rejects a symlinked directory that escapes the root without descending it", async () => {
+    const root = await fixtureRoot();
+    const outside = await fixtureRoot();
+    await mkdir(join(outside, "evil"));
+    await writeFile(
+      join(outside, "evil", "mod.ts"),
+      'import defu from "defu";\n',
+    );
+    await symlink(join(outside, "evil"), join(root, "linkeddir"));
+    await writeFile(join(root, "normal.ts"), 'import { x } from "node:fs";\n');
+
+    const joined = (await scanExtension(root)).join("\n");
+    expect(joined).toContain("linkeddir");
+    expect(joined).toContain("escapes the extension root");
+    // followSymlinks:false → the external tree is flagged, not descended/analyzed.
+    expect(joined).not.toContain("disallowed bare import defu");
   });
 });

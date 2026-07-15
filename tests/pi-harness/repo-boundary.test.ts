@@ -107,4 +107,13 @@ describe("validateCwdWithinRepo (real git)", () => {
     gitInit(outside);
     expect((await validateCwdWithinRepo(outside, root)).ok).toBe(false);
   });
+
+  test("a non-repo root falls back to containment (real git returns no common-dir)", async () => {
+    // No gitInit: the real gitCommonDir errors on a non-repo → undefined, so the
+    // check accepts a contained subdir on containment alone.
+    const root = await tempRoot("rb-nonrepo-");
+    const sub = join(root, "packages", "a");
+    await mkdir(sub, { recursive: true });
+    expect((await validateCwdWithinRepo(sub, root)).ok).toBe(true);
+  });
 });

@@ -618,6 +618,38 @@ describe("evaluateCommand normalization bypasses (#7:1)", () => {
   ])("keeps benign path/alias spelling default-continue: %s", (command) => {
     expect(verdictOf(command)).toBe("default-continue");
   });
+
+  // Interpreter -c recursion must reach through nested interpreter layers so a
+  // doubly-wrapped denied body cannot dodge the floor.
+  test.each([
+    ["sh -c 'sh -c \"bit relay sync\"'", "bit relay は禁止です"],
+    ["bash -c \"sh -c 'bit issue claim 1'\"", "bit issue claim は禁止です"],
+  ])("denies a nested interpreter -c body: %s", (command, reason) => {
+    expect(evaluateCommand(command, floor)).toEqual({
+      verdict: "deny",
+      reason,
+    });
+  });
+
+  // Multiple/stacked bit global options are all stripped before the subcommand.
+  test.each([
+    ["bit -C /a -C /b relay sync", "bit relay は禁止です"],
+    ["bit -h relay sync", "bit relay は禁止です"],
+  ])("strips stacked bit global options: %s", (command, reason) => {
+    expect(evaluateCommand(command, floor)).toEqual({
+      verdict: "deny",
+      reason,
+    });
+  });
+
+  // Interpreter forms with no inspectable -c body: opaque-executor ask when a
+  // -c is present but its argument is absent; a plain script arg is not opaque.
+  test("an interpreter -c with no argument stays ask", () => {
+    expect(verdictOf("sh -c")).toBe("ask");
+  });
+  test("an interpreter invoked without -c is not an opaque executor", () => {
+    expect(verdictOf("sh script.sh")).toBe("default-continue");
+  });
 });
 
 describe("permission-policy #6:1 integration", () => {
