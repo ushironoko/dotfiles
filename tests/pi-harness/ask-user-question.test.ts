@@ -44,7 +44,65 @@ interface AskResult {
   };
 }
 
+type UiModeLike = "tui" | "rpc" | "json" | "print";
+type SelectKeybinding =
+  | "tui.select.up"
+  | "tui.select.down"
+  | "tui.select.pageUp"
+  | "tui.select.pageDown"
+  | "tui.select.confirm"
+  | "tui.select.cancel";
+
+interface KeybindingsLike {
+  matches(data: string, keybinding: SelectKeybinding): boolean;
+}
+
+interface CustomComponentLike {
+  render(width: number): string[];
+  invalidate(): void;
+  handleInput?(data: string): void;
+  dispose?(): void;
+}
+
+type CustomUiFactoryLike<T> = (
+  tui: {
+    terminal?: { rows: number };
+    requestRender(): void;
+  },
+  theme: {
+    fg(color: string, text: string): string;
+  },
+  keybindings: KeybindingsLike,
+  done: (result: T) => void,
+) => CustomComponentLike | Promise<CustomComponentLike>;
+
+type AskUiLike = CtxLike["ui"] & {
+  custom?<T>(factory: CustomUiFactoryLike<T>): Promise<T>;
+};
+
+interface AskCtxLike extends CtxLike {
+  mode?: UiModeLike;
+  ui: AskUiLike;
+}
+
+interface CustomDialog {
+  keys: string[];
+  renders: string[][];
+}
+
+type AskFakePi = FakePi & {
+  readonly keybindings: KeybindingsLike;
+  queueCustomKeys(...keys: string[]): void;
+  readonly customDialogs: CustomDialog[];
+  readonly ctx: AskCtxLike & { hasUI: boolean };
+};
+
 const tempDirectories: string[] = [];
+const KEY_UP = "\u001b[A";
+const KEY_DOWN = "\u001b[B";
+const KEY_SPACE = " ";
+const KEY_ENTER = "\r";
+const KEY_ESCAPE = "\u001b";
 
 afterEach(async () => {
   await Promise.all(
@@ -129,8 +187,60 @@ const execute = async (
   return result as AskResult;
 };
 
-const setup = (options: { hasUI?: boolean } = {}): FakePi => {
-  const pi = createFakePi(options);
+const setup = (
+  options: {
+    hasUI?: boolean;
+    mode?: UiModeLike;
+    terminalRows?: number;
+  } = {},
+): AskFakePi => {
+  const pi = createFakePi({ hasUI: options.hasUI }) as AskFakePi;
+  const customQueue: { keys: string[] }[] = [];
+  const customDialogs: CustomDialog[] = [];
+  const keybindings: KeybindingsLike = {
+    matches: (data, keybinding) => {
+      if (keybinding === "tui.select.up") return data === KEY_UP;
+      if (keybinding === "tui.select.down") return data === KEY_DOWN;
+      if (keybinding === "tui.select.pageUp") return data === "\u001b[5~";
+      if (keybinding === "tui.select.pageDown") return data === "\u001b[6~";
+      if (keybinding === "tui.select.confirm") return data === KEY_ENTER;
+      return data === KEY_ESCAPE || data === "\u0003";
+    },
+  };
+  const tui = {
+    terminal: { rows: options.terminalRows ?? 24 },
+    requestRender: () => {},
+  };
+  const theme = { fg: (_color: string, text: string): string => text };
+
+  pi.ctx.mode = options.mode ?? "tui";
+  pi.ctx.ui.custom = async <T>(factory: CustomUiFactoryLike<T>): Promise<T> => {
+    const queued = customQueue.shift() ?? { keys: [] };
+    const dialog: CustomDialog = { keys: [...queued.keys], renders: [] };
+    customDialogs.push(dialog);
+    let settled = false;
+    let result: T | undefined;
+    const component = await factory(tui, theme, keybindings, (value) => {
+      settled = true;
+      result = value;
+    });
+    dialog.renders.push(component.render(120));
+    for (const key of queued.keys) {
+      if (settled) break;
+      component.handleInput?.(key);
+      dialog.renders.push(component.render(120));
+    }
+    component.dispose?.();
+    if (!settled) {
+      throw new Error("fake custom dialog did not receive a finishing key");
+    }
+    return result as T;
+  };
+  Object.assign(pi, {
+    keybindings,
+    queueCustomKeys: (...keys: string[]) => customQueue.push({ keys }),
+    customDialogs,
+  });
   setupAskUserQuestion(pi);
   return pi;
 };
@@ -330,14 +440,17 @@ describe("pi-harness AskUserQuestion answers", () => {
     expect(pi.inputDialogs).toHaveLength(2);
   });
 
-  test("toggles multi-select choices collision-safely and emits schema order", async () => {
+  test("toggles multi-select choices with Space without moving the cursor", async () => {
     const pi = setup();
-    // Select option label "Done", then option label "Other", deselect "Done",
-    // then select the adapter's Done action.
-    pi.queueSelectIndex(1);
-    pi.queueSelectIndex(0);
-    pi.queueSelectIndex(1);
-    pi.queueSelectIndex(3);
+    pi.queueCustomKeys(
+      KEY_DOWN,
+      KEY_SPACE,
+      KEY_UP,
+      KEY_SPACE,
+      KEY_DOWN,
+      KEY_SPACE,
+      KEY_ENTER,
+    );
     const input = question({
       multiSelect: true,
       options: [
@@ -351,16 +464,108 @@ describe("pi-harness AskUserQuestion answers", () => {
     expect(result.details.answers).toEqual({
       "Which path should we take?": "Other",
     });
-    expect(pi.selectDialogs[0]?.options).toHaveLength(3);
-    expect(pi.selectDialogs.at(-1)?.options).toHaveLength(4);
+    expect(pi.selectDialogs).toHaveLength(0);
+    expect(pi.customDialogs).toHaveLength(1);
+    expect(pi.customDialogs[0]?.renders[2]).toContain(
+      "> [x] 2. Done — A real option named Done",
+    );
+  });
+
+  test("honors remapped selector navigation and confirmation keys", async () => {
+    const pi = setup();
+    pi.keybindings.matches = (data, keybinding) =>
+      (keybinding === "tui.select.down" && data === "j") ||
+      (keybinding === "tui.select.confirm" && data === "y") ||
+      (keybinding === "tui.select.cancel" && data === "q");
+    pi.queueCustomKeys("j", KEY_SPACE, "y");
+
+    const result = await execute(pi, [question({ multiSelect: true })]);
+
+    expect(result.details.answers).toEqual({
+      "Which path should we take?": "Fast",
+    });
+  });
+
+  test("keeps fixed Space and Enter usable when remapped bindings conflict", async () => {
+    const pi = setup();
+    pi.keybindings.matches = (data, keybinding) =>
+      keybinding === "tui.select.confirm" && data === KEY_SPACE;
+    pi.queueCustomKeys(KEY_SPACE, KEY_ENTER);
+
+    const result = await execute(pi, [question({ multiSelect: true })]);
+
+    expect(result.details.answers).toEqual({
+      "Which path should we take?": "Safe",
+    });
+  });
+
+  test("accepts Kitty navigation, Space, and Enter with lock modifiers", async () => {
+    const pi = setup();
+    pi.queueCustomKeys("\u001b[1;65B", "\u001b[32;65u", "\u001b[13;65u");
+
+    const result = await execute(pi, [question({ multiSelect: true })]);
+
+    expect(result.details.answers).toEqual({
+      "Which path should we take?": "Fast",
+    });
+  });
+
+  test("wraps long multi-select content without dropping its tail", async () => {
+    const pi = setup();
+    pi.queueCustomKeys(KEY_SPACE, KEY_ENTER);
+    const tail = "TAIL-MUST-STAY-VISIBLE";
+    const input = question({
+      multiSelect: true,
+      options: [
+        {
+          label: "Long",
+          description: `${"detail ".repeat(30)}${tail}`,
+        },
+        {
+          label: "Huge inactive option",
+          description: "offscreen detail ".repeat(500),
+        },
+      ],
+    });
+
+    await execute(pi, [input]);
+
+    const initialRender = pi.customDialogs[0]?.renders[0];
+    expect(initialRender?.join("")).toContain(tail);
+    expect(
+      initialRender?.some((line) => line.startsWith("> [ ] 1. Long —")),
+    ).toBe(true);
+    expect(initialRender?.length).toBeLessThanOrEqual(22);
+  });
+
+  test("keeps the active option visible in a short terminal", async () => {
+    const pi = setup({ terminalRows: 5 });
+    pi.queueCustomKeys(KEY_SPACE, KEY_ENTER);
+    const input = question({
+      multiSelect: true,
+      options: [
+        { label: "Visible", description: "active choice" },
+        {
+          label: "Huge inactive option",
+          description: "offscreen detail ".repeat(500),
+        },
+      ],
+    });
+
+    await execute(pi, [input]);
+
+    const initialRender = pi.customDialogs[0]?.renders[0];
+    expect(initialRender?.length).toBeLessThanOrEqual(3);
+    expect(
+      initialRender?.some((line) => line.startsWith("> [ ] 1. Visible —")),
+    ).toBe(true);
   });
 
   test("combines selected multi options with a custom Other answer", async () => {
     const pi = setup();
-    pi.queueSelectIndex(0);
-    pi.queueSelectIndex(2);
+    pi.queueCustomKeys(KEY_SPACE, KEY_DOWN, KEY_DOWN, KEY_SPACE);
     pi.queueInput("Keep logs for 30 days");
-    pi.queueSelectIndex(3);
+    pi.queueCustomKeys(KEY_ENTER);
 
     const result = await execute(pi, [question({ multiSelect: true })]);
 
@@ -371,13 +576,22 @@ describe("pi-harness AskUserQuestion answers", () => {
     expect(result.content[0]?.text).toContain(
       '"Which path should we take?"="Safe, Keep logs for 30 days"',
     );
+    expect(pi.customDialogs[1]?.renders[0]).toContain(
+      "> [x] Other — type, edit, or submit empty text to clear a custom answer (set)",
+    );
   });
 
   test("emits multi-select labels and previews in schema order", async () => {
     const pi = setup();
-    pi.queueSelectIndex(2);
-    pi.queueSelectIndex(0);
-    pi.queueSelectIndex(4);
+    pi.queueCustomKeys(
+      KEY_DOWN,
+      KEY_DOWN,
+      KEY_SPACE,
+      KEY_UP,
+      KEY_UP,
+      KEY_SPACE,
+      KEY_ENTER,
+    );
     const input = question({
       multiSelect: true,
       options: [
@@ -404,12 +618,11 @@ describe("pi-harness AskUserQuestion answers", () => {
 
   test("allows multi-select Other text to be cleared before submission", async () => {
     const pi = setup();
-    pi.queueSelectIndex(2);
+    pi.queueCustomKeys(KEY_DOWN, KEY_DOWN, KEY_SPACE);
     pi.queueInput("temporary note");
-    pi.queueSelectIndex(2);
+    pi.queueCustomKeys(KEY_SPACE);
     pi.queueInput("   ");
-    pi.queueSelectIndex(0);
-    pi.queueSelectIndex(3);
+    pi.queueCustomKeys(KEY_UP, KEY_UP, KEY_SPACE, KEY_ENTER);
 
     const result = await execute(pi, [question({ multiSelect: true })]);
 
@@ -417,7 +630,34 @@ describe("pi-harness AskUserQuestion answers", () => {
       "Which path should we take?": "Safe",
     });
     expect(result.details.annotations).toEqual({});
-    expect(pi.selectDialogs[2]?.options).toHaveLength(3);
+    expect(pi.customDialogs).toHaveLength(3);
+    expect(pi.customDialogs[2]?.renders[0]).toContain(
+      "> [ ] Other — type, edit, or submit empty text to clear a custom answer",
+    );
+  });
+
+  test("keeps the portable selector flow for RPC multi-select", async () => {
+    const pi = setup({ mode: "rpc" });
+    pi.queueSelectIndex(1);
+    pi.queueSelectIndex(0);
+    pi.queueSelectIndex(1);
+    pi.queueSelectIndex(3);
+    const input = question({
+      multiSelect: true,
+      options: [
+        { label: "Other", description: "A real option named Other" },
+        { label: "Done", description: "A real option named Done" },
+      ],
+    });
+
+    const result = await execute(pi, [input]);
+
+    expect(result.details.answers).toEqual({
+      "Which path should we take?": "Other",
+    });
+    expect(pi.customDialogs).toHaveLength(0);
+    expect(pi.selectDialogs[0]?.options).toHaveLength(3);
+    expect(pi.selectDialogs.at(-1)?.options).toHaveLength(4);
   });
 
   test("asks multiple questions sequentially", async () => {
@@ -450,6 +690,18 @@ describe("pi-harness AskUserQuestion termination", () => {
     ).rejects.toThrow("cancelled by the user");
   });
 
+  test.each([KEY_ESCAPE, "\u0003"])(
+    "cancels a TUI multi-select with a configured cancel key",
+    async (key) => {
+      const pi = setup();
+      pi.queueCustomKeys(key);
+
+      await expect(
+        execute(pi, [question({ multiSelect: true })]),
+      ).rejects.toThrow("cancelled by the user");
+    },
+  );
+
   test("throws before opening UI when already aborted", async () => {
     const pi = setup();
     const controller = createTestAbortController();
@@ -475,6 +727,34 @@ describe("pi-harness AskUserQuestion termination", () => {
       execute(pi, [question()], { signal: controller.signal }),
     ).rejects.toThrow("aborted");
     expect(observed).toBe(controller.signal);
+  });
+
+  test("closes a TUI multi-select when its signal aborts", async () => {
+    const pi = setup();
+    const controller = createTestAbortController();
+    pi.ctx.ui.custom = async <T>(
+      factory: CustomUiFactoryLike<T>,
+    ): Promise<T> => {
+      let answer: T | undefined;
+      const component = await factory(
+        { requestRender: () => {} },
+        { fg: (_color, text) => text },
+        pi.keybindings,
+        (value) => {
+          answer = value;
+        },
+      );
+      controller.abort();
+      component.dispose?.();
+      if (answer === undefined) throw new Error("custom dialog did not close");
+      return answer;
+    };
+
+    await expect(
+      execute(pi, [question({ multiSelect: true })], {
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("aborted");
   });
 
   test("passes the signal to Other input and distinguishes its abort", async () => {
