@@ -399,6 +399,7 @@ describe("lifecycle compatibility", () => {
       "Codex native custom agents",
     );
     expect(disabled.stdout).toBe("");
+    expect(delegatedByPi.exitCode).toBe(0);
     expect(delegatedByPi.stdout).toBe("");
   });
 
