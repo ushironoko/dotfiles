@@ -7,8 +7,9 @@ description: "Iteratively asks the user for information missing from the current
 
 pi fork of the Claude Code `dig` skill. Read the current plan file, identify
 information that is still missing before implementation can start, and ask
-the user about it repeatedly. pi has no AskUserQuestion tool — ask in plain
-conversation. Reflect each answer into the plan, re-analyze the updated
+the user about it repeatedly through the Claude-compatible `AskUserQuestion`
+tool provided by pi-harness. If interactive UI is unavailable, fall back to
+plain conversation. Reflect each answer into the plan, re-analyze the updated
 plan, and ask again if gaps remain. Repeat this cycle until the information
 is sufficient.
 
@@ -63,7 +64,7 @@ When missing information is found, repeat this cycle:
 ```
 ┌─→ Identify missing information
 │   ↓
-│   Ask the user in plain conversation (bundle 1–3 related questions per round)
+│   Ask via AskUserQuestion (bundle 1–3 related questions per round)
 │   ↓
 │   Receive the user's answers
 │   ↓
@@ -79,8 +80,8 @@ When missing information is found, repeat this cycle:
 - **1–3 related questions per round** (too many questions at once is a burden)
 - **Ask concretely**: not "How should the design work?" but "For the return
   type, are you assuming Result<T, E> or Option<T>?" — present options or
-  concrete examples. Since pi has no structured question tool, write the
-  options as a short numbered list the user can answer briefly.
+  concrete examples. Use `AskUserQuestion` options and descriptions; only write
+  a short numbered list in plain conversation when interactive UI is unavailable.
 - **Use codebase knowledge**: read the related code before asking, so you
   understand existing implementation patterns. Never ask for information
   already readable from the code.

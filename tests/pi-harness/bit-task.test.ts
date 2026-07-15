@@ -25,6 +25,7 @@ const makeConfig = (): HarnessConfig => ({
     statusline: true,
     "provider-log": false,
     "asuku-notify": true,
+    "ask-user-question": true,
   },
   trust: { trustedRoots: [] },
   paths: resolvePaths("/tmp/pi-bit-task-unit"),

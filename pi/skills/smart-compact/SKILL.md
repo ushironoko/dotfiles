@@ -44,9 +44,10 @@ Show the analysis result as a concise bullet list.
 
 ### Phase 2: Interview
 
-Based on the Phase 1 analysis, ask the user what to keep. pi has no
-AskUserQuestion tool — ask in plain conversation, presenting the choices as
-a numbered list and telling the user that multiple selections are fine.
+Based on the Phase 1 analysis, use pi-harness's Claude-compatible
+`AskUserQuestion` tool with `multiSelect: true` to ask the user what to keep.
+If interactive UI is unavailable, ask in plain conversation with a numbered
+list and state that multiple selections are fine.
 
 **Rules for generating the choices:**
 

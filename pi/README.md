@@ -39,7 +39,11 @@ toggleable), then hook-bridge and the rest. Feature toggles live in
 
 ```json
 {
-  "features": { "statusline": false, "provider-log": false },
+  "features": {
+    "statusline": false,
+    "provider-log": false,
+    "ask-user-question": true
+  },
   "trustedRoots": ["/path/to/repo/you/trust"]
 }
 ```
@@ -88,6 +92,7 @@ typebox baseline + acceptance/rejection through pi's real `validateToolArguments
 | Workflow tool (ultracode)            | `workflow` tool (declarative JSON plan)                                      |
 | TaskCompleted                        | `task_completed` tool (bit-task, codex-side hook)                            |
 | WorktreeCreate / WorktreeRemove      | `worktree_create` / `worktree_remove` tools                                  |
+| AskUserQuestion                      | exact-name `AskUserQuestion` compatibility tool                              |
 | Notification (asuku)                 | asuku-notify feature (`agent_settled`, detached)                             |
 | permissions.deny                     | permission-policy rules (fail-closed)                                        |
 | statusLine                           | statusline feature (`setWidget`)                                             |
@@ -96,6 +101,23 @@ typebox baseline + acceptance/rejection through pi's real `validateToolArguments
 Known gaps vs Claude Code: no auto mode (server-side classifier is Claude
 Code-only; rule-based policy approximates it), no LSP plugins, provider-log
 is a request/status logger (not full logproxy).
+
+## AskUserQuestion compatibility
+
+The parent pi session registers an exact-name `AskUserQuestion` tool so shared
+Claude-oriented skills can run unchanged with Codex or other pi models. It
+accepts 1–4 single- or multi-select questions, 2–4 options per question,
+optional `preview` text, and an automatic Other/notes path. Successful results
+use Claude's question-keyed `answers` and `annotations` shape, including
+selected previews and notes.
+
+The adapter uses pi's `ui.select` / `ui.input`, so it works in TUI and RPC UI
+modes without a runtime TUI dependency. Cancellation and abort fail the tool;
+print/JSON modes report that interactive UI is unavailable. The feature is
+default-on but can be disabled with `features.ask-user-question`; child pi
+processes always disable it because they have no user-facing dialog. Call it
+alone and wait for the answer before generating answer-dependent tool calls —
+sequential execution cannot rewrite sibling calls already emitted by a model.
 
 ## workflow tool (ultracode equivalent)
 
