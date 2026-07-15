@@ -3,6 +3,12 @@
 set -euo pipefail
 
 INPUT=$(cat)
+
+# pi exports this marker to every subprocess. Its hook bridge already owns the
+# ultracode prompt in that path, so do not activate a second, Codex-native
+# orchestration layer when pi delegates work to Codex CLI.
+[ "${PI_CODING_AGENT:-}" = "true" ] && exit 0
+
 command -v jq >/dev/null 2>&1 || exit 0
 
 PROMPT=$(printf '%s' "$INPUT" | jq -r '.prompt // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]') || exit 0

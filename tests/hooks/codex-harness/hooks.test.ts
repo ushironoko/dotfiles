@@ -371,13 +371,26 @@ describe("lifecycle compatibility", () => {
     await Promise.all(tempDirectories.splice(0).map(cleanupTestDirectory));
   });
 
-  test("injects native agent guidance only for ultracode prompts", async () => {
-    const enabled = await runHook("user_prompt_submit/ultracode_context.sh", {
-      prompt: "Use ultracode for this implementation",
-    });
-    const disabled = await runHook("user_prompt_submit/ultracode_context.sh", {
-      prompt: "Implement this normally",
-    });
+  test("injects native agent guidance only for direct Codex ultracode prompts", async () => {
+    const directEnv = { PI_CODING_AGENT: "false" };
+    const enabled = await runHook(
+      "user_prompt_submit/ultracode_context.sh",
+      { prompt: "Use ultracode for this implementation" },
+      ROOT,
+      directEnv,
+    );
+    const disabled = await runHook(
+      "user_prompt_submit/ultracode_context.sh",
+      { prompt: "Implement this normally" },
+      ROOT,
+      directEnv,
+    );
+    const delegatedByPi = await runHook(
+      "user_prompt_submit/ultracode_context.sh",
+      { prompt: "Use ultracode for this implementation" },
+      ROOT,
+      { PI_CODING_AGENT: "true" },
+    );
 
     const output = JSON.parse(enabled.stdout) as {
       hookSpecificOutput: { additionalContext: string };
@@ -386,6 +399,8 @@ describe("lifecycle compatibility", () => {
       "Codex native custom agents",
     );
     expect(disabled.stdout).toBe("");
+    expect(delegatedByPi.exitCode).toBe(0);
+    expect(delegatedByPi.stdout).toBe("");
   });
 
   test("explicit completion matches the sequence-aware bit task title", async () => {
