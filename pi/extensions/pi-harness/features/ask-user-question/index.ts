@@ -85,7 +85,7 @@ const requireParameters = (params: unknown): AskUserQuestionInput => {
       }
       if (labels.has(rawOption.label)) {
         throw new Error(
-          `AskUserQuestion question ${questionIndex + 1} has duplicate option label: ${rawOption.label}`,
+          `AskUserQuestion question ${questionIndex + 1} has duplicate option label: ${sanitizeForMenu(rawOption.label)}`,
         );
       }
       labels.add(rawOption.label);
@@ -101,8 +101,88 @@ const ensureNotAborted = (signal: AbortSignal | undefined): void => {
   }
 };
 
-const compactForMenu = (value: string): string =>
-  value.replace(/\r?\n/g, " / ").trim();
+const consumeCsi = (value: string, start: number): number => {
+  for (let index = start; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 64 && code <= 126) return index + 1;
+  }
+  return value.length;
+};
+
+const consumeControlString = (value: string, start: number): number => {
+  for (let index = start; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 7 || code === 156) return index + 1;
+    if (
+      value[index] === "\u001b" &&
+      index + 1 < value.length &&
+      value[index + 1] === "\\"
+    ) {
+      return index + 2;
+    }
+  }
+  return value.length;
+};
+
+const stripTerminalControls = (
+  value: string,
+  lineFeedReplacement: string,
+): string => {
+  let output = "";
+  let index = 0;
+  while (index < value.length) {
+    const code = value.charCodeAt(index);
+    if (value[index] === "\u001b") {
+      const next = value[index + 1];
+      if (next === "[") {
+        index = consumeCsi(value, index + 2);
+      } else if (
+        next === "]" ||
+        next === "P" ||
+        next === "X" ||
+        next === "^" ||
+        next === "_"
+      ) {
+        index = consumeControlString(value, index + 2);
+      } else {
+        index += index + 1 < value.length ? 2 : 1;
+      }
+      continue;
+    }
+    if (code === 155) {
+      index = consumeCsi(value, index + 1);
+      continue;
+    }
+    if (
+      code === 157 ||
+      code === 144 ||
+      code === 152 ||
+      code === 158 ||
+      code === 159
+    ) {
+      index = consumeControlString(value, index + 1);
+      continue;
+    }
+    if (value[index] === "\n") {
+      output += lineFeedReplacement;
+      index += 1;
+      continue;
+    }
+    if (code <= 31 || (code >= 127 && code <= 159)) {
+      index += 1;
+      continue;
+    }
+    output += value[index];
+    index += 1;
+  }
+  return output;
+};
+
+const sanitizeForMenu = (value: string): string =>
+  stripTerminalControls(value, " / ").trim();
+
+const sanitizeForResult = (value: string): string =>
+  stripTerminalControls(value, "\n");
 
 const optionLine = (
   option: QuestionOption,
@@ -111,16 +191,17 @@ const optionLine = (
 ): string => {
   let mark = "";
   if (selected !== undefined) mark = selected ? "[x] " : "[ ] ";
-  const description = compactForMenu(option.description);
+  const label = sanitizeForMenu(option.label);
+  const description = sanitizeForMenu(option.description);
   const preview =
     option.preview === undefined
       ? ""
-      : ` | Preview: ${compactForMenu(option.preview)}`;
-  return `${mark}${index + 1}. ${option.label} — ${description}${preview}`;
+      : ` | Preview: ${sanitizeForMenu(option.preview)}`;
+  return `${mark}${index + 1}. ${label} — ${description}${preview}`;
 };
 
 const questionTitle = (question: Question): string =>
-  `${question.header}: ${question.question}`;
+  `${sanitizeForMenu(question.header)}: ${sanitizeForMenu(question.question)}`;
 
 const usesPreviewMode = (question: Question): boolean =>
   question.options.some((option) => option.preview !== undefined);
@@ -132,7 +213,7 @@ const askForOther = async (
 ): Promise<OtherInputResult> => {
   ensureNotAborted(signal);
   const answer = await ctx.ui.input(
-    `${question.header}: Other`,
+    `${sanitizeForMenu(question.header)}: Other`,
     "Type your answer or notes; submit empty text to clear",
     { signal },
   );
@@ -262,14 +343,18 @@ const annotationFor = (
 };
 
 const resultSegment = (question: Question, answer: QuestionAnswer): string => {
+  const safeQuestion = sanitizeForResult(question.question);
+  const safeValue = sanitizeForResult(answer.value);
   let segment =
     answer.labels.length === 0
-      ? `"${question.question}"=(no option selected)`
-      : `"${question.question}"="${answer.value}"`;
+      ? `"${safeQuestion}"=(no option selected)`
+      : `"${safeQuestion}"="${safeValue}"`;
   if (answer.preview !== undefined) {
-    segment += ` selected preview:\n${answer.preview}`;
+    segment += ` selected preview:\n${sanitizeForResult(answer.preview)}`;
   }
-  if (answer.notes !== undefined) segment += ` notes: ${answer.notes}`;
+  if (answer.notes !== undefined) {
+    segment += ` notes: ${sanitizeForResult(answer.notes)}`;
+  }
   return segment;
 };
 
@@ -306,7 +391,7 @@ const setupAskUserQuestion = (pi: PiLike): void => {
       for (const item of input.questions) {
         if (seen.has(item.question)) {
           throw new Error(
-            `AskUserQuestion duplicate question text cannot be represented in answers: ${item.question}`,
+            `AskUserQuestion duplicate question text cannot be represented in answers: ${sanitizeForMenu(item.question)}`,
           );
         }
         seen.add(item.question);

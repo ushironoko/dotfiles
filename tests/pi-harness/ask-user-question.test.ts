@@ -213,6 +213,62 @@ describe("pi-harness AskUserQuestion answers", () => {
     expect(pi.selectDialogs[0]?.options[1]).toContain("bun test / bun run tsc");
   });
 
+  test("strips ANSI, OSC, C0, C1, and DEL controls from every model-facing UI field", async () => {
+    const pi = setup();
+    pi.queueSelectIndex(0);
+    const oscTitle = "\u001b]2;spoofed-title\u0007";
+    const csiRed = "\u001b[31m";
+    const csiReset = "\u001b[0m";
+    const c1Red = "\u009b31m";
+    const c1Reset = "\u009b0m";
+    const oscLinkStart = "\u001b]8;;https://example.invalid\u001b\\";
+    const oscLinkEnd = "\u001b]8;;\u001b\\";
+    const input = question({
+      question: `${oscTitle}Question\u007f`,
+      header: `${c1Red}Header${c1Reset}`,
+      options: [
+        {
+          label: `${csiRed}Label${csiReset}`,
+          description: `${oscTitle}Description\u0000`,
+          preview: `${oscLinkStart}Preview${oscLinkEnd}`,
+        },
+        { label: "Other option", description: "plain" },
+      ],
+    });
+
+    const result = await execute(pi, [input]);
+
+    expect(pi.selectDialogs[0]?.title).toBe("Header: Question");
+    expect(pi.selectDialogs[0]?.options[0]).toBe(
+      "1. Label — Description | Preview: Preview",
+    );
+    expect(pi.selectDialogs[0]?.options[1]).toBe("2. Other option — plain");
+    expect(result.content[0]?.text).toBe(
+      'Your questions have been answered: "Question"="Label" selected preview:\nPreview. You can now continue with these answers in mind.',
+    );
+    // The compatibility details retain the original model arguments; only
+    // terminal-facing strings are sanitized.
+    expect(result.details.questions).toEqual([input]);
+  });
+
+  test("sanitizes the Other input title and returned custom text", async () => {
+    const pi = setup();
+    pi.queueSelectIndex(2);
+    const hostileAnswer = "\u001b]2;spoofed-title\u0007Safe note";
+    pi.queueInput(hostileAnswer);
+    const input = question({ header: "\u001b[31mHeader\u001b[0m" });
+
+    const result = await execute(pi, [input]);
+
+    expect(pi.inputDialogs[0]?.title).toBe("Header: Other");
+    expect(result.content[0]?.text).toBe(
+      'Your questions have been answered: "Which path should we take?"="Safe note". You can now continue with these answers in mind.',
+    );
+    expect(result.details.answers).toEqual({
+      "Which path should we take?": hostileAnswer,
+    });
+  });
+
   test("returns Other text as the answer for a question without previews", async () => {
     const pi = setup();
     pi.queueSelectIndex(2);
