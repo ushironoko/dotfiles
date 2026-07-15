@@ -98,6 +98,50 @@ export interface PiEventResultMap {
 
 export type NotifyLevel = "info" | "warning" | "error";
 
+export type ThemeColorLike =
+  | "accent"
+  | "success"
+  | "error"
+  | "warning"
+  | "muted"
+  | "dim";
+
+export interface ThemeLike {
+  fg(color: ThemeColorLike, text: string): string;
+}
+
+export interface TuiLike {
+  requestRender(): void;
+}
+
+export interface FooterDataLike {
+  getGitBranch(): string | null;
+  onBranchChange(callback: () => void): () => void;
+}
+
+export interface FooterComponentLike {
+  render(width: number): string[];
+  invalidate(): void;
+  dispose?(): void;
+}
+
+export type FooterFactoryLike = (
+  tui: TuiLike,
+  theme: ThemeLike,
+  footerData: FooterDataLike,
+) => FooterComponentLike;
+
+export interface ModelLike {
+  id: string;
+  name?: string;
+}
+
+export interface ContextUsageLike {
+  percent: number | null;
+}
+
+export type PiModeLike = "tui" | "rpc" | "json" | "print";
+
 export interface DialogOptionsLike {
   signal?: AbortSignal;
   timeout?: number;
@@ -121,13 +165,16 @@ export interface UiLike {
   ): Promise<string | undefined>;
   notify(message: string, level?: NotifyLevel): void;
   setWidget?(key: string, lines: string[] | undefined): void;
-  setFooter?(text: string | undefined): void;
+  setFooter?(factory: FooterFactoryLike | undefined): void;
 }
 
 export interface CtxLike {
   hasUI: boolean;
   ui: UiLike;
+  mode?: PiModeLike;
   cwd?: string;
+  model?: ModelLike;
+  getContextUsage?(): ContextUsageLike | undefined;
 }
 
 export type PiEventHandler<K extends PiEventName> = (

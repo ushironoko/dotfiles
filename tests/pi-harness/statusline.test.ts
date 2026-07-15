@@ -1,22 +1,46 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { visibleWidth as piVisibleWidth } from "@earendil-works/pi-tui";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
-import setupStatusline from "../../pi/extensions/pi-harness/features/statusline/index";
+import setupStatusline, {
+  parseNumstat,
+  parseOriginRepository,
+} from "../../pi/extensions/pi-harness/features/statusline/index";
 import {
+  formatModelName,
+  type GitStatus,
   parseStatuslineCache,
+  remainingContextPercent,
   renderStatusline,
   STATUSLINE_WIDGET_KEY,
+  type StatuslineSnapshot,
+  visibleStatuslineWidth,
 } from "../../pi/extensions/pi-harness/features/statusline/render";
 import type { DetachedSpawnFunction } from "../../pi/extensions/pi-harness/lib/detached";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
+import type { ThemeLike } from "../../pi/extensions/pi-harness/lib/pi-like";
 import { cleanupTestDirectory, setupTestDirectory } from "../test-helpers";
 import { createFakePi } from "./fake-pi";
 
 const tempDirectories: string[] = [];
+const identityTheme: ThemeLike = { fg: (_color, text) => text };
+const ansiTheme: ThemeLike = {
+  fg: (color, text) => {
+    const code = {
+      accent: 36,
+      success: 32,
+      error: 31,
+      warning: 33,
+      muted: 90,
+      dim: 90,
+    }[color];
+    return `\u001B[${code}m${text}\u001B[0m`;
+  },
+};
 
-const makeTempDirectory = async (prefix: string): Promise<string> => {
+const tempDirectory = async (prefix: string): Promise<string> => {
   const directory = await setupTestDirectory(prefix);
   tempDirectories.push(directory);
   return directory;
@@ -53,7 +77,7 @@ const waitFor = async (condition: () => Promise<boolean>): Promise<void> => {
   throw new Error("Timed out waiting for condition");
 };
 
-const sampleCache = (label = "ts") => ({
+const sampleCache = (label = "TS") => ({
   project_root: "/repo",
   language: "ts",
   label,
@@ -65,7 +89,23 @@ const sampleCache = (label = "ts") => ({
   },
 });
 
-/** Seed a cache file exactly where the bash runner would write it. */
+const gitStatus = (overrides: Partial<GitStatus> = {}): GitStatus => ({
+  isRepository: true,
+  repository: "ushironoko/dotfiles",
+  additions: 0,
+  deletions: 0,
+  ...overrides,
+});
+
+const snapshot = (
+  overrides: Partial<StatuslineSnapshot> = {},
+): StatuslineSnapshot => ({
+  directory: "dotfiles",
+  git: gitStatus(),
+  ...overrides,
+});
+
+/** Seed a cache file exactly where the bash runner writes it. */
 const seedCache = async (
   cacheDir: string,
   projectRoot: string,
@@ -76,45 +116,287 @@ const seedCache = async (
   await fs.writeFile(join(cacheDir, `${hash}.json`), JSON.stringify(payload));
 };
 
-/** Make a directory look like a ts project so the root detector accepts it. */
+/** Make a directory look like a TS project so the root detector accepts it. */
 const markAsProject = async (root: string): Promise<void> => {
   await fs.writeFile(join(root, "package.json"), "{}");
   await fs.writeFile(join(root, "tsconfig.json"), "{}");
 };
 
-describe("renderStatusline", () => {
-  test("renders label, one glyph per check slot, and the branch", () => {
-    const lines = renderStatusline(sampleCache(), "feat/x");
-    expect(lines).toEqual(["ts lint:✓ type:… test:✗ (feat/x)"]);
+const runGit = async (cwd: string, args: string[]): Promise<void> => {
+  const process = Bun.spawn(["git", ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stderr] = await Promise.all([
+    process.exited,
+    new Response(process.stderr).text(),
+  ]);
+  if (exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${stderr}`);
+};
+
+describe("Claude-compatible statusline rendering", () => {
+  test("renders every Claude field in the same order", () => {
+    const lines = renderStatusline(
+      snapshot({
+        git: gitStatus({ additions: 12, deletions: 3 }),
+        projectLabel: "TS",
+        cache: sampleCache(),
+      }),
+      {
+        branch: "feat/pi",
+        modelName: "Opus 4.8",
+        remainingContext: 42,
+      },
+      200,
+      identityTheme,
+    );
+
+    expect(lines).toEqual([
+      "ushironoko/dotfiles | dotfiles | feat/pi | +12 -3 | TS L✓ T… X✗ | Opus 4.8 | 42%",
+    ]);
   });
 
-  test("unknown statuses render as ?", () => {
-    const cache = {
-      label: "rust",
-      checks: { lint: { status: "weird" }, typecheck: {}, test: undefined },
-    };
-    const lines = renderStatusline(cache, undefined);
-    expect(lines).toEqual(["rust lint:? type:? test:?"]);
+  test("renders pending checks before the first cache file exists", () => {
+    expect(
+      renderStatusline(
+        snapshot({
+          git: {
+            isRepository: false,
+            additions: 0,
+            deletions: 0,
+          },
+          projectLabel: "TS",
+        }),
+        {},
+        100,
+        identityTheme,
+      ),
+    ).toEqual(["dotfiles | TS L? T? X?"]);
   });
 
-  test("branch-only rendering works without a cache", () => {
-    expect(renderStatusline(undefined, "main")).toEqual(["(main)"]);
+  test("uses Claude-equivalent colors for diffs, checks, model, and context", () => {
+    const [line = ""] = renderStatusline(
+      snapshot({
+        git: gitStatus({ additions: 2, deletions: 1 }),
+        projectLabel: "TS",
+        cache: sampleCache(),
+      }),
+      { modelName: "Sonnet", remainingContext: 9 },
+      200,
+      ansiTheme,
+    );
+
+    expect(line).toContain("\u001B[32m+2\u001B[0m");
+    expect(line).toContain("\u001B[31m-1\u001B[0m");
+    expect(line).toContain("L\u001B[32m✓\u001B[0m");
+    expect(line).toContain("T\u001B[33m…\u001B[0m");
+    expect(line).toContain("X\u001B[31m✗\u001B[0m");
+    expect(line).toContain("\u001B[36mSonnet\u001B[0m");
+    expect(line).toContain("\u001B[31m9%\u001B[0m");
   });
 
-  test("nothing to show clears the widget", () => {
-    expect(renderStatusline(undefined, undefined)).toBeUndefined();
+  test("omits detached HEAD like git branch --show-current", () => {
+    expect(
+      renderStatusline(snapshot(), { branch: "detached" }, 100, identityTheme),
+    ).toEqual(["ushironoko/dotfiles | dotfiles"]);
   });
 
-  test("parseStatuslineCache rejects malformed JSON and non-objects", () => {
+  test("sanitizes controls and truncates CJK fields to the component width", () => {
+    const [line = ""] = renderStatusline(
+      snapshot({
+        directory: "日本語-project\nspoofed",
+        git: {
+          isRepository: false,
+          additions: 0,
+          deletions: 0,
+        },
+      }),
+      {},
+      8,
+      identityTheme,
+    );
+
+    expect(line).not.toContain("\n");
+    expect(line.endsWith("…")).toBe(true);
+    expect(visibleStatuslineWidth(line)).toBeLessThanOrEqual(8);
+  });
+
+  test("matches pi-tui width for emoji and East Asian wide graphemes", () => {
+    for (const directory of ["☕abcde", "\uA960abcde", "\u{17000}abcde"]) {
+      const [line = ""] = renderStatusline(
+        snapshot({
+          directory,
+          git: {
+            isRepository: false,
+            additions: 0,
+            deletions: 0,
+          },
+        }),
+        {},
+        5,
+        identityTheme,
+      );
+
+      expect(piVisibleWidth(line)).toBeLessThanOrEqual(5);
+    }
+  });
+
+  test("matches pi-tui for text emoji and multi-code-point graphemes", () => {
+    for (const grapheme of ["❤", "❤️", "가"]) {
+      expect(visibleStatuslineWidth(grapheme)).toBe(piVisibleWidth(grapheme));
+    }
+
+    const [line = ""] = renderStatusline(
+      snapshot({
+        directory: "가a",
+        git: { isRepository: false, additions: 0, deletions: 0 },
+      }),
+      {},
+      3,
+      identityTheme,
+    );
+    expect(line).toBe("가a");
+  });
+
+  test("normalizes model names and reports full-window remaining context", () => {
+    expect(
+      formatModelName({ id: "claude-opus", name: "Opus 4.8 (1M context)" }),
+    ).toBe("Opus 4.8");
+    expect(remainingContextPercent({ percent: 70.4 })).toBe(30);
+    expect(remainingContextPercent({ percent: 70.5 })).toBe(30);
+    expect(remainingContextPercent({ percent: 71.5 })).toBe(28);
+    expect(remainingContextPercent({ percent: 110 })).toBe(0);
+    expect(remainingContextPercent({ percent: null })).toBeUndefined();
+  });
+
+  test("malformed inherited status names fall back without reaching the theme", () => {
+    const [line = ""] = renderStatusline(
+      snapshot({
+        projectLabel: "TS",
+        cache: {
+          checks: {
+            lint: { status: "__proto__" },
+            typecheck: { status: "constructor" },
+            test: { status: "toString" },
+          },
+        },
+      }),
+      {},
+      100,
+      ansiTheme,
+    );
+
+    expect(line).toContain(
+      "L\u001B[90m?\u001B[0m T\u001B[90m?\u001B[0m X\u001B[90m?\u001B[0m",
+    );
+  });
+
+  test("parses cache, remote, and numstat inputs defensively", () => {
     expect(parseStatuslineCache("not json")).toBeUndefined();
     expect(parseStatuslineCache('"string"')).toBeUndefined();
-    expect(parseStatuslineCache('{"label":"ts"}')).toEqual({ label: "ts" });
+    expect(parseStatuslineCache('{"label":"TS"}')).toEqual({ label: "TS" });
+    expect(parseOriginRepository("git@github.com:org/repo.git\n")).toBe(
+      "org/repo",
+    );
+    expect(parseOriginRepository("https://github.com/org/repo.git")).toBe(
+      "org/repo",
+    );
+    expect(parseNumstat("3\t2\ta.ts\n-\t-\timage.png\n4\t0\tb.ts\n")).toEqual({
+      additions: 7,
+      deletions: 2,
+    });
   });
 });
 
-describe("pi-harness statusline feature", () => {
+describe("pi-harness statusline lifecycle", () => {
+  test("session_start installs a dynamic custom footer from cache", async () => {
+    const home = await tempDirectory("pi-statusline-render");
+    const project = join(home, "repo");
+    await fs.mkdir(project, { recursive: true });
+    await markAsProject(project);
+    const cacheDir = join(home, "cache");
+    await seedCache(cacheDir, project, sampleCache("BUN"));
+
+    const pi = createFakePi({
+      cwd: project,
+      gitBranch: "feat/pi",
+      model: { id: "claude-opus", name: "Opus 4.8 (1M context)" },
+      contextUsage: { percent: 58.2 },
+    });
+    setupStatusline(pi, makeConfig(home, [project]), {
+      cacheDir,
+      getGitStatus: async () =>
+        gitStatus({ repository: "acme/repo", additions: 5, deletions: 2 }),
+    });
+
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    expect(pi.renderFooter(200)).toEqual([
+      "acme/repo | repo | feat/pi | +5 -2 | BUN L✓ T… X✗ | Opus 4.8 | 42%",
+    ]);
+    expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toBeUndefined();
+    expect(pi.footerRenderRequests).toBeGreaterThan(0);
+  });
+
+  test("branch, model, and context updates are reflected without reinstalling", async () => {
+    const home = await tempDirectory("pi-statusline-dynamic");
+    const plainDirectory = join(home, "plain");
+    await fs.mkdir(plainDirectory, { recursive: true });
+    const pi = createFakePi({
+      cwd: plainDirectory,
+      gitBranch: "main",
+      model: { id: "model-a", name: "Model A" },
+      contextUsage: { percent: 20 },
+    });
+    setupStatusline(pi, makeConfig(home, [plainDirectory]), {
+      getGitStatus: async () => gitStatus({ repository: undefined }),
+    });
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    const requestsBeforeBranchChange = pi.footerRenderRequests;
+
+    pi.setGitBranch("topic");
+    pi.ctx.model = { id: "model-b", name: "Model B" };
+    pi.setContextUsage({ percent: 91 });
+
+    expect(pi.footerRenderRequests).toBeGreaterThan(requestsBeforeBranchChange);
+    expect(pi.renderFooter(100)).toEqual(["plain | topic | Model B | 9%"]);
+  });
+
+  test("default git collection renders origin and tracked diff totals", async () => {
+    const home = await tempDirectory("pi-statusline-git");
+    const project = join(home, "repo");
+    await fs.mkdir(project, { recursive: true });
+    await markAsProject(project);
+    await fs.writeFile(join(project, "source.txt"), "one\ntwo\n");
+    await runGit(project, ["init", "-b", "main"]);
+    await runGit(project, ["config", "user.email", "test@example.com"]);
+    await runGit(project, ["config", "user.name", "Status Test"]);
+    await runGit(project, ["add", "."]);
+    await runGit(project, ["commit", "-m", "initial"]);
+    await runGit(project, [
+      "remote",
+      "add",
+      "origin",
+      "git@github.com:owner/project.git",
+    ]);
+    await fs.writeFile(
+      join(project, "source.txt"),
+      "one changed\ntwo\nthree\n",
+    );
+
+    const pi = createFakePi({ cwd: project, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home, [project]), {
+      cacheDir: join(home, "cache"),
+    });
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+
+    expect(pi.renderFooter(200)).toEqual([
+      "owner/project | repo | main | +2 -1 | TS L? T? X?",
+    ]);
+  });
+
   test("agent_settled launches the checks runner detached for a trusted root", async () => {
-    const home = await makeTempDirectory("pi-statusline-run");
+    const home = await tempDirectory("pi-statusline-run");
     const project = join(home, "repo");
     await fs.mkdir(project, { recursive: true });
     await markAsProject(project);
@@ -124,7 +406,6 @@ describe("pi-harness statusline feature", () => {
       "lib/statusline_checks_run.sh",
     );
     await fs.mkdir(dirname(runner), { recursive: true });
-    // Temp-then-rename so the poller never observes a half-written capture.
     await fs.writeFile(
       runner,
       [
@@ -138,7 +419,11 @@ describe("pi-harness statusline feature", () => {
     const pi = createFakePi({ cwd: project });
     setupStatusline(pi, makeConfig(home, [project]), {
       cacheDir: join(home, "cache"),
-      getBranch: async () => undefined,
+      getGitStatus: async () => ({
+        isRepository: false,
+        additions: 0,
+        deletions: 0,
+      }),
     });
 
     await pi.emitAgentSettled();
@@ -150,12 +435,11 @@ describe("pi-harness statusline feature", () => {
         return false;
       }
     });
-    const captured = (await fs.readFile(captureFile, "utf8")).trim();
-    expect(captured).toBe(project);
+    expect((await fs.readFile(captureFile, "utf8")).trim()).toBe(project);
   });
 
   test("passes the canonical trusted root to the runner as a boundary", async () => {
-    const home = await makeTempDirectory("pi-statusline-boundary");
+    const home = await tempDirectory("pi-statusline-boundary");
     const project = join(home, "repo");
     await fs.mkdir(project, { recursive: true });
     await markAsProject(project);
@@ -178,7 +462,11 @@ describe("pi-harness statusline feature", () => {
     const pi = createFakePi({ cwd: project });
     setupStatusline(pi, makeConfig(home, [project]), {
       cacheDir: join(home, "cache"),
-      getBranch: async () => undefined,
+      getGitStatus: async () => ({
+        isRepository: false,
+        additions: 0,
+        deletions: 0,
+      }),
     });
 
     await pi.emitAgentSettled();
@@ -190,18 +478,19 @@ describe("pi-harness statusline feature", () => {
         return false;
       }
     });
-    const [cwdArg, boundaryArg] = (await fs.readFile(captureFile, "utf8"))
+    const [cwdArgument, boundaryArgument] = (
+      await fs.readFile(captureFile, "utf8")
+    )
       .trim()
       .split("\n");
-    expect(cwdArg).toBe(project);
-    // The boundary is the canonical (realpath'd) trusted root containing cwd.
-    expect(await fs.realpath(boundaryArg ?? "")).toBe(
+    expect(cwdArgument).toBe(project);
+    expect(await fs.realpath(boundaryArgument ?? "")).toBe(
       await fs.realpath(project),
     );
   });
 
   test("an untrusted root never launches the runner but still renders", async () => {
-    const home = await makeTempDirectory("pi-statusline-untrusted");
+    const home = await tempDirectory("pi-statusline-untrusted");
     const project = join(home, "repo");
     await fs.mkdir(project, { recursive: true });
     await markAsProject(project);
@@ -212,81 +501,87 @@ describe("pi-harness statusline feature", () => {
       launches.push(command);
     };
 
-    const pi = createFakePi({ cwd: project });
-    setupStatusline(pi, makeConfig(home, []), {
+    let gitReads = 0;
+    const pi = createFakePi({ cwd: project, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home), {
       cacheDir,
       spawnDetached,
-      getBranch: async () => "main",
+      getGitStatus: async () => {
+        gitReads += 1;
+        return gitStatus({ repository: undefined });
+      },
     });
 
     await pi.emitAgentSettled();
     expect(launches).toHaveLength(0);
-    expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toEqual([
-      "ts lint:✓ type:… test:✗ (main)",
-    ]);
+    expect(gitReads).toBe(0);
+    expect(pi.renderFooter(100)).toEqual(["repo | main | TS L✓ T… X✗"]);
   });
 
-  test("session_start renders the widget from the cache", async () => {
-    const home = await makeTempDirectory("pi-statusline-render");
+  test("directory-valued project markers are ignored like the shell -f test", async () => {
+    const home = await tempDirectory("pi-statusline-dirmarker");
     const project = join(home, "repo");
-    await fs.mkdir(project, { recursive: true });
-    await markAsProject(project);
-    const cacheDir = join(home, "cache");
-    await seedCache(cacheDir, project, sampleCache("bun"));
-    const spawnDetached: DetachedSpawnFunction = () => {};
-
-    const pi = createFakePi({ cwd: project });
-    setupStatusline(pi, makeConfig(home, []), {
-      cacheDir,
-      spawnDetached,
-      getBranch: async () => "feat/pi",
-    });
-
-    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
-    expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toEqual([
-      "bun lint:✓ type:… test:✗ (feat/pi)",
-    ]);
-  });
-
-  test("directory-valued project markers are ignored like the shell's -f test", async () => {
-    const home = await makeTempDirectory("pi-statusline-dirmarker");
-    const project = join(home, "repo");
-    // Markers exist but as DIRECTORIES; statusline_checks_lib.sh uses [ -f ]
-    // so it walks past this root — the TS port must agree or the two
-    // harnesses would read different cache files for the same cwd.
     await fs.mkdir(join(project, "package.json"), { recursive: true });
     await fs.mkdir(join(project, "tsconfig.json"), { recursive: true });
     await fs.mkdir(join(project, "Cargo.toml"), { recursive: true });
     const cacheDir = join(home, "cache");
     await seedCache(cacheDir, project, sampleCache());
-    const spawnDetached: DetachedSpawnFunction = () => {};
 
-    const pi = createFakePi({ cwd: project });
-    setupStatusline(pi, makeConfig(home, []), {
+    const pi = createFakePi({ cwd: project, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home), {
       cacheDir,
-      spawnDetached,
-      getBranch: async () => "main",
+      getGitStatus: async () => gitStatus({ repository: undefined }),
     });
-
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
-    // No project root detected → the seeded cache must NOT be read.
-    expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toEqual(["(main)"]);
+
+    expect(pi.renderFooter(100)).toEqual(["repo | main"]);
   });
 
-  test("outside a detected project the widget falls back to the branch", async () => {
-    const home = await makeTempDirectory("pi-statusline-noproject");
-    const plainDir = join(home, "plain");
-    await fs.mkdir(plainDir, { recursive: true });
-    const spawnDetached: DetachedSpawnFunction = () => {};
+  test("skips git and UI collection in print and JSON modes", async () => {
+    const home = await tempDirectory("pi-statusline-headless");
+    const project = join(home, "repo");
+    await fs.mkdir(project, { recursive: true });
+    await markAsProject(project);
 
-    const pi = createFakePi({ cwd: plainDir });
-    setupStatusline(pi, makeConfig(home, []), {
+    for (const mode of ["print", "json"] as const) {
+      let gitReads = 0;
+      let branchReads = 0;
+      const pi = createFakePi({ cwd: project, mode });
+      setupStatusline(pi, makeConfig(home, [project]), {
+        getGitStatus: async () => {
+          gitReads += 1;
+          return gitStatus();
+        },
+        getBranch: async () => {
+          branchReads += 1;
+          return "main";
+        },
+      });
+
+      await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+      await pi.emitAgentSettled();
+      expect(gitReads).toBe(0);
+      expect(branchReads).toBe(0);
+      expect(pi.renderFooter(100)).toBeUndefined();
+      expect(pi.widgets.size).toBe(0);
+    }
+  });
+
+  test("uses the widget fallback in RPC mode", async () => {
+    const home = await tempDirectory("pi-statusline-fallback");
+    const project = join(home, "repo");
+    await fs.mkdir(project, { recursive: true });
+    await markAsProject(project);
+    const pi = createFakePi({ cwd: project, mode: "rpc" });
+    setupStatusline(pi, makeConfig(home, [project]), {
       cacheDir: join(home, "cache"),
-      spawnDetached,
+      getGitStatus: async () => gitStatus({ repository: undefined }),
       getBranch: async () => "main",
     });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
-    expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toEqual(["(main)"]);
+    expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toEqual([
+      "repo | main | TS L? T? X?",
+    ]);
   });
 });
