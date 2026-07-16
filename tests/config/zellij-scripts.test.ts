@@ -114,16 +114,16 @@ describe("translate-popup.sh", () => {
     await Promise.all(tmps.splice(0).map(cleanupTestDirectory));
   });
 
-  test("pipeline contract: capture reaches plamo-translate as English-to-Japanese input", async () => {
+  test("pipeline contract: uvx runs pinned PLaMo for English-to-Japanese input", async () => {
     const tmp = await setupTestDirectory("zellij-pipeline", ["bin"]);
     tmps.push(tmp);
     const binDir = join(tmp, "bin");
     await makeStub(binDir, "pbcopy", "cat > /dev/null");
     await makeStub(
       binDir,
-      "plamo-translate",
+      "uvx",
       [
-        `printf '%s\\n' "$*" > "${join(tmp, "plamo-args.txt")}"`,
+        `printf '%s\\n' "$*" > "${join(tmp, "uvx-args.txt")}"`,
         `cat > "${join(tmp, "plamo-stdin.txt")}"`,
         `printf 'こんにちは、世界'`,
       ].join("\n"),
@@ -137,8 +137,10 @@ describe("translate-popup.sh", () => {
 
     const plamoStdin = await fs.readFile(join(tmp, "plamo-stdin.txt"), "utf-8");
     expect(plamoStdin).toBe("Hello, world\n");
-    const plamoArgs = await fs.readFile(join(tmp, "plamo-args.txt"), "utf-8");
-    expect(plamoArgs).toBe("--from English --to Japanese\n");
+    const uvxArgs = await fs.readFile(join(tmp, "uvx-args.txt"), "utf-8");
+    expect(uvxArgs).toBe(
+      "--no-config --from plamo-translate==1.0.5 --python 3.14 --with transformers==4.57.6 plamo-translate --from English --to Japanese\n",
+    );
 
     // Translated output is shown in the popup
     expect(r.stdout).toContain("こんにちは、世界");
@@ -154,7 +156,7 @@ describe("translate-popup.sh", () => {
     await makeStub(binDir, "pbcopy", "cat > /dev/null");
     await makeStub(
       binDir,
-      "plamo-translate",
+      "uvx",
       `cat > "${join(tmp, "plamo-stdin.txt")}"; printf 'ok'`,
     );
 
@@ -176,14 +178,14 @@ describe("translate-popup.sh", () => {
     ).rejects.toThrow();
   });
 
-  test("missing capture: plamo-translate is not invoked and the empty message is shown", async () => {
+  test("missing capture: uvx is not invoked and the empty message is shown", async () => {
     const tmp = await setupTestDirectory("zellij-empty-capture", ["bin"]);
     tmps.push(tmp);
     const binDir = join(tmp, "bin");
     await makeStub(
       binDir,
-      "plamo-translate",
-      `touch "${join(tmp, "plamo-invoked")}"; cat > /dev/null`,
+      "uvx",
+      `touch "${join(tmp, "uvx-invoked")}"; cat > /dev/null`,
     );
 
     const r = await runScript(TRANSLATE_POPUP, {
@@ -192,7 +194,7 @@ describe("translate-popup.sh", () => {
     });
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("翻訳対象が空です");
-    expect(fs.access(join(tmp, "plamo-invoked"))).rejects.toThrow();
+    expect(fs.access(join(tmp, "uvx-invoked"))).rejects.toThrow();
   });
 });
 
@@ -257,11 +259,10 @@ describe("config.kdl copy_command contract", () => {
 });
 
 describe("mise tool config", () => {
-  test("pins PLaMo Translate with a compatible Python toolchain", async () => {
+  test("uses mise-managed uv without a pipx PLaMo installation", async () => {
     const config = await fs.readFile(MISE_CONFIG, "utf8");
-    expect(config).toContain(
-      '"pipx:plamo-translate" = { version = "1.0.5", uvx_args = "--python 3.14 --with transformers==4.57.6" }',
-    );
+    expect(config).toMatch(/^uv = "[^"]+"$/m);
+    expect(config).not.toContain("pipx:plamo-translate");
   });
 });
 

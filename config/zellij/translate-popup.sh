@@ -25,7 +25,9 @@ fi
 if [ -z "$text" ]; then
   echo "翻訳対象が空です (選択テキストがキャプチャされていません)"
 else
-  printf '%s\n' "$text" | plamo-translate --from English --to Japanese
+  printf '%s\n' "$text" | uvx --no-config --from plamo-translate==1.0.5 \
+    --python 3.14 --with transformers==4.57.6 \
+    plamo-translate --from English --to Japanese
 fi
 
 printf '\n[Enter で閉じる]'
