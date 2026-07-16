@@ -41,5 +41,79 @@
       "reason": "bit clone relay+ は禁止です"
     }
   ],
+  "allow": [
+    {
+      "source": "Bash(pnpm:*)",
+      "pattern": "^pnpm(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(bun:*)",
+      "pattern": "^bun(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(cargo:*)",
+      "pattern": "^cargo(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(find:*)",
+      "pattern": "^find(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(gh:*)",
+      "pattern": "^gh(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(mise:*)",
+      "pattern": "^mise(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(codex login status:*)",
+      "pattern": "^codex login status(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(~/.claude/hooks/lib/codex-stage.sh:*)",
+      "pattern": "^~/\\.claude/hooks/lib/codex-stage\\.sh(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(bit issue init:*)",
+      "pattern": "^bit issue init(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(bit issue create:*)",
+      "pattern": "^bit issue create(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(bit issue list:*)",
+      "pattern": "^bit issue list(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(bit issue view:*)",
+      "pattern": "^bit issue view(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(bit issue get:*)",
+      "pattern": "^bit issue get(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(bit issue update:*)",
+      "pattern": "^bit issue update(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(bit issue close:*)",
+      "pattern": "^bit issue close(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(bit issue reopen:*)",
+      "pattern": "^bit issue reopen(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(bit issue comment:*)",
+      "pattern": "^bit issue comment(?: |(?![\\s\\S]))"
+    },
+    {
+      "source": "Bash(bit issue search:*)",
+      "pattern": "^bit issue search(?: |(?![\\s\\S]))"
+    }
+  ],
   "ask": []
 }

@@ -1,10 +1,7 @@
 /**
- * Detects drift between the Claude harness permission source of truth
- * (claude/.claude/settings.json permissions.deny) and the pi-harness rule
- * data (pi/extensions/pi-harness/permission-rules.json).
- *
- * Until Phase 2A lands the rules file this check reports SKIP and succeeds,
- * so run-all stays green during the skeleton phase.
+ * Detect drift between Claude Bash permission sources and the translated
+ * pi-harness rules. Read permissions are intentionally outside this Bash-only
+ * policy.
  */
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -18,46 +15,120 @@ const RULES_PATH = resolve(
   "../pi/extensions/pi-harness/permission-rules.json",
 );
 
-interface ClaudeSettings {
-  permissions?: { deny?: string[] };
+type RuleBucket = "allow" | "deny";
+
+export interface ClaudePermissionSettings {
+  permissions?: { allow?: string[]; deny?: string[] };
 }
 
-interface PiPermissionRules {
+export interface PiPermissionRules {
+  allow?: { source?: string }[];
   deny?: { source?: string }[];
 }
 
-let rulesRaw: string;
-try {
-  rulesRaw = await readFile(RULES_PATH, "utf8");
-} catch {
+export interface PermissionRuleDrift {
+  missing: string[];
+  stale: string[];
+  duplicates: string[];
+  wrongBucket: string[];
+}
+
+const bashSources = (entries: readonly string[] | undefined): string[] =>
+  (entries ?? []).filter((entry) => entry.startsWith("Bash("));
+
+const duplicates = (entries: readonly string[]): string[] => {
+  const seen = new Set<string>();
+  const repeated = new Set<string>();
+  for (const entry of entries) {
+    if (seen.has(entry)) repeated.add(entry);
+    seen.add(entry);
+  }
+  return [...repeated].sort();
+};
+
+export const findPermissionRuleDrift = (
+  settings: ClaudePermissionSettings,
+  rules: PiPermissionRules,
+): PermissionRuleDrift => {
+  const expected: Record<RuleBucket, string[]> = {
+    allow: bashSources(settings.permissions?.allow),
+    deny: bashSources(settings.permissions?.deny),
+  };
+  const actual: Record<RuleBucket, string[]> = {
+    allow: (rules.allow ?? []).flatMap((rule) =>
+      rule.source === undefined ? [] : [rule.source],
+    ),
+    deny: (rules.deny ?? []).flatMap((rule) =>
+      rule.source === undefined ? [] : [rule.source],
+    ),
+  };
+
+  const missing: string[] = [];
+  const stale: string[] = [];
+  const wrongBucket: string[] = [];
+  const duplicateEntries: string[] = [];
+
+  for (const bucket of ["allow", "deny"] as const) {
+    const other: RuleBucket = bucket === "allow" ? "deny" : "allow";
+    const expectedSet = new Set(expected[bucket]);
+    const actualSet = new Set(actual[bucket]);
+    const otherSet = new Set(actual[other]);
+
+    for (const source of expected[bucket]) {
+      if (actualSet.has(source)) continue;
+      if (otherSet.has(source)) {
+        wrongBucket.push(`${bucket}:${source}`);
+      } else {
+        missing.push(`${bucket}:${source}`);
+      }
+    }
+    for (const source of actual[bucket]) {
+      if (source.startsWith("Bash(") && !expectedSet.has(source)) {
+        stale.push(`${bucket}:${source}`);
+      }
+    }
+    for (const source of duplicates(actual[bucket])) {
+      duplicateEntries.push(`${bucket}:${source}`);
+    }
+  }
+
+  return {
+    missing: [...new Set(missing)].sort(),
+    stale: [...new Set(stale)].sort(),
+    duplicates: duplicateEntries.sort(),
+    wrongBucket: [...new Set(wrongBucket)].sort(),
+  };
+};
+
+if (import.meta.main) {
+  let rulesRaw: string;
+  try {
+    rulesRaw = await readFile(RULES_PATH, "utf8");
+  } catch {
+    console.log("check-pi-rules: SKIP (permission-rules.json not present yet)");
+    process.exit(0);
+  }
+
+  const settings = JSON.parse(
+    await readFile(SETTINGS_PATH, "utf8"),
+  ) as ClaudePermissionSettings;
+  const rules = JSON.parse(rulesRaw) as PiPermissionRules;
+  const drift = findPermissionRuleDrift(settings, rules);
+  const findings = (
+    Object.entries(drift) as [keyof PermissionRuleDrift, string[]][]
+  ).flatMap(([kind, entries]) =>
+    entries.map((entry: string) => `${kind}: ${entry}`),
+  );
+
+  if (findings.length > 0) {
+    console.error("check-pi-rules: permission source drift detected:");
+    for (const finding of findings) console.error(`  - ${finding}`);
+    process.exit(1);
+  }
+
+  const allowCount = bashSources(settings.permissions?.allow).length;
+  const denyCount = bashSources(settings.permissions?.deny).length;
   console.log(
-    "check-pi-rules: SKIP (permission-rules.json not present yet — lands in Phase 2A)",
+    `check-pi-rules: OK (${allowCount} Bash allow, ${denyCount} Bash deny entries covered)`,
   );
-  process.exit(0);
 }
-
-const settings: ClaudeSettings = JSON.parse(
-  await readFile(SETTINGS_PATH, "utf8"),
-);
-const rules: PiPermissionRules = JSON.parse(rulesRaw);
-
-const claudeDeny = settings.permissions?.deny ?? [];
-const piDenySources = new Set(
-  (rules.deny ?? [])
-    .map((rule) => rule.source)
-    .filter((source) => source !== undefined),
-);
-
-const missing = claudeDeny.filter((entry) => !piDenySources.has(entry));
-if (missing.length > 0) {
-  console.error(
-    "check-pi-rules: claude settings.json deny entries missing from permission-rules.json:",
-  );
-  for (const entry of missing) console.error(`  - ${entry}`);
-  console.error(
-    "Each Claude deny entry must appear as a deny rule 'source' (the rule itself may translate the pattern).",
-  );
-  process.exit(1);
-}
-
-console.log(`check-pi-rules: OK (${claudeDeny.length} deny entries covered)`);

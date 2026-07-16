@@ -42,11 +42,33 @@ const DEFAULT_TOGGLES: Record<ToggleableFeature, boolean> = {
   "ask-user-question": true,
 };
 
+export interface PermissionJudgeConfig {
+  enabled: boolean;
+  url: string;
+  model: string;
+  timeoutMs: number;
+  confirmTimeoutMs: number;
+  keepAlive: string;
+  configurationError?: string;
+}
+
+export const DEFAULT_PERMISSION_JUDGE_CONFIG: Readonly<PermissionJudgeConfig> =
+  {
+    enabled: true,
+    url: "http://127.0.0.1:11434/api/chat",
+    model: "qwen2.5:1.5b",
+    timeoutMs: 2_000,
+    confirmTimeoutMs: 30_000,
+    keepAlive: "30m",
+  };
+
 export interface HarnessConfig {
   isChild: boolean;
   features: Record<ToggleableFeature, boolean>;
   trust: TrustConfig;
   paths: HarnessPaths;
+  /** Always materialized by loadConfig; optional for narrow test adapters. */
+  permissionJudge?: PermissionJudgeConfig;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -71,6 +93,166 @@ function readLocalToggles(
   }
 }
 
+const validJudgeUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "http:" &&
+      (url.hostname === "127.0.0.1" || url.hostname === "[::1]") &&
+      url.pathname === "/api/chat" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === ""
+    );
+  } catch {
+    return false;
+  }
+};
+
+const validModel = (value: string): boolean =>
+  value.length > 0 &&
+  value.length <= 128 &&
+  /^[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+)?$/.test(value) &&
+  !value.toLowerCase().includes("cloud");
+
+const validKeepAlive = (value: string): boolean => {
+  const match = /^(\d{1,4})(ms|s|m|h)$/.exec(value);
+  if (match === null) return false;
+  const amount = Number(match[1]);
+  if (amount < 1) return false;
+  const multiplier = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 }[
+    match[2] as "ms" | "s" | "m" | "h"
+  ];
+  const durationMs = amount * multiplier;
+  return durationMs >= 1_000 && durationMs <= 86_400_000;
+};
+
+const readPermissionJudgeConfig = (
+  localConfigFile: string,
+): PermissionJudgeConfig => {
+  let root: Record<string, unknown> | undefined;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(localConfigFile, "utf8"));
+    if (!isRecord(parsed)) {
+      return {
+        ...DEFAULT_PERMISSION_JUDGE_CONFIG,
+        configurationError: "pi-harness.local.json must contain an object",
+      };
+    }
+    root = parsed;
+  } catch (error) {
+    if (
+      isRecord(error) &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      return { ...DEFAULT_PERMISSION_JUDGE_CONFIG };
+    }
+    return {
+      ...DEFAULT_PERMISSION_JUDGE_CONFIG,
+      configurationError: "pi-harness.local.json could not be parsed",
+    };
+  }
+
+  const value = root.permissionJudge;
+  if (value === undefined) return { ...DEFAULT_PERMISSION_JUDGE_CONFIG };
+  if (!isRecord(value)) {
+    return {
+      ...DEFAULT_PERMISSION_JUDGE_CONFIG,
+      configurationError: "permissionJudge must contain an object",
+    };
+  }
+
+  const errors: string[] = [];
+  // Only an omitted field inherits its default. JSON null is an explicit,
+  // invalid value and must make the judge unavailable rather than silently
+  // enabling or reconfiguring it.
+  const enabled =
+    value.enabled === undefined
+      ? DEFAULT_PERMISSION_JUDGE_CONFIG.enabled
+      : value.enabled;
+  const url =
+    value.url === undefined ? DEFAULT_PERMISSION_JUDGE_CONFIG.url : value.url;
+  const model =
+    value.model === undefined
+      ? DEFAULT_PERMISSION_JUDGE_CONFIG.model
+      : value.model;
+  const timeoutMs =
+    value.timeoutMs === undefined
+      ? DEFAULT_PERMISSION_JUDGE_CONFIG.timeoutMs
+      : value.timeoutMs;
+  const confirmTimeoutMs =
+    value.confirmTimeoutMs === undefined
+      ? DEFAULT_PERMISSION_JUDGE_CONFIG.confirmTimeoutMs
+      : value.confirmTimeoutMs;
+  const keepAlive =
+    value.keepAlive === undefined
+      ? DEFAULT_PERMISSION_JUDGE_CONFIG.keepAlive
+      : value.keepAlive;
+
+  if (typeof enabled !== "boolean") errors.push("enabled");
+  if (typeof url !== "string" || !validJudgeUrl(url)) errors.push("url");
+  if (typeof model !== "string" || !validModel(model)) errors.push("model");
+  if (
+    typeof timeoutMs !== "number" ||
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < 100 ||
+    timeoutMs > 10_000
+  ) {
+    errors.push("timeoutMs");
+  }
+  if (
+    typeof confirmTimeoutMs !== "number" ||
+    !Number.isInteger(confirmTimeoutMs) ||
+    confirmTimeoutMs < 1_000 ||
+    confirmTimeoutMs > 300_000
+  ) {
+    errors.push("confirmTimeoutMs");
+  }
+  if (typeof keepAlive !== "string" || !validKeepAlive(keepAlive)) {
+    errors.push("keepAlive");
+  }
+
+  return {
+    enabled:
+      typeof enabled === "boolean"
+        ? enabled
+        : DEFAULT_PERMISSION_JUDGE_CONFIG.enabled,
+    url:
+      typeof url === "string" && validJudgeUrl(url)
+        ? url
+        : DEFAULT_PERMISSION_JUDGE_CONFIG.url,
+    model:
+      typeof model === "string" && validModel(model)
+        ? model
+        : DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+    timeoutMs:
+      typeof timeoutMs === "number" &&
+      Number.isInteger(timeoutMs) &&
+      timeoutMs >= 100 &&
+      timeoutMs <= 10_000
+        ? timeoutMs
+        : DEFAULT_PERMISSION_JUDGE_CONFIG.timeoutMs,
+    confirmTimeoutMs:
+      typeof confirmTimeoutMs === "number" &&
+      Number.isInteger(confirmTimeoutMs) &&
+      confirmTimeoutMs >= 1_000 &&
+      confirmTimeoutMs <= 300_000
+        ? confirmTimeoutMs
+        : DEFAULT_PERMISSION_JUDGE_CONFIG.confirmTimeoutMs,
+    keepAlive:
+      typeof keepAlive === "string" && validKeepAlive(keepAlive)
+        ? keepAlive
+        : DEFAULT_PERMISSION_JUDGE_CONFIG.keepAlive,
+    ...(errors.length === 0
+      ? {}
+      : {
+          configurationError: `invalid permissionJudge fields: ${errors.join(", ")}`,
+        }),
+  };
+};
+
 export function loadConfig(
   env: Record<string, string | undefined> = process.env,
   paths: HarnessPaths = resolvePaths(),
@@ -91,5 +273,6 @@ export function loadConfig(
     features,
     trust: loadTrustConfig(paths.localConfigFile),
     paths,
+    permissionJudge: readPermissionJudgeConfig(paths.localConfigFile),
   };
 }

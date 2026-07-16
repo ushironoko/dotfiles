@@ -1,10 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
 import {
   evaluateCommand,
   loadRules,
 } from "../../pi/extensions/pi-harness/features/permission-policy/rules";
-import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
+import {
+  DEFAULT_PERMISSION_JUDGE_CONFIG,
+  loadConfig,
+  type HarnessConfig,
+} from "../../pi/extensions/pi-harness/config";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import type { ToolCallEvent } from "../../pi/extensions/pi-harness/lib/pi-like";
 import { createFakePi } from "./fake-pi";
@@ -163,6 +171,202 @@ describe("permission-policy", () => {
     const rules = loadRules('{"deny":[],"ask":[]}');
     expect(evaluateCommand("bit issue claim 123", rules).verdict).toBe("deny");
     expect(evaluateCommand("bit relay serve", rules).verdict).toBe("deny");
+  });
+});
+
+describe("explicit allow matching", () => {
+  const rules = loadRules(
+    JSON.stringify({
+      deny: [],
+      allow: [
+        { pattern: "^bun(?: |(?![\\s\\S]))" },
+        {
+          pattern: "^~/\\.claude/hooks/lib/codex-stage\\.sh(?: |(?![\\s\\S]))",
+        },
+      ],
+      ask: [],
+    }),
+  );
+
+  test.each([
+    "bun",
+    "bun test",
+    "bun run check --filter=core",
+    'bun test --filter "foo bar"',
+    "bun -e 'process.exit(0)'",
+    "bun test && bun run lint",
+  ])("allows an explicitly trusted concrete command: %s", (command) => {
+    expect(evaluateCommand(command, rules).verdict).toBe("allow");
+  });
+
+  test.each([
+    "sudo bun test",
+    "FOO=bar bun test",
+    "/tmp/bun test",
+    "./bun test",
+    '"bun" test',
+    String.raw`b\un test`,
+    'bun "$task"',
+    "bun $IFS#x; /tmp/evil",
+    "bun ${IFS}#x; /tmp/evil",
+    "bun\r#x; /tmp/evil",
+    "bun test &",
+    "bun --version > ~/.ssh/authorized_keys",
+    "> ~/.ssh/authorized_keys; bun --version",
+  ])(
+    "does not widen an allow through wrappers, paths, or expansion: %s",
+    (command) => {
+      expect(evaluateCommand(command, rules).verdict).toBe("default-continue");
+    },
+  );
+
+  test("preserves a path-specific allow without basename widening", () => {
+    expect(
+      evaluateCommand("~/.claude/hooks/lib/codex-stage.sh review", rules)
+        .verdict,
+    ).toBe("allow");
+    for (const command of [
+      "/tmp/codex-stage.sh review",
+      "~/_claude/hooks/lib/codex-stage.sh review",
+      '"~/.claude/hooks/lib/codex-stage.sh" review',
+      String.raw`\~/.claude/hooks/lib/codex-stage.sh review`,
+    ]) {
+      expect(evaluateCommand(command, rules).verdict).toBe("default-continue");
+    }
+  });
+
+  test.each([
+    "bun\u00a0evil",
+    "bun\u000cevil",
+    "bun\u2028evil",
+    "bun\u2028",
+    "bun\u2029",
+    "bun\r",
+    "bit\u00a0issue\u00a0init",
+    "codex\u00a0login\u00a0status",
+  ])(
+    "does not treat non-shell Unicode whitespace as a separator: %s",
+    (command) => {
+      const productionRules = loadRules(
+        readFileSync(
+          resolve(
+            import.meta.dir,
+            "../../pi/extensions/pi-harness/permission-rules.json",
+          ),
+          "utf8",
+        ),
+      );
+      expect(evaluateCommand(command, productionRules).verdict).toBe(
+        "default-continue",
+      );
+    },
+  );
+});
+
+describe("permission judge config", () => {
+  test("is enabled with local-only defaults when the config file is absent", () => {
+    const paths = resolvePaths(join(tmpdir(), `missing-pi-home-${Date.now()}`));
+    expect(loadConfig({}, paths).permissionJudge).toEqual(
+      DEFAULT_PERMISSION_JUDGE_CONFIG,
+    );
+  });
+
+  test("loads valid overrides and gives child profiles the same judge", async () => {
+    const home = await mkdtemp(join(tmpdir(), "pi-judge-config-"));
+    const paths = resolvePaths(home);
+    await mkdir(join(home, ".pi", "agent"), { recursive: true });
+    await writeFile(
+      paths.localConfigFile,
+      JSON.stringify({
+        permissionJudge: {
+          enabled: false,
+          url: "http://[::1]:11500/api/chat",
+          model: "local/model:1.5b",
+          timeoutMs: 750,
+          confirmTimeoutMs: 5_000,
+          keepAlive: "2h",
+        },
+      }),
+    );
+
+    try {
+      const parent = loadConfig({}, paths).permissionJudge;
+      const child = loadConfig(
+        { PI_HARNESS_CHILD: "1" },
+        paths,
+      ).permissionJudge;
+      expect(parent).toEqual({
+        enabled: false,
+        url: "http://[::1]:11500/api/chat",
+        model: "local/model:1.5b",
+        timeoutMs: 750,
+        confirmTimeoutMs: 5_000,
+        keepAlive: "2h",
+      });
+      expect(child).toEqual({
+        enabled: false,
+        url: "http://[::1]:11500/api/chat",
+        model: "local/model:1.5b",
+        timeoutMs: 750,
+        confirmTimeoutMs: 5_000,
+        keepAlive: "2h",
+      });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("marks explicit unsafe or out-of-range values unavailable", async () => {
+    const home = await mkdtemp(join(tmpdir(), "pi-judge-invalid-config-"));
+    const paths = resolvePaths(home);
+    await mkdir(join(home, ".pi", "agent"), { recursive: true });
+    await writeFile(
+      paths.localConfigFile,
+      JSON.stringify({
+        permissionJudge: {
+          url: "https://example.com/api/chat",
+          model: "qwen:cloud",
+          timeoutMs: 10,
+          confirmTimeoutMs: 500,
+          keepAlive: "0m",
+        },
+      }),
+    );
+
+    try {
+      expect(loadConfig({}, paths).permissionJudge?.configurationError).toBe(
+        "invalid permissionJudge fields: url, model, timeoutMs, confirmTimeoutMs, keepAlive",
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects explicit null fields instead of silently defaulting them", async () => {
+    const home = await mkdtemp(join(tmpdir(), "pi-judge-null-config-"));
+    const paths = resolvePaths(home);
+    await mkdir(join(home, ".pi", "agent"), { recursive: true });
+    await writeFile(
+      paths.localConfigFile,
+      JSON.stringify({
+        permissionJudge: {
+          enabled: null,
+          url: null,
+          model: null,
+          timeoutMs: null,
+          confirmTimeoutMs: null,
+          keepAlive: null,
+        },
+      }),
+    );
+
+    try {
+      expect(loadConfig({}, paths).permissionJudge?.configurationError).toBe(
+        "invalid permissionJudge fields: enabled, url, model, timeoutMs, confirmTimeoutMs, keepAlive",
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });
 
@@ -329,7 +533,7 @@ describe("evaluateCommand compound-command scanning", () => {
     expect(verdictOf("rm -rf /tmp/x && bit issue claim")).toBe("deny");
   });
 
-  test("allow only wins when every segment is allowed", () => {
+  test("allow only wins when every shell segment is explicitly allowed", () => {
     const rules = loadRules(
       JSON.stringify({
         deny: [],
@@ -337,14 +541,14 @@ describe("evaluateCommand compound-command scanning", () => {
         ask: [],
       }),
     );
-    // Both segments allowed → allow.
+    // Every executable segment is covered by the explicit trust grant.
     expect(
       evaluateCommand(
         "git reset --hard HEAD~1 && git reset --hard HEAD~2",
         rules,
       ).verdict,
     ).toBe("allow");
-    // One allowed, one plain → proceeds as default-continue.
+    // A mixed allowed/default command remains the default.
     expect(
       evaluateCommand("git reset --hard HEAD~1 && echo done", rules).verdict,
     ).toBe("default-continue");

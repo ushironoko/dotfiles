@@ -77,6 +77,8 @@ export interface Segment {
   readonly words: readonly string[];
   readonly opaque: ReadonlySet<number>;
   readonly opaqueUnquoted: ReadonlySet<number>;
+  /** Concrete pre-normalization command text, when safe for explicit allow. */
+  readonly allowCandidate?: string;
 }
 
 export interface ScanResult {
@@ -483,6 +485,7 @@ export const scanCommand = (command: string): ScanResult => {
   let wordOpaqueUnquoted = false;
   let atWordStart = true;
   let pendingRedirectTarget = false;
+  let allowEligible = true;
   let i = 0;
 
   const resetWord = (): void => {
@@ -508,14 +511,27 @@ export const scanCommand = (command: string): ScanResult => {
   const flushSegment = (): void => {
     flushWord();
     pendingRedirectTarget = false;
-    if (words.length > 0) {
-      segments.push({ words, opaque, opaqueUnquoted });
-      words = [];
-      opaque = new Set<number>();
-      opaqueUnquoted = new Set<number>();
+    if (words.length > 0 || !allowEligible) {
+      const allowCandidate =
+        allowEligible && opaque.size === 0 && words.length > 0
+          ? words.join(" ")
+          : undefined;
+      segments.push({
+        words,
+        opaque,
+        opaqueUnquoted,
+        ...(allowCandidate === undefined ? {} : { allowCandidate }),
+      });
     }
+    words = [];
+    opaque = new Set<number>();
+    opaqueUnquoted = new Set<number>();
+    allowEligible = true;
   };
   const fail = (): ScanResult => ({ segments, subs, ok: false });
+  const markHeadSyntax = (): void => {
+    if (words.length === 0) allowEligible = false;
+  };
   const markOpaque = (unquoted: boolean): void => {
     wordStarted = true;
     wordOpaque = true;
@@ -526,6 +542,7 @@ export const scanCommand = (command: string): ScanResult => {
     const c = command[i];
 
     if (c === "\\") {
+      markHeadSyntax();
       const n = command[i + 1];
       if (n === undefined) {
         word += "\\";
@@ -546,6 +563,7 @@ export const scanCommand = (command: string): ScanResult => {
     }
 
     if (c === "'") {
+      markHeadSyntax();
       const k = command.indexOf("'", i + 1);
       if (k === -1) return fail();
       word += command.slice(i + 1, k);
@@ -556,6 +574,7 @@ export const scanCommand = (command: string): ScanResult => {
     }
 
     if (c === '"') {
+      markHeadSyntax();
       const dq = readDoubleQuote(command, i);
       if (dq === undefined) return fail();
       word += dq.literal;
@@ -568,12 +587,17 @@ export const scanCommand = (command: string): ScanResult => {
     }
 
     if (c === "$") {
+      markHeadSyntax();
       const dollar = readDollar(command, i);
       if (dollar === undefined) return fail();
       subs.push(...dollar.subs);
       if (dollar.boundary) {
+        // Shell comment recognition happens before expansion: in `$IFS#x`,
+        // `#x` is part of the same lexical word, not a comment. Keep that
+        // lexical state and never derive an explicit allow through IFS.
+        allowEligible = false;
         flushWord();
-        atWordStart = true;
+        atWordStart = false;
         i = dollar.end;
         continue;
       }
@@ -586,6 +610,7 @@ export const scanCommand = (command: string): ScanResult => {
     }
 
     if (c === "`") {
+      markHeadSyntax();
       const back = readBacktick(command, i);
       if (back === undefined) return fail();
       subs.push(back.inner);
@@ -597,6 +622,7 @@ export const scanCommand = (command: string): ScanResult => {
     }
 
     if (c === "<" || c === ">") {
+      allowEligible = false;
       if (command[i + 1] === "(") {
         const bal = readBalanced(command, i + 1, "(", ")");
         if (bal === undefined) return fail();
@@ -649,7 +675,7 @@ export const scanCommand = (command: string): ScanResult => {
       continue;
     }
 
-    if (c === "\n" || c === "\r") {
+    if (c === "\n") {
       flushSegment();
       atWordStart = true;
       i += 1;
@@ -674,6 +700,7 @@ export const scanCommand = (command: string): ScanResult => {
     if (c === "&") {
       // &> / &>> redirect-all — a redirection, not a background operator.
       if (command[i + 1] === ">") {
+        allowEligible = false;
         flushWord();
         i += 2;
         if (command[i] === ">") i += 1;
@@ -681,6 +708,7 @@ export const scanCommand = (command: string): ScanResult => {
         atWordStart = true;
         continue;
       }
+      if (command[i + 1] !== "&") allowEligible = false;
       flushSegment();
       i += 1;
       if (command[i] === "&") i += 1;
