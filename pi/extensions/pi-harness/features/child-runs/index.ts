@@ -4,7 +4,7 @@ import {
   extractPersistedChildRuns,
 } from "./persistence";
 import { ChildRunRegistry } from "./registry";
-import { ChildRunsOverlayController, type BrowserContextLike } from "./ui";
+import { ChildRunsPanelController, type BrowserContextLike } from "./ui";
 
 interface RuntimeContextLike extends BrowserContextLike {
   sessionManager?: {
@@ -58,7 +58,7 @@ const replayBranch = (
 const setupChildRuns = (pi: PiLike): ChildRunsIntegration => {
   const runtime = pi as unknown as RuntimePiLike;
   const registry = new ChildRunRegistry();
-  const overlay = new ChildRunsOverlayController(registry);
+  const panel = new ChildRunsPanelController(registry);
 
   runtime.registerCommand("subagents", {
     description: "Show and focus the live child-session browser",
@@ -72,14 +72,14 @@ const setupChildRuns = (pi: PiLike): ChildRunsIntegration => {
         }
         return;
       }
-      await overlay.showAndFocus(ctx);
+      await panel.showAndFocus(ctx);
     },
   });
 
   runtime.registerShortcut("ctrl+alt+s", {
     description: "Show and focus child sessions",
     handler: async (ctx) => {
-      await overlay.showAndFocus(ctx);
+      await panel.showAndFocus(ctx);
     },
   });
 
@@ -108,14 +108,14 @@ const setupChildRuns = (pi: PiLike): ChildRunsIntegration => {
   runtime.on("session_start", (_event, ctx) => replayBranch(registry, ctx));
   runtime.on("session_tree", (_event, ctx) => replayBranch(registry, ctx));
   runtime.on("session_shutdown", () => {
-    overlay.dispose();
+    panel.dispose();
     registry.dispose();
   });
 
   return {
     registry,
     ensureVisible(ctx) {
-      overlay.ensureVisible(ctx as RuntimeContextLike);
+      panel.ensureVisible(ctx as RuntimeContextLike);
     },
   };
 };

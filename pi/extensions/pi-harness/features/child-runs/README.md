@@ -1,21 +1,31 @@
 # Child-session browser
 
 The pi-harness `subagent` and `workflow` tools expose their child runs in a
-resident TUI browser.
+resident full-width TUI browser between the chat editor and statusline.
 
 ## Behavior
 
-- The first child invocation mounts a non-capturing overlay on the right.
-- The overlay is visible at terminal widths of 120 columns or more and never
-  steals focus from the main editor.
+- The first child invocation mounts the browser in pi's `belowEditor` widget
+  slot without stealing focus from the main editor.
+- The browser receives the full terminal content width and remains in normal
+  layout flow, so it does not cover chat or editor content.
+- Its height is approximately one quarter of the terminal, clamped to 4–10
+  lines. The cap preserves useful editor and conversation space on common
+  24-row and 40-row terminals; extremely short terminals may still be tight.
 - `/subagents` or `Ctrl+Alt+S` shows and focuses the browser.
-- `Esc` returns focus to the main session while leaving the overlay visible.
-- `q` hides the overlay. A new child run, `/subagents`, or the shortcut shows
+- When a cursor-aware editor has focus, Down keeps its native cursor/history
+  behavior. If native Down changes neither editor text nor cursor at the bottom
+  boundary, focus moves to the browser with its current run selected.
+- Down transfer is best-effort: editors without `getText()` and `getCursor()`
+  retain native Down handling and use `/subagents` or `Ctrl+Alt+S` for explicit
+  focus. Remapped Down is honored when the editor's runtime keybindings manager
+  is detectable; otherwise default terminal sequences are used.
+- `Esc` returns focus to the main editor while leaving the browser visible.
+- `q` hides the browser. A new child run, `/subagents`, or the shortcut shows
   it again.
 - Arrow keys select runs and scroll transcripts. Enter opens a run, Left or
   `b` returns to the list, and End resumes live-follow mode.
-- On narrow terminals the normal subagent/workflow tool row remains the live
-  status fallback.
+- The normal subagent/workflow tool row remains a compact status summary.
 
 Closing, hiding, or unfocusing the browser never cancels child execution.
 
@@ -50,10 +60,12 @@ raw source data.
 
 ## Interactive smoke check
 
-1. Start pi in a terminal at least 120 columns wide.
-2. Launch a parallel `subagent` call or a multi-task `workflow`.
-3. Confirm the right overlay appears without taking editor focus.
-4. Press `Ctrl+Alt+S`, select a running child, and verify live updates.
+1. Start pi and launch a parallel `subagent` call or a multi-task `workflow`.
+2. Confirm the full-width browser appears below the editor and above the
+   statusline without taking editor focus.
+3. In a multi-line draft, press Down and confirm native cursor movement still
+   works; at the bottom boundary, press Down again and confirm browser focus.
+4. Select a running child and verify live updates.
 5. Press `Esc` and confirm normal editor input continues.
 6. Press `q`, then run `/subagents` and confirm the same browser reappears.
 7. Resume the parent session and confirm completed transcripts are restored.
