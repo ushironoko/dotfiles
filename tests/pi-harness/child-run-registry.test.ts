@@ -185,6 +185,38 @@ describe("child-run registry", () => {
     ).toBe(true);
   });
 
+  test("enforces the serialized per-run byte cap during persistence", () => {
+    const store = registry();
+    const { invocationId, runIds } = begin(store, 1);
+    const runId = runIds[0]!;
+    store.observe(runId, { type: "process_started", at: 1 });
+    for (let index = 0; index < 400; index++) {
+      store.observe(runId, {
+        type: "assistant_final",
+        text: `${index}:${"x".repeat(234)}`,
+        at: 2,
+      });
+    }
+    store.finishRun(runId, {
+      status: "succeeded",
+      reason: "completed",
+    });
+
+    const liveTranscript =
+      store.getInvocation(invocationId)!.runs[0]!.transcript;
+    expect(
+      Buffer.byteLength(JSON.stringify(liveTranscript), "utf8"),
+    ).toBeGreaterThan(MAX_RUN_TRANSCRIPT_BYTES);
+
+    const persistedRun = store.toPersisted(invocationId)!.runs[0]!;
+    expect(
+      Buffer.byteLength(JSON.stringify(persistedRun), "utf8"),
+    ).toBeLessThanOrEqual(MAX_RUN_TRANSCRIPT_BYTES);
+    expect(
+      persistedRun.transcript.some((item) => item.type === "truncated"),
+    ).toBe(true);
+  });
+
   test("exposes compact summaries without transcript text", () => {
     const store = registry();
     const { invocationId, runIds } = begin(store, 1);

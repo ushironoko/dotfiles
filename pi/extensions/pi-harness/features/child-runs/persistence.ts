@@ -163,6 +163,12 @@ const decodeRun = (
   }
   dropped += Math.max(0, value.transcript.length - MAX_RUN_TRANSCRIPT_ITEMS);
   if (dropped > 0) {
+    while (run.transcript.length >= MAX_RUN_TRANSCRIPT_ITEMS) {
+      const removed = run.transcript.pop();
+      if (removed === undefined) break;
+      dropped += 1;
+      droppedBytes += byteLength(removed);
+    }
     run.transcript.push({
       type: "truncated",
       omittedItems: dropped,

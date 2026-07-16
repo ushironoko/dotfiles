@@ -3,6 +3,7 @@ import {
   CHILD_RUNS_SCHEMA,
   CHILD_RUNS_VERSION,
   MAX_RUN_TRANSCRIPT_BYTES,
+  MAX_RUN_TRANSCRIPT_ITEMS,
   type PersistedChildRunsV1,
 } from "../../pi/extensions/pi-harness/features/child-runs/model";
 import {
@@ -99,6 +100,24 @@ describe("child-run persisted details", () => {
     expect(
       decoded.runs[0]?.transcript.some((item) => item.type === "truncated"),
     ).toBe(true);
+  });
+
+  test("keeps replay transcripts within the item cap including truncation", () => {
+    const hostile = payload();
+    hostile.runs[0]!.transcript = Array.from(
+      { length: MAX_RUN_TRANSCRIPT_ITEMS + 1 },
+      (_, index) => ({
+        type: "assistant" as const,
+        text: `answer-${index}`,
+      }),
+    );
+
+    const transcript = decodePersistedChildRuns(hostile)!.runs[0]!.transcript;
+    expect(transcript).toHaveLength(MAX_RUN_TRANSCRIPT_ITEMS);
+    expect(transcript.at(-1)).toMatchObject({
+      type: "truncated",
+      omittedItems: 2,
+    });
   });
 
   test("extracts only active-branch tool-result payloads and deduplicates ids", () => {

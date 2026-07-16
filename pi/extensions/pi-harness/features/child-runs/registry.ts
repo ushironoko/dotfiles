@@ -301,9 +301,8 @@ export class ChildRunRegistry {
           Math.max(1, invocation.runs.length),
       ),
     );
-    const runs = invocation.runs.map((run) =>
-      this.persistRun(run, perRunBudget),
-    );
+    const runBudget = Math.min(perRunBudget, MAX_RUN_TRANSCRIPT_BYTES);
+    const runs = invocation.runs.map((run) => this.persistRun(run, runBudget));
     const payload: PersistedChildRunsV1 = {
       schema: CHILD_RUNS_SCHEMA,
       version: CHILD_RUNS_VERSION,
