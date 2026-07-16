@@ -143,11 +143,16 @@ export default defineConfig({
       include: sharedAgentSkills,
     },
     {
-      // pi auto-discovers ~/.pi/agent/extensions/*/index.ts. Only this child
-      // directory is linked — ~/.pi/agent itself stays machine-local
+      // pi auto-discovers ~/.pi/agent/extensions/*/index.ts. Only child
+      // directories are linked — ~/.pi/agent itself stays machine-local
       // (auth.json, settings.json, sessions are rewritten by pi at runtime).
       source: "./pi/extensions/pi-harness",
       target: "~/.pi/agent/extensions/pi-harness",
+      type: "directory",
+    },
+    {
+      source: "./pi/extensions/codex-web",
+      target: "~/.pi/agent/extensions/codex-web",
       type: "directory",
     },
     {

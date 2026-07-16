@@ -1,8 +1,8 @@
 /**
- * Enforces the pi-harness self-containment rule: the extension is loaded via
- * a symlink under ~/.pi/agent/extensions, so it must not import repo code
- * outside its own directory. Allowed runtime imports:
- *   (a) relative paths that stay inside pi/extensions/pi-harness
+ * Enforces self-containment for every dotfiles-managed pi extension. Each
+ * extension is loaded via a child symlink under ~/.pi/agent/extensions, so it
+ * must not import repo code outside its own directory. Allowed runtime imports:
+ *   (a) relative paths that stay inside that extension's directory
  *   (b) node: builtins
  *   (c) @earendil-works/* — type-only imports only (erased at runtime)
  *
@@ -17,10 +17,16 @@ import { Glob } from "bun";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 
-export const EXTENSION_ROOT = resolve(
-  import.meta.dir,
-  "../pi/extensions/pi-harness",
+export const PI_EXTENSIONS_ROOT = resolve(import.meta.dir, "../pi/extensions");
+export const EXTENSION_ROOT = resolve(PI_EXTENSIONS_ROOT, "pi-harness");
+export const CODEX_WEB_EXTENSION_ROOT = resolve(
+  PI_EXTENSIONS_ROOT,
+  "codex-web",
 );
+export const EXTENSION_ROOTS = [
+  EXTENSION_ROOT,
+  CODEX_WEB_EXTENSION_ROOT,
+] as const;
 
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 
@@ -273,7 +279,13 @@ export const scanExtension = async (root: string): Promise<string[]> => {
 };
 
 if (import.meta.main) {
-  const violations = await scanExtension(EXTENSION_ROOT);
+  const violations: string[] = [];
+  for (const root of EXTENSION_ROOTS) {
+    const extensionName = relative(PI_EXTENSIONS_ROOT, root);
+    for (const violation of await scanExtension(root)) {
+      violations.push(`${extensionName}/${violation}`);
+    }
+  }
 
   if (violations.length > 0) {
     console.error("check-pi-imports: self-containment violations:");
@@ -281,5 +293,5 @@ if (import.meta.main) {
     process.exit(1);
   }
 
-  console.log("check-pi-imports: OK");
+  console.log(`check-pi-imports: OK (${EXTENSION_ROOTS.length} extensions)`);
 }
