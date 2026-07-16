@@ -80,6 +80,7 @@ const createLayout = (rows: number, columns: number) => {
     { matches: () => false },
     () => {},
     () => {},
+    () => {},
   );
   const footer = new Text("footer-main\nfooter-detail", 0, 0);
 

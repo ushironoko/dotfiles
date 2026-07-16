@@ -42,6 +42,23 @@ interface WidgetUiLike {
     content: ((tui: TuiLike, theme: unknown) => ComponentLike) | undefined,
     options?: { placement: "belowEditor" },
   ): void;
+  custom?<T>(
+    factory: (
+      tui: TuiLike,
+      theme: unknown,
+      keybindings: KeybindingsLike,
+      done: (result: T) => void,
+    ) => ComponentLike,
+    options?: {
+      overlay?: boolean;
+      overlayOptions?: {
+        width?: number | `${number}%`;
+        maxHeight?: number | `${number}%`;
+        anchor?: string;
+        margin?: number;
+      };
+    },
+  ): Promise<T>;
   onTerminalInput?(
     handler: (data: string) => { consume?: boolean; data?: string } | undefined,
   ): () => void;
@@ -49,8 +66,6 @@ interface WidgetUiLike {
 }
 
 export type BrowserContextLike = CtxLike;
-
-type BrowserMode = "list" | "detail";
 
 type FlatRun = {
   invocation: ChildInvocationSnapshot;
@@ -65,6 +80,12 @@ const flattenRuns = (snapshots: ChildInvocationSnapshot[]): FlatRun[] =>
     invocation.runs.map((run) => ({ invocation, run })),
   );
 
+const findRun = (
+  snapshots: ChildInvocationSnapshot[],
+  runId: string | undefined,
+): FlatRun | undefined =>
+  flattenRuns(snapshots).find(({ run }) => run.runId === runId);
+
 const line = (value: string, width: number): string =>
   truncateToWidth(stripTerminalControls(value), Math.max(0, width), "");
 
@@ -73,11 +94,12 @@ const taskOneLine = (task: string): string =>
 
 const transcriptLines = (item: TranscriptItem, width: number): string[] => {
   if (item.type === "assistant") {
-    return ["assistant:"].concat(
-      wrapPlainText(item.text, Math.max(1, width - 2)).map(
+    return [
+      "assistant:",
+      ...wrapPlainText(item.text, Math.max(1, width - 2)).map(
         (part) => `  ${part}`,
       ),
-    );
+    ];
   }
   if (item.type === "tool") {
     let runStatus: ChildRunStatus = "succeeded";
@@ -94,18 +116,15 @@ const transcriptLines = (item: TranscriptItem, width: number): string[] => {
 };
 
 export class ChildRunsBrowserComponent implements ComponentLike {
-  private mode: BrowserMode = "list";
   private selectedRunId: string | undefined;
   private listOffset = 0;
-  private detailOffset = 0;
-  private follow = true;
-  private lastDetailMaxOffset = 0;
   private readonly unsubscribe: () => void;
 
   constructor(
     private readonly registry: ChildRunRegistry,
     private readonly tui: TuiLike,
     private readonly keybindings: KeybindingsLike,
+    private readonly onInspect: (runId: string) => void,
     private readonly onUnfocus: () => void,
     private readonly onHide: () => void,
   ) {
@@ -131,22 +150,13 @@ export class ChildRunsBrowserComponent implements ComponentLike {
       this.selectedRunId = runs[0]?.run.runId;
     }
 
-    const body =
-      this.mode === "detail"
-        ? this.renderDetail(runs, safeWidth, height - 2)
-        : this.renderList(snapshots, runs, safeWidth, height - 2);
-    const title =
-      this.mode === "detail" ? " Child session " : " Child sessions ";
+    const body = this.renderList(snapshots, runs, safeWidth, height - 2);
+    const title = " Child sessions ";
     const borderWidth = Math.max(1, safeWidth - visibleWidth(title));
     return [
       line(`${title}${"─".repeat(borderWidth)}`, safeWidth),
       ...body,
-      line(
-        this.mode === "detail"
-          ? "←/b list  ↑↓ scroll  End live  Esc unfocus  q hide"
-          : "↑↓ select  Enter inspect  Esc unfocus  q hide",
-        safeWidth,
-      ),
+      line("↑↓ select  Enter inspect  Esc unfocus  q hide", safeWidth),
     ].slice(0, height);
   }
 
@@ -161,57 +171,29 @@ export class ChildRunsBrowserComponent implements ComponentLike {
       return;
     }
 
-    if (this.mode === "list") {
-      const current = Math.max(
-        0,
-        runs.findIndex(({ run }) => run.runId === this.selectedRunId),
-      );
-      if (this.matches(data, "tui.select.up") || data === "k") {
-        this.selectedRunId = runs[Math.max(0, current - 1)]?.run.runId;
-      } else if (this.matches(data, "tui.select.down") || data === "j") {
-        this.selectedRunId =
-          runs[Math.min(runs.length - 1, current + 1)]?.run.runId;
-      } else if (this.matches(data, "tui.select.pageUp")) {
-        this.selectedRunId = runs[Math.max(0, current - 8)]?.run.runId;
-      } else if (this.matches(data, "tui.select.pageDown")) {
-        this.selectedRunId =
-          runs[Math.min(runs.length - 1, current + 8)]?.run.runId;
-      } else if (
-        this.matches(data, "tui.select.confirm") ||
-        this.matches(data, "tui.editor.cursorRight")
-      ) {
-        if (this.selectedRunId !== undefined) {
-          this.mode = "detail";
-          this.follow = true;
-          this.detailOffset = 0;
-        }
-      } else return;
-    } else {
-      if (data === "b" || this.matches(data, "tui.editor.cursorLeft")) {
-        this.mode = "list";
-      } else if (this.matches(data, "tui.select.up") || data === "k") {
-        this.follow = false;
-        this.detailOffset = Math.max(0, this.detailOffset - 1);
-      } else if (this.matches(data, "tui.select.pageUp")) {
-        this.follow = false;
-        this.detailOffset = Math.max(0, this.detailOffset - 8);
-      } else if (this.matches(data, "tui.select.down") || data === "j") {
-        this.detailOffset = Math.min(
-          this.lastDetailMaxOffset,
-          this.detailOffset + 1,
-        );
-        this.follow = this.detailOffset >= this.lastDetailMaxOffset;
-      } else if (this.matches(data, "tui.select.pageDown")) {
-        this.detailOffset = Math.min(
-          this.lastDetailMaxOffset,
-          this.detailOffset + 8,
-        );
-        this.follow = this.detailOffset >= this.lastDetailMaxOffset;
-      } else if (this.matches(data, "tui.editor.cursorLineEnd")) {
-        this.follow = true;
-        this.detailOffset = this.lastDetailMaxOffset;
-      } else return;
-    }
+    const current = Math.max(
+      0,
+      runs.findIndex(({ run }) => run.runId === this.selectedRunId),
+    );
+    if (this.matches(data, "tui.select.up") || data === "k") {
+      this.selectedRunId = runs[Math.max(0, current - 1)]?.run.runId;
+    } else if (this.matches(data, "tui.select.down") || data === "j") {
+      this.selectedRunId =
+        runs[Math.min(runs.length - 1, current + 1)]?.run.runId;
+    } else if (this.matches(data, "tui.select.pageUp")) {
+      this.selectedRunId = runs[Math.max(0, current - 8)]?.run.runId;
+    } else if (this.matches(data, "tui.select.pageDown")) {
+      this.selectedRunId =
+        runs[Math.min(runs.length - 1, current + 8)]?.run.runId;
+    } else if (
+      this.matches(data, "tui.select.confirm") ||
+      defaultKeyMatches(data, "tui.select.confirm") ||
+      this.matches(data, "tui.editor.cursorRight")
+    ) {
+      if (this.selectedRunId !== undefined) {
+        this.onInspect(this.selectedRunId);
+      }
+    } else return;
     this.tui.requestRender();
   }
 
@@ -223,10 +205,6 @@ export class ChildRunsBrowserComponent implements ComponentLike {
 
   getSelectedRunId(): string | undefined {
     return this.selectedRunId;
-  }
-
-  getMode(): BrowserMode {
-    return this.mode;
   }
 
   private renderList(
@@ -277,56 +255,184 @@ export class ChildRunsBrowserComponent implements ComponentLike {
       .map((item) => line(item.text, width));
   }
 
-  private renderDetail(
-    runs: FlatRun[],
-    width: number,
-    viewport: number,
-  ): string[] {
-    const selected = runs.find(({ run }) => run.runId === this.selectedRunId);
-    if (selected === undefined) {
-      this.mode = "list";
-      return [line("Selected child run is no longer available.", width)];
+  private matches(data: string, keybinding: string): boolean {
+    try {
+      return this.keybindings.matches(data, keybinding);
+    } catch {
+      return false;
     }
-    const { invocation, run } = selected;
-    const allLines: string[] = [
-      `${run.agent} · ${statusLabel(run.status)}`,
-      `${invocation.label}${run.stageName ? ` · ${run.stageName}` : ""}`,
-      `task: ${taskOneLine(run.task)}`,
-      "",
-    ];
-    for (const item of run.transcript) {
-      allLines.push(...transcriptLines(item, width));
+  }
+}
+
+const detailContentLines = (selected: FlatRun, width: number): string[] => {
+  const { invocation, run } = selected;
+  const lines: string[] = [
+    `${run.agent} · ${statusLabel(run.status)}`,
+    `${invocation.label}${run.stageName ? ` · ${run.stageName}` : ""}`,
+    `task: ${taskOneLine(run.task)}`,
+    "",
+  ];
+  for (const item of run.transcript) {
+    lines.push(...transcriptLines(item, width));
+  }
+  if (run.liveDraft) {
+    lines.push("assistant [live]:");
+    lines.push(
+      ...wrapPlainText(run.liveDraft, Math.max(1, width - 2)).map(
+        (part) => `  ${part}`,
+      ),
+    );
+  }
+  if (run.transcript.length === 0 && !run.liveDraft) {
+    lines.push(
+      run.status === "queued" ? "(not launched)" : "(no assistant text yet)",
+    );
+  }
+  if (run.protocolWarnings > 0) {
+    lines.push(`(${run.protocolWarnings} child stream warning(s))`);
+  }
+  return lines;
+};
+
+/** Focused, near-full-screen transcript viewer for one fixed child run. */
+export class ChildRunDetailComponent implements ComponentLike {
+  private offset = 0;
+  private follow: boolean;
+  private lastMaxOffset = 0;
+  private lastViewport = 1;
+  private readonly unsubscribe: () => void;
+
+  constructor(
+    private readonly registry: ChildRunRegistry,
+    private readonly runId: string,
+    private readonly tui: TuiLike,
+    private readonly keybindings: KeybindingsLike,
+    private readonly onClose: () => void,
+  ) {
+    const initialStatus = findRun(this.registry.getSnapshots(), this.runId)?.run
+      .status;
+    this.follow = initialStatus === "queued" || initialStatus === "running";
+    this.unsubscribe = registry.subscribe(() => this.tui.requestRender());
+  }
+
+  render(width: number): string[] {
+    const safeWidth = Math.max(1, width);
+    // The overlay uses a one-cell margin on each side, so rows - 2 fills the
+    // available height without competing with the resident editor-flow panel.
+    // On tiny terminals, drop the hint and then the title before reducing the
+    // transcript to zero visible rows.
+    const height = Math.max(1, this.tui.terminal.rows - 2);
+    const showTitle = height >= 2;
+    const showHint = height >= 3;
+    const chrome = Number(showTitle) + Number(showHint);
+    const viewport = Math.max(1, height - chrome);
+    this.lastViewport = viewport;
+    const selected = findRun(this.registry.getSnapshots(), this.runId);
+    const allLines =
+      selected === undefined
+        ? ["Selected child run is no longer available."]
+        : detailContentLines(selected, safeWidth);
+
+    this.lastMaxOffset = Math.max(0, allLines.length - viewport);
+    if (this.follow) this.offset = this.lastMaxOffset;
+    else this.offset = Math.min(this.offset, this.lastMaxOffset);
+
+    const visible = allLines.slice(this.offset, this.offset + viewport);
+    while (visible.length < viewport) visible.push("");
+
+    const running = selected?.run.status === "running";
+    let state = "";
+    if (running && this.follow) state = " · LIVE";
+    else if (!this.follow) state = " · PAUSED";
+    const title = ` Child session${state} `;
+    const borderWidth = Math.max(1, safeWidth - visibleWidth(title));
+    const first = allLines.length === 0 ? 0 : this.offset + 1;
+    const last = Math.min(allLines.length, this.offset + viewport);
+    const position = `${first}-${last}/${allLines.length}`;
+    const output: string[] = [];
+    if (showTitle) {
+      output.push(line(`${title}${"─".repeat(borderWidth)}`, safeWidth));
     }
-    if (run.liveDraft) {
-      allLines.push("assistant [live]:");
-      allLines.push(
-        ...wrapPlainText(run.liveDraft, Math.max(1, width - 2)).map(
-          (part) => `  ${part}`,
+    output.push(...visible.map((item) => line(item, safeWidth)));
+    if (showHint) {
+      output.push(
+        line(
+          `↑↓ scroll  PgUp/PgDn page  Home/End  Esc/←/b close  ${position}`,
+          safeWidth,
         ),
       );
     }
-    if (run.transcript.length === 0 && !run.liveDraft) {
-      allLines.push(
-        run.status === "queued" ? "(not launched)" : "(no assistant text yet)",
-      );
+    return output.slice(0, height);
+  }
+
+  handleInput(data: string): void {
+    if (
+      data === "q" ||
+      data === "b" ||
+      this.matches(data, "tui.select.cancel") ||
+      this.matches(data, "tui.editor.cursorLeft") ||
+      defaultKeyMatches(data, "tui.select.cancel") ||
+      defaultKeyMatches(data, "tui.editor.cursorLeft")
+    ) {
+      this.onClose();
+      return;
     }
-    if (run.protocolWarnings > 0) {
-      allLines.push(`(${run.protocolWarnings} child stream warning(s))`);
-    }
-    this.lastDetailMaxOffset = Math.max(0, allLines.length - viewport);
-    if (this.follow) this.detailOffset = this.lastDetailMaxOffset;
-    else
-      this.detailOffset = Math.min(this.detailOffset, this.lastDetailMaxOffset);
-    const visible = allLines.slice(
-      this.detailOffset,
-      this.detailOffset + Math.max(1, viewport),
-    );
-    if (this.follow && run.status === "running") {
-      visible[0] = `[LIVE] ${visible[0] ?? ""}`;
-    } else if (!this.follow) {
-      visible[0] = `[PAUSED] ${visible[0] ?? ""}`;
-    }
-    return visible.map((item) => line(item, width));
+
+    const page = Math.max(1, this.lastViewport - 1);
+    if (
+      data === "k" ||
+      this.matches(data, "tui.select.up") ||
+      defaultKeyMatches(data, "tui.select.up")
+    ) {
+      this.follow = false;
+      this.offset = Math.max(0, this.offset - 1);
+    } else if (
+      this.matches(data, "tui.select.pageUp") ||
+      defaultKeyMatches(data, "tui.select.pageUp")
+    ) {
+      this.follow = false;
+      this.offset = Math.max(0, this.offset - page);
+    } else if (
+      data === "j" ||
+      this.matches(data, "tui.select.down") ||
+      defaultKeyMatches(data, "tui.select.down")
+    ) {
+      this.offset = Math.min(this.lastMaxOffset, this.offset + 1);
+      this.follow = this.offset >= this.lastMaxOffset;
+    } else if (
+      this.matches(data, "tui.select.pageDown") ||
+      defaultKeyMatches(data, "tui.select.pageDown")
+    ) {
+      this.offset = Math.min(this.lastMaxOffset, this.offset + page);
+      this.follow = this.offset >= this.lastMaxOffset;
+    } else if (
+      this.matches(data, "tui.editor.cursorLineStart") ||
+      defaultKeyMatches(data, "tui.editor.cursorLineStart")
+    ) {
+      this.follow = false;
+      this.offset = 0;
+    } else if (
+      this.matches(data, "tui.editor.cursorLineEnd") ||
+      defaultKeyMatches(data, "tui.editor.cursorLineEnd")
+    ) {
+      this.follow = true;
+      this.offset = this.lastMaxOffset;
+    } else return;
+    this.tui.requestRender();
+  }
+
+  invalidate(): void {}
+
+  dispose(): void {
+    this.unsubscribe();
+  }
+
+  getOffset(): number {
+    return this.offset;
+  }
+
+  isFollowing(): boolean {
+    return this.follow;
   }
 
   private matches(data: string, keybinding: string): boolean {
@@ -353,6 +459,7 @@ const defaultKeyMatches = (data: string, keybinding: string): boolean => {
     "tui.editor.cursorDown": ["down", "\u001b[B"],
     "tui.editor.cursorLeft": ["left", "\u001b[D"],
     "tui.editor.cursorRight": ["right", "\u001b[C"],
+    "tui.editor.cursorLineStart": ["home", "\u001b[H", "\u001b[1~"],
     "tui.editor.cursorLineEnd": ["end", "\u001b[F", "\u001b[4~"],
     "tui.select.up": ["up", "\u001b[A"],
     "tui.select.down": ["down", "\u001b[B"],
@@ -369,6 +476,7 @@ const defaultKeyMatches = (data: string, keybinding: string): boolean => {
     "tui.editor.cursorDown": /^1;1(?::[12])?B$/,
     "tui.editor.cursorLeft": /^1;1(?::[12])?D$/,
     "tui.editor.cursorRight": /^1;1(?::[12])?C$/,
+    "tui.editor.cursorLineStart": /^(?:1;1(?::[12])?H|7;1(?::[12])?~)$/,
     "tui.editor.cursorLineEnd": /^(?:1;1(?::[12])?F|8;1(?::[12])?~)$/,
     "tui.select.up": /^1;1(?::[12])?A$/,
     "tui.select.down": /^1;1(?::[12])?B$/,
@@ -417,6 +525,8 @@ export class ChildRunsPanelController {
   private tui: TuiLike | undefined;
   private ui: WidgetUiLike | undefined;
   private unsubscribeInput: (() => void) | undefined;
+  private detailClose: (() => void) | undefined;
+  private detailPromise: Promise<void> | undefined;
   private readonly keybindings: KeybindingsLike = {
     matches: (data, keybinding) =>
       this.editor?.keybindings?.matches(data, keybinding) ??
@@ -435,6 +545,8 @@ export class ChildRunsPanelController {
 
   dispose(): void {
     if (this.state === "disposed") return;
+    this.detailClose?.();
+    this.detailClose = undefined;
     if (this.tui?.focusedComponent === this.component) this.restoreFocus();
     if (this.state === "mounted") {
       this.ui?.setWidget(CHILD_RUNS_WIDGET_KEY, undefined);
@@ -473,6 +585,7 @@ export class ChildRunsPanelController {
             this.registry,
             tui,
             this.keybindings,
+            (runId) => this.openDetail(runId),
             () => this.restoreFocus(),
             () => this.hide(),
           );
@@ -499,6 +612,69 @@ export class ChildRunsPanelController {
     }
   }
 
+  private openDetail(runId: string): void {
+    const { ui } = this;
+    if (ui?.custom === undefined) {
+      ui?.notify(
+        "Child-session detail view requires custom TUI support.",
+        "warning",
+      );
+      return;
+    }
+    if (this.detailPromise !== undefined) return;
+
+    let detailPromise: Promise<void>;
+    try {
+      detailPromise = ui.custom<void>(
+        (tui, _theme, keybindings, done) => {
+          let closed = false;
+          const close = () => {
+            if (closed) return;
+            closed = true;
+            done(undefined);
+          };
+          this.detailClose = close;
+          return new ChildRunDetailComponent(
+            this.registry,
+            runId,
+            tui,
+            keybindings,
+            close,
+          );
+        },
+        {
+          overlay: true,
+          overlayOptions: {
+            width: "100%",
+            maxHeight: "100%",
+            anchor: "center",
+            margin: 1,
+          },
+        },
+      );
+    } catch (error) {
+      ui.notify(
+        `Child-session detail view could not open: ${String(error)}`,
+        "warning",
+      );
+      return;
+    }
+
+    this.detailPromise = detailPromise;
+    void detailPromise
+      .catch((error) => {
+        ui.notify(
+          `Child-session detail view could not open: ${String(error)}`,
+          "warning",
+        );
+      })
+      .finally(() => {
+        if (this.detailPromise !== detailPromise) return;
+        this.detailPromise = undefined;
+        this.detailClose = undefined;
+      });
+  }
+
   private installInputListener(ui: WidgetUiLike): void {
     if (this.unsubscribeInput !== undefined || ui.onTerminalInput === undefined)
       return;
@@ -519,16 +695,10 @@ export class ChildRunsPanelController {
     }
 
     const focused = this.tui.focusedComponent;
-    if (focused === this.component) return undefined;
+    if (focused === this.component || !isEditorLike(focused)) return undefined;
     this.captureFocusTarget(focused);
-    const editor = this.editor;
-    if (
-      editor === undefined ||
-      focused !== editor ||
-      editor.isShowingAutocomplete?.() === true
-    ) {
-      return undefined;
-    }
+    const editor = focused;
+    if (editor.isShowingAutocomplete?.() === true) return undefined;
 
     const beforeText = editor.getText();
     const beforeCursor = editor.getCursor();
