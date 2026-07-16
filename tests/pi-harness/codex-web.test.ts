@@ -39,14 +39,28 @@ const authFor = (accountId = "acct_test") => ({
   apiKey: tokenFor(accountId),
 });
 
-const sseResponse = (events: unknown[]): Response =>
+const serializeSseEvents = (events: unknown[]): string =>
+  events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+
+const responseWithoutContentType = (body: string): Response =>
   new Response(
-    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
-    {
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-    },
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body));
+        controller.close();
+      },
+    }),
+    { status: 200 },
   );
+
+const sseResponse = (events: unknown[]): Response =>
+  new Response(serializeSseEvents(events), {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+
+const sseResponseWithoutContentType = (events: unknown[]): Response =>
+  responseWithoutContentType(serializeSseEvents(events));
 
 const successEvents = (
   sourceUrl = "https://docs.example.com/guide?utm_source=test&section=api#top",
@@ -256,6 +270,27 @@ describe("bounded Codex Responses client", () => {
     expect(JSON.stringify(result)).not.toContain("raw");
   });
 
+  test("accepts validated SSE when the endpoint omits Content-Type", async () => {
+    const fetchMock: FetchLike = async () => {
+      const response = sseResponseWithoutContentType(successEvents());
+      expect(response.headers.get("content-type")).toBeNull();
+      return response;
+    };
+
+    await expect(
+      requestCodexWeb(baseRequest(), { fetch: fetchMock }),
+    ).resolves.toEqual({
+      answer: "Bounded cited answer.",
+      queries: ["bounded query"],
+      sources: [
+        {
+          title: "Example Docs",
+          url: "https://docs.example.com/guide?section=api",
+        },
+      ],
+    });
+  });
+
   test("requires an exact requested-page citation for URL inspection", async () => {
     const requestedUrl = "https://www.example.com/page";
     const goodFetch: FetchLike = async () =>
@@ -378,6 +413,10 @@ describe("bounded Codex Responses client", () => {
         expected: "stream-too-large",
         response: sseResponse(successEvents()),
         options: { maxStreamBytes: 10 },
+      },
+      {
+        expected: "missing-terminal-event",
+        response: responseWithoutContentType("{}"),
       },
       {
         expected: "invalid-content-type",
