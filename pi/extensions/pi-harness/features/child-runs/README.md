@@ -23,8 +23,14 @@ resident full-width TUI browser between the chat editor and statusline.
 - `Esc` returns focus to the main editor while leaving the browser visible.
 - `q` hides the browser. A new child run, `/subagents`, or the shortcut shows
   it again.
-- Arrow keys select runs and scroll transcripts. Enter opens a run, Left or
-  `b` returns to the list, and End resumes live-follow mode.
+- In the resident list, arrow keys only select runs. Enter opens the selected
+  run in a focused, near-full-screen overlay; raw Enter sequences are accepted
+  even when the editor keybinding adapter cannot classify them.
+- In the detail overlay, arrow keys only scroll that fixed transcript.
+  PageUp/PageDown move by a viewport, Home/End jump to the beginning/live end,
+  and Escape, Left, `b`, or `q` closes the overlay and returns to the list.
+- Completed transcripts open at the beginning. Running transcripts open in
+  live-follow mode; scrolling upward pauses follow until End is pressed.
 - The normal subagent/workflow tool row remains a compact status summary.
 
 Closing, hiding, or unfocusing the browser never cancels child execution.
@@ -61,11 +67,16 @@ raw source data.
 ## Interactive smoke check
 
 1. Start pi and launch a parallel `subagent` call or a multi-task `workflow`.
-2. Confirm the full-width browser appears below the editor and above the
+2. Confirm the full-width list appears below the editor and above the
    statusline without taking editor focus.
 3. In a multi-line draft, press Down and confirm native cursor movement still
-   works; at the bottom boundary, press Down again and confirm browser focus.
-4. Select a running child and verify live updates.
-5. Press `Esc` and confirm normal editor input continues.
-6. Press `q`, then run `/subagents` and confirm the same browser reappears.
-7. Resume the parent session and confirm completed transcripts are restored.
+   works; at the bottom boundary, press Down again and confirm list focus.
+4. Select a running child, press Enter, and confirm its near-full-screen detail
+   overlay opens with live updates.
+5. Press Up/PageUp and confirm the transcript scrolls while the selected run
+   remains fixed; press End and confirm live-follow resumes.
+6. Press Escape and confirm focus returns to the resident list, then Escape
+   again and confirm normal editor input continues.
+7. Press `q` in the list, then run `/subagents` and confirm it reappears.
+8. Resume the parent session and confirm completed transcripts open from the
+   beginning and remain scrollable within the documented retention bounds.
