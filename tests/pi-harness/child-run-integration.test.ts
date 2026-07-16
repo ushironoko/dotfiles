@@ -37,39 +37,12 @@ const makeConfig = (home: string): HarnessConfig => ({
   paths: resolvePaths(home),
 });
 
-interface OverlayHandleFake {
-  hidden: boolean;
-  focused: boolean;
-  hide(): void;
-  setHidden(value: boolean): void;
-  isHidden(): boolean;
-  focus(): void;
-  unfocus(): void;
-  isFocused(): boolean;
+interface RuntimeComponent {
+  render(width: number): string[];
+  invalidate(): void;
+  handleInput?(data: string): void;
+  dispose?(): void;
 }
-
-const createOverlayHandle = (): OverlayHandleFake => ({
-  hidden: false,
-  focused: false,
-  hide() {
-    this.hidden = true;
-  },
-  setHidden(value) {
-    this.hidden = value;
-  },
-  isHidden() {
-    return this.hidden;
-  },
-  focus() {
-    this.focused = true;
-  },
-  unfocus() {
-    this.focused = false;
-  },
-  isFocused() {
-    return this.focused;
-  },
-});
 
 const createRuntime = (cwd: string) => {
   const tools: ToolDefLike[] = [];
@@ -85,12 +58,56 @@ const createRuntime = (cwd: string) => {
     string,
     { handler: (ctx: RuntimeContext) => Promise<void> | void }
   >();
-  const overlayHandle = createOverlayHandle();
-  let customCalls = 0;
-  let component:
-    | { render(width: number): string[]; handleInput?(data: string): void }
+  const keybindings = {
+    matches: (data: string, key: string) =>
+      (key === "tui.editor.cursorDown" &&
+        (data === "down" || data === "\u001b[1;1:3B")) ||
+      (key === "tui.select.confirm" && data === "\r") ||
+      (key === "tui.select.cancel" && data === "\u001b") ||
+      (key === "tui.select.up" && data === "up") ||
+      (key === "tui.select.down" && data === "down"),
+  };
+  let editorLines = [""];
+  let editorCursor = { line: 0, col: 0 };
+  const editor: RuntimeComponent & {
+    keybindings: typeof keybindings;
+    getText(): string;
+    getCursor(): { line: number; col: number };
+    isShowingAutocomplete(): boolean;
+  } = {
+    keybindings,
+    render: () => ["editor"],
+    invalidate() {},
+    getText: () => editorLines.join("\n"),
+    getCursor: () => ({ ...editorCursor }),
+    isShowingAutocomplete: () => false,
+    handleInput(data) {
+      if (!keybindings.matches(data, "tui.editor.cursorDown")) return;
+      if (editorCursor.line < editorLines.length - 1) {
+        editorCursor.line += 1;
+        editorCursor.col = Math.min(
+          editorCursor.col,
+          editorLines[editorCursor.line]?.length ?? 0,
+        );
+        return;
+      }
+      editorCursor.col = editorLines[editorCursor.line]?.length ?? 0;
+    },
+  };
+  const tui = {
+    terminal: { rows: 40 },
+    requestRender: () => {},
+    focusedComponent: editor as RuntimeComponent | null,
+    setFocus(next: RuntimeComponent | null) {
+      this.focusedComponent = next;
+    },
+  };
+  let widgetCalls = 0;
+  let component: RuntimeComponent | undefined;
+  let widgetPlacement: string | undefined;
+  let terminalInputHandler:
+    | ((data: string) => { consume?: boolean; data?: string } | undefined)
     | undefined;
-  let overlayOptions: Record<string, unknown> | undefined;
   let branch: unknown[] = [];
 
   const ctx = {
@@ -103,27 +120,32 @@ const createRuntime = (cwd: string) => {
       confirm: async () => false,
       input: async () => undefined,
       notify: () => {},
-      custom(factory: Function, options: Record<string, unknown>) {
-        customCalls += 1;
-        component = Reflect.apply(factory, undefined, [
-          { terminal: { rows: 40 }, requestRender: () => {} },
-          {},
-          {
-            matches: (data: string, key: string) =>
-              (key === "tui.select.confirm" && data === "\r") ||
-              (key === "tui.select.cancel" && data === "\u001b") ||
-              (key === "tui.select.up" && data === "up") ||
-              (key === "tui.select.down" && data === "down"),
-          },
-          () => {},
-        ]);
-        const rawOverlayOptions = options.overlayOptions;
-        overlayOptions =
-          typeof rawOverlayOptions === "function"
-            ? Reflect.apply(rawOverlayOptions, undefined, [])
-            : (rawOverlayOptions as Record<string, unknown>);
-        Reflect.apply(options.onHandle as Function, undefined, [overlayHandle]);
-        return new Promise<void>(() => {});
+      setWidget(
+        _key: string,
+        content:
+          | ((widgetTui: typeof tui, theme: unknown) => RuntimeComponent)
+          | undefined,
+        options?: { placement?: string },
+      ) {
+        widgetCalls += 1;
+        if (content === undefined) {
+          component?.dispose?.();
+          component = undefined;
+          return;
+        }
+        widgetPlacement = options?.placement;
+        component = content(tui, {});
+      },
+      onTerminalInput(
+        handler: (
+          data: string,
+        ) => { consume?: boolean; data?: string } | undefined,
+      ) {
+        terminalInputHandler = handler;
+        return () => {
+          if (terminalInputHandler === handler)
+            terminalInputHandler = undefined;
+        };
       },
     },
   } as unknown as RuntimeContext;
@@ -160,10 +182,20 @@ const createRuntime = (cwd: string) => {
     tools,
     commands,
     shortcuts,
-    overlayHandle,
-    getCustomCalls: () => customCalls,
+    editor,
+    tui,
+    getWidgetCalls: () => widgetCalls,
     getComponent: () => component,
-    getOverlayOptions: () => overlayOptions,
+    getWidgetPlacement: () => widgetPlacement,
+    setEditorState(lines: string[], line: number, col: number) {
+      editorLines = [...lines];
+      editorCursor = { line, col };
+    },
+    dispatchInput(data: string) {
+      const result = terminalInputHandler?.(data);
+      if (result?.consume) return;
+      tui.focusedComponent?.handleInput?.(result?.data ?? data);
+    },
     setBranch(entries: unknown[]) {
       branch = entries;
     },
@@ -269,7 +301,7 @@ const writeAgent = async (home: string): Promise<void> => {
 };
 
 describe("child-run subagent integration", () => {
-  test("mounts one non-capturing overlay, streams summaries, and persists a safe transcript", async () => {
+  test("mounts one full-width below-editor panel, streams summaries, and persists a safe transcript", async () => {
     const home = await setupTestDirectory("pi-child-integration");
     tempDirectories.push(home);
     await writeAgent(home);
@@ -289,9 +321,10 @@ describe("child-run subagent integration", () => {
       runtime.ctx,
     ]);
 
-    expect(runtime.getCustomCalls()).toBe(1);
-    expect(runtime.getOverlayOptions()?.nonCapturing).toBe(true);
-    expect(runtime.overlayHandle.focused).toBe(false);
+    expect(runtime.getWidgetCalls()).toBe(1);
+    expect(runtime.getWidgetPlacement()).toBe("belowEditor");
+    expect(runtime.getComponent()).toBeDefined();
+    expect(runtime.tui.focusedComponent).toBe(runtime.editor);
     expect(JSON.stringify(updates)).toContain('"kind":"summary"');
     expect(
       JSON.stringify(
@@ -482,23 +515,73 @@ describe("child-run subagent integration", () => {
     expect(childRuns.registry.getSnapshots()).toEqual([]);
   });
 
-  test("/subagents focuses the resident overlay and Escape only unfocuses", async () => {
+  test("Down transfers focus only after native editor navigation reaches its bottom boundary", () => {
+    const home = "/tmp/pi-child-down-focus";
+    const runtime = createRuntime(home);
+    const childRuns = setupChildRuns(runtime.pi);
+    childRuns.ensureVisible(runtime.ctx);
+    const panel = runtime.getComponent();
+    if (panel === undefined) throw new Error("child-run panel did not mount");
+
+    runtime.setEditorState(["first", "second"], 0, 0);
+    runtime.dispatchInput("down");
+    expect(runtime.editor.getCursor()).toEqual({ line: 1, col: 0 });
+    expect(runtime.tui.focusedComponent).toBe(runtime.editor);
+
+    runtime.setEditorState(["first", "second"], 1, 6);
+    runtime.dispatchInput("\u001b[1;1:3B");
+    expect(runtime.tui.focusedComponent).toBe(runtime.editor);
+
+    runtime.dispatchInput("down");
+    expect(runtime.tui.focusedComponent).toBe(panel);
+
+    panel.handleInput?.("\u001b");
+    expect(runtime.tui.focusedComponent).toBe(runtime.editor);
+  });
+
+  test("/subagents restores generic custom-editor focus on Escape and q", async () => {
     const home = await setupTestDirectory("pi-child-command");
     tempDirectories.push(home);
     const runtime = createRuntime(home);
     setupChildRuns(runtime.pi);
+    const customEditor: RuntimeComponent = {
+      render: () => ["custom editor"],
+      invalidate() {},
+      handleInput() {},
+    };
+    runtime.tui.setFocus(customEditor);
 
     await runtime.commands.get("subagents")!.handler("", runtime.ctx);
-    const visible = runtime.getOverlayOptions()?.visible as
-      | ((width: number, height: number) => boolean)
-      | undefined;
-    expect(visible?.(80, 30)).toBe(true);
-    expect(runtime.overlayHandle.focused).toBe(true);
-    runtime.getComponent()?.handleInput?.("\u001b");
-    expect(runtime.overlayHandle.focused).toBe(false);
-    expect(runtime.overlayHandle.hidden).toBe(false);
+    const panel = runtime.getComponent();
+    if (panel === undefined) throw new Error("child-run panel did not mount");
+    expect(runtime.getWidgetPlacement()).toBe("belowEditor");
+    expect(runtime.tui.focusedComponent).toBe(panel);
+    panel.handleInput?.("\u001b");
+    expect(runtime.tui.focusedComponent).toBe(customEditor);
+    expect(runtime.getComponent()).toBeDefined();
+
+    await runtime.commands.get("subagents")!.handler("", runtime.ctx);
     runtime.getComponent()?.handleInput?.("q");
-    expect(runtime.overlayHandle.hidden).toBe(true);
-    expect(visible?.(80, 30)).toBe(false);
+    expect(runtime.tui.focusedComponent).toBe(customEditor);
+    expect(runtime.getComponent()).toBeUndefined();
+  });
+
+  test("explicit focus refresh replaces a stale pre-mount focus target", async () => {
+    const runtime = createRuntime("/tmp/pi-child-stale-focus");
+    const childRuns = setupChildRuns(runtime.pi);
+    const temporarySelector: RuntimeComponent = {
+      render: () => ["selector"],
+      invalidate() {},
+      handleInput() {},
+    };
+    runtime.tui.setFocus(temporarySelector);
+    childRuns.ensureVisible(runtime.ctx);
+
+    runtime.tui.setFocus(runtime.editor);
+    await runtime.commands.get("subagents")!.handler("", runtime.ctx);
+    const panel = runtime.getComponent();
+    if (panel === undefined) throw new Error("child-run panel did not mount");
+    panel.handleInput?.("\u001b");
+    expect(runtime.tui.focusedComponent).toBe(runtime.editor);
   });
 });

@@ -14,47 +14,37 @@ import type {
 import { statusIcon, type ComponentLike } from "./presentation";
 import { ChildRunRegistry } from "./registry";
 
-interface TuiLike {
-  terminal: { rows: number };
-  requestRender(force?: boolean): void;
-}
-
 interface KeybindingsLike {
   matches(data: string, keybinding: string): boolean;
 }
 
-interface OverlayHandleLike {
-  hide(): void;
-  setHidden(hidden: boolean): void;
-  isHidden(): boolean;
-  focus(): void;
-  unfocus(options?: { target: ComponentLike | null }): void;
-  isFocused(): boolean;
+interface EditorLike extends ComponentLike {
+  handleInput(data: string): void;
+  getText(): string;
+  getCursor(): { line: number; col: number };
+  isShowingAutocomplete?(): boolean;
+  keybindings?: KeybindingsLike;
 }
 
-interface OverlayOptionsLike {
-  width?: number | `${number}%`;
-  maxHeight?: number | `${number}%`;
-  anchor?: string;
-  margin?: number;
-  nonCapturing?: boolean;
-  visible?: (termWidth: number, termHeight: number) => boolean;
+interface TuiLike {
+  terminal: { rows: number };
+  requestRender(force?: boolean): void;
+  setFocus?(component: ComponentLike | null): void;
+  // pi-tui has no public focus getter. The widget needs the currently focused
+  // editor so it can preserve native Down handling and restore focus after
+  // browsing. Keep this private runtime seam isolated to this adapter.
+  focusedComponent?: ComponentLike | null;
 }
 
-interface CustomUiLike {
-  custom<T>(
-    factory: (
-      tui: TuiLike,
-      theme: unknown,
-      keybindings: KeybindingsLike,
-      done: (result: T) => void,
-    ) => ComponentLike,
-    options: {
-      overlay: true;
-      overlayOptions: OverlayOptionsLike | (() => OverlayOptionsLike);
-      onHandle: (handle: OverlayHandleLike) => void;
-    },
-  ): Promise<T>;
+interface WidgetUiLike {
+  setWidget(
+    key: string,
+    content: ((tui: TuiLike, theme: unknown) => ComponentLike) | undefined,
+    options?: { placement: "belowEditor" },
+  ): void;
+  onTerminalInput?(
+    handler: (data: string) => { consume?: boolean; data?: string } | undefined,
+  ): () => void;
   notify(message: string, level?: "info" | "warning" | "error"): void;
 }
 
@@ -344,137 +334,236 @@ export class ChildRunsBrowserComponent implements ComponentLike {
   }
 }
 
-type MountState = "unmounted" | "mounting" | "mounted" | "disposed";
+type MountState = "unmounted" | "mounted" | "disposed";
 
-export class ChildRunsOverlayController {
+export const CHILD_RUNS_WIDGET_KEY = "pi-harness-child-runs";
+
+const isKeyRelease = (data: string): boolean =>
+  !data.includes("\u001b[200~") &&
+  [":3u", ":3~", ":3A", ":3B", ":3C", ":3D", ":3H", ":3F"].some((marker) =>
+    data.includes(marker),
+  );
+
+const defaultKeyMatches = (data: string, keybinding: string): boolean => {
+  const legacyKeys: Record<string, string[]> = {
+    "tui.editor.cursorDown": ["down", "\u001b[B"],
+    "tui.editor.cursorLeft": ["left", "\u001b[D"],
+    "tui.editor.cursorRight": ["right", "\u001b[C"],
+    "tui.editor.cursorLineEnd": ["end", "\u001b[F", "\u001b[4~"],
+    "tui.select.up": ["up", "\u001b[A"],
+    "tui.select.down": ["down", "\u001b[B"],
+    "tui.select.pageUp": ["pageup", "\u001b[5~"],
+    "tui.select.pageDown": ["pagedown", "\u001b[6~"],
+    "tui.select.confirm": ["enter", "\r", "\n"],
+    "tui.select.cancel": ["escape", "\u001b"],
+  };
+  if (legacyKeys[keybinding]?.includes(data)) return true;
+
+  if (!data.startsWith("\u001b[")) return false;
+  const kittySequence = data.slice(2);
+  const kittyPatterns: Partial<Record<string, RegExp>> = {
+    "tui.editor.cursorDown": /^1;1(?::[12])?B$/,
+    "tui.editor.cursorLeft": /^1;1(?::[12])?D$/,
+    "tui.editor.cursorRight": /^1;1(?::[12])?C$/,
+    "tui.editor.cursorLineEnd": /^(?:1;1(?::[12])?F|8;1(?::[12])?~)$/,
+    "tui.select.up": /^1;1(?::[12])?A$/,
+    "tui.select.down": /^1;1(?::[12])?B$/,
+    "tui.select.pageUp": /^5;1(?::[12])?~$/,
+    "tui.select.pageDown": /^6;1(?::[12])?~$/,
+    "tui.select.confirm": /^13(?:;1)?(?::[12])?u$/,
+    "tui.select.cancel": /^27(?:;1)?(?::[12])?u$/,
+  };
+  return kittyPatterns[keybinding]?.test(kittySequence) ?? false;
+};
+
+const isEditorLike = (value: unknown): value is EditorLike =>
+  typeof value === "object" &&
+  value !== null &&
+  "handleInput" in value &&
+  typeof value.handleInput === "function" &&
+  "getText" in value &&
+  typeof value.getText === "function" &&
+  "getCursor" in value &&
+  typeof value.getCursor === "function";
+
+const sameCursor = (
+  left: { line: number; col: number },
+  right: { line: number; col: number },
+): boolean => left.line === right.line && left.col === right.col;
+
+/**
+ * Resident full-width child browser mounted in pi's below-editor widget slot.
+ *
+ * pi-tui currently exposes setFocus() but no public focus getter. To preserve
+ * normal editor navigation, the controller reads the focused editor through a
+ * single structural seam, forwards Down to it first, and only transfers focus
+ * when text and cursor are unchanged (the editor's bottom boundary).
+ */
+export class ChildRunsPanelController {
   private state: MountState = "unmounted";
-  private handle: OverlayHandleLike | undefined;
   private component: ChildRunsBrowserComponent | undefined;
-  private pendingFocus = false;
-  private explicitlyVisible = false;
-  private ready: Promise<boolean> | undefined;
+  private editor: EditorLike | undefined;
+  private returnFocus: ComponentLike | undefined;
+  private tui: TuiLike | undefined;
+  private ui: WidgetUiLike | undefined;
+  private unsubscribeInput: (() => void) | undefined;
+  private readonly keybindings: KeybindingsLike = {
+    matches: (data, keybinding) =>
+      this.editor?.keybindings?.matches(data, keybinding) ??
+      defaultKeyMatches(data, keybinding),
+  };
 
   constructor(private readonly registry: ChildRunRegistry) {}
 
   ensureVisible(ctx: BrowserContextLike): void {
-    void this.show(ctx, false);
+    this.show(ctx, false);
   }
 
   async showAndFocus(ctx: BrowserContextLike): Promise<void> {
-    await this.show(ctx, true);
+    this.show(ctx, true);
   }
 
   dispose(): void {
     if (this.state === "disposed") return;
-    this.state = "disposed";
-    this.component?.dispose();
+    if (this.tui?.focusedComponent === this.component) this.restoreFocus();
+    if (this.state === "mounted") {
+      this.ui?.setWidget(CHILD_RUNS_WIDGET_KEY, undefined);
+    }
+    this.unsubscribeInput?.();
+    this.unsubscribeInput = undefined;
     this.component = undefined;
-    this.explicitlyVisible = false;
-    this.handle?.hide();
-    this.handle = undefined;
+    this.editor = undefined;
+    this.returnFocus = undefined;
+    this.tui = undefined;
+    this.ui = undefined;
+    this.state = "disposed";
   }
 
   getMountState(): MountState {
     return this.state;
   }
 
-  getHandle(): OverlayHandleLike | undefined {
-    return this.handle;
-  }
-
-  private async show(
-    ctx: BrowserContextLike,
-    focus: boolean,
-  ): Promise<boolean> {
+  private show(ctx: BrowserContextLike, focus: boolean): boolean {
     if (ctx.mode !== "tui" || this.state === "disposed") return false;
-    if (focus) this.explicitlyVisible = true;
-    if (this.state === "mounted" && this.handle !== undefined) {
-      this.handle.setHidden(false);
-      if (focus) this.handle.focus();
+    if (this.state === "mounted") {
+      if (focus) this.focusBrowser();
       return true;
     }
-    if (this.state === "mounting") {
-      this.pendingFocus ||= focus;
-      return (await this.ready) ?? false;
+
+    const ui = ctx.ui as unknown as WidgetUiLike;
+    this.ui = ui;
+    this.installInputListener(ui);
+    try {
+      ui.setWidget(
+        CHILD_RUNS_WIDGET_KEY,
+        (tui) => {
+          this.tui = tui;
+          this.captureFocusTarget(tui.focusedComponent);
+          const component = new ChildRunsBrowserComponent(
+            this.registry,
+            tui,
+            this.keybindings,
+            () => this.restoreFocus(),
+            () => this.hide(),
+          );
+          this.component = component;
+          return component;
+        },
+        { placement: "belowEditor" },
+      );
+      if (this.component === undefined || this.tui === undefined) {
+        throw new Error("widget factory did not mount a component");
+      }
+      this.state = "mounted";
+      if (focus) this.focusBrowser();
+      return true;
+    } catch (error) {
+      this.state = "unmounted";
+      this.component?.dispose();
+      this.component = undefined;
+      ui.notify(
+        `Child-session browser could not open: ${String(error)}`,
+        "warning",
+      );
+      return false;
+    }
+  }
+
+  private installInputListener(ui: WidgetUiLike): void {
+    if (this.unsubscribeInput !== undefined || ui.onTerminalInput === undefined)
+      return;
+    this.unsubscribeInput = ui.onTerminalInput((data) =>
+      this.handleTerminalInput(data),
+    );
+  }
+
+  private handleTerminalInput(data: string): { consume: true } | undefined {
+    if (
+      this.state !== "mounted" ||
+      this.component === undefined ||
+      this.tui === undefined ||
+      isKeyRelease(data) ||
+      !this.keybindings.matches(data, "tui.editor.cursorDown")
+    ) {
+      return undefined;
     }
 
-    this.state = "mounting";
-    this.pendingFocus = focus;
-    let settleReady: (mounted: boolean) => void = () => {};
-    this.ready = new Promise<boolean>((resolve) => {
-      settleReady = resolve;
-    });
-    const ui = ctx.ui as unknown as CustomUiLike;
-    let localComponent: ChildRunsBrowserComponent | undefined;
-    const customPromise = ui.custom<void>(
-      (tui, _theme, keybindings) => {
-        localComponent = new ChildRunsBrowserComponent(
-          this.registry,
-          tui,
-          keybindings,
-          () => this.handle?.unfocus(),
-          () => this.hide(),
-        );
-        this.component = localComponent;
-        return localComponent;
-      },
-      {
-        overlay: true,
-        overlayOptions: () => ({
-          nonCapturing: true,
-          anchor: "right-center",
-          width: 48,
-          maxHeight: "80%",
-          margin: 1,
-          visible: (termWidth) =>
-            termWidth >= 120 ||
-            this.explicitlyVisible ||
-            this.handle?.isFocused() === true,
-        }),
-        onHandle: (handle) => {
-          if (this.state === "disposed") {
-            handle.hide();
-            settleReady(false);
-            return;
-          }
-          this.handle = handle;
-          this.state = "mounted";
-          handle.setHidden(false);
-          if (this.pendingFocus) handle.focus();
-          this.pendingFocus = false;
-          settleReady(true);
-        },
-      },
-    );
-    void customPromise
-      .then(() => {
-        if (this.state === "disposed") return;
-        localComponent?.dispose();
-        if (this.component === localComponent) this.component = undefined;
-        this.handle = undefined;
-        this.explicitlyVisible = false;
-        this.state = "unmounted";
-      })
-      .catch((error) => {
-        if (this.state !== "disposed") {
-          this.state = "unmounted";
-          this.handle = undefined;
-          this.explicitlyVisible = false;
-          this.component?.dispose();
-          this.component = undefined;
-          ui.notify(
-            `Child-session browser could not open: ${String(error)}`,
-            "warning",
-          );
-        }
-        settleReady(false);
-      });
-    return (await this.ready) ?? false;
+    const focused = this.tui.focusedComponent;
+    if (focused === this.component) return undefined;
+    this.captureFocusTarget(focused);
+    const editor = this.editor;
+    if (
+      editor === undefined ||
+      focused !== editor ||
+      editor.isShowingAutocomplete?.() === true
+    ) {
+      return undefined;
+    }
+
+    const beforeText = editor.getText();
+    const beforeCursor = editor.getCursor();
+    editor.handleInput(data);
+    const afterText = editor.getText();
+    const afterCursor = editor.getCursor();
+    if (beforeText === afterText && sameCursor(beforeCursor, afterCursor)) {
+      this.focusBrowser();
+    } else {
+      this.tui.requestRender();
+    }
+    return { consume: true };
+  }
+
+  private captureFocusTarget(
+    candidate: ComponentLike | null | undefined,
+  ): void {
+    if (
+      candidate === undefined ||
+      candidate === null ||
+      candidate === this.component
+    )
+      return;
+    this.returnFocus = candidate;
+    if (isEditorLike(candidate)) this.editor = candidate;
+  }
+
+  private focusBrowser(): void {
+    if (this.state !== "mounted" || this.component === undefined) return;
+    this.captureFocusTarget(this.tui?.focusedComponent);
+    this.tui?.setFocus?.(this.component);
+    this.tui?.requestRender();
+  }
+
+  private restoreFocus(): void {
+    if (this.returnFocus === undefined) return;
+    this.tui?.setFocus?.(this.returnFocus);
+    this.tui?.requestRender();
   }
 
   private hide(): void {
-    this.explicitlyVisible = false;
-    this.handle?.unfocus();
-    this.handle?.setHidden(true);
+    if (this.state !== "mounted") return;
+    this.restoreFocus();
+    this.state = "unmounted";
+    this.component = undefined;
+    this.ui?.setWidget(CHILD_RUNS_WIDGET_KEY, undefined);
   }
 }

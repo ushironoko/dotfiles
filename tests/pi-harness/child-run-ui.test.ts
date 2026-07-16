@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { TUI, type Component, type Terminal } from "@earendil-works/pi-tui";
+
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
 import { ChildRunsBrowserComponent } from "../../pi/extensions/pi-harness/features/child-runs/ui";
 import { visibleWidth } from "../../pi/extensions/pi-harness/lib/terminal-text";
@@ -48,69 +48,6 @@ const setup = () => {
     getHidden: () => hidden,
   };
 };
-
-describe("pi-tui overlay focus contract", () => {
-  test("non-capturing mount keeps editor input and explicit focus survives a temporary modal", () => {
-    let onInput: ((data: string) => void) | undefined;
-    const terminal: Terminal = {
-      start(input) {
-        onInput = input;
-      },
-      stop() {},
-      drainInput: async () => {},
-      write() {},
-      columns: 120,
-      rows: 30,
-      kittyProtocolActive: false,
-      moveBy() {},
-      hideCursor() {},
-      showCursor() {},
-      clearLine() {},
-      clearFromCursor() {},
-      clearScreen() {},
-      setTitle() {},
-      setProgress() {},
-    };
-    const counts = { editor: 0, browser: 0, modal: 0 };
-    const component = (name: keyof typeof counts): Component => ({
-      render: () => [name],
-      invalidate() {},
-      handleInput() {
-        counts[name] += 1;
-      },
-    });
-    const editor = component("editor");
-    const browser = component("browser");
-    const modal = component("modal");
-    const tui = new TUI(terminal);
-    tui.addChild(editor);
-    tui.start();
-    tui.setFocus(editor);
-
-    const browserHandle = tui.showOverlay(browser, {
-      nonCapturing: true,
-      width: 40,
-      visible: () => true,
-    });
-    onInput?.("a");
-    expect(counts).toEqual({ editor: 1, browser: 0, modal: 0 });
-
-    browserHandle.focus();
-    onInput?.("b");
-    expect(counts.browser).toBe(1);
-    tui.showOverlay(modal, { width: 20 });
-    onInput?.("c");
-    expect(counts.modal).toBe(1);
-    tui.hideOverlay();
-    onInput?.("d");
-    expect(counts.browser).toBe(2);
-
-    browserHandle.unfocus();
-    onInput?.("e");
-    expect(counts.editor).toBe(2);
-    tui.stop();
-  });
-});
 
 describe("child-session browser component", () => {
   test("renders an explanatory empty state within width", () => {
