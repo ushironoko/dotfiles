@@ -20,6 +20,7 @@ import setupStatusline from "./features/statusline/index";
 import setupProviderLog from "./features/provider-log/index";
 import setupAsukuNotify from "./features/asuku-notify/index";
 import setupAskUserQuestion from "./features/ask-user-question/index";
+import setupChildRuns from "./features/child-runs/index";
 
 // The parameter is typed against the narrowed PiLike seam instead of pi's
 // ExtensionAPI: pi invokes this default export at runtime (jiti, no type
@@ -30,8 +31,12 @@ const setupHarness = (pi: PiLike, config: HarnessConfig): void => {
   setupPermissionPolicy(pi, config);
 
   if (config.features["hook-bridge"]) setupHookBridge(pi, config);
-  if (config.features.subagent) setupSubagent(pi, config);
-  if (config.features.workflow) setupWorkflow(pi, config);
+  const childRuns =
+    config.features.subagent || config.features.workflow
+      ? setupChildRuns(pi)
+      : undefined;
+  if (config.features.subagent) setupSubagent(pi, config, { childRuns });
+  if (config.features.workflow) setupWorkflow(pi, config, { childRuns });
   if (config.features["bit-task"]) setupBitTask(pi, config);
   if (config.features.statusline) setupStatusline(pi, config);
   if (config.features["provider-log"]) setupProviderLog(pi, config);
