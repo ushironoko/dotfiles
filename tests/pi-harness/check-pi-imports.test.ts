@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  CODEX_WEB_EXTENSION_ROOT,
   collectViolations,
   EXTENSION_ROOT,
   scanExtension,
@@ -102,6 +103,10 @@ describe("check-pi-imports self-containment analysis", () => {
 });
 
 describe("check-pi-imports scanExtension enumeration", () => {
+  test("the codex-web extension is self-contained", async () => {
+    expect(await scanExtension(CODEX_WEB_EXTENSION_ROOT)).toEqual([]);
+  });
+
   test("analyzes dotfile .ts and rejects escaping/broken symlinks", async () => {
     const root = await fixtureRoot();
     const outside = await fixtureRoot();
