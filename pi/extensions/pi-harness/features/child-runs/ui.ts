@@ -114,9 +114,13 @@ export class ChildRunsBrowserComponent implements ComponentLike {
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
+    // The browser now participates in normal layout flow with chat, editor,
+    // status rows, and footer. Keep its budget conservative rather than using
+    // the former overlay-sized 80%/30-row cap. Common 24/40-row terminals get
+    // at most 6/10 browser rows; very small terminals retain minimal controls.
     const height = Math.max(
-      6,
-      Math.min(Math.floor(this.tui.terminal.rows * 0.8), 30),
+      4,
+      Math.min(Math.floor(this.tui.terminal.rows / 4), 10),
     );
     const snapshots = this.registry.getSnapshots();
     const runs = flattenRuns(snapshots);
@@ -129,8 +133,8 @@ export class ChildRunsBrowserComponent implements ComponentLike {
 
     const body =
       this.mode === "detail"
-        ? this.renderDetail(runs, safeWidth, height - 3)
-        : this.renderList(snapshots, runs, safeWidth, height - 3);
+        ? this.renderDetail(runs, safeWidth, height - 2)
+        : this.renderList(snapshots, runs, safeWidth, height - 2);
     const title =
       this.mode === "detail" ? " Child session " : " Child sessions ";
     const borderWidth = Math.max(1, safeWidth - visibleWidth(title));
@@ -398,6 +402,12 @@ const sameCursor = (
  * normal editor navigation, the controller reads the focused editor through a
  * single structural seam, forwards Down to it first, and only transfers focus
  * when text and cursor are unchanged (the editor's bottom boundary).
+ *
+ * Boundary transfer is best-effort for cursor-aware editors that expose
+ * getText() and getCursor(). Editors without those optional capabilities keep
+ * native Down handling and can focus the browser via /subagents or Ctrl+Alt+S.
+ * Remapped Down is honored when the editor exposes its runtime keybindings
+ * manager; otherwise only the fallback default terminal sequences are known.
  */
 export class ChildRunsPanelController {
   private state: MountState = "unmounted";

@@ -539,6 +539,63 @@ describe("child-run subagent integration", () => {
     expect(runtime.tui.focusedComponent).toBe(runtime.editor);
   });
 
+  test("custom editors without cursor capability retain native Down handling", () => {
+    const runtime = createRuntime("/tmp/pi-child-custom-down");
+    const childRuns = setupChildRuns(runtime.pi);
+    const received: string[] = [];
+    const customEditor: RuntimeComponent = {
+      render: () => ["custom editor"],
+      invalidate() {},
+      handleInput(data) {
+        received.push(data);
+      },
+    };
+    runtime.tui.setFocus(customEditor);
+    childRuns.ensureVisible(runtime.ctx);
+
+    runtime.dispatchInput("down");
+    expect(received).toEqual(["down"]);
+    expect(runtime.tui.focusedComponent).toBe(customEditor);
+  });
+
+  test("cursor-aware editors honor a remapped Down binding", () => {
+    const runtime = createRuntime("/tmp/pi-child-remapped-down");
+    const childRuns = setupChildRuns(runtime.pi);
+    const received: string[] = [];
+    const remappedEditor: RuntimeComponent & {
+      keybindings: { matches(data: string, key: string): boolean };
+      getText(): string;
+      getCursor(): { line: number; col: number };
+    } = {
+      keybindings: {
+        matches: (data, key) =>
+          (key === "tui.editor.cursorDown" && data === "\u000e") ||
+          (key === "tui.select.cancel" && data === "\u001b"),
+      },
+      render: () => ["remapped editor"],
+      invalidate() {},
+      getText: () => "draft",
+      getCursor: () => ({ line: 0, col: 5 }),
+      handleInput(data) {
+        received.push(data);
+      },
+    };
+    runtime.tui.setFocus(remappedEditor);
+    childRuns.ensureVisible(runtime.ctx);
+    const panel = runtime.getComponent();
+    if (panel === undefined) throw new Error("child-run panel did not mount");
+
+    runtime.dispatchInput("\u001b[B");
+    expect(received).toEqual(["\u001b[B"]);
+    expect(runtime.tui.focusedComponent).toBe(remappedEditor);
+
+    runtime.dispatchInput("\u000e");
+    expect(received).toEqual(["\u001b[B", "\u000e"]);
+    expect(runtime.tui.focusedComponent).toBe(panel);
+    panel.handleInput?.("\u001b");
+    expect(runtime.tui.focusedComponent).toBe(remappedEditor);
+  });
+
   test("/subagents restores generic custom-editor focus on Escape and q", async () => {
     const home = await setupTestDirectory("pi-child-command");
     tempDirectories.push(home);

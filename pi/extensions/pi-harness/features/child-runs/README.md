@@ -9,10 +9,17 @@ resident full-width TUI browser between the chat editor and statusline.
   slot without stealing focus from the main editor.
 - The browser receives the full terminal content width and remains in normal
   layout flow, so it does not cover chat or editor content.
+- Its height is approximately one quarter of the terminal, clamped to 4–10
+  lines. The cap preserves useful editor and conversation space on common
+  24-row and 40-row terminals; extremely short terminals may still be tight.
 - `/subagents` or `Ctrl+Alt+S` shows and focuses the browser.
-- When the editor has focus, Down keeps its native cursor/history behavior.
-  If native Down changes neither editor text nor cursor at the bottom boundary,
-  focus moves to the browser with its current run selected.
+- When a cursor-aware editor has focus, Down keeps its native cursor/history
+  behavior. If native Down changes neither editor text nor cursor at the bottom
+  boundary, focus moves to the browser with its current run selected.
+- Down transfer is best-effort: editors without `getText()` and `getCursor()`
+  retain native Down handling and use `/subagents` or `Ctrl+Alt+S` for explicit
+  focus. Remapped Down is honored when the editor's runtime keybindings manager
+  is detectable; otherwise default terminal sequences are used.
 - `Esc` returns focus to the main editor while leaving the browser visible.
 - `q` hides the browser. A new child run, `/subagents`, or the shortcut shows
   it again.

@@ -4,7 +4,7 @@ import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-
 import { ChildRunsBrowserComponent } from "../../pi/extensions/pi-harness/features/child-runs/ui";
 import { visibleWidth } from "../../pi/extensions/pi-harness/lib/terminal-text";
 
-const setup = () => {
+const setup = (rows = 20) => {
   let id = 0;
   const registry = new ChildRunRegistry({
     idFactory: () => `id-${++id}`,
@@ -12,7 +12,7 @@ const setup = () => {
   });
   const renders: number[] = [];
   const tui = {
-    terminal: { rows: 20 },
+    terminal: { rows },
     requestRender: () => renders.push(1),
   };
   const keybindings = {
@@ -49,12 +49,58 @@ const setup = () => {
   };
 };
 
+const addRuns = (registry: ChildRunRegistry, count: number): string[] =>
+  registry.beginInvocation({
+    toolCallId: `parent-${count}`,
+    source: "workflow",
+    label: "workflow",
+    runs: Array.from({ length: count }, (_, taskIndex) => ({
+      agent: `agent-${taskIndex}`,
+      task: `inspect task ${taskIndex}`,
+      taskIndex,
+      stageIndex: 0,
+    })),
+  }).runIds;
+
 describe("child-session browser component", () => {
   test("renders an explanatory empty state within width", () => {
     const { component } = setup();
     const lines = component.render(24);
     expect(lines.join("\n")).toContain("No child runs");
     expect(lines.every((item) => visibleWidth(item) <= 24)).toBe(true);
+  });
+
+  test("caps populated list height for common and small terminals", () => {
+    for (const [rows, expectedHeight] of [
+      [24, 6],
+      [40, 10],
+      [12, 4],
+    ] as const) {
+      const { registry, component } = setup(rows);
+      addRuns(registry, 30);
+      const lines = component.render(80);
+      expect(lines).toHaveLength(expectedHeight);
+      expect(lines.at(-1)).toContain("↑↓ select");
+    }
+  });
+
+  test("caps populated detail height and preserves its hint row", () => {
+    const { registry, component } = setup(24);
+    const [runId] = addRuns(registry, 1);
+    if (runId === undefined) throw new Error("run did not initialize");
+    registry.observe(runId, { type: "process_started", at: 1 });
+    for (let index = 0; index < 30; index++) {
+      registry.observe(runId, {
+        type: "assistant_final",
+        text: `line ${index}`,
+        at: index + 2,
+      });
+    }
+    component.render(80);
+    component.handleInput("enter");
+    const lines = component.render(80);
+    expect(lines).toHaveLength(6);
+    expect(lines.at(-1)).toContain("End live");
   });
 
   test("keeps selection stable by run id and opens the selected detail", () => {
