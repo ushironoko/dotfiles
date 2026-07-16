@@ -8,6 +8,8 @@ export const MAX_RUN_TRANSCRIPT_ITEMS = 256;
 export const MAX_PERSISTED_INVOCATION_BYTES = 512 * 1024;
 export const MAX_REPLAY_INVOCATIONS = 32;
 export const MAX_REPLAY_BYTES = 2 * 1024 * 1024;
+export const MAX_LIVE_INVOCATIONS = MAX_REPLAY_INVOCATIONS;
+export const MAX_LIVE_HISTORY_BYTES = MAX_REPLAY_BYTES;
 
 export type ChildRunSource = "subagent" | "workflow";
 export type ChildRunMode = "single" | "parallel" | "chain";

@@ -85,7 +85,8 @@ export const capUtf8 = (value: string, maxBytes: number): string => {
   if (maxBytes <= 0) return "";
   if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
   const suffixBytes = Buffer.byteLength(TRUNCATION_SUFFIX, "utf8");
-  const contentBytes = Math.max(0, maxBytes - suffixBytes);
+  const includeSuffix = suffixBytes <= maxBytes;
+  const contentBytes = maxBytes - (includeSuffix ? suffixBytes : 0);
   let low = 0;
   let high = value.length;
   while (low < high) {
@@ -97,7 +98,7 @@ export const capUtf8 = (value: string, maxBytes: number): string => {
   let end = low;
   const last = value.charCodeAt(end - 1);
   if (last >= 0xd800 && last <= 0xdbff) end -= 1;
-  return `${value.slice(0, end)}${TRUNCATION_SUFFIX}`;
+  return `${value.slice(0, end)}${includeSuffix ? TRUNCATION_SUFFIX : ""}`;
 };
 
 const isZeroWidth = (code: number): boolean =>

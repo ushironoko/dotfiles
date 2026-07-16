@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   MAX_ASSISTANT_ITEM_BYTES,
+  MAX_RUN_TRANSCRIPT_BYTES,
+  MAX_RUN_TRANSCRIPT_ITEMS,
   type ChildObservation,
 } from "../../pi/extensions/pi-harness/features/child-runs/model";
 import { createChildProtocolParser } from "../../pi/extensions/pi-harness/features/child-runs/protocol";
@@ -143,6 +145,81 @@ describe("child JSON protocol normalization", () => {
     expect(JSON.stringify(observations)).not.toContain("provider-secret-id");
   });
 
+  test("bounds retained raw tool-id correlations by item count", () => {
+    const observations: ChildObservation[] = [];
+    const parser = createChildProtocolParser({
+      observe: (item) => observations.push(item),
+      now: () => 9,
+    });
+
+    for (let index = 0; index < MAX_RUN_TRANSCRIPT_ITEMS; index++) {
+      parser.processLine(
+        JSON.stringify({
+          type: "tool_execution_start",
+          toolCallId: `tool-${index}`,
+          toolName: "bash",
+        }),
+      );
+    }
+    parser.processLine(
+      JSON.stringify({
+        type: "tool_execution_start",
+        toolCallId: "overflow-tool",
+        toolName: "read",
+      }),
+    );
+    parser.processLine(
+      JSON.stringify({
+        type: "tool_execution_end",
+        toolCallId: "overflow-tool",
+        toolName: "read",
+      }),
+    );
+    parser.processLine(
+      JSON.stringify({
+        type: "tool_execution_end",
+        toolCallId: "tool-0",
+        toolName: "bash",
+      }),
+    );
+
+    expect(observations.at(MAX_RUN_TRANSCRIPT_ITEMS)).toMatchObject({
+      type: "tool_started",
+      localId: MAX_RUN_TRANSCRIPT_ITEMS + 1,
+    });
+    expect(observations.at(MAX_RUN_TRANSCRIPT_ITEMS + 1)).toMatchObject({
+      type: "tool_finished",
+      localId: MAX_RUN_TRANSCRIPT_ITEMS + 2,
+    });
+    expect(observations.at(MAX_RUN_TRANSCRIPT_ITEMS + 2)).toMatchObject({
+      type: "tool_finished",
+      localId: 1,
+    });
+  });
+
+  test("does not retain a raw tool id beyond the byte budget", () => {
+    const observations: ChildObservation[] = [];
+    const parser = createChildProtocolParser({
+      observe: (item) => observations.push(item),
+    });
+    const oversizedId = `shared-prefix-${"x".repeat(MAX_RUN_TRANSCRIPT_BYTES)}`;
+
+    for (const type of ["tool_execution_start", "tool_execution_end"]) {
+      parser.processLine(
+        JSON.stringify({
+          type,
+          toolCallId: oversizedId,
+          toolName: "bash",
+        }),
+      );
+    }
+
+    expect(observations).toMatchObject([
+      { type: "tool_started", localId: 1 },
+      { type: "tool_finished", localId: 2 },
+    ]);
+  });
+
   test("reports malformed and oversized input without echoing it", () => {
     const observations: ChildObservation[] = [];
     const parser = createChildProtocolParser({
@@ -210,6 +287,16 @@ describe("terminal-safe text helpers", () => {
         "\u001b]2;title\u0007a\u001b[31mb\u001b[0m\u0000\u007f\u009b32mc\u009b0m",
       ),
     ).toBe("abc");
+  });
+
+  test("keeps byte caps smaller than the truncation suffix", () => {
+    expect(capUtf8("abcdef", 1)).toBe("a");
+    expect(capUtf8("界", 2)).toBe("");
+    for (const maxBytes of [0, 1, 2]) {
+      expect(
+        Buffer.byteLength(capUtf8("abcdef", maxBytes), "utf8"),
+      ).toBeLessThanOrEqual(maxBytes);
+    }
   });
 
   test("caps and wraps CJK and emoji without exceeding width", () => {

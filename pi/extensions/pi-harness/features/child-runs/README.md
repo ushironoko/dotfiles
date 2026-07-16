@@ -42,7 +42,8 @@ Limits:
 - 16 KiB per finalized assistant item;
 - 256 items and 64 KiB per run;
 - 512 KiB per invocation, divided fairly across runs;
-- the newest 32 invocations / 2 MiB when replaying browser history.
+- the newest 32 completed invocations / 2 MiB in both live and replayed
+  browser history; active invocations are retained until completion.
 
 Malformed or oversized child-stream diagnostics are live-only and never echo
 raw source data.

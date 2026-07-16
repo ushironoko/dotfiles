@@ -5,6 +5,8 @@ import {
   CHILD_RUNS_VERSION,
   MAX_ASSISTANT_ITEM_BYTES,
   MAX_LIVE_DRAFT_BYTES,
+  MAX_LIVE_HISTORY_BYTES,
+  MAX_LIVE_INVOCATIONS,
   MAX_PERSISTED_INVOCATION_BYTES,
   MAX_RUN_TRANSCRIPT_BYTES,
   MAX_RUN_TRANSCRIPT_ITEMS,
@@ -64,6 +66,27 @@ const cloneInvocation = (
   runs: invocation.runs.map(cloneRun),
 });
 
+const historicalInvocation = (
+  payload: PersistedChildRunsV1,
+): InternalInvocation => ({
+  invocationId: payload.invocationId,
+  source: payload.source,
+  mode: payload.mode,
+  label: payload.label,
+  createdAt: payload.createdAt,
+  runs: payload.runs.map<LiveChildRun>((run) => ({
+    ...run,
+    invocationId: payload.invocationId,
+    source: payload.source,
+    mode: payload.mode,
+    protocolWarnings: 0,
+    transcript: cloneTranscript(run.transcript),
+    transcriptBytes: byteLength(run.transcript),
+    omittedItems: 0,
+    omittedBytes: 0,
+  })),
+});
+
 const taskPreview = (task: string): string => {
   const oneLine = stripTerminalControls(task, " ").replace(/\s+/g, " ").trim();
   return capUtf8(oneLine, 240);
@@ -85,6 +108,7 @@ export class ChildRunRegistry {
   private readonly invocationOrder: string[] = [];
   private readonly runToInvocation = new Map<string, string>();
   private readonly toolCallToInvocation = new Map<string, string>();
+  private readonly historicalBytes = new Map<string, number>();
   private readonly subscribers = new Set<() => void>();
   private disposed = false;
 
@@ -335,51 +359,62 @@ export class ChildRunRegistry {
     if (invocationId === undefined) return undefined;
     const payload = this.toPersisted(invocationId);
     this.toolCallToInvocation.delete(toolCallId);
-    const invocation = this.invocations.get(invocationId);
-    if (invocation !== undefined) invocation.toolCallId = undefined;
+    if (payload === undefined) return undefined;
+
+    this.invocations.set(invocationId, historicalInvocation(payload));
+    this.historicalBytes.set(invocationId, byteLength(payload));
+    const orderIndex = this.invocationOrder.indexOf(invocationId);
+    if (orderIndex !== -1) this.invocationOrder.splice(orderIndex, 1);
+    this.invocationOrder.push(invocationId);
+    this.pruneHistoricalInvocations();
+    this.publish();
     return payload;
   }
 
   replacePersistedHistory(payloads: readonly PersistedChildRunsV1[]): void {
+    const activeInvocationIds = new Set<string>();
+    const occupiedRunIds = new Set<string>();
+    for (const invocationId of this.invocationOrder) {
+      const invocation = this.invocations.get(invocationId);
+      if (invocation?.toolCallId === undefined) continue;
+      activeInvocationIds.add(invocationId);
+      for (const run of invocation.runs) occupiedRunIds.add(run.runId);
+    }
+
+    const accepted: PersistedChildRunsV1[] = [];
+    const occupiedInvocationIds = new Set(activeInvocationIds);
+    for (const payload of payloads) {
+      const runIds = payload.runs.map((run) => run.runId);
+      if (
+        occupiedInvocationIds.has(payload.invocationId) ||
+        new Set(runIds).size !== runIds.length ||
+        runIds.some((runId) => occupiedRunIds.has(runId))
+      ) {
+        continue;
+      }
+      accepted.push(payload);
+      occupiedInvocationIds.add(payload.invocationId);
+      for (const runId of runIds) occupiedRunIds.add(runId);
+    }
+
     const historicalIds = this.invocationOrder.filter(
       (invocationId) =>
         this.invocations.get(invocationId)?.toolCallId === undefined,
     );
     for (const invocationId of historicalIds) {
-      const invocation = this.invocations.get(invocationId);
-      this.invocations.delete(invocationId);
-      for (const run of invocation?.runs ?? []) {
-        this.runToInvocation.delete(run.runId);
-      }
-      const index = this.invocationOrder.indexOf(invocationId);
-      if (index !== -1) this.invocationOrder.splice(index, 1);
+      this.removeInvocation(invocationId);
     }
 
-    for (const payload of payloads) {
-      const runs = payload.runs.map<LiveChildRun>((run) => ({
-        ...run,
-        invocationId: payload.invocationId,
-        source: payload.source,
-        mode: payload.mode,
-        protocolWarnings: 0,
-        transcript: cloneTranscript(run.transcript),
-        transcriptBytes: byteLength(run.transcript),
-        omittedItems: 0,
-        omittedBytes: 0,
-      }));
-      const invocation: InternalInvocation = {
-        invocationId: payload.invocationId,
-        source: payload.source,
-        mode: payload.mode,
-        label: payload.label,
-        createdAt: payload.createdAt,
-        runs,
-      };
+    for (const payload of accepted) {
+      const invocation = historicalInvocation(payload);
       this.invocations.set(payload.invocationId, invocation);
       this.invocationOrder.push(payload.invocationId);
-      for (const run of runs)
+      this.historicalBytes.set(payload.invocationId, byteLength(payload));
+      for (const run of invocation.runs) {
         this.runToInvocation.set(run.runId, payload.invocationId);
+      }
     }
+    this.pruneHistoricalInvocations();
     this.publish();
   }
 
@@ -401,6 +436,40 @@ export class ChildRunRegistry {
     this.disposed = true;
     this.subscribers.clear();
     this.toolCallToInvocation.clear();
+  }
+
+  private pruneHistoricalInvocations(): void {
+    const historicalIds = this.invocationOrder.filter(
+      (invocationId) =>
+        this.invocations.get(invocationId)?.toolCallId === undefined,
+    );
+    let totalBytes = historicalIds.reduce(
+      (total, invocationId) =>
+        total + (this.historicalBytes.get(invocationId) ?? 0),
+      0,
+    );
+    while (
+      historicalIds.length > MAX_LIVE_INVOCATIONS ||
+      totalBytes > MAX_LIVE_HISTORY_BYTES
+    ) {
+      const oldest = historicalIds.shift();
+      if (oldest === undefined) break;
+      totalBytes -= this.historicalBytes.get(oldest) ?? 0;
+      this.removeInvocation(oldest);
+    }
+  }
+
+  private removeInvocation(invocationId: string): void {
+    const invocation = this.invocations.get(invocationId);
+    this.invocations.delete(invocationId);
+    this.historicalBytes.delete(invocationId);
+    for (const run of invocation?.runs ?? []) {
+      if (this.runToInvocation.get(run.runId) === invocationId) {
+        this.runToInvocation.delete(run.runId);
+      }
+    }
+    const orderIndex = this.invocationOrder.indexOf(invocationId);
+    if (orderIndex !== -1) this.invocationOrder.splice(orderIndex, 1);
   }
 
   private findRun(runId: string): LiveChildRun | undefined {

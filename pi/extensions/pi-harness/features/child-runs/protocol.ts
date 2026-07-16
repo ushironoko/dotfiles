@@ -2,6 +2,8 @@ import { capUtf8, stripTerminalControls } from "../../lib/terminal-text";
 import {
   MAX_ASSISTANT_ITEM_BYTES,
   MAX_LIVE_DRAFT_BYTES,
+  MAX_RUN_TRANSCRIPT_BYTES,
+  MAX_RUN_TRANSCRIPT_ITEMS,
   type ChildObservation,
 } from "./model";
 
@@ -58,6 +60,7 @@ export const createChildProtocolParser = (
 ): ChildProtocolParser => {
   const now = options.now ?? Date.now;
   const toolIds = new Map<string, { localId: number; name: string }>();
+  let toolIdBytes = 0;
   let nextToolId = 1;
 
   const observe = (observation: ChildObservation): void => {
@@ -82,7 +85,14 @@ export const createChildProtocolParser = (
         256,
       ),
     };
-    toolIds.set(key, item);
+    const keyBytes = Buffer.byteLength(key, "utf8");
+    if (
+      toolIds.size < MAX_RUN_TRANSCRIPT_ITEMS &&
+      toolIdBytes + keyBytes <= MAX_RUN_TRANSCRIPT_BYTES
+    ) {
+      toolIds.set(key, item);
+      toolIdBytes += keyBytes;
+    }
     return item;
   };
 

@@ -268,7 +268,7 @@ export const extractPersistedChildRuns = (
     const payload = byId.get(invocationId);
     if (payload === undefined) continue;
     const nextBytes = byteLength(payload);
-    if (bytes + nextBytes > MAX_REPLAY_BYTES) continue;
+    if (bytes + nextBytes > MAX_REPLAY_BYTES) break;
     selected.push(payload);
     bytes += nextBytes;
   }

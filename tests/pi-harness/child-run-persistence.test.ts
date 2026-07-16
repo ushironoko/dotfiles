@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   CHILD_RUNS_SCHEMA,
   CHILD_RUNS_VERSION,
+  MAX_REPLAY_BYTES,
+  MAX_REPLAY_INVOCATIONS,
   MAX_RUN_TRANSCRIPT_BYTES,
   MAX_RUN_TRANSCRIPT_ITEMS,
   type PersistedChildRunsV1,
@@ -11,6 +13,14 @@ import {
   decodePersistedChildRuns,
   extractPersistedChildRuns,
 } from "../../pi/extensions/pi-harness/features/child-runs/persistence";
+
+const serializedBytes = (value: unknown): number =>
+  Buffer.byteLength(JSON.stringify(value), "utf8");
+
+const toolResult = (childRuns: PersistedChildRunsV1) => ({
+  type: "message",
+  message: { role: "toolResult", details: { childRuns } },
+});
 
 const payload = (
   overrides: Partial<PersistedChildRunsV1> = {},
@@ -42,6 +52,20 @@ const payload = (
   ],
   ...overrides,
 });
+
+const largePayload = (invocationId: string): PersistedChildRunsV1 =>
+  payload({
+    invocationId,
+    runs: Array.from({ length: 32 }, (_, index) => ({
+      runId: `${invocationId}-run-${index}`,
+      agent: "reviewer",
+      task: "review task",
+      taskIndex: index,
+      status: "succeeded" as const,
+      terminalReason: "completed" as const,
+      transcript: [{ type: "assistant" as const, text: "x".repeat(14_000) }],
+    })),
+  });
 
 describe("child-run persisted details", () => {
   test("preserves existing tool details under a namespaced childRuns key", () => {
@@ -139,6 +163,31 @@ describe("child-run persisted details", () => {
       },
     ];
     expect(extractPersistedChildRuns(branch)).toEqual([newer]);
+  });
+
+  test("retains a contiguous newest suffix at the replay byte boundary", () => {
+    const newest = Array.from({ length: 4 }, (_, index) =>
+      largePayload(`newest-${index}`),
+    );
+    const largeBytes = newest.map((item) =>
+      serializedBytes(decodePersistedChildRuns(item)),
+    );
+    expect(
+      largeBytes.reduce((total, bytes) => total + bytes, 0),
+    ).toBeLessThanOrEqual(MAX_REPLAY_BYTES);
+    expect(
+      largeBytes.reduce((total, bytes) => total + bytes, 0) + largeBytes[0]!,
+    ).toBeGreaterThan(MAX_REPLAY_BYTES);
+    expect(newest.length + 2).toBeLessThan(MAX_REPLAY_INVOCATIONS);
+
+    const oldestSmall = payload({ invocationId: "oldest-small" });
+    const blocker = largePayload("blocker");
+    const selected = extractPersistedChildRuns(
+      [oldestSmall, blocker, ...newest].map(toolResult),
+    );
+    expect(selected.map(({ invocationId }) => invocationId)).toEqual(
+      newest.map(({ invocationId }) => invocationId),
+    );
   });
 
   test("never admits unallowlisted privacy sentinels", () => {
