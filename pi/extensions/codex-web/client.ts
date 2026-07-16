@@ -700,9 +700,11 @@ const requestCodexWeb = async (
         `Codex web request failed with HTTP ${response.status}${suffix ? ` (${suffix})` : ""}`,
       );
     }
-    const contentType =
-      response.headers.get("content-type")?.toLowerCase() ?? "";
-    if (!contentType.includes("text/event-stream")) {
+    const contentType = response.headers.get("content-type")?.toLowerCase();
+    // The Codex backend can omit Content-Type on a valid chunked SSE response.
+    // A missing header is accepted only if parseSse validates the bounded body
+    // and observes both completed search evidence and a terminal response.
+    if (contentType && !contentType.includes("text/event-stream")) {
       try {
         await response.body?.cancel();
       } catch {
