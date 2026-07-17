@@ -119,6 +119,7 @@ const createRuntime = (cwd: string, options: { background?: boolean } = {}) => {
     | undefined;
   let branch: unknown[] = [];
   let idle = true;
+  const notifications: string[] = [];
   const appendedEntries: { customType: string; data: unknown }[] = [];
   const sentMessages: { message: unknown; options: unknown }[] = [];
 
@@ -132,7 +133,7 @@ const createRuntime = (cwd: string, options: { background?: boolean } = {}) => {
       select: async () => undefined,
       confirm: async () => false,
       input: async () => undefined,
-      notify: () => {},
+      notify: (message: string) => notifications.push(message),
       setWidget(
         _key: string,
         content:
@@ -247,6 +248,8 @@ const createRuntime = (cwd: string, options: { background?: boolean } = {}) => {
     getCustomOptions: () => customOptions,
     getAppendedEntries: () => appendedEntries,
     getSentMessages: () => sentMessages,
+    getNotifications: () => [...notifications],
+    hasTerminalInputHandler: () => terminalInputHandler !== undefined,
     setEditorState(lines: string[], line: number, col: number) {
       editorLines = [...lines];
       editorCursor = { line, col };
@@ -1636,6 +1639,30 @@ describe("child-run subagent integration", () => {
     runtime.getComponent()?.handleInput?.("q");
     expect(runtime.tui.focusedComponent).toBe(customEditor);
     expect(runtime.getComponent()).toBeUndefined();
+  });
+
+  test("falls back to public custom UI when private focus inspection is absent", async () => {
+    const runtime = createRuntime("/tmp/pi-child-focus-fallback");
+    delete (runtime.tui as { focusedComponent?: RuntimeComponent | null })
+      .focusedComponent;
+    const childRuns = setupChildRuns(runtime.pi);
+
+    childRuns.ensureVisible(runtime.ctx);
+    expect(runtime.getComponent()).toBeDefined();
+    expect(runtime.hasTerminalInputHandler()).toBe(false);
+    expect(runtime.getNotifications()).toHaveLength(1);
+    childRuns.ensureVisible(runtime.ctx);
+    expect(runtime.getNotifications()).toHaveLength(1);
+
+    const command = runtime.commands.get("subagents");
+    if (command === undefined) throw new Error("subagents command missing");
+    const pending = command.handler("", runtime.ctx);
+    await Bun.sleep(0);
+    expect(runtime.getCustomCalls()).toBe(1);
+    expect(runtime.getCustomOptions()?.overlay).toBe(true);
+    runtime.getCustomComponent()?.handleInput?.("\u001b");
+    await pending;
+    expect(runtime.getCustomComponent()).toBeUndefined();
   });
 
   test("explicit focus refresh replaces a stale pre-mount focus target", async () => {

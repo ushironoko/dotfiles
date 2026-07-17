@@ -11,6 +11,11 @@ import type {
   LiveChildRun,
   TranscriptItem,
 } from "./model";
+import {
+  readFocusedComponent,
+  setFocusSafely,
+  type FocusTuiLike,
+} from "./focus-capability";
 import { statusIcon, type ComponentLike } from "./presentation";
 import { ChildRunRegistry } from "./registry";
 
@@ -26,14 +31,9 @@ interface EditorLike extends ComponentLike {
   keybindings?: KeybindingsLike;
 }
 
-interface TuiLike {
+interface TuiLike extends FocusTuiLike {
   terminal: { rows: number };
   requestRender(force?: boolean): void;
-  setFocus?(component: ComponentLike | null): void;
-  // pi-tui has no public focus getter. The widget needs the currently focused
-  // editor so it can preserve native Down handling and restore focus after
-  // browsing. Keep this private runtime seam isolated to this adapter.
-  focusedComponent?: ComponentLike | null;
 }
 
 interface WidgetUiLike {
@@ -527,6 +527,10 @@ export class ChildRunsPanelController {
   private unsubscribeInput: (() => void) | undefined;
   private detailClose: (() => void) | undefined;
   private detailPromise: Promise<void> | undefined;
+  private fallbackClose: (() => void) | undefined;
+  private fallbackPromise: Promise<void> | undefined;
+  private focusDegraded = false;
+  private focusWarningShown = false;
   private readonly keybindings: KeybindingsLike = {
     matches: (data, keybinding) =>
       this.editor?.keybindings?.matches(data, keybinding) ??
@@ -540,14 +544,18 @@ export class ChildRunsPanelController {
   }
 
   async showAndFocus(ctx: BrowserContextLike): Promise<void> {
-    this.show(ctx, true);
+    if (!this.show(ctx, false)) return;
+    if (this.focusBrowser()) return;
+    await this.openFallbackBrowser();
   }
 
   dispose(): void {
     if (this.state === "disposed") return;
     this.detailClose?.();
     this.detailClose = undefined;
-    if (this.tui?.focusedComponent === this.component) this.restoreFocus();
+    this.fallbackClose?.();
+    this.fallbackClose = undefined;
+    if (this.isResidentFocused()) this.restoreFocus();
     if (this.state === "mounted") {
       this.ui?.setWidget(CHILD_RUNS_WIDGET_KEY, undefined);
     }
@@ -568,7 +576,7 @@ export class ChildRunsPanelController {
   private show(ctx: BrowserContextLike, focus: boolean): boolean {
     if (ctx.mode !== "tui" || this.state === "disposed") return false;
     if (this.state === "mounted") {
-      if (focus) this.focusBrowser();
+      if (focus && !this.focusBrowser()) void this.openFallbackBrowser();
       return true;
     }
 
@@ -580,7 +588,7 @@ export class ChildRunsPanelController {
         CHILD_RUNS_WIDGET_KEY,
         (tui) => {
           this.tui = tui;
-          this.captureFocusTarget(tui.focusedComponent);
+          this.captureCurrentFocus();
           const component = new ChildRunsBrowserComponent(
             this.registry,
             tui,
@@ -598,7 +606,7 @@ export class ChildRunsPanelController {
         throw new Error("widget factory did not mount a component");
       }
       this.state = "mounted";
-      if (focus) this.focusBrowser();
+      if (focus && !this.focusBrowser()) void this.openFallbackBrowser();
       return true;
     } catch (error) {
       this.state = "unmounted";
@@ -610,6 +618,73 @@ export class ChildRunsPanelController {
       );
       return false;
     }
+  }
+
+  private async openFallbackBrowser(): Promise<void> {
+    const { ui } = this;
+    if (ui?.custom === undefined || this.state !== "mounted") {
+      ui?.notify(
+        "Child-session browser focus requires custom TUI support on this pi version.",
+        "warning",
+      );
+      return;
+    }
+    if (this.fallbackPromise !== undefined) return this.fallbackPromise;
+
+    let fallbackPromise: Promise<void>;
+    try {
+      fallbackPromise = ui.custom<void>(
+        (tui, _theme, keybindings, done) => {
+          let closed = false;
+          const close = () => {
+            if (closed) return;
+            closed = true;
+            done(undefined);
+          };
+          this.fallbackClose = close;
+          return new ChildRunsBrowserComponent(
+            this.registry,
+            tui,
+            keybindings,
+            (runId) => this.openDetail(runId),
+            close,
+            () => {
+              this.hide();
+              close();
+            },
+          );
+        },
+        {
+          overlay: true,
+          overlayOptions: {
+            width: "100%",
+            maxHeight: "100%",
+            anchor: "center",
+            margin: 1,
+          },
+        },
+      );
+    } catch (error) {
+      ui.notify(
+        `Child-session browser fallback could not open: ${String(error)}`,
+        "warning",
+      );
+      return;
+    }
+
+    this.fallbackPromise = fallbackPromise;
+    await fallbackPromise
+      .catch((error) => {
+        ui.notify(
+          `Child-session browser fallback could not open: ${String(error)}`,
+          "warning",
+        );
+      })
+      .finally(() => {
+        if (this.fallbackPromise !== fallbackPromise) return;
+        this.fallbackPromise = undefined;
+        this.fallbackClose = undefined;
+      });
   }
 
   private openDetail(runId: string): void {
@@ -676,7 +751,11 @@ export class ChildRunsPanelController {
   }
 
   private installInputListener(ui: WidgetUiLike): void {
-    if (this.unsubscribeInput !== undefined || ui.onTerminalInput === undefined)
+    if (
+      this.focusDegraded ||
+      this.unsubscribeInput !== undefined ||
+      ui.onTerminalInput === undefined
+    )
       return;
     this.unsubscribeInput = ui.onTerminalInput((data) =>
       this.handleTerminalInput(data),
@@ -694,8 +773,9 @@ export class ChildRunsPanelController {
       return undefined;
     }
 
-    const focused = this.tui.focusedComponent;
-    if (focused === this.component || !isEditorLike(focused)) return undefined;
+    const focused = this.readCurrentFocus();
+    if (focused === undefined || focused === this.component) return undefined;
+    if (!isEditorLike(focused)) return undefined;
     this.captureFocusTarget(focused);
     const editor = focused;
     if (editor.isShowingAutocomplete?.() === true) return undefined;
@@ -726,22 +806,73 @@ export class ChildRunsPanelController {
     if (isEditorLike(candidate)) this.editor = candidate;
   }
 
-  private focusBrowser(): void {
-    if (this.state !== "mounted" || this.component === undefined) return;
-    this.captureFocusTarget(this.tui?.focusedComponent);
-    this.tui?.setFocus?.(this.component);
-    this.tui?.requestRender();
+  private focusBrowser(): boolean {
+    if (
+      this.state !== "mounted" ||
+      this.component === undefined ||
+      this.focusDegraded
+    )
+      return false;
+    const focused = this.readCurrentFocus();
+    if (focused === undefined || focused === null) return false;
+    this.captureFocusTarget(focused);
+    if (this.returnFocus === undefined || this.tui === undefined) return false;
+    const result = setFocusSafely(this.tui, this.component);
+    if (!result.ok) {
+      this.degradeFocus(result.reason);
+      return false;
+    }
+    this.tui.requestRender();
+    return true;
   }
 
   private restoreFocus(): void {
-    if (this.returnFocus === undefined) return;
-    this.tui?.setFocus?.(this.returnFocus);
-    this.tui?.requestRender();
+    if (this.returnFocus === undefined || this.tui === undefined) return;
+    const result = setFocusSafely(this.tui, this.returnFocus);
+    if (!result.ok) {
+      this.degradeFocus(result.reason);
+      return;
+    }
+    this.tui.requestRender();
+  }
+
+  private captureCurrentFocus(): void {
+    const focused = this.readCurrentFocus();
+    if (focused !== undefined) this.captureFocusTarget(focused);
+  }
+
+  private readCurrentFocus(): ComponentLike | null | undefined {
+    if (this.tui === undefined || this.focusDegraded) return undefined;
+    const result = readFocusedComponent(this.tui);
+    if (!result.supported) {
+      this.degradeFocus(result.reason);
+      return undefined;
+    }
+    return result.component;
+  }
+
+  private isResidentFocused(): boolean {
+    if (this.component === undefined) return false;
+    return this.readCurrentFocus() === this.component;
+  }
+
+  private degradeFocus(reason: string): void {
+    if (!this.focusDegraded) {
+      this.focusDegraded = true;
+      this.unsubscribeInput?.();
+      this.unsubscribeInput = undefined;
+    }
+    if (this.focusWarningShown) return;
+    this.focusWarningShown = true;
+    this.ui?.notify(
+      `Child-session browser focus degraded: ${reason}. Use /subagents or Ctrl+Alt+S for the public overlay fallback.`,
+      "warning",
+    );
   }
 
   private hide(): void {
     if (this.state !== "mounted") return;
-    this.restoreFocus();
+    if (this.isResidentFocused()) this.restoreFocus();
     this.state = "unmounted";
     this.component = undefined;
     this.ui?.setWidget(CHILD_RUNS_WIDGET_KEY, undefined);

@@ -608,7 +608,7 @@ const setupWorkflow = (
           return {
             content: [
               {
-                type: "text",
+                type: "text" as const,
                 text: capText(`${summary}\n\n${stageDigest}${worktreeNote}`),
               },
             ],
@@ -687,7 +687,7 @@ const setupWorkflow = (
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: capText(
                 `Background workflow accepted.\nInvocation ID: ${invocationId}\nUse /subagents to inspect progress; completion will be delivered to the parent automatically.`,
               ),

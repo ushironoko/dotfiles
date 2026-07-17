@@ -1,3 +1,10 @@
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import type { TSchema } from "typebox";
+
 /**
  * Structural types for the subset of pi's ExtensionAPI that pi-harness uses.
  *
@@ -184,22 +191,31 @@ export type PiEventHandler<K extends PiEventName> = (
 
 export interface ToolDefLike {
   name: string;
-  label?: string;
+  label: string;
   description: string;
   promptSnippet?: string;
   promptGuidelines?: string[];
   executionMode?: "parallel" | "sequential";
-  parameters: unknown;
+  parameters: TSchema;
   execute: (
     toolCallId: string,
     params: never,
     signal: AbortSignal | undefined,
     onUpdate: unknown,
     ctx: CtxLike,
-  ) => Promise<unknown>;
+  ) => Promise<AgentToolResult<unknown>>;
 }
 
 export interface PiLike {
   on<K extends PiEventName>(event: K, handler: PiEventHandler<K>): void;
   registerTool(tool: ToolDefLike): void;
 }
+
+// Compile-only contracts against pi's documented public API. Keeping these
+// next to the narrow seam makes local and global declaration compilation fail
+// when the real runtime can no longer supply what the harness expects.
+type Assert<T extends true> = T;
+type _PiApiContract = Assert<ExtensionAPI extends PiLike ? true : false>;
+type _PiContextContract = Assert<
+  ExtensionContext extends CtxLike ? true : false
+>;

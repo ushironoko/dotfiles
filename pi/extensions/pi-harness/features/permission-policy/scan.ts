@@ -4,9 +4,10 @@
  * verdict precedence; this module owns:
  *
  *  - `scanCommand`: split a command line into simple-command segments
- *    (quote/escape/comment/redirection/here-doc aware) plus the raw text of
- *    every command substitution (including those nested in ${…}/$((…))) to
- *    recurse into. Structurally unparseable input → `ok:false` (caller denies).
+ *    (quote/escape/comment/redirection aware) plus the raw text of every
+ *    command substitution (including those nested in ${…}/$((…))) to recurse
+ *    into. Structurally unparseable or unsupported input (including `<<`
+ *    here-doc syntax) → `ok:false` (caller denies).
  *  - `normalizeSegment`: strip leading assignments / wrappers / reserved words
  *    and report whether the resulting head is statically unknown.
  *  - `speculativeFloor`: "could this segment become a built-in floor command
@@ -77,6 +78,8 @@ export interface Segment {
   readonly words: readonly string[];
   readonly opaque: ReadonlySet<number>;
   readonly opaqueUnquoted: ReadonlySet<number>;
+  /** Concrete pre-normalization command text, when safe for explicit allow. */
+  readonly allowCandidate?: string;
 }
 
 export interface ScanResult {
@@ -94,21 +97,50 @@ interface Balanced {
   readonly end: number;
 }
 
+const MAX_READER_NESTING = 64;
+
 const readBalanced = (
   text: string,
   openIndex: number,
   open: string,
   close: string,
+  inDoubleQuotes = false,
+  readerNesting = 0,
 ): Balanced | undefined => {
+  if (readerNesting > MAX_READER_NESTING) return undefined;
   let depth = 1;
   let j = openIndex + 1;
   while (j < text.length) {
     const c = text[j];
     if (c === "\\") {
+      if (text[j + 1] === "\n") return undefined;
       j += 2;
       continue;
     }
+    if (c === "$" && text[j + 1] === "(") {
+      // A command substitution starts a fresh shell quote context. Skip its
+      // complete balanced span before looking for the outer `}`; otherwise a
+      // brace protected by an inner single quote can prematurely close `${…}`.
+      const nested = readBalanced(
+        text,
+        j + 1,
+        "(",
+        ")",
+        false,
+        readerNesting + 1,
+      );
+      if (nested === undefined) return undefined;
+      j = nested.end;
+      continue;
+    }
     if (c === "'") {
+      // Apostrophes inside an outer-double-quoted parameter expansion are
+      // operator-sensitive: they are literal in default-value words but quote
+      // pattern characters for `${x#pattern}` / `${x/pattern/replacement}`.
+      // Rather than let a quoted brace swallow later shell commands, reject
+      // this ambiguous outer context. Nested `$()` spans were skipped above and
+      // therefore retain their own ordinary single-quote semantics.
+      if (inDoubleQuotes) return undefined;
       const k = text.indexOf("'", j + 1);
       if (k === -1) return undefined;
       j = k + 1;
@@ -117,6 +149,7 @@ const readBalanced = (
     if (c === '"') {
       j += 1;
       while (j < text.length && text[j] !== '"') {
+        if (text[j] === "\\" && text[j + 1] === "\n") return undefined;
         j += text[j] === "\\" ? 2 : 1;
       }
       if (j >= text.length) return undefined;
@@ -252,7 +285,11 @@ interface DollarResult {
   readonly end: number;
 }
 
-const readDollar = (text: string, index: number): DollarResult | undefined => {
+const readDollar = (
+  text: string,
+  index: number,
+  inDoubleQuotes = false,
+): DollarResult | undefined => {
   const n = text[index + 1];
   if (n === "(") {
     const arithmetic = text[index + 2] === "(";
@@ -260,16 +297,18 @@ const readDollar = (text: string, index: number): DollarResult | undefined => {
     if (bal === undefined) return undefined;
     // Arithmetic is not a command, but a $(…) can be nested inside it and DOES
     // run; recurse into the inner text either way.
+    const nestedSubs = arithmetic ? extractSubs(bal.inner) : [bal.inner];
+    if (nestedSubs === undefined) return undefined;
     return {
       append: OPAQUE,
-      subs: arithmetic ? extractSubs(bal.inner) : [bal.inner],
+      subs: nestedSubs,
       boundary: false,
       opaque: true,
       end: bal.end,
     };
   }
   if (n === "{") {
-    const bal = readBalanced(text, index + 1, "{", "}");
+    const bal = readBalanced(text, index + 1, "{", "}", inDoubleQuotes);
     if (bal === undefined) return undefined;
     if (bal.inner === "IFS") {
       return {
@@ -282,15 +321,30 @@ const readDollar = (text: string, index: number): DollarResult | undefined => {
     }
     // ${x:-$(cmd)} etc. — a substitution inside a parameter expansion still
     // executes; recurse into any command substitutions found within.
+    const nestedSubs = extractSubs(bal.inner, inDoubleQuotes);
+    if (nestedSubs === undefined) return undefined;
     return {
       append: OPAQUE,
-      subs: extractSubs(bal.inner),
+      subs: nestedSubs,
       boundary: false,
       opaque: true,
       end: bal.end,
     };
   }
   if (n === "'") {
+    if (inDoubleQuotes) {
+      // `$'…'` has ANSI-C quote semantics only when it starts outside an
+      // existing double quote. Inside `"…"`, both apostrophes are literal and
+      // any later `$()` / backtick still executes; consume only the `$` so the
+      // double-quote reader can inspect the remainder in the correct context.
+      return {
+        append: "$",
+        subs: [],
+        boundary: false,
+        opaque: false,
+        end: index + 1,
+      };
+    }
     const ansi = readAnsiC(text, index + 1);
     if (ansi === undefined) return undefined;
     return {
@@ -370,16 +424,13 @@ const readDoubleQuote = (
         j += 2;
         continue;
       }
-      if (escaped === "\n") {
-        j += 2;
-        continue;
-      }
+      if (escaped === "\n") return undefined;
       literal += "\\";
       j += 1;
       continue;
     }
     if (c === "$") {
-      const dollar = readDollar(text, j);
+      const dollar = readDollar(text, j, true);
       if (dollar === undefined) return undefined;
       literal += dollar.boundary ? " " : dollar.append;
       subs.push(...dollar.subs);
@@ -403,33 +454,47 @@ const readDoubleQuote = (
 };
 
 // Pull the raw text of every top-level command substitution out of a fragment
-// (used for ${…}/$((…)) interiors). Best-effort: on a malformed fragment the
-// caller still recurses whatever was found.
-const extractSubs = (fragment: string): string[] => {
+// (used for ${…}/$((…)) interiors). Any malformed or over-nested substitution
+// fails the enclosing scan; silently returning a partial list could hide a
+// mandatory-deny command beyond the malformed span.
+const extractSubs = (
+  fragment: string,
+  initiallyInDoubleQuotes = false,
+): string[] | undefined => {
   const found: string[] = [];
   let i = 0;
+  let inDoubleQuotes = initiallyInDoubleQuotes;
+  // Within the `word` of a parameter expansion that itself started inside an
+  // outer double quote, apostrophes remain literal even across nested `"…"`
+  // pairs. Only a recursively evaluated `$()` gets a fresh shell quote context.
+  const apostrophesAreLiteral = initiallyInDoubleQuotes;
   while (i < fragment.length) {
     const c = fragment[i];
     if (c === "\\") {
       i += 2;
       continue;
     }
-    if (c === "'") {
+    if (c === '"') {
+      inDoubleQuotes = !inDoubleQuotes;
+      i += 1;
+      continue;
+    }
+    if (c === "'" && !inDoubleQuotes && !apostrophesAreLiteral) {
       const k = fragment.indexOf("'", i + 1);
-      if (k === -1) break;
+      if (k === -1) return undefined;
       i = k + 1;
       continue;
     }
     if (c === "`") {
       const back = readBacktick(fragment, i);
-      if (back === undefined) break;
+      if (back === undefined) return undefined;
       found.push(back.inner);
       i = back.end;
       continue;
     }
     if (c === "$" && fragment[i + 1] === "(" && fragment[i + 2] !== "(") {
       const bal = readBalanced(fragment, i + 1, "(", ")");
-      if (bal === undefined) break;
+      if (bal === undefined) return undefined;
       found.push(bal.inner);
       i = bal.end;
       continue;
@@ -483,6 +548,7 @@ export const scanCommand = (command: string): ScanResult => {
   let wordOpaqueUnquoted = false;
   let atWordStart = true;
   let pendingRedirectTarget = false;
+  let allowEligible = true;
   let i = 0;
 
   const resetWord = (): void => {
@@ -508,14 +574,33 @@ export const scanCommand = (command: string): ScanResult => {
   const flushSegment = (): void => {
     flushWord();
     pendingRedirectTarget = false;
-    if (words.length > 0) {
-      segments.push({ words, opaque, opaqueUnquoted });
-      words = [];
-      opaque = new Set<number>();
-      opaqueUnquoted = new Set<number>();
+    if (words.length > 0 || !allowEligible) {
+      // Preserve argv boundaries when rendering the regex candidate. Literal
+      // whitespace produced inside one quoted/escaped shell word must not turn
+      // into the separator between two words: `codex 'login status'` is not
+      // the granted argv prefix `codex login status`. OPAQUE is a private-use
+      // non-whitespace sentinel that cannot satisfy either a literal space or
+      // a custom `\s` separator, while broad single-head grants still match.
+      const allowCandidate =
+        allowEligible && opaque.size === 0 && words.length > 0
+          ? words.map((value) => value.replace(/\s/gu, OPAQUE)).join(" ")
+          : undefined;
+      segments.push({
+        words,
+        opaque,
+        opaqueUnquoted,
+        ...(allowCandidate === undefined ? {} : { allowCandidate }),
+      });
     }
+    words = [];
+    opaque = new Set<number>();
+    opaqueUnquoted = new Set<number>();
+    allowEligible = true;
   };
   const fail = (): ScanResult => ({ segments, subs, ok: false });
+  const markHeadSyntax = (): void => {
+    if (words.length === 0) allowEligible = false;
+  };
   const markOpaque = (unquoted: boolean): void => {
     wordStarted = true;
     wordOpaque = true;
@@ -526,6 +611,7 @@ export const scanCommand = (command: string): ScanResult => {
     const c = command[i];
 
     if (c === "\\") {
+      markHeadSyntax();
       const n = command[i + 1];
       if (n === undefined) {
         word += "\\";
@@ -534,10 +620,11 @@ export const scanCommand = (command: string): ScanResult => {
         i += 1;
         continue;
       }
-      if (n === "\n") {
-        i += 2;
-        continue;
-      }
+      // Backslash-newline removal happens before Bash tokenization and can
+      // synthesize operators (`$(`, `<<`, `&&`, …) across physical lines.
+      // Reconstructing every affected grammar is out of scope, so executable
+      // contexts containing a line continuation are deliberately unsupported.
+      if (n === "\n") return fail();
       word += n;
       wordStarted = true;
       atWordStart = false;
@@ -546,6 +633,7 @@ export const scanCommand = (command: string): ScanResult => {
     }
 
     if (c === "'") {
+      markHeadSyntax();
       const k = command.indexOf("'", i + 1);
       if (k === -1) return fail();
       word += command.slice(i + 1, k);
@@ -556,6 +644,7 @@ export const scanCommand = (command: string): ScanResult => {
     }
 
     if (c === '"') {
+      markHeadSyntax();
       const dq = readDoubleQuote(command, i);
       if (dq === undefined) return fail();
       word += dq.literal;
@@ -568,12 +657,17 @@ export const scanCommand = (command: string): ScanResult => {
     }
 
     if (c === "$") {
+      markHeadSyntax();
       const dollar = readDollar(command, i);
       if (dollar === undefined) return fail();
       subs.push(...dollar.subs);
       if (dollar.boundary) {
+        // Shell comment recognition happens before expansion: in `$IFS#x`,
+        // `#x` is part of the same lexical word, not a comment. Keep that
+        // lexical state and never derive an explicit allow through IFS.
+        allowEligible = false;
         flushWord();
-        atWordStart = true;
+        atWordStart = false;
         i = dollar.end;
         continue;
       }
@@ -586,6 +680,7 @@ export const scanCommand = (command: string): ScanResult => {
     }
 
     if (c === "`") {
+      markHeadSyntax();
       const back = readBacktick(command, i);
       if (back === undefined) return fail();
       subs.push(back.inner);
@@ -597,6 +692,7 @@ export const scanCommand = (command: string): ScanResult => {
     }
 
     if (c === "<" || c === ">") {
+      allowEligible = false;
       if (command[i + 1] === "(") {
         const bal = readBalanced(command, i + 1, "(", ")");
         if (bal === undefined) return fail();
@@ -607,17 +703,13 @@ export const scanCommand = (command: string): ScanResult => {
         i = bal.end;
         continue;
       }
-      // Here-doc: skip the body (data), recurse substitutions in an unquoted one.
+      // Bash here-doc parsing depends on header-wide FIFO state, delimiter
+      // quote removal, logical-line joining, and context-specific expansion
+      // rules. A partial parser can swallow a later mandatory-deny command (or
+      // confuse arithmetic `<<` with a here-doc), so this unsupported syntax is
+      // deliberately fail-closed. `<<<` remains an ordinary here-string below.
       if (c === "<" && command[i + 1] === "<" && command[i + 2] !== "<") {
-        i = consumeHereDoc(command, i, subs);
-        // The fd digit / {var} designator before "<<" is not a command word.
-        if (word.length > 0 && (/^\d+$/.test(word) || FD_VAR.test(word))) {
-          resetWord();
-        } else {
-          flushWord();
-        }
-        atWordStart = true;
-        continue;
+        return fail();
       }
       // Ordinary redirection: drop a leading fd designator, skip the operator
       // run, and mark the following word as the (discarded) target.
@@ -649,7 +741,7 @@ export const scanCommand = (command: string): ScanResult => {
       continue;
     }
 
-    if (c === "\n" || c === "\r") {
+    if (c === "\n") {
       flushSegment();
       atWordStart = true;
       i += 1;
@@ -674,6 +766,7 @@ export const scanCommand = (command: string): ScanResult => {
     if (c === "&") {
       // &> / &>> redirect-all — a redirection, not a background operator.
       if (command[i + 1] === ">") {
+        allowEligible = false;
         flushWord();
         i += 2;
         if (command[i] === ">") i += 1;
@@ -681,6 +774,7 @@ export const scanCommand = (command: string): ScanResult => {
         atWordStart = true;
         continue;
       }
+      if (command[i + 1] !== "&") allowEligible = false;
       flushSegment();
       i += 1;
       if (command[i] === "&") i += 1;
@@ -727,58 +821,6 @@ export const scanCommand = (command: string): ScanResult => {
 
   flushSegment();
   return { segments, subs, ok: true };
-};
-
-// Skip a here-doc body. Returns the index at/after the terminator line. For an
-// unquoted delimiter, command substitutions in the body still execute → recurse.
-const consumeHereDoc = (
-  command: string,
-  start: number,
-  subs: string[],
-): number => {
-  // command[start] === "<", command[start+1] === "<"
-  let i = start + 2;
-  if (command[i] === "-") i += 1;
-  while (i < command.length && (command[i] === " " || command[i] === "\t"))
-    i += 1;
-  let quoted = false;
-  let delim = "";
-  // Delimiter word: may be quoted (<<'EOF' / <<"EOF" / <<\EOF → literal body).
-  while (i < command.length) {
-    const c = command[i];
-    if (c === "'" || c === '"') {
-      quoted = true;
-      const k = command.indexOf(c, i + 1);
-      if (k === -1) return command.length;
-      delim += command.slice(i + 1, k);
-      i = k + 1;
-      continue;
-    }
-    if (c === "\\") {
-      quoted = true;
-      delim += command[i + 1] ?? "";
-      i += 2;
-      continue;
-    }
-    if (/[\s;&|<>()]/.test(c)) break;
-    delim += c;
-    i += 1;
-  }
-  if (delim === "") return i;
-  // Advance to the next line, then scan body lines until a line === delim.
-  const nl = command.indexOf("\n", i);
-  if (nl === -1) return command.length;
-  let lineStart = nl + 1;
-  while (lineStart <= command.length) {
-    let lineEnd = command.indexOf("\n", lineStart);
-    if (lineEnd === -1) lineEnd = command.length;
-    const line = command.slice(lineStart, lineEnd);
-    if (line.trim() === delim) return lineEnd;
-    if (!quoted) subs.push(...extractSubs(line));
-    if (lineEnd === command.length) return command.length;
-    lineStart = lineEnd + 1;
-  }
-  return command.length;
 };
 
 // ---------------------------------------------------------------------------

@@ -1,10 +1,11 @@
 /**
- * Enforces the pi-harness self-containment rule: the extension is loaded via
- * a symlink under ~/.pi/agent/extensions, so it must not import repo code
- * outside its own directory. Allowed runtime imports:
- *   (a) relative paths that stay inside pi/extensions/pi-harness
+ * Enforces self-containment for every dotfiles-managed pi extension. Each
+ * extension is loaded via a child symlink under ~/.pi/agent/extensions, so it
+ * must not import repo code outside its own directory. Allowed runtime imports:
+ *   (a) relative paths that stay inside that extension's directory
  *   (b) node: builtins
- *   (c) @earendil-works/* — type-only imports only (erased at runtime)
+ *   (c) @earendil-works/* — type-only imports, plus exact documented
+ *       runtime roots explicitly allowlisted per extension
  *
  * Detection is syntax-aware via Bun.Transpiler (static + dynamic import,
  * require, require.resolve — literal specifiers), so strings/comments never
@@ -17,10 +18,23 @@ import { Glob } from "bun";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 
-export const EXTENSION_ROOT = resolve(
-  import.meta.dir,
-  "../pi/extensions/pi-harness",
+export const PI_EXTENSIONS_ROOT = resolve(import.meta.dir, "../pi/extensions");
+export const EXTENSION_ROOT = resolve(PI_EXTENSIONS_ROOT, "pi-harness");
+export const CODEX_WEB_EXTENSION_ROOT = resolve(
+  PI_EXTENSIONS_ROOT,
+  "codex-web",
 );
+export const EXTENSION_ROOTS = [
+  EXTENSION_ROOT,
+  CODEX_WEB_EXTENSION_ROOT,
+] as const;
+
+// pi's extension loader aliases this documented root import to the copy bundled
+// with the running pi process. Keep this allowlist exact: subpaths, lookalikes,
+// other pi packages, and codex-web runtime imports remain denied.
+const RUNTIME_IMPORTS_BY_ROOT = new Map<string, ReadonlySet<string>>([
+  [EXTENSION_ROOT, new Set(["@earendil-works/pi-tui"])],
+]);
 
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 
@@ -193,10 +207,11 @@ export const collectViolations = (
   for (const specifier of specifiers) {
     if (specifier.startsWith("node:")) continue;
     if (specifier.startsWith("@earendil-works/")) {
-      // Only type-only @earendil-works imports are allowed; the transpiler
-      // erases those, so anything reaching here is a runtime import.
+      // Type-only imports are erased before this scan. Runtime imports are
+      // limited to exact roots virtualized by pi for this extension.
+      if (RUNTIME_IMPORTS_BY_ROOT.get(root)?.has(specifier) === true) continue;
       violations.push(
-        `${relFile}: runtime import of ${specifier} (type-only imports allowed)`,
+        `${relFile}: runtime import of ${specifier} (type-only imports and explicitly bundled roots only)`,
       );
       continue;
     }
@@ -273,7 +288,13 @@ export const scanExtension = async (root: string): Promise<string[]> => {
 };
 
 if (import.meta.main) {
-  const violations = await scanExtension(EXTENSION_ROOT);
+  const violations: string[] = [];
+  for (const root of EXTENSION_ROOTS) {
+    const extensionName = relative(PI_EXTENSIONS_ROOT, root);
+    for (const violation of await scanExtension(root)) {
+      violations.push(`${extensionName}/${violation}`);
+    }
+  }
 
   if (violations.length > 0) {
     console.error("check-pi-imports: self-containment violations:");
@@ -281,5 +302,5 @@ if (import.meta.main) {
     process.exit(1);
   }
 
-  console.log("check-pi-imports: OK");
+  console.log(`check-pi-imports: OK (${EXTENSION_ROOTS.length} extensions)`);
 }

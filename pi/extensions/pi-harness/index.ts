@@ -9,6 +9,7 @@
  * In child pi processes (PI_HARNESS_CHILD=1) only the safety layer stays
  * active — see config.ts.
  */
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { PiLike } from "./lib/pi-like";
 import { loadConfig, type HarnessConfig } from "./config";
 import setupPermissionPolicy from "./features/permission-policy/index";
@@ -46,7 +47,7 @@ const setupHarness = (pi: PiLike, config: HarnessConfig): void => {
   if (config.features["ask-user-question"]) setupAskUserQuestion(pi);
 };
 
-const piHarness = (pi: PiLike): void => {
+const piHarness: ExtensionFactory = (pi): void => {
   setupHarness(pi, loadConfig());
 };
 

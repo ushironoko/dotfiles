@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  CODEX_WEB_EXTENSION_ROOT,
   collectViolations,
   EXTENSION_ROOT,
   scanExtension,
@@ -38,10 +39,31 @@ describe("check-pi-imports self-containment analysis", () => {
     );
   });
 
-  test("flags a runtime @earendil-works import", () => {
-    expect(check('import { x } from "@earendil-works/pi-ai";')[0]).toContain(
-      "runtime import of @earendil-works",
+  test("allows only pi-tui's documented root runtime import in pi-harness", () => {
+    expect(
+      check('import { visibleWidth } from "@earendil-works/pi-tui";'),
+    ).toEqual([]);
+
+    for (const specifier of [
+      "@earendil-works/pi-ai",
+      "@earendil-works/pi-tui/dist/index.js",
+      "@earendil-works/pi-tui-evil",
+    ]) {
+      expect(
+        check(`import { x } from ${JSON.stringify(specifier)};`)[0],
+      ).toContain(`runtime import of ${specifier}`);
+    }
+  });
+
+  test("does not grant the pi-harness runtime allowlist to codex-web", () => {
+    const source = 'import { visibleWidth } from "@earendil-works/pi-tui";';
+    const violations = collectViolations(
+      "index.ts",
+      join(CODEX_WEB_EXTENSION_ROOT, "index.ts"),
+      source,
+      CODEX_WEB_EXTENSION_ROOT,
     );
+    expect(violations[0]).toContain("runtime import of @earendil-works/pi-tui");
   });
 
   test("flags a relative import that escapes the extension root", () => {
@@ -102,6 +124,10 @@ describe("check-pi-imports self-containment analysis", () => {
 });
 
 describe("check-pi-imports scanExtension enumeration", () => {
+  test("the codex-web extension is self-contained", async () => {
+    expect(await scanExtension(CODEX_WEB_EXTENSION_ROOT)).toEqual([]);
+  });
+
   test("analyzes dotfile .ts and rejects escaping/broken symlinks", async () => {
     const root = await fixtureRoot();
     const outside = await fixtureRoot();

@@ -448,7 +448,10 @@ const setupSubagent = (
             }
             return {
               content: [
-                { type: "text", text: capText(previous || "(no output)") },
+                {
+                  type: "text" as const,
+                  text: capText(previous || "(no output)"),
+                },
               ],
               details: { mode: "chain", results } satisfies SubagentDetails,
             };
@@ -505,7 +508,7 @@ const setupSubagent = (
             return {
               content: [
                 {
-                  type: "text",
+                  type: "text" as const,
                   text: capText(
                     `Parallel: ${results.length}/${results.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`,
                   ),
@@ -529,7 +532,7 @@ const setupSubagent = (
             return {
               content: [
                 {
-                  type: "text",
+                  type: "text" as const,
                   text: capText(result.output || "(no output)"),
                 },
               ],
@@ -594,7 +597,7 @@ const setupSubagent = (
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: capText(
                 `Background subagent ${mode} accepted.\nInvocation ID: ${invocationId}\nUse /subagents to inspect progress; completion will be delivered to the parent automatically.`,
               ),

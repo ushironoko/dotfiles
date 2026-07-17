@@ -14,6 +14,7 @@ interface DenyRule {
 }
 
 interface AllowRule {
+  readonly source?: string;
   readonly pattern: RegExp;
   readonly reason?: string;
 }
@@ -42,6 +43,7 @@ interface DenyDefinition {
 }
 
 interface AllowDefinition {
+  readonly source?: string;
   readonly pattern: string;
   readonly reason?: string;
 }
@@ -153,11 +155,15 @@ const parseAllowDefinition = (value: unknown): AllowDefinition | undefined => {
   if (!isRecord(value) || typeof value.pattern !== "string") {
     return undefined;
   }
+  if (value.source !== undefined && typeof value.source !== "string") {
+    return undefined;
+  }
   if (value.reason !== undefined && typeof value.reason !== "string") {
     return undefined;
   }
   return {
     pattern: value.pattern,
+    ...(value.source === undefined ? {} : { source: value.source }),
     ...(value.reason === undefined ? {} : { reason: value.reason }),
   };
 };
@@ -231,6 +237,9 @@ const compileAllowRules = (
     try {
       rules.push({
         pattern: new RegExp(definition.pattern),
+        ...(definition.source === undefined
+          ? {}
+          : { source: definition.source }),
         ...(definition.reason === undefined
           ? {}
           : { reason: definition.reason }),
@@ -297,7 +306,7 @@ const loadRules = (jsonText: string | undefined): LoadedRules => {
 const MAX_SUBSTITUTION_DEPTH = 20;
 
 const UNPARSEABLE_REASON =
-  "permission-policy: コマンドを解析できませんでした（引用符または括弧が不整合のため fail-closed でブロックしました）";
+  "permission-policy: コマンドを解析できませんでした（引用符/括弧の不整合または未対応構文のため fail-closed でブロックしました）";
 const OPAQUE_EXECUTOR_REASON =
   "不透明な実行子（eval / sh -c / xargs 等）は内容を静的に検査できないため確認が必要です";
 const POTENTIALLY_SENSITIVE_REASON =
@@ -324,6 +333,7 @@ const structuralBitDeny = (seg: NormalizedSegment): string | undefined => {
 const evaluateNormalized = (
   normalized: NormalizedSegment,
   rules: LoadedRules,
+  allowCandidate: string | undefined,
 ): Verdict => {
   if (normalized.words.length === 0) return { verdict: "default-continue" };
   const command = normalized.words.join(" ");
@@ -339,7 +349,12 @@ const evaluateNormalized = (
     return { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON };
   }
 
-  const allowed = rules.allow.find((rule) => rule.pattern.test(command));
+  // Allow grants use the scanner's conservative concrete representation
+  // before wrapper stripping or executable basename normalization.
+  const allowed =
+    allowCandidate === undefined
+      ? undefined
+      : rules.allow.find((rule) => rule.pattern.test(allowCandidate));
   if (allowed !== undefined) {
     return allowed.reason === undefined
       ? { verdict: "allow" }
@@ -398,7 +413,9 @@ const evaluateCommandInner = (
   const verdicts: Verdict[] = [];
   for (const segment of scanned.segments) {
     const normalized = normalizeSegment(segment);
-    verdicts.push(evaluateNormalized(normalized, rules));
+    verdicts.push(
+      evaluateNormalized(normalized, rules, segment.allowCandidate),
+    );
     // `sh -c '<script>'` runs exactly <script>; evaluate it so a denied body
     // (e.g. `bit relay sync`) is denied instead of downgraded to an opaque ask.
     const inner = interpreterConcreteArg(normalized);
