@@ -18,11 +18,18 @@
 import type {
   AgentStartInjection,
   BeforeAgentStartEvent,
+  ContextUsageLike,
   CtxLike,
   DialogOptionsLike,
+  FooterComponentLike,
+  FooterDataLike,
   GenericEvent,
+  ModelLike,
   NotifyLevel,
   PiEventHandler,
+  PiModeLike,
+  ThemeLike,
+  TuiLike,
   PiEventName,
   PiLike,
   SessionStartEvent,
@@ -88,6 +95,14 @@ export interface FakePi extends PiLike {
   readonly notifications: Notification[];
   /** Widget lines captured from ctx.ui.setWidget, keyed by widget id. */
   readonly widgets: Map<string, string[] | undefined>;
+  /** Render the currently installed custom footer with the identity theme. */
+  renderFooter(width: number): string[] | undefined;
+  /** Notify footer branch subscribers, matching FooterDataProvider behavior. */
+  setGitBranch(branch: string | null): void;
+  /** Replace the context-usage result returned by the handler context. */
+  setContextUsage(usage: ContextUsageLike | undefined): void;
+  /** Number of renders requested through the fake TUI. */
+  readonly footerRenderRequests: number;
   /** Queue a response for the next ctx.ui.confirm call (defaults to false). */
   queueConfirm(answer: boolean): void;
   /** Select the zero-based option on the next ctx.ui.select call. */
@@ -103,7 +118,14 @@ export interface FakePi extends PiLike {
 }
 
 export function createFakePi(
-  options: { hasUI?: boolean; cwd?: string } = {},
+  options: {
+    hasUI?: boolean;
+    mode?: PiModeLike;
+    cwd?: string;
+    gitBranch?: string | null;
+    model?: ModelLike;
+    contextUsage?: ContextUsageLike;
+  } = {},
 ): FakePi {
   const store: HandlerStore = {
     session_start: [],
@@ -124,10 +146,32 @@ export function createFakePi(
   const selectDialogs: SelectDialog[] = [];
   const inputDialogs: InputDialog[] = [];
   const confirmDialogs: ConfirmDialog[] = [];
+  const branchCallbacks = new Set<() => void>();
+  let gitBranch = options.gitBranch ?? null;
+  let { contextUsage } = options;
+  let footerComponent: FooterComponentLike | undefined;
+  let footerRenderRequests = 0;
+
+  const tui: TuiLike = {
+    requestRender: () => {
+      footerRenderRequests += 1;
+    },
+  };
+  const theme: ThemeLike = { fg: (_color, text) => text };
+  const footerData: FooterDataLike = {
+    getGitBranch: () => gitBranch,
+    onBranchChange: (callback) => {
+      branchCallbacks.add(callback);
+      return () => branchCallbacks.delete(callback);
+    },
+  };
 
   const ctx: CtxLike & { hasUI: boolean } = {
     hasUI: options.hasUI ?? true,
+    mode: options.mode ?? "tui",
     cwd: options.cwd,
+    model: options.model,
+    getContextUsage: () => contextUsage,
     ui: {
       select: async (title, choices, dialogOptions) => {
         selectDialogs.push({
@@ -151,6 +195,10 @@ export function createFakePi(
       },
       setWidget: (key, lines) => {
         widgets.set(key, lines);
+      },
+      setFooter: (factory) => {
+        footerComponent?.dispose?.();
+        footerComponent = factory?.(tui, theme, footerData);
       },
     },
   };
@@ -229,6 +277,19 @@ export function createFakePi(
     tools,
     notifications,
     widgets,
+    renderFooter(width) {
+      return footerComponent?.render(width);
+    },
+    setGitBranch(branch) {
+      gitBranch = branch;
+      for (const callback of branchCallbacks) callback();
+    },
+    setContextUsage(usage) {
+      contextUsage = usage;
+    },
+    get footerRenderRequests() {
+      return footerRenderRequests;
+    },
     queueConfirm(answer) {
       confirmQueue.push(answer);
     },

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
+import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
 import setupWorkflow from "../../pi/extensions/pi-harness/features/workflow/index";
 import type {
   SpawnFunction,
@@ -269,6 +270,83 @@ describe("pi-harness workflow", () => {
     expect(text).toContain("finding-two");
     expect(details.succeeded).toBe(2);
     expect(details.total).toBe(2);
+  });
+
+  test("publishes one live child run per stage task while preserving degradation", async () => {
+    const home = await makeTempDirectory("pi-workflow-child-runs");
+    await writeAgents(home, ["codex-reviewer"]);
+    const { records, spawnFn } = makeSpawnFn((taskArg) =>
+      taskArg.includes("fails")
+        ? { stderr: "rate limited", code: 15 }
+        : { text: `done: ${taskArg}` },
+    );
+    let nextId = 0;
+    const registry = new ChildRunRegistry({
+      idFactory: () => `workflow-id-${++nextId}`,
+      now: () => 100,
+    });
+    let visibleCalls = 0;
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      childRuns: {
+        registry,
+        ensureVisible: () => visibleCalls++,
+      },
+    });
+    const updates: unknown[] = [];
+    const result = await Reflect.apply(
+      findWorkflowTool(pi.tools).execute,
+      undefined,
+      [
+        "workflow-live",
+        {
+          stages: [
+            {
+              name: "review",
+              mode: "fanout",
+              tasks: [
+                { agentType: "codex-reviewer", task: "succeeds" },
+                { agentType: "codex-reviewer", task: "fails" },
+              ],
+            },
+            {
+              name: "judge",
+              mode: "single",
+              tasks: [
+                { agentType: "codex-reviewer", task: "judge {previous}" },
+              ],
+            },
+          ],
+        },
+        undefined,
+        (update: unknown) => updates.push(update),
+        pi.ctx,
+      ],
+    );
+
+    expect(getResult(result).details.succeeded).toBe(2);
+    expect(records).toHaveLength(3);
+    expect(visibleCalls).toBe(1);
+    const snapshots = registry.getSnapshots();
+    expect(snapshots).toHaveLength(1);
+    expect(
+      snapshots[0]?.runs.map((run) => [
+        run.stageIndex,
+        run.taskIndex,
+        run.status,
+      ]),
+    ).toEqual([
+      [0, 0, "succeeded"],
+      [0, 1, "failed"],
+      [1, 0, "succeeded"],
+    ]);
+    expect(JSON.stringify(updates)).toContain('"kind":"summary"');
+    expect(
+      JSON.stringify(
+        updates.map((update) => (update as { details?: unknown }).details),
+      ),
+    ).not.toContain("done: succeeds");
   });
 
   test("oversized outputs share the report budget so every task stays represented", async () => {
