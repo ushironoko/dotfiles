@@ -310,6 +310,81 @@ describe("Claude-compatible statusline rendering", () => {
 });
 
 describe("pi-harness statusline lifecycle", () => {
+  test("inherits trust only while a registered linked worktree stays intact", async () => {
+    const home = await tempDirectory("pi-statusline-worktree-trust");
+    const project = join(home, "repo");
+    const worktree = join(home, "topic-worktree");
+    const replacement = join(home, "replacement");
+    await fs.mkdir(project, { recursive: true });
+    await markAsProject(project);
+    await runGit(project, ["init", "-b", "main"]);
+    await runGit(project, ["config", "user.email", "test@example.com"]);
+    await runGit(project, ["config", "user.name", "Status Test"]);
+    await runGit(project, ["add", "."]);
+    await runGit(project, ["commit", "-m", "initial"]);
+    await runGit(project, ["worktree", "add", "-b", "topic", worktree]);
+    const canonicalProject = await fs.realpath(project);
+    const canonicalWorktree = await fs.realpath(worktree);
+    const runner = join(
+      resolvePaths(home).claudeHooksDir,
+      "lib/statusline_checks_run.sh",
+    );
+    await fs.mkdir(dirname(runner), { recursive: true });
+    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+
+    const gitReads: string[] = [];
+    const checkLaunches: string[][] = [];
+    const pi = createFakePi({ cwd: canonicalProject, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home, [canonicalProject]), {
+      cacheDir: join(home, "cache"),
+      getGitStatus: async (cwd) => {
+        gitReads.push(cwd);
+        return gitStatus({ repository: undefined });
+      },
+      getBranch: async (cwd) => (cwd === canonicalWorktree ? "topic" : "main"),
+      spawnDetached: (_command, args) => {
+        checkLaunches.push(args);
+      },
+    });
+
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    await pi.emitToolResult({
+      type: "tool_result",
+      toolName: "worktree_create",
+      input: { name: "topic" },
+      content: [{ type: "text", text: canonicalWorktree }],
+      isError: false,
+    });
+    await pi.emitAgentSettled();
+    expect(gitReads).toEqual([
+      canonicalProject,
+      canonicalWorktree,
+      canonicalWorktree,
+    ]);
+    expect(checkLaunches).toEqual([
+      [runner, canonicalWorktree, canonicalWorktree],
+    ]);
+
+    // Git still has stale registration metadata, but neither a plain
+    // replacement nor a retargeted symlink may inherit trust.
+    await fs.rm(worktree, { recursive: true, force: true });
+    await fs.mkdir(worktree);
+    await pi.emitAgentSettled();
+    await fs.rm(worktree, { recursive: true, force: true });
+    await fs.mkdir(replacement);
+    await fs.symlink(replacement, worktree, "dir");
+    await pi.emitAgentSettled();
+
+    expect(gitReads).toEqual([
+      canonicalProject,
+      canonicalWorktree,
+      canonicalWorktree,
+    ]);
+    expect(checkLaunches).toEqual([
+      [runner, canonicalWorktree, canonicalWorktree],
+    ]);
+  });
+
   test("session_start installs a dynamic custom footer from cache", async () => {
     const home = await tempDirectory("pi-statusline-render");
     const project = join(home, "repo");
@@ -360,6 +435,84 @@ describe("pi-harness statusline lifecycle", () => {
 
     expect(pi.footerRenderRequests).toBeGreaterThan(requestsBeforeBranchChange);
     expect(pi.renderFooter(100)).toEqual(["plain | topic | Model B | 9%"]);
+  });
+
+  test("follows a created worktree until that active worktree is removed", async () => {
+    const home = await tempDirectory("pi-statusline-worktree");
+    const project = join(home, "repo");
+    const worktree = join(home, "topic-worktree");
+    await fs.mkdir(project, { recursive: true });
+    await fs.mkdir(worktree, { recursive: true });
+    await markAsProject(project);
+    await markAsProject(worktree);
+
+    const gitReads: string[] = [];
+    const checkLaunches: string[][] = [];
+    let worktreeBranch = "topic";
+    let worktreeValid = true;
+    const runner = join(
+      resolvePaths(home).claudeHooksDir,
+      "lib/statusline_checks_run.sh",
+    );
+    await fs.mkdir(dirname(runner), { recursive: true });
+    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+
+    const pi = createFakePi({ cwd: project, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home, [project]), {
+      cacheDir: join(home, "cache"),
+      getGitStatus: async (cwd) => {
+        gitReads.push(cwd);
+        return gitStatus({ repository: undefined });
+      },
+      getBranch: async (cwd) => (cwd === worktree ? worktreeBranch : "main"),
+      spawnDetached: (_command, args) => {
+        checkLaunches.push(args);
+      },
+      validateInheritedWorktree: async () => worktreeValid,
+    });
+
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    await pi.emitToolResult({
+      type: "tool_result",
+      toolName: "worktree_create",
+      input: { name: "topic" },
+      content: [{ type: "text", text: worktree }],
+      isError: false,
+    });
+    expect(pi.renderFooter(100)).toEqual([
+      "topic-worktree | topic | TS L? T? X?",
+    ]);
+
+    // The built-in footer provider remains tied to the session checkout. Its
+    // stale update must not replace the active worktree branch.
+    pi.setGitBranch("stale-main");
+    worktreeBranch = "topic-next";
+    await pi.emitAgentSettled();
+    expect(pi.renderFooter(100)).toEqual([
+      "topic-worktree | topic-next | TS L? T? X?",
+    ]);
+    expect(checkLaunches).toEqual([[runner, worktree, worktree]]);
+
+    // A later identity failure revokes inherited trust before any Git read or
+    // repository-defined check can run, while retaining the last safe branch.
+    worktreeValid = false;
+    worktreeBranch = "replacement-branch";
+    await pi.emitAgentSettled();
+    expect(pi.renderFooter(100)).toEqual([
+      "topic-worktree | topic-next | TS L? T? X?",
+    ]);
+    expect(checkLaunches).toEqual([[runner, worktree, worktree]]);
+    expect(gitReads).toEqual([project, worktree, worktree]);
+
+    await pi.emitToolResult({
+      type: "tool_result",
+      toolName: "worktree_remove",
+      input: { path: worktree, confirmed: true },
+      content: [{ type: "text", text: `Removed worktree: ${worktree}` }],
+      isError: false,
+    });
+    expect(pi.renderFooter(100)).toEqual(["repo | stale-main | TS L? T? X?"]);
+    expect(gitReads).toEqual([project, worktree, worktree, project]);
   });
 
   test("default git collection renders origin and tracked diff totals", async () => {
