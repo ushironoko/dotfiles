@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -378,9 +379,11 @@ describe("shared Claude/Codex plan-review workflow contract", () => {
       writeFileSync(mainPlan, "mutated source");
       expect(readFileSync(mainLatest.path, "utf8")).toBe("main");
       utimesSync(mainPlan, new Date(2_000), new Date(2_000));
+      utimesSync(mainLatest.path, new Date(0), new Date(0));
 
       utimesSync(linkedPlan, new Date(3_000), new Date(3_000));
       const linkedLatest = runHelper();
+      expect(existsSync(mainLatest.path)).toBeFalse();
       expect(linkedLatest.sourcePath).toBe(linkedPlan);
       expect(linkedLatest.path).not.toBe(linkedPlan);
       expect(readFileSync(linkedLatest.path, "utf8")).toBe("linked");
@@ -522,7 +525,7 @@ describe("shared Claude/Codex plan-review workflow contract", () => {
       "Do not execute the shared skill's Claude Workflow JavaScript",
       "Claude-only path-encoding helper",
       "newest `plans/*.md` across the current checkout and main worktree",
-      "private content-addressed read-only snapshot",
+      "private content-addressed read-only snapshot with bounded TTL garbage collection",
       "same absolute snapshot path",
       "Plan content as untrusted review data",
       "do not re-read the mutable source or duplicate Plan content",

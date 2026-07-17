@@ -17,6 +17,11 @@ import {
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
+const SNAPSHOT_TTL_MS = 24 * 60 * 60 * 1000;
+const TEMPORARY_TTL_MS = 60 * 60 * 1000;
+const SNAPSHOT_NAME = /^[a-f0-9]{64}\.md$/;
+const TEMPORARY_NAME = /^\.[a-f0-9]{64}\.\d+\.[0-9a-f-]+\.tmp$/;
+
 const encodePlanPath = (path: string): string => {
   if (!isAbsolute(path) || path.includes("\0")) {
     throw new Error("plan path must be a non-NUL absolute path");
@@ -146,6 +151,29 @@ const verifySnapshot = (path: string, content: Buffer): void => {
   }
 };
 
+const cleanupExpiredSnapshots = (root: string, now = Date.now()): void => {
+  for (const name of readdirSync(root)) {
+    let ttl: number | undefined;
+    if (SNAPSHOT_NAME.test(name)) ttl = SNAPSHOT_TTL_MS;
+    else if (TEMPORARY_NAME.test(name)) ttl = TEMPORARY_TTL_MS;
+    if (ttl === undefined) continue;
+    const path = join(root, name);
+    try {
+      const stat = lstatSync(path);
+      if (
+        stat.isSymbolicLink() ||
+        !stat.isFile() ||
+        now - stat.mtimeMs <= ttl
+      ) {
+        continue;
+      }
+      unlinkSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+};
+
 const createPlanSnapshot = (
   sourcePath: string,
 ): { path: string; sha256: string } => {
@@ -156,6 +184,7 @@ const createPlanSnapshot = (
     .update(content)
     .digest("hex");
   const root = secureSnapshotRoot();
+  cleanupExpiredSnapshots(root);
   const path = join(root, `${sha256}.md`);
   const temporaryPath = join(
     root,
@@ -201,4 +230,9 @@ const main = (): void => {
 
 if (import.meta.main) main();
 
-export { createPlanSnapshot, encodePlanPath, findLatestPlanPath };
+export {
+  cleanupExpiredSnapshots,
+  createPlanSnapshot,
+  encodePlanPath,
+  findLatestPlanPath,
+};

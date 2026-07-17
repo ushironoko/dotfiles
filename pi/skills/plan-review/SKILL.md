@@ -33,7 +33,8 @@ Run `bun ~/.claude/skills/plan-review/encode-plan-path.ts` with no arguments.
 The helper compares `plans/*.md` under the current worktree and main repo,
 copies the latest Plan once to a content-addressed read-only snapshot under a
 private temp root, then returns `{ sourcePath, path, pathBase64, sha256 }` JSON.
-If no file is found, stop with an error. Display the absolute `sourcePath`, read
+It lazily removes published snapshots older than 24 hours and hidden temporary
+files older than one hour. If no file is found, stop with an error. Display the absolute `sourcePath`, read
 and analyze the snapshot `path`, retain `pathBase64` for Phase 3, and never
 re-read the mutable source during this review.
 
