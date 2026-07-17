@@ -1,11 +1,75 @@
 import { describe, expect, test } from "bun:test";
 
+import {
+  readFocusedComponent,
+  setFocusSafely,
+} from "../../pi/extensions/pi-harness/features/child-runs/focus-capability";
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
 import {
   ChildRunDetailComponent,
   ChildRunsBrowserComponent,
 } from "../../pi/extensions/pi-harness/features/child-runs/ui";
 import { visibleWidth } from "../../pi/extensions/pi-harness/lib/terminal-text";
+
+describe("child-session private focus capability", () => {
+  const component = { render: () => ["x"], invalidate() {} };
+
+  test("reads a valid focus target and changes focus through the public setter", () => {
+    let focused = component;
+    const tui = {
+      get focusedComponent() {
+        return focused;
+      },
+      setFocus(next: typeof component | null) {
+        if (next !== null) focused = next;
+      },
+    };
+
+    expect(readFocusedComponent(tui)).toEqual({
+      supported: true,
+      component,
+    });
+    expect(setFocusSafely(tui, component)).toEqual({ ok: true });
+  });
+
+  test("fails closed for absent, throwing, and changed-shape focus state", () => {
+    expect(readFocusedComponent({ setFocus() {} })).toEqual({
+      supported: false,
+      reason: "TUI focus inspection is unavailable",
+    });
+    const throwingTui = {
+      get focusedComponent(): unknown {
+        throw new Error("private API changed");
+      },
+      setFocus() {},
+    };
+    expect(readFocusedComponent(throwingTui)).toEqual({
+      supported: false,
+      reason: "TUI focus inspection failed",
+    });
+    const changedTui = {
+      focusedComponent: "not-a-component",
+      setFocus() {},
+    };
+    expect(readFocusedComponent(changedTui)).toEqual({
+      supported: false,
+      reason: "TUI focus target has changed shape",
+    });
+  });
+
+  test("contains a throwing public focus setter", () => {
+    expect(
+      setFocusSafely(
+        {
+          setFocus() {
+            throw new Error("focus failed");
+          },
+        },
+        component,
+      ),
+    ).toEqual({ ok: false, reason: "TUI focus change failed" });
+  });
+});
 
 const setup = (rows = 20) => {
   let id = 0;

@@ -1,3 +1,10 @@
+import type {
+  AgentToolResult,
+  AgentToolUpdateCallback,
+  ExtensionAPI,
+  ExtensionFactory,
+} from "@earendil-works/pi-coding-agent";
+import type { TSchema } from "typebox";
 import {
   requestCodexWeb,
   type CodexAuthInput,
@@ -40,12 +47,8 @@ interface ToolContextLike {
   ui: ToolUiLike;
 }
 
-interface ToolUpdateLike {
-  content: { type: "text"; text: string }[];
-  details?: Record<string, unknown>;
-}
-
-type ToolUpdateCallbackLike = (update: ToolUpdateLike) => void;
+type ToolDetailsLike = Record<string, unknown> | undefined;
+type ToolUpdateCallbackLike = AgentToolUpdateCallback<ToolDetailsLike>;
 
 interface ToolDefinitionLike {
   name: string;
@@ -54,14 +57,14 @@ interface ToolDefinitionLike {
   description: string;
   promptSnippet: string;
   promptGuidelines: string[];
-  parameters: unknown;
+  parameters: TSchema;
   execute(
     toolCallId: string,
     params: unknown,
     signal: AbortSignal | undefined,
     onUpdate: ToolUpdateCallbackLike | undefined,
     ctx: ToolContextLike,
-  ): Promise<unknown>;
+  ): Promise<AgentToolResult<ToolDetailsLike>>;
 }
 
 interface ExtensionApiLike {
@@ -263,5 +266,12 @@ const setupCodexWeb = (pi: ExtensionApiLike): void => {
   });
 };
 
+type Assert<T extends true> = T;
+type _CodexWebApiContract = Assert<
+  ExtensionAPI extends ExtensionApiLike ? true : false
+>;
+
+const codexWeb: ExtensionFactory = (pi): void => setupCodexWeb(pi);
+
 export { setupCodexWeb };
-export default setupCodexWeb;
+export default codexWeb;

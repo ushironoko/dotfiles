@@ -500,7 +500,7 @@ const setupWorkflow = (
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: capText(`${summary}\n\n${stageDigest}${worktreeNote}`),
             },
           ],

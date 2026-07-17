@@ -117,6 +117,7 @@ const createRuntime = (cwd: string) => {
     | ((data: string) => { consume?: boolean; data?: string } | undefined)
     | undefined;
   let branch: unknown[] = [];
+  const notifications: string[] = [];
 
   const ctx = {
     cwd,
@@ -127,7 +128,7 @@ const createRuntime = (cwd: string) => {
       select: async () => undefined,
       confirm: async () => false,
       input: async () => undefined,
-      notify: () => {},
+      notify: (message: string) => notifications.push(message),
       setWidget(
         _key: string,
         content:
@@ -227,6 +228,8 @@ const createRuntime = (cwd: string) => {
     getCustomCalls: () => customCalls,
     getCustomComponent: () => customComponent,
     getCustomOptions: () => customOptions,
+    getNotifications: () => [...notifications],
+    hasTerminalInputHandler: () => terminalInputHandler !== undefined,
     setEditorState(lines: string[], line: number, col: number) {
       editorLines = [...lines];
       editorCursor = { line, col };
@@ -729,6 +732,30 @@ describe("child-run subagent integration", () => {
     runtime.getComponent()?.handleInput?.("q");
     expect(runtime.tui.focusedComponent).toBe(customEditor);
     expect(runtime.getComponent()).toBeUndefined();
+  });
+
+  test("falls back to public custom UI when private focus inspection is absent", async () => {
+    const runtime = createRuntime("/tmp/pi-child-focus-fallback");
+    delete (runtime.tui as { focusedComponent?: RuntimeComponent | null })
+      .focusedComponent;
+    const childRuns = setupChildRuns(runtime.pi);
+
+    childRuns.ensureVisible(runtime.ctx);
+    expect(runtime.getComponent()).toBeDefined();
+    expect(runtime.hasTerminalInputHandler()).toBe(false);
+    expect(runtime.getNotifications()).toHaveLength(1);
+    childRuns.ensureVisible(runtime.ctx);
+    expect(runtime.getNotifications()).toHaveLength(1);
+
+    const command = runtime.commands.get("subagents");
+    if (command === undefined) throw new Error("subagents command missing");
+    const pending = command.handler("", runtime.ctx);
+    await Bun.sleep(0);
+    expect(runtime.getCustomCalls()).toBe(1);
+    expect(runtime.getCustomOptions()?.overlay).toBe(true);
+    runtime.getCustomComponent()?.handleInput?.("\u001b");
+    await pending;
+    expect(runtime.getCustomComponent()).toBeUndefined();
   });
 
   test("explicit focus refresh replaces a stale pre-mount focus target", async () => {

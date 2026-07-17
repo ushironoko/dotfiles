@@ -1,3 +1,9 @@
+import {
+  truncateToWidth as piTruncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
+
 const consumeCsi = (value: string, start: number): number => {
   for (let index = start; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -101,38 +107,10 @@ export const capUtf8 = (value: string, maxBytes: number): string => {
   return `${value.slice(0, end)}${includeSuffix ? TRUNCATION_SUFFIX : ""}`;
 };
 
-const isZeroWidth = (code: number): boolean =>
-  (code >= 0x300 && code <= 0x36f) ||
-  (code >= 0x1ab0 && code <= 0x1aff) ||
-  (code >= 0x1dc0 && code <= 0x1dff) ||
-  (code >= 0x20d0 && code <= 0x20ff) ||
-  (code >= 0xfe00 && code <= 0xfe0f) ||
-  (code >= 0xfe20 && code <= 0xfe2f) ||
-  code === 0x200d;
-
-const isWide = (code: number): boolean =>
-  code >= 0x1100 &&
-  (code <= 0x115f ||
-    code === 0x2329 ||
-    code === 0x232a ||
-    (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe10 && code <= 0xfe19) ||
-    (code >= 0xfe30 && code <= 0xfe6f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f000 && code <= 0x1faff) ||
-    (code >= 0x20000 && code <= 0x3fffd));
-
-const runeWidth = (rune: string): number => {
-  const code = rune.codePointAt(0) ?? 0;
-  if (isZeroWidth(code)) return 0;
-  return isWide(code) ? 2 : 1;
-};
-
-export const visibleWidth = (value: string): number =>
-  Array.from(value).reduce((width, rune) => width + runeWidth(rune), 0);
+// pi aliases this documented package root to the TUI implementation bundled
+// with the running binary. Re-export width behavior through this local adapter
+// so sanitization/privacy logic stays local while Unicode behavior follows pi.
+export { visibleWidth };
 
 export const truncateToWidth = (
   value: string,
@@ -140,43 +118,13 @@ export const truncateToWidth = (
   suffix: string = "…",
 ): string => {
   if (width <= 0) return "";
-  if (visibleWidth(value) <= width) return value;
-  const suffixWidth = visibleWidth(suffix);
-  const available = Math.max(0, width - suffixWidth);
-  let output = "";
-  let used = 0;
-  for (const rune of value) {
-    const next = runeWidth(rune);
-    if (used + next > available) break;
-    output += rune;
-    used += next;
-  }
-  return `${output}${suffixWidth <= width ? suffix : ""}`;
+  return stripTerminalControls(piTruncateToWidth(value, width, suffix));
 };
 
 /** Wrap already-sanitized plain text. Every returned line fits width. */
 export const wrapPlainText = (value: string, width: number): string[] => {
   if (width <= 0) return [""];
-  const lines: string[] = [];
-  for (const sourceLine of value.split("\n")) {
-    if (sourceLine === "") {
-      lines.push("");
-      continue;
-    }
-    let current = "";
-    let used = 0;
-    for (const rune of sourceLine) {
-      const next = runeWidth(rune);
-      if (used > 0 && used + next > width) {
-        lines.push(current);
-        current = "";
-        used = 0;
-      }
-      if (next > width) continue;
-      current += rune;
-      used += next;
-    }
-    lines.push(current);
-  }
-  return lines.length === 0 ? [""] : lines;
+  return wrapTextWithAnsi(value, width).map((line) =>
+    stripTerminalControls(line),
+  );
 };
