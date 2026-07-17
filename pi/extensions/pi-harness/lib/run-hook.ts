@@ -10,6 +10,7 @@
 import { spawn } from "node:child_process";
 import { sanitizeChildEnv } from "./child-env";
 import type { RawHookResult } from "./claude-hook-io";
+import { PROCESS_FORCE_SETTLE_MS } from "./termination";
 
 export interface RunHookOptions {
   cwd?: string;
@@ -111,7 +112,10 @@ export function runHook(
       killGroup(child.pid, "SIGTERM");
       killTimer = setTimeout(() => {
         if (child.pid !== undefined) killGroup(child.pid, "SIGKILL");
-        forceSettleTimer = setTimeout(() => settle(null), 100);
+        forceSettleTimer = setTimeout(
+          () => settle(null),
+          PROCESS_FORCE_SETTLE_MS,
+        );
         if (
           typeof forceSettleTimer === "object" &&
           "unref" in forceSettleTimer

@@ -6,6 +6,11 @@ import {
   type BackgroundHost,
 } from "../../pi/extensions/pi-harness/features/child-runs/background";
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
+import {
+  BACKGROUND_DRAIN_TIMEOUT_MS,
+  PROCESS_FORCE_SETTLE_MS,
+  WORKTREE_CREATE_TERM_GRACE_MS,
+} from "../../pi/extensions/pi-harness/lib/termination";
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -18,7 +23,13 @@ const deferred = <T>() => {
 };
 
 const runtime = (
-  options: { maxActive?: number; maxChildren?: number } = {},
+  options: {
+    maxActive?: number;
+    maxChildren?: number;
+    drainTimeoutMs?: number;
+    failSends?: number;
+    reentrantSend?: boolean;
+  } = {},
 ) => {
   let id = 0;
   const registry = new ChildRunRegistry({
@@ -27,15 +38,33 @@ const runtime = (
   });
   const entries: { customType: string; data: unknown }[] = [];
   const messages: { message: unknown; options: unknown }[] = [];
+  let sendCount = 0;
+  let manager!: BackgroundInvocationManager;
   const host: BackgroundHost = {
     appendEntry(customType, data) {
       entries.push({ customType, data });
     },
     sendMessage(message, sendOptions) {
+      sendCount += 1;
+      if (sendCount <= (options.failSends ?? 0)) {
+        throw new Error("synthetic send failure");
+      }
       messages.push({ message, options: sendOptions });
+      if (options.reentrantSend) {
+        const details = message.details as { invocationId?: unknown };
+        if (typeof details.invocationId !== "string") {
+          throw new Error("notification had no invocation id");
+        }
+        manager.markAgentStarted();
+        manager.acknowledgeNotificationDelivery(details.invocationId);
+      }
     },
   };
-  const manager = new BackgroundInvocationManager(registry, host, options);
+  manager = new BackgroundInvocationManager(registry, host, {
+    maxActive: options.maxActive,
+    maxChildren: options.maxChildren,
+    drainTimeoutMs: options.drainTimeoutMs,
+  });
   return { registry, manager, entries, messages };
 };
 
@@ -190,7 +219,7 @@ describe("background child-run manager", () => {
     );
   });
 
-  test("flushes every ready completion into Pi so followUpMode can batch them", async () => {
+  test("hands completions to Pi one turn at a time", async () => {
     const { registry, manager, messages } = runtime();
     manager.markAgentStarted();
     const first = begin(registry, "tool-1");
@@ -214,9 +243,76 @@ describe("background child-run manager", () => {
     expect(messages).toEqual([]);
 
     manager.markAgentSettled();
+    expect(messages).toHaveLength(1);
+    expect(JSON.stringify(messages[0])).toContain("tool-1 done");
+
+    // A settled event that does not belong to a started notification turn must
+    // not release the owned attempt or hand a second message to Pi.
+    manager.markAgentSettled();
+    expect(messages).toHaveLength(1);
+
+    manager.markAgentStarted();
+    manager.acknowledgeNotificationDelivery(first.invocationId);
+    manager.markAgentSettled();
     expect(messages).toHaveLength(2);
-    expect(JSON.stringify(messages)).toContain("tool-1 done");
-    expect(JSON.stringify(messages)).toContain("tool-2 done");
+    expect(JSON.stringify(messages[1])).toContain("tool-2 done");
+  });
+
+  test("a stale non-idle settlement cannot hand completion into a newer run", async () => {
+    const { registry, manager, messages } = runtime();
+    manager.markAgentStarted();
+    const started = begin(registry);
+    manager.schedule({
+      invocationId: started.invocationId,
+      toolCallId: "tool-1",
+      source: "subagent",
+      async run() {
+        finishSucceeded(registry, started.runIds[0]!);
+        return { text: "wait for true idle" };
+      },
+    });
+    manager.acknowledgeToolResult("tool-1");
+    await manager.drain(started.invocationId);
+
+    manager.markAgentStarted();
+    manager.markAgentSettled(false);
+    expect(messages).toEqual([]);
+    manager.markAgentSettled(true);
+    expect(messages).toHaveLength(1);
+  });
+
+  test("branch navigation retains one handed-off attempt but drops later completions", async () => {
+    const { registry, manager, messages } = runtime();
+    manager.markAgentStarted();
+    const startedRuns = [begin(registry, "tool-1"), begin(registry, "tool-2")];
+    for (const [index, started] of startedRuns.entries()) {
+      const toolCallId = `tool-${index + 1}`;
+      manager.schedule({
+        invocationId: started.invocationId,
+        toolCallId,
+        source: "subagent",
+        async run() {
+          finishSucceeded(registry, started.runIds[0]!);
+          return { text: `${toolCallId} old branch` };
+        },
+      });
+      manager.acknowledgeToolResult(toolCallId);
+    }
+    await manager.drain();
+    manager.markAgentSettled();
+    expect(messages).toHaveLength(1);
+    expect(manager.shouldCancelBranchNavigation()).toBe(true);
+
+    await manager.abortAndDrain("branch-change", {
+      suppressNotification: true,
+    });
+    manager.markAgentStarted();
+    const [firstStarted] = startedRuns;
+    if (firstStarted === undefined) throw new Error("missing first run");
+    manager.acknowledgeNotificationDelivery(firstStarted.invocationId);
+    manager.markAgentSettled();
+    expect(messages).toHaveLength(1);
+    expect(manager.shouldCancelBranchNavigation()).toBe(false);
   });
 
   test("branch navigation drops a queued completion before entering another branch", async () => {
@@ -284,8 +380,191 @@ describe("background child-run manager", () => {
     expect(() => manager.assertCanAccept()).toThrow(
       "Too many active or pending background invocations (1/1)",
     );
+    manager.markAgentStarted();
     manager.acknowledgeNotificationDelivery(first.invocationId);
+    expect(() => manager.assertCanAccept()).toThrow(
+      "Too many active or pending background invocations (1/1)",
+    );
+    manager.markAgentSettled();
     expect(() => manager.assertCanAccept()).not.toThrow();
+  });
+
+  test("releases a started delivery that settles before custom message acknowledgment", async () => {
+    const { registry, manager } = runtime({ maxActive: 1 });
+    manager.markAgentStarted();
+    const started = begin(registry);
+    manager.schedule({
+      invocationId: started.invocationId,
+      toolCallId: "tool-1",
+      source: "subagent",
+      async run() {
+        finishSucceeded(registry, started.runIds[0]!);
+        return { text: "delivery fails before custom message" };
+      },
+    });
+    manager.acknowledgeToolResult("tool-1");
+    await manager.drain(started.invocationId);
+    manager.markAgentSettled();
+    expect(() => manager.assertCanAccept()).toThrow();
+
+    manager.markAgentStarted();
+    manager.markAgentSettled();
+    expect(() => manager.assertCanAccept()).not.toThrow();
+  });
+
+  test("a synchronous send failure cannot wedge the next completion", async () => {
+    const { registry, manager, messages } = runtime({ failSends: 1 });
+    manager.markAgentStarted();
+    for (const toolCallId of ["tool-1", "tool-2"]) {
+      const started = begin(registry, toolCallId);
+      manager.schedule({
+        invocationId: started.invocationId,
+        toolCallId,
+        source: "subagent",
+        async run() {
+          finishSucceeded(registry, started.runIds[0]!);
+          return { text: `${toolCallId} result` };
+        },
+      });
+      manager.acknowledgeToolResult(toolCallId);
+    }
+    await manager.drain();
+    manager.markAgentSettled();
+
+    expect(messages).toHaveLength(1);
+    expect(JSON.stringify(messages[0])).toContain("tool-2 result");
+  });
+
+  test("owns reentrant notification start and acknowledgment before send returns", async () => {
+    const { registry, manager, messages } = runtime({ reentrantSend: true });
+    manager.markAgentStarted();
+    for (const toolCallId of ["tool-1", "tool-2"]) {
+      const started = begin(registry, toolCallId);
+      manager.schedule({
+        invocationId: started.invocationId,
+        toolCallId,
+        source: "subagent",
+        async run() {
+          finishSucceeded(registry, started.runIds[0]!);
+          return { text: `${toolCallId} reentrant` };
+        },
+      });
+      manager.acknowledgeToolResult(toolCallId);
+    }
+    await manager.drain();
+
+    manager.markAgentSettled();
+    expect(messages).toHaveLength(1);
+    manager.markAgentSettled(false);
+    expect(manager.shouldCancelBranchNavigation()).toBe(false);
+    expect(messages).toHaveLength(1);
+    manager.markAgentSettled();
+    expect(messages).toHaveLength(2);
+    manager.markAgentSettled();
+    expect(() => manager.assertCanAccept()).not.toThrow();
+  });
+
+  test("waits for delayed resource finalization before lifecycle persistence", async () => {
+    const { registry, manager, entries } = runtime({ drainTimeoutMs: 100 });
+    const started = begin(registry);
+    manager.markAgentStarted();
+    manager.schedule({
+      invocationId: started.invocationId,
+      toolCallId: "tool-1",
+      source: "workflow",
+      run(signal) {
+        return new Promise((_resolve, reject) => {
+          if (
+            !("addEventListener" in signal) ||
+            typeof signal.addEventListener !== "function"
+          ) {
+            reject(new Error("AbortSignal listener API unavailable"));
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => {
+              setTimeout(() => {
+                registry.setRunWorktree(
+                  started.runIds[0]!,
+                  "/tmp/delayed-worktree",
+                );
+                reject(new Error("cancelled after publishing worktree"));
+              }, 20);
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+    manager.acknowledgeToolResult("tool-1");
+    await Promise.resolve();
+
+    const aborting = manager.abortAndDrain("branch-change", {
+      suppressNotification: true,
+    });
+    const newcomer = begin(registry, "tool-2");
+    expect(() =>
+      manager.schedule({
+        invocationId: newcomer.invocationId,
+        toolCallId: "tool-2",
+        source: "subagent",
+        run: async () => ({ text: "must not start during tree drain" }),
+      }),
+    ).toThrow("draining for a lifecycle transition");
+    await Bun.sleep(5);
+    expect(entries).toEqual([]);
+    await aborting;
+    expect(entries).toHaveLength(1);
+    expect(JSON.stringify(entries[0])).toContain("/tmp/delayed-worktree");
+    expect(() => manager.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    manager.completeBranchTransition();
+    expect(() => manager.assertCanAccept()).not.toThrow();
+  });
+
+  test("overlapping lifecycle drains keep admission closed until both finish", async () => {
+    const { registry, manager } = runtime();
+    const started = begin(registry);
+    manager.schedule({
+      invocationId: started.invocationId,
+      toolCallId: "tool-1",
+      source: "subagent",
+      run: async () => deferred<never>().promise,
+    });
+    manager.acknowledgeToolResult("tool-1");
+    await Promise.resolve();
+
+    const first = manager.abortAndDrain("branch-change", {
+      suppressNotification: true,
+      drainTimeoutMs: 10,
+    });
+    const second = manager.abortAndDrain("branch-change", {
+      suppressNotification: true,
+      drainTimeoutMs: 40,
+    });
+    await first;
+    expect(() => manager.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    await second;
+    expect(() => manager.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    manager.completeBranchTransition();
+    expect(() => manager.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    manager.completeBranchTransition();
+    expect(() => manager.assertCanAccept()).not.toThrow();
+  });
+
+  test("derives the default drain bound from the longest termination path", () => {
+    expect(BACKGROUND_DRAIN_TIMEOUT_MS).toBeGreaterThan(
+      WORKTREE_CREATE_TERM_GRACE_MS + PROCESS_FORCE_SETTLE_MS,
+    );
+    expect(BACKGROUND_DRAIN_TIMEOUT_MS).toBe(12_000);
   });
 
   test("shares a bounded abort-aware child slot pool", async () => {

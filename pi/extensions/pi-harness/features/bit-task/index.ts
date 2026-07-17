@@ -6,6 +6,10 @@ import { sanitizeChildEnv } from "../../lib/child-env";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import { runHook as defaultRunHook } from "../../lib/run-hook";
 import {
+  PROCESS_FORCE_SETTLE_MS,
+  WORKTREE_CREATE_TERM_GRACE_MS,
+} from "../../lib/termination";
+import {
   buildTaskCompletedArgs,
   buildWorktreeCreatePayload,
   buildWorktreeRemovePayload,
@@ -46,7 +50,6 @@ interface BitTaskDeps {
 const COMMAND_TIMEOUT_MS = 10_000;
 const COMMAND_TERM_GRACE_MS = 2_000;
 const HOOK_TIMEOUT_MS = 60_000;
-const WORKTREE_CREATE_TERM_GRACE_MS = 10_000;
 const MAX_OUTPUT_BYTES = 65_536;
 const ERROR_TAIL_LENGTH = 4_096;
 
@@ -156,7 +159,10 @@ const runCommand: RunCommand = (command, args, options) =>
       killGroup(child.pid, "SIGTERM");
       killTimer = setTimeout(() => {
         if (child.pid !== undefined) killGroup(child.pid, "SIGKILL");
-        forceSettleTimer = setTimeout(() => settle(null), 100);
+        forceSettleTimer = setTimeout(
+          () => settle(null),
+          PROCESS_FORCE_SETTLE_MS,
+        );
         if (
           typeof forceSettleTimer === "object" &&
           "unref" in forceSettleTimer
@@ -464,9 +470,19 @@ export default function setupBitTask(
     ) {
       const cwd = deps.cwd ?? ctx.cwd ?? process.cwd();
       const name = requireString(params, "name", "worktree_create");
-      return textResult(
-        await createValidatedWorktree(creator, cwd, name, signal),
-      );
+      let createdPath: string | undefined;
+      try {
+        return textResult(
+          await createValidatedWorktree(creator, cwd, name, signal, (path) => {
+            createdPath = path;
+          }),
+        );
+      } catch (error) {
+        if (createdPath === undefined) throw error;
+        throw new Error(
+          `${errorMessage(error)}\n\nA worktree was left in place at: ${createdPath}\nIt can be removed with the user-approved worktree_remove tool.`,
+        );
+      }
     },
   });
 

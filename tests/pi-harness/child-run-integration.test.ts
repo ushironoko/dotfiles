@@ -118,6 +118,7 @@ const createRuntime = (cwd: string, options: { background?: boolean } = {}) => {
     | ((data: string) => { consume?: boolean; data?: string } | undefined)
     | undefined;
   let branch: unknown[] = [];
+  let idle = true;
   const appendedEntries: { customType: string; data: unknown }[] = [];
   const sentMessages: { message: unknown; options: unknown }[] = [];
 
@@ -126,6 +127,7 @@ const createRuntime = (cwd: string, options: { background?: boolean } = {}) => {
     mode: "tui",
     hasUI: true,
     sessionManager: { getBranch: () => branch },
+    isIdle: () => idle,
     ui: {
       select: async () => undefined,
       confirm: async () => false,
@@ -256,6 +258,9 @@ const createRuntime = (cwd: string, options: { background?: boolean } = {}) => {
     },
     setBranch(entries: unknown[]) {
       branch = entries;
+    },
+    setIdle(next: boolean) {
+      idle = next;
     },
     async emit(event: string, payload: unknown) {
       let patch: unknown;
@@ -557,6 +562,63 @@ describe("child-run subagent integration", () => {
     expect(rendered.every((line) => line.length <= 36)).toBe(true);
   });
 
+  test("reserves async prompt preflight before a child completion can trigger", async () => {
+    const home = await setupTestDirectory("pi-child-background-preflight");
+    tempDirectories.push(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    let releasePreflight!: () => void;
+    const preflightGate = new Promise<void>((resolve) => {
+      releasePreflight = resolve;
+    });
+    let laterHandlerStartedResolve!: () => void;
+    const laterHandlerStarted = new Promise<void>((resolve) => {
+      laterHandlerStartedResolve = resolve;
+    });
+    runtime.pi.on("before_agent_start", async () => {
+      laterHandlerStartedResolve();
+      await preflightGate;
+      return undefined;
+    });
+
+    const preflight = runtime.emit("before_agent_start", {
+      type: "before_agent_start",
+    });
+    await laterHandlerStarted;
+    const started = childRuns.registry.beginInvocation({
+      toolCallId: "preflight-parent",
+      source: "subagent",
+      mode: "single",
+      label: "preflight child",
+      runs: [{ agent: "worker", task: "finish in preflight", taskIndex: 0 }],
+    });
+    childRuns.background!.schedule({
+      invocationId: started.invocationId,
+      toolCallId: "preflight-parent",
+      source: "subagent",
+      async run() {
+        const [runId] = started.runIds;
+        if (runId === undefined) throw new Error("missing run id");
+        childRuns.registry.observe(runId, { type: "process_started", at: 1 });
+        childRuns.registry.finishRun(runId, {
+          status: "succeeded",
+          reason: "completed",
+        });
+        return { text: "completed during preflight" };
+      },
+    });
+    childRuns.background!.acknowledgeToolResult("preflight-parent");
+    await childRuns.background!.drain(started.invocationId);
+    expect(runtime.getSentMessages()).toEqual([]);
+
+    releasePreflight();
+    await preflight;
+    await runtime.emit("agent_start", { type: "agent_start" });
+    expect(runtime.getSentMessages()).toEqual([]);
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+    expect(runtime.getSentMessages()).toHaveLength(1);
+  });
+
   test("accepts a production subagent immediately and delivers completion after message_end", async () => {
     const home = await setupTestDirectory("pi-child-background-subagent");
     tempDirectories.push(home);
@@ -628,6 +690,10 @@ describe("child-run subagent integration", () => {
     );
     expect(runtime.getSentMessages()).toEqual([]);
 
+    runtime.setIdle(false);
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+    expect(runtime.getSentMessages()).toEqual([]);
+    runtime.setIdle(true);
     await runtime.emit("agent_settled", { type: "agent_settled" });
     expect(runtime.getSentMessages()).toHaveLength(1);
     expect(runtime.getSentMessages()[0]?.options).toEqual({
@@ -638,6 +704,248 @@ describe("child-run subagent integration", () => {
     expect(notification).toContain(invocationId);
     expect(notification).toContain("background answer 界");
     expect(notification).toContain("untrusted child output");
+  });
+
+  test("cancels tree navigation while a handed-off completion turn is active", async () => {
+    const home = await setupTestDirectory("pi-child-background-tree-handoff");
+    tempDirectories.push(home);
+    await writeAgent(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    setupSubagent(runtime.pi, makeConfig(home), {
+      childRuns,
+      spawnFn: scriptedSpawn("old branch completion"),
+    });
+    const tool = runtime.tools.find((item) => item.name === "subagent")!;
+    await runtime.emit("agent_start", { type: "agent_start" });
+    const accepted = (await Reflect.apply(tool.execute, undefined, [
+      "tree-handoff-parent",
+      { agent: "worker", task: "finish before tree" },
+      undefined,
+      undefined,
+      runtime.ctx,
+    ])) as { details: { background: { invocationId: string } } };
+    const { invocationId } = accepted.details.background;
+    await runtime.emit("message_end", {
+      type: "message_end",
+      message: { role: "toolResult", toolCallId: "tree-handoff-parent" },
+    });
+    await childRuns.background!.drain(invocationId);
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+    expect(runtime.getSentMessages()).toHaveLength(1);
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toEqual({ cancel: true });
+
+    await runtime.emit("agent_start", { type: "agent_start" });
+    await runtime.emit("message_start", {
+      type: "message_start",
+      message: {
+        role: "custom",
+        customType: "pi-harness/child-run-completion",
+        details: { invocationId },
+      },
+    });
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toBeUndefined();
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    // Simulate a later extension cancelling navigation: no session_tree event
+    // arrives. Even another parent prompt cannot reopen the branch boundary.
+    await runtime.emit("before_agent_start", {
+      type: "before_agent_start",
+    });
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+
+    // Pi exposes no completion event for another extension's cancellation, so
+    // only an explicit session lifecycle reset may clear that conservative
+    // stale guard without risking cross-branch work.
+    runtime.setBranch([]);
+    await runtime.emit("session_start", { type: "session_start" });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+    expect(runtime.getSentMessages()).toHaveLength(1);
+  });
+
+  test("rejects an overlapping pre-tree transition until the first commits", async () => {
+    const home = await setupTestDirectory("pi-child-background-tree-overlap");
+    tempDirectories.push(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toBeUndefined();
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toEqual({ cancel: true });
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    await runtime.emit("session_tree", { type: "session_tree" });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+  });
+
+  test("an aborted rejected overlap does not release the first guard", async () => {
+    const home = await setupTestDirectory(
+      "pi-child-background-tree-token-abort",
+    );
+    tempDirectories.push(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    const first = new AbortController() as unknown as {
+      signal: AbortSignal;
+      abort(): void;
+    };
+    const second = new AbortController() as unknown as {
+      signal: AbortSignal;
+      abort(): void;
+    };
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+        signal: first.signal,
+      }),
+    ).toBeUndefined();
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+        signal: second.signal,
+      }),
+    ).toEqual({ cancel: true });
+    second.abort();
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    await runtime.emit("session_tree", { type: "session_tree" });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+  });
+
+  test("retains a post-handler abort guard until navigation outcome", async () => {
+    const home = await setupTestDirectory("pi-child-background-tree-abort");
+    tempDirectories.push(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    const controller = new AbortController() as unknown as {
+      signal: AbortSignal;
+      abort(): void;
+    };
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+        signal: controller.signal,
+      }),
+    ).toBeUndefined();
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    controller.abort();
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    // A second navigation cannot overlap while a later custom-summary handler
+    // may still commit the first navigation despite its aborted signal.
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toEqual({ cancel: true });
+    await runtime.emit("session_tree", { type: "session_tree" });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+  });
+
+  test("aborted pre-tree signals release guards only after active drain cleanup", async () => {
+    const home = await setupTestDirectory(
+      "pi-child-background-tree-abort-during-drain",
+    );
+    tempDirectories.push(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    const started = childRuns.registry.beginInvocation({
+      toolCallId: "tree-abort-drain-parent",
+      source: "workflow",
+      label: "tree abort drain",
+      runs: [{ agent: "worker", task: "cleanup", taskIndex: 0 }],
+    });
+    let cleanupStartedResolve!: () => void;
+    const cleanupStarted = new Promise<void>((resolve) => {
+      cleanupStartedResolve = resolve;
+    });
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    childRuns.background!.schedule({
+      invocationId: started.invocationId,
+      toolCallId: "tree-abort-drain-parent",
+      source: "workflow",
+      run(signal) {
+        return new Promise((_resolve, reject) => {
+          if (
+            !("addEventListener" in signal) ||
+            typeof signal.addEventListener !== "function"
+          ) {
+            reject(new Error("AbortSignal listener API unavailable"));
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => {
+              cleanupStartedResolve();
+              void cleanupGate.then(() => reject(new Error("cleanup done")));
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+    childRuns.background!.acknowledgeToolResult("tree-abort-drain-parent");
+    await Promise.resolve();
+    const controller = new AbortController() as unknown as {
+      signal: AbortSignal;
+      abort(): void;
+    };
+    const navigating = runtime.emit("session_before_tree", {
+      type: "session_before_tree",
+      signal: controller.signal,
+    });
+    await cleanupStarted;
+    controller.abort();
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    releaseCleanup();
+    expect(await navigating).toEqual({ cancel: true });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+
+    const alreadyAborted = new AbortController() as unknown as {
+      signal: AbortSignal;
+      abort(): void;
+    };
+    alreadyAborted.abort();
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+        signal: alreadyAborted.signal,
+      }),
+    ).toEqual({ cancel: true });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
   });
 
   test("session_before_tree aborts and persists production work without cross-branch delivery", async () => {
@@ -677,12 +985,72 @@ describe("child-run subagent integration", () => {
     );
     expect(runtime.getSentMessages()).toEqual([]);
     expect(childRuns.background?.hasActiveInvocations()).toBe(false);
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
 
     runtime.setBranch([]);
     await runtime.emit("session_tree", { type: "session_tree" });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
     await runtime.emit("agent_settled", { type: "agent_settled" });
     expect(runtime.getSentMessages()).toEqual([]);
     expect(accepted.details.background.invocationId).toBeDefined();
+  });
+
+  test("rejects workflow admission released between pre-tree drain and tree commit", async () => {
+    const home = await setupTestDirectory("pi-child-background-tree-admission");
+    tempDirectories.push(home);
+    await writeAgent(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    let releaseValidation!: () => void;
+    const validationGate = new Promise<void>((resolve) => {
+      releaseValidation = resolve;
+    });
+    let validationStartedResolve!: () => void;
+    const validationStarted = new Promise<void>((resolve) => {
+      validationStartedResolve = resolve;
+    });
+    setupWorkflow(runtime.pi, makeConfig(home), {
+      childRuns,
+      spawnFn: scriptedSpawn("must not spawn"),
+      validateCwd: async () => {
+        validationStartedResolve();
+        await validationGate;
+        return { ok: true };
+      },
+    });
+    const tool = runtime.tools.find((item) => item.name === "workflow")!;
+    await runtime.emit("agent_start", { type: "agent_start" });
+    const execution = Reflect.apply(tool.execute, undefined, [
+      "tree-admission-parent",
+      {
+        stages: [
+          {
+            mode: "single",
+            tasks: [{ agentType: "worker", task: "review", cwd: home }],
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      runtime.ctx,
+    ]) as Promise<unknown>;
+    await validationStarted;
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toBeUndefined();
+    releaseValidation();
+    await expect(execution).rejects.toThrow(
+      "draining for a lifecycle transition",
+    );
+
+    runtime.setBranch([]);
+    await runtime.emit("session_tree", { type: "session_tree" });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
   });
 
   test("accepts a production workflow immediately and later sends its aggregate digest", async () => {

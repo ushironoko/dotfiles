@@ -40,16 +40,21 @@ Closing, hiding, or unfocusing the browser never cancels child execution.
 
 When an invocation completes, pi-harness persists its bounded transcript,
 adds one explicitly untrusted aggregate result to the parent context, and
-requests an automatic follow-up parent turn. Multiple results may share a turn
-when pi's `followUpMode` is `all`.
+requests an automatic follow-up parent turn. Completion delivery is serialized:
+only one result is handed to pi at a time, while later results remain in the
+manager-local queue until the preceding notification turn settles.
 
 Background child runs require persistent TUI or RPC mode. Print (`-p`) and JSON
 modes reject `subagent` and `workflow` before side effects because the parent
 process would exit before completion delivery. A `/tree` request aborts and
 persists active invocations on the old branch before navigation, without
-sending their result to the destination branch. Because pi's pre-tree hook is
-the last point still bound to the old branch, this abort remains effective if
-a later hook cancels navigation. Reload, session replacement, and shutdown
+sending their result to the destination branch. If a completion-triggered
+parent turn has already been handed to pi, that navigation attempt is cancelled
+because pi exposes no queue-retraction API; retry `/tree` after the turn settles.
+Unsent manager-local completions are discarded at the first request. If a
+later extension cancels navigation after pi-harness has prepared the boundary,
+background admission stays conservatively paused until session reload/resume
+because pi exposes no post-cancellation event. Session replacement and shutdown
 likewise abort active process groups.
 
 ## Retention and privacy
@@ -76,7 +81,7 @@ prompts.
 Limits:
 
 - four child pi processes across all concurrent `subagent` and `workflow` invocations;
-- eight retained background invocations, including completion notifications waiting in Pi's follow-up queue;
+- eight retained background invocations, including manager-local completions and the single active notification turn;
 - 16 KiB per finalized assistant item;
 - 256 items and 64 KiB per run;
 - 512 KiB per invocation, divided fairly across runs;

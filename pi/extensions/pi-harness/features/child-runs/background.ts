@@ -1,4 +1,5 @@
 import { capUtf8, stripTerminalControls } from "../../lib/terminal-text";
+import { BACKGROUND_DRAIN_TIMEOUT_MS } from "../../lib/termination";
 import type {
   ChildRunSource,
   ChildRunTerminalReason,
@@ -12,7 +13,6 @@ export const MAX_BACKGROUND_CHILDREN = 4;
 
 const MAX_NOTIFICATION_BYTES = 50 * 1024;
 const MAX_NOTIFICATION_RESULT_BYTES = 32 * 1024;
-const DEFAULT_DRAIN_TIMEOUT_MS = 3_000;
 
 export interface BackgroundHost {
   appendEntry(customType: string, data?: unknown): void;
@@ -62,6 +62,13 @@ interface QueuedDelivery {
   invocationId: string;
   source: ChildRunSource;
   completion: BackgroundWorkResult;
+}
+
+type NotificationAttemptPhase = "submitted" | "started" | "delivered";
+
+interface NotificationAttempt {
+  invocationId: string;
+  phase: NotificationAttemptPhase;
 }
 
 interface BackgroundManagerOptions {
@@ -187,10 +194,13 @@ export class BackgroundInvocationManager {
   private readonly records = new Map<string, BackgroundRecord>();
   private readonly toolCallToInvocation = new Map<string, string>();
   private readonly deliveryQueue: QueuedDelivery[] = [];
-  private readonly notificationsInFlight = new Set<string>();
+  private notificationAttempt?: NotificationAttempt;
   private readonly childWaiters: ChildWaiter[] = [];
   private childrenAvailable: number;
   private agentBusy = false;
+  private lifecycleDrainCount = 0;
+  private nextBranchTransitionToken = 0;
+  private readonly pendingBranchTransitions = new Set<number>();
   private closing = false;
 
   constructor(
@@ -203,17 +213,25 @@ export class BackgroundInvocationManager {
     this.maxActive = options.maxActive ?? MAX_ACTIVE_BACKGROUND_INVOCATIONS;
     this.maxChildren = options.maxChildren ?? MAX_BACKGROUND_CHILDREN;
     this.childrenAvailable = this.maxChildren;
-    this.drainTimeoutMs = options.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
+    this.drainTimeoutMs = options.drainTimeoutMs ?? BACKGROUND_DRAIN_TIMEOUT_MS;
   }
 
   assertCanAccept(): void {
     if (this.closing) {
       throw new Error("Background child-run manager is shutting down");
     }
+    if (
+      this.lifecycleDrainCount > 0 ||
+      this.pendingBranchTransitions.size > 0
+    ) {
+      throw new Error(
+        "Background child-run manager is draining for a lifecycle transition",
+      );
+    }
     const retainedInvocations =
       this.records.size +
       this.deliveryQueue.length +
-      this.notificationsInFlight.size;
+      (this.notificationAttempt === undefined ? 0 : 1);
     if (retainedInvocations >= this.maxActive) {
       throw new Error(
         `Too many active or pending background invocations (${retainedInvocations}/${this.maxActive})`,
@@ -302,17 +320,70 @@ export class BackgroundInvocationManager {
     this.tryArchive(record);
   }
 
-  markAgentStarted(): void {
+  markAgentPreflightStarted(): void {
     this.agentBusy = true;
   }
 
-  acknowledgeNotificationDelivery(invocationId: string): void {
-    this.notificationsInFlight.delete(invocationId);
+  markAgentStarted(): void {
+    this.agentBusy = true;
+    if (this.notificationAttempt?.phase === "submitted") {
+      this.notificationAttempt.phase = "started";
+    }
   }
 
-  markAgentSettled(): void {
+  acknowledgeNotificationDelivery(invocationId: string): void {
+    if (this.notificationAttempt?.invocationId !== invocationId) return;
+    this.notificationAttempt.phase = "delivered";
+  }
+
+  markAgentSettled(isIdle = true): void {
+    if (!isIdle) {
+      // This settlement still owns a started/delivered notification attempt,
+      // even if an earlier extension immediately started the next parent run.
+      if (
+        this.notificationAttempt !== undefined &&
+        this.notificationAttempt.phase !== "submitted"
+      ) {
+        this.notificationAttempt = undefined;
+      }
+      this.agentBusy = true;
+      return;
+    }
     this.agentBusy = false;
+    // A send attempt is set before the host call. Only a notification turn that
+    // actually started (or delivered its custom message) owns this settlement;
+    // unrelated/spurious settled events cannot release a submitted attempt.
+    if (
+      this.notificationAttempt !== undefined &&
+      this.notificationAttempt.phase !== "submitted"
+    ) {
+      this.notificationAttempt = undefined;
+    }
     this.deliverReady();
+  }
+
+  shouldCancelBranchNavigation(): boolean {
+    return this.notificationAttempt !== undefined;
+  }
+
+  beginBranchTransition(): number {
+    const token = ++this.nextBranchTransitionToken;
+    this.pendingBranchTransitions.add(token);
+    return token;
+  }
+
+  completeBranchTransition(token?: number): void {
+    if (token !== undefined) {
+      this.pendingBranchTransitions.delete(token);
+      return;
+    }
+    const oldest = this.pendingBranchTransitions.values().next().value;
+    if (typeof oldest === "number")
+      this.pendingBranchTransitions.delete(oldest);
+  }
+
+  resetBranchTransitions(): void {
+    this.pendingBranchTransitions.clear();
   }
 
   hasActiveInvocations(): boolean {
@@ -355,50 +426,71 @@ export class BackgroundInvocationManager {
 
   async abortAndDrain(
     reason: ChildRunTerminalReason,
-    options: { suppressNotification?: boolean } = {},
-  ): Promise<void> {
-    const suppressNotification = options.suppressNotification ?? true;
-    if (suppressNotification) {
-      this.deliveryQueue.splice(0);
-      this.notificationsInFlight.clear();
-    }
-    const records = [...this.records.values()];
-    for (const record of records) {
-      record.abortRunIds = this.registry.getNonTerminalRunIds(
-        record.invocationId,
-      );
-      record.abortReason = reason;
-      record.suppressNotification = suppressNotification;
-      record.controller.abort();
-    }
-    this.rejectChildWaiters();
-
-    await Promise.race([
-      Promise.allSettled(records.map((record) => record.workPromise)),
-      new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, this.drainTimeoutMs);
-        if (typeof timer === "object" && "unref" in timer) timer.unref();
-      }),
-    ]);
-
-    for (const record of records) {
-      this.registry.terminalizeInvocation(
-        record.invocationId,
-        { status: "aborted", reason },
-        { status: "aborted", reason },
-      );
-      this.registry.retagAbortedRuns(record.abortRunIds ?? [], reason);
-      if (record.settled === undefined) {
-        record.settled = {
-          failed: true,
-          text: `Background ${record.source} invocation was aborted.`,
-        };
+    options: {
+      suppressNotification?: boolean;
+      drainTimeoutMs?: number;
+      branchTransitionToken?: number;
+    } = {},
+  ): Promise<number | undefined> {
+    this.lifecycleDrainCount += 1;
+    const branchTransitionToken =
+      reason === "branch-change"
+        ? (options.branchTransitionToken ?? this.beginBranchTransition())
+        : undefined;
+    try {
+      const suppressNotification = options.suppressNotification ?? true;
+      if (suppressNotification) {
+        // Unsent completions are still manager-owned and can be discarded. A
+        // handed-off notification is intentionally retained so the tree hook
+        // can cancel navigation until its parent turn settles.
+        this.deliveryQueue.splice(0);
       }
-      // A shutdown/tree transition is itself the acceptance boundary for an
-      // already-returned tool. This prevents a missing late message_end from
-      // losing the final aborted snapshot.
-      record.accepted = true;
-      this.tryArchive(record);
+      // Snapshot only after admission is paused. No invocation can appear
+      // behind this lifecycle barrier and survive into the destination branch.
+      const records = [...this.records.values()];
+      for (const record of records) {
+        record.abortRunIds = this.registry.getNonTerminalRunIds(
+          record.invocationId,
+        );
+        record.abortReason = reason;
+        record.suppressNotification = suppressNotification;
+        record.controller.abort();
+      }
+      this.rejectChildWaiters();
+
+      await Promise.race([
+        Promise.allSettled(records.map((record) => record.workPromise)),
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(
+            resolve,
+            options.drainTimeoutMs ?? this.drainTimeoutMs,
+          );
+          if (typeof timer === "object" && "unref" in timer) timer.unref();
+        }),
+      ]);
+
+      for (const record of records) {
+        this.registry.terminalizeInvocation(
+          record.invocationId,
+          { status: "aborted", reason },
+          { status: "aborted", reason },
+        );
+        this.registry.retagAbortedRuns(record.abortRunIds ?? [], reason);
+        if (record.settled === undefined) {
+          record.settled = {
+            failed: true,
+            text: `Background ${record.source} invocation was aborted.`,
+          };
+        }
+        // A shutdown/tree transition is itself the acceptance boundary for an
+        // already-returned tool. This prevents a missing late message_end from
+        // losing the final aborted snapshot.
+        record.accepted = true;
+        this.tryArchive(record);
+      }
+      return branchTransitionToken;
+    } finally {
+      this.lifecycleDrainCount = Math.max(0, this.lifecycleDrainCount - 1);
     }
   }
 
@@ -407,7 +499,7 @@ export class BackgroundInvocationManager {
     this.closing = true;
     await this.abortAndDrain("shutdown", { suppressNotification: true });
     this.deliveryQueue.splice(0);
-    this.notificationsInFlight.clear();
+    this.notificationAttempt = undefined;
   }
 
   private releaseChildSlot(): void {
@@ -467,41 +559,50 @@ export class BackgroundInvocationManager {
   }
 
   private deliverReady(): void {
-    if (this.closing || this.agentBusy || this.deliveryQueue.length === 0) {
+    if (
+      this.closing ||
+      this.agentBusy ||
+      this.notificationAttempt !== undefined ||
+      this.deliveryQueue.length === 0
+    ) {
       return;
     }
-    const ready = this.deliveryQueue.splice(0);
-    let delivered = false;
-    for (const delivery of ready) {
-      this.notificationsInFlight.add(delivery.invocationId);
-      try {
-        this.host.sendMessage(
-          {
-            customType: CHILD_RUN_COMPLETION_ENTRY,
-            content: formatBackgroundCompletion(
-              delivery.invocationId,
-              delivery.source,
-              delivery.completion,
-            ),
-            display: true,
-            details: {
-              invocationId: delivery.invocationId,
-              source: delivery.source,
-              failed: delivery.completion.failed === true,
-            },
+    const delivery = this.deliveryQueue.shift();
+    if (delivery === undefined) return;
+
+    // Claim ownership before the fire-and-forget host call: real Pi may emit
+    // agent_start/message_start reentrantly before sendMessage() returns.
+    this.notificationAttempt = {
+      invocationId: delivery.invocationId,
+      phase: "submitted",
+    };
+    this.agentBusy = true;
+    try {
+      this.host.sendMessage(
+        {
+          customType: CHILD_RUN_COMPLETION_ENTRY,
+          content: formatBackgroundCompletion(
+            delivery.invocationId,
+            delivery.source,
+            delivery.completion,
+          ),
+          display: true,
+          details: {
+            invocationId: delivery.invocationId,
+            source: delivery.source,
+            failed: delivery.completion.failed === true,
           },
-          { triggerTurn: true, deliverAs: "followUp" },
-        );
-        delivered = true;
-      } catch {
-        this.notificationsInFlight.delete(delivery.invocationId);
-        // A stale runtime or one failed delivery must not lose persisted
-        // history or prevent another ready completion from being enqueued.
+        },
+        { triggerTurn: true, deliverAs: "followUp" },
+      );
+    } catch {
+      if (this.notificationAttempt?.invocationId === delivery.invocationId) {
+        this.notificationAttempt = undefined;
+        this.agentBusy = false;
       }
+      // Persistence already succeeded. Drop this failed notification and let a
+      // later retained completion attempt delivery instead of wedging capacity.
+      this.deliverReady();
     }
-    // The first successful trigger starts a parent run; later messages have
-    // already reached Pi's follow-up queue, where followUpMode controls
-    // one-at-a-time versus batched delivery.
-    if (delivered) this.agentBusy = true;
   }
 }
