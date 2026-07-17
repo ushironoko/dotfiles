@@ -74,6 +74,13 @@ feature toggles live in `~/.pi/agent/pi-harness.local.json` (machine-local):
 Child pi processes spawned by subagent/workflow receive `PI_HARNESS_CHILD=1`
 and keep only the safety layer (no recursion, no duplicate notifications).
 
+The safety layer includes a default-on local Ollama fallback for Bash commands
+that match no deterministic deny/allow/ask rule. An unavailable judge asks in
+interactive sessions and blocks in child/non-UI sessions; set
+`permissionJudge.enabled` to `false` for the previous rule-only behavior. See
+[`LOCAL_PERMISSION_JUDGE.md`](./LOCAL_PERMISSION_JUDGE.md) for setup,
+configuration, data boundaries, and qualification steps.
+
 ## Codex web tools
 
 `extensions/codex-web` registers `web_search` and `web_fetch` for the current
@@ -138,12 +145,12 @@ typebox baseline + acceptance/rejection through pi's real `validateToolArguments
 | WorktreeCreate / WorktreeRemove      | `worktree_create` / `worktree_remove` tools                                  |
 | AskUserQuestion                      | exact-name `AskUserQuestion` compatibility tool                              |
 | Notification (asuku)                 | asuku-notify feature (`agent_settled`, detached)                             |
-| permissions.deny                     | permission-policy rules (fail-closed)                                        |
+| permissions.deny / auto fallback     | permission-policy rules + local Ollama judge (fail-closed)                   |
 | statusLine                           | statusline feature (Claude-equivalent custom footer)                         |
 | logproxy                             | provider-log feature (opt-in, reduced scope)                                 |
 
-Known gaps vs Claude Code: no auto mode (server-side classifier is Claude
-Code-only; rule-based policy approximates it), no LSP plugins, provider-log
+Known gaps vs Claude Code: no Claude server-side auto mode (the local Ollama
+judge plus deterministic rules approximates it), no LSP plugins, provider-log
 is a request/status logger (not full logproxy).
 
 ## AskUserQuestion compatibility

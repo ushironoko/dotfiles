@@ -20,6 +20,7 @@
     "check:pi-schemas": "bun scripts/gen-pi-schemas.ts --check",
     "check:pi-compat": "bun scripts/check-pi-compat.ts",
     "check:pi-version": "bun scripts/check-pi-version.ts",
+    "qualify:pi-permission-judge": "bun scripts/qualify-permission-judge.ts",
     "update:pi": "bun scripts/update-pi.ts",
     "gen:pi-schemas": "bun scripts/gen-pi-schemas.ts",
     "format": "prettier --write .",

@@ -57,6 +57,12 @@ interface InputDialog {
   dialogOptions?: DialogOptionsLike;
 }
 
+interface ConfirmDialog {
+  title: string;
+  message: string;
+  dialogOptions?: DialogOptionsLike;
+}
+
 interface HandlerStore {
   session_start: PiEventHandler<"session_start">[];
   before_agent_start: PiEventHandler<"before_agent_start">[];
@@ -106,6 +112,7 @@ export interface FakePi extends PiLike {
   /** Dialogs captured at the UI boundary. */
   readonly selectDialogs: SelectDialog[];
   readonly inputDialogs: InputDialog[];
+  readonly confirmDialogs: ConfirmDialog[];
   /** Context handed to every handler; mutate hasUI to simulate print mode. */
   readonly ctx: CtxLike & { hasUI: boolean };
 }
@@ -138,6 +145,7 @@ export function createFakePi(
   const inputQueue: { answer: string | undefined }[] = [];
   const selectDialogs: SelectDialog[] = [];
   const inputDialogs: InputDialog[] = [];
+  const confirmDialogs: ConfirmDialog[] = [];
   const branchCallbacks = new Set<() => void>();
   let gitBranch = options.gitBranch ?? null;
   let { contextUsage } = options;
@@ -174,7 +182,10 @@ export function createFakePi(
         const reply = selectQueue.shift();
         return reply?.index === undefined ? undefined : choices[reply.index];
       },
-      confirm: async () => confirmQueue.shift() ?? false,
+      confirm: async (title, message, dialogOptions) => {
+        confirmDialogs.push({ title, message, dialogOptions });
+        return confirmQueue.shift() ?? false;
+      },
       input: async (title, placeholder, dialogOptions) => {
         inputDialogs.push({ title, placeholder, dialogOptions });
         return inputQueue.shift()?.answer;
@@ -290,6 +301,7 @@ export function createFakePi(
     },
     selectDialogs,
     inputDialogs,
+    confirmDialogs,
     ctx,
   };
 }
