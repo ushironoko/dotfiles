@@ -169,6 +169,7 @@ const commandFailure = (description: string, result: CommandResult): Error =>
 
 const textResult = (text: string) => ({
   content: [{ type: "text" as const, text }],
+  details: undefined,
 });
 
 const verificationSkipped = (taskId: string, reason: string) =>

@@ -15,15 +15,18 @@
     "check:codex-agents": "bun scripts/sync-codex-agents.ts --check",
     "check:codex-rules": "bun scripts/check-codex-rules.ts",
     "check:pi-rules": "bun scripts/check-pi-rules.ts",
+    "check:pi-baseline": "bun scripts/pi-compat/baseline.ts",
     "check:pi-imports": "bun scripts/check-pi-imports.ts",
     "check:pi-schemas": "bun scripts/gen-pi-schemas.ts --check",
+    "check:pi-compat": "bun scripts/check-pi-compat.ts",
     "check:pi-version": "bun scripts/check-pi-version.ts",
+    "update:pi": "bun scripts/update-pi.ts",
     "gen:pi-schemas": "bun scripts/gen-pi-schemas.ts",
     "format": "prettier --write .",
     "lint:fix": "oxlint --fix",
     "tsc": "tsgo --noEmit",
     "setup:git-filters": "bash scripts/setup-git-filters.sh",
-    "run-all": "bun run setup:git-filters && bun run check:pi-schemas && bun run format && bun run check:codex-agents && bun run check:codex-rules && bun run check:pi-rules && bun run check:pi-imports && bun run lint && bun run lint:sh && bun run tsc && bun test",
+    "run-all": "bun run setup:git-filters && bun run check:pi-baseline && bun run check:pi-schemas && bun run format && bun run check:codex-agents && bun run check:codex-rules && bun run check:pi-rules && bun run check:pi-imports && bun run lint && bun run lint:sh && bun run tsc && bun test",
     "install:local": "bun link"
   },
   "dependencies": {
@@ -38,6 +41,7 @@
   "devDependencies": {
     "@earendil-works/pi-ai": "0.80.7",
     "@earendil-works/pi-coding-agent": "0.80.7",
+    "@earendil-works/pi-tui": "0.80.7",
     "@prettier/plugin-oxc": "0.0.4",
     "@tskm/compiler": "0.4.1",
     "@tskm/core": "0.3.0",
