@@ -48,7 +48,6 @@ The judge is enabled by default. Override it in the machine-local
     "model": "qwen2.5:latest",
     "expectedDigest": "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
     "timeoutMs": 2000,
-    "confirmTimeoutMs": 30000,
     "keepAlive": "30m"
   }
 }
@@ -63,21 +62,30 @@ exactly matches `/api/tags`. `expectedDigest` must be the exact lowercase 64-hex
 manifest digest returned by that endpoint. Models with a `:cloud` tag or name
 containing `cloud` are rejected.
 Invalid explicit settings never fall back to a remote or different model; they
-require human confirmation or block.
+require human confirmation or block. Interactive permission confirmations have
+no countdown: they remain open until the user responds or aborts the active pi
+operation (for example with Esc).
 
 ## Decision order
 
 1. Mandatory deny rule: block.
 2. Explicit allow rule: approve without Ollama.
 3. Built-in/dynamic/opaque ask rule: ask the user, or block without UI.
-4. For an unknown command, reuse an unexpired completed `ALLOW` cache entry if
+4. For an otherwise unknown compound command, treat one leading top-level
+   `cd <absolute-literal-path> &&` segment as neutral only when the destination
+   exists and has the same canonical Git common directory as the tool cwd. This
+   includes linked worktrees. Every remaining executable segment must be
+   explicitly allowed; relative/dynamic paths, redirects, other connectors,
+   multiple `cd` segments, missing paths, and unrelated or nested repositories
+   do not receive this exception.
+5. For an unknown command, reuse an unexpired completed `ALLOW` cache entry if
    one exists. This sends no request.
-5. Before a cache-miss chat request, require `/api/status` to report
+6. Before a cache-miss chat request, require `/api/status` to report
    `cloud.disabled === true`.
-6. Require `/api/tags` to contain exactly one exact-name model entry whose
+7. Require `/api/tags` to contain exactly one exact-name model entry whose
    `name`, `model`, and pinned digest match and which has no `remote_host` or
    `remote_model` field.
-7. Query `/api/chat`, then require the exact configured response model, no
+8. Query `/api/chat`, then require the exact configured response model, no
    remote metadata, a completed non-truncated response, and an entire verdict
    of `ALLOW`. Every other result asks the user or blocks without UI.
 
@@ -87,9 +95,9 @@ that every `bun`, `find`, `gh`, or similar subcommand is intrinsically safe.
 Wrappers, alternate or quoted executable paths, dynamic expansions,
 redirections, and background execution do not inherit an allow entry. Quoted
 literal arguments remain concrete, but embedded whitespace remains inside its
-original argv word and cannot satisfy a multi-word allow prefix. A compound
-command bypasses Ollama only when every executable segment is explicitly
-allowed.
+original argv word and cannot satisfy a multi-word allow prefix. Except for the
+narrow same-repository leading `cd` case above, a compound command bypasses
+Ollama only when every executable segment is explicitly allowed.
 
 When Ollama is unavailable or cannot be verified, TUI/RPC sessions show a
 confirmation and non-interactive/child sessions block unknown commands. A

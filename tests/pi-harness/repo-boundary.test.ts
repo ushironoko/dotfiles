@@ -1,9 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, realpath, symlink } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateCwdWithinRepo } from "../../pi/extensions/pi-harness/lib/repo-boundary";
+import {
+  validateCwdInSameRepo,
+  validateCwdWithinRepo,
+} from "../../pi/extensions/pi-harness/lib/repo-boundary";
 
 const tempRoot = async (prefix: string): Promise<string> =>
   // realpath so macOS /var → /private/var canonicalization matches the module's.
@@ -12,6 +22,92 @@ const tempRoot = async (prefix: string): Promise<string> =>
 const gitInit = (cwd: string): void => {
   execFileSync("git", ["init", "-q"], { cwd, stdio: "ignore" });
 };
+
+describe("validateCwdInSameRepo", () => {
+  test("accepts an outside linked-worktree shape with the same common dir", async () => {
+    const root = await tempRoot("same-repo-root-");
+    const linked = await tempRoot("same-repo-linked-");
+    const sameRepo = async (): Promise<string> => "/common/.git";
+
+    expect(await validateCwdInSameRepo(linked, root, sameRepo)).toEqual({
+      ok: true,
+    });
+  });
+
+  test("rejects different or missing repository identities", async () => {
+    const root = await tempRoot("same-repo-root-");
+    const candidate = await tempRoot("same-repo-other-");
+    const different = async (cwd: string): Promise<string | undefined> =>
+      cwd === root ? "/root/.git" : "/other/.git";
+    const differentResult = await validateCwdInSameRepo(
+      candidate,
+      root,
+      different,
+    );
+    expect(differentResult.ok).toBe(false);
+
+    const noRootRepo = async (): Promise<undefined> => undefined;
+    const noRepoResult = await validateCwdInSameRepo(
+      candidate,
+      root,
+      noRootRepo,
+    );
+    expect(noRepoResult.ok).toBe(false);
+
+    const missingResult = await validateCwdInSameRepo(
+      join(root, "missing"),
+      root,
+      async () => "/root/.git",
+    );
+    expect(missingResult.ok).toBe(false);
+  });
+
+  test("accepts a real linked worktree and rejects a distinct repository", async () => {
+    const parent = await tempRoot("same-repo-real-");
+    const root = join(parent, "root");
+    const linked = join(parent, "linked");
+    const other = join(parent, "other");
+    await mkdir(root);
+    await mkdir(other);
+    gitInit(root);
+    gitInit(other);
+    await writeFile(join(root, "README.md"), "test\n");
+    execFileSync("git", ["add", "README.md"], {
+      cwd: root,
+      stdio: "ignore",
+    });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=pi-harness",
+        "-c",
+        "user.email=pi-harness@example.test",
+        "commit",
+        "-qm",
+        "initial",
+      ],
+      { cwd: root, stdio: "ignore" },
+    );
+    execFileSync("git", ["worktree", "add", "-q", "-b", "linked", linked], {
+      cwd: root,
+      stdio: "ignore",
+    });
+    const escape = join(root, "escape");
+    await symlink(other, escape);
+
+    try {
+      const linkedResult = await validateCwdInSameRepo(linked, root);
+      const otherResult = await validateCwdInSameRepo(other, root);
+      const escapeResult = await validateCwdInSameRepo(escape, root);
+      expect(linkedResult.ok).toBe(true);
+      expect(otherResult.ok).toBe(false);
+      expect(escapeResult.ok).toBe(false);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("validateCwdWithinRepo (injected git identity)", () => {
   const sameRepo = async (): Promise<string> => "/common/.git";

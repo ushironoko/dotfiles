@@ -52,6 +52,53 @@ const gitCommonDir = (cwd: string): Promise<string | undefined> =>
 
 export type GitCommonDirFn = (cwd: string) => Promise<string | undefined>;
 
+/**
+ * Verify repository identity without requiring path containment. Linked Git
+ * worktrees deliberately live outside one another, but resolve to the same
+ * canonical common directory. Both endpoints must be real Git worktrees; the
+ * non-repository containment fallback used by validateCwdWithinRepo is not
+ * appropriate for permission grants.
+ */
+export const validateCwdInSameRepo = async (
+  candidateCwd: string,
+  rootCwd: string,
+  gitCommonDirFn: GitCommonDirFn = gitCommonDir,
+): Promise<CwdBoundaryResult> => {
+  let realCandidate: string;
+  try {
+    realCandidate = await realpath(candidateCwd);
+  } catch {
+    return { ok: false, reason: `cwd does not resolve: ${candidateCwd}` };
+  }
+  let realRoot: string;
+  try {
+    realRoot = await realpath(rootCwd);
+  } catch {
+    return { ok: false, reason: `repository cwd does not resolve: ${rootCwd}` };
+  }
+
+  const [candidateCommon, rootCommon] = await Promise.all([
+    gitCommonDirFn(realCandidate),
+    gitCommonDirFn(realRoot),
+  ]);
+  if (rootCommon === undefined) {
+    return { ok: false, reason: `cwd is not in a git repository: ${rootCwd}` };
+  }
+  if (candidateCommon === undefined) {
+    return {
+      ok: false,
+      reason: `cwd ${candidateCwd} is not in a git repository`,
+    };
+  }
+  if (candidateCommon !== rootCommon) {
+    return {
+      ok: false,
+      reason: `cwd ${candidateCwd} belongs to a different git repository`,
+    };
+  }
+  return { ok: true };
+};
+
 export const validateCwdWithinRepo = async (
   candidateCwd: string,
   rootCwd: string,

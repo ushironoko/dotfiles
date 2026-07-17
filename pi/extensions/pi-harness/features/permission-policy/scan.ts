@@ -78,6 +78,10 @@ export interface Segment {
   readonly words: readonly string[];
   readonly opaque: ReadonlySet<number>;
   readonly opaqueUnquoted: ReadonlySet<number>;
+  /** True only when this segment is outside a parenthesized shell group. */
+  readonly topLevel: boolean;
+  /** True only when the shell connector immediately after this segment is &&. */
+  readonly followedByAnd: boolean;
   /** Concrete pre-normalization command text, when safe for explicit allow. */
   readonly allowCandidate?: string;
 }
@@ -549,6 +553,7 @@ export const scanCommand = (command: string): ScanResult => {
   let atWordStart = true;
   let pendingRedirectTarget = false;
   let allowEligible = true;
+  let groupDepth = 0;
   let i = 0;
 
   const resetWord = (): void => {
@@ -571,7 +576,7 @@ export const scanCommand = (command: string): ScanResult => {
     if (wordOpaqueUnquoted) opaqueUnquoted.add(index);
     resetWord();
   };
-  const flushSegment = (): void => {
+  const flushSegment = (followedByAnd = false): void => {
     flushWord();
     pendingRedirectTarget = false;
     if (words.length > 0 || !allowEligible) {
@@ -589,6 +594,8 @@ export const scanCommand = (command: string): ScanResult => {
         words,
         opaque,
         opaqueUnquoted,
+        topLevel: groupDepth === 0,
+        followedByAnd,
         ...(allowCandidate === undefined ? {} : { allowCandidate }),
       });
     }
@@ -774,10 +781,10 @@ export const scanCommand = (command: string): ScanResult => {
         atWordStart = true;
         continue;
       }
-      if (command[i + 1] !== "&") allowEligible = false;
-      flushSegment();
-      i += 1;
-      if (command[i] === "&") i += 1;
+      const followedByAnd = command[i + 1] === "&";
+      if (!followedByAnd) allowEligible = false;
+      flushSegment(followedByAnd);
+      i += followedByAnd ? 2 : 1;
       atWordStart = true;
       continue;
     }
@@ -792,6 +799,7 @@ export const scanCommand = (command: string): ScanResult => {
 
     if (c === "(" || c === ")") {
       flushSegment();
+      groupDepth = c === "(" ? groupDepth + 1 : Math.max(0, groupDepth - 1);
       i += 1;
       atWordStart = true;
       continue;

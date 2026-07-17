@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { resolve } from "node:path";
 import {
   DEFAULT_PERMISSION_JUDGE_CONFIG,
   type HarnessConfig,
@@ -237,6 +238,32 @@ describe("permission policy local judge routing", () => {
     expect(upstream.received).toHaveLength(0);
   });
 
+  test("bypasses the judge only for a leading same-repository cd plus an explicit allow", async () => {
+    const upstream = await start(() => ollamaResponse("ASK"));
+    const repoRoot = resolve(import.meta.dir, "../..");
+
+    const sameRepo = createFakePi({ cwd: repoRoot, hasUI: false });
+    setupPermissionPolicy(sameRepo, makeConfig(judgeConfig(upstream)));
+    expect(
+      await sameRepo.emitToolCall(
+        bashCall(`cd ${repoRoot} && bun run tsc`, "same-repo"),
+      ),
+    ).toBeUndefined();
+    expect(upstream.received).toHaveLength(0);
+
+    const outsideRepo = createFakePi({ cwd: repoRoot, hasUI: false });
+    setupPermissionPolicy(outsideRepo, makeConfig(judgeConfig(upstream)));
+    expect(
+      await outsideRepo.emitToolCall(
+        bashCall("cd /tmp && bun run tsc", "outside-repo"),
+      ),
+    ).toEqual({
+      block: true,
+      reason: "local judge requested user confirmation",
+    });
+    expect(chatRequests(upstream)).toHaveLength(1);
+  });
+
   test("falls back to human confirmation for ASK or invalid output", async () => {
     let content = "ASK";
     const upstream = await start(() => ollamaResponse(content));
@@ -259,19 +286,13 @@ describe("permission policy local judge routing", () => {
     });
   });
 
-  test("bounds confirmation with the active signal and configured timeout", async () => {
+  test("keeps confirmation abortable without a timeout", async () => {
     const upstream = await start(() => ollamaResponse("ASK"));
     const pi = createFakePi();
     const controller = createTestAbortController();
     Object.assign(pi.ctx, { signal: controller.signal });
     pi.queueConfirm(false);
-    setupPermissionPolicy(
-      pi,
-      makeConfig({
-        ...judgeConfig(upstream),
-        confirmTimeoutMs: 1_234,
-      }),
-    );
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
 
     expect(await pi.emitToolCall(bashCall("git status"))).toEqual({
       block: true,
@@ -280,8 +301,8 @@ describe("permission policy local judge routing", () => {
     expect(pi.confirmDialogs).toHaveLength(1);
     expect(pi.confirmDialogs[0]?.dialogOptions).toEqual({
       signal: controller.signal,
-      timeout: 1_234,
     });
+    expect(pi.confirmDialogs[0]?.dialogOptions).not.toHaveProperty("timeout");
   });
 
   test("blocks non-interactively when the judge does not allow", async () => {

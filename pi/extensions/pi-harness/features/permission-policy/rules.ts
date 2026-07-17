@@ -4,8 +4,10 @@ import {
   normalizeSegment,
   type NormalizedSegment,
   scanCommand,
+  type Segment,
   speculativeFloor,
 } from "./scan";
+import { literalTrustedCdTarget } from "./trusted-cd";
 
 interface DenyRule {
   readonly source?: string;
@@ -35,6 +37,11 @@ type Verdict =
   | { readonly verdict: "ask"; readonly reason: string }
   | { readonly verdict: "allow"; readonly reason?: string }
   | { readonly verdict: "default-continue" };
+
+interface EvaluationOptions {
+  /** Filesystem-verified target of a leading same-repository cd segment. */
+  readonly trustedLeadingCdTarget?: string;
+}
 
 interface DenyDefinition {
   readonly source?: string;
@@ -331,9 +338,11 @@ const structuralBitDeny = (seg: NormalizedSegment): string | undefined => {
 // (unsuppressable by user allow — the data-leak floor) > user ALLOW > concrete
 // ASK > built-in ASK-potential > opaque executor > default-continue.
 const evaluateNormalized = (
+  segment: Segment,
   normalized: NormalizedSegment,
   rules: LoadedRules,
   allowCandidate: string | undefined,
+  trustedLeadingCdTarget: string | undefined,
 ): Verdict => {
   if (normalized.words.length === 0) return { verdict: "default-continue" };
   const command = normalized.words.join(" ");
@@ -347,6 +356,16 @@ const evaluateNormalized = (
 
   if (potential === "deny") {
     return { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON };
+  }
+
+  // A same-repository leading cd is neutral only for explicit-allow
+  // aggregation. The caller obtains this target through filesystem/Git
+  // validation; the scanner check here reasserts the exact safe shell shape.
+  if (
+    trustedLeadingCdTarget !== undefined &&
+    literalTrustedCdTarget(segment) === trustedLeadingCdTarget
+  ) {
+    return { verdict: "allow" };
   }
 
   // Allow grants use the scanner's conservative concrete representation
@@ -404,6 +423,7 @@ const evaluateCommandInner = (
   command: string,
   rules: LoadedRules,
   depth: number,
+  options: EvaluationOptions,
 ): Verdict => {
   if (depth > MAX_SUBSTITUTION_DEPTH) {
     return { verdict: "deny", reason: UNPARSEABLE_REASON };
@@ -411,26 +431,42 @@ const evaluateCommandInner = (
   const scanned = scanCommand(command);
   if (!scanned.ok) return { verdict: "deny", reason: UNPARSEABLE_REASON };
   const verdicts: Verdict[] = [];
-  for (const segment of scanned.segments) {
+  for (const [index, segment] of scanned.segments.entries()) {
     const normalized = normalizeSegment(segment);
     verdicts.push(
-      evaluateNormalized(normalized, rules, segment.allowCandidate),
+      evaluateNormalized(
+        segment,
+        normalized,
+        rules,
+        segment.allowCandidate,
+        depth === 0 && index === 0 ? options.trustedLeadingCdTarget : undefined,
+      ),
     );
     // `sh -c '<script>'` runs exactly <script>; evaluate it so a denied body
     // (e.g. `bit relay sync`) is denied instead of downgraded to an opaque ask.
     const inner = interpreterConcreteArg(normalized);
     if (inner !== undefined) {
-      verdicts.push(evaluateCommandInner(inner, rules, depth + 1));
+      verdicts.push(evaluateCommandInner(inner, rules, depth + 1, {}));
     }
   }
   for (const sub of scanned.subs) {
-    verdicts.push(evaluateCommandInner(sub, rules, depth + 1));
+    verdicts.push(evaluateCommandInner(sub, rules, depth + 1, {}));
   }
   return combineVerdicts(verdicts);
 };
 
-const evaluateCommand = (command: string, rules: LoadedRules): Verdict =>
-  evaluateCommandInner(command, rules, 0);
+const evaluateCommand = (
+  command: string,
+  rules: LoadedRules,
+  options: EvaluationOptions = {},
+): Verdict => evaluateCommandInner(command, rules, 0, options);
 
 export { evaluateCommand, loadRules };
-export type { AllowRule, AskRule, DenyRule, LoadedRules, Verdict };
+export type {
+  AllowRule,
+  AskRule,
+  DenyRule,
+  EvaluationOptions,
+  LoadedRules,
+  Verdict,
+};

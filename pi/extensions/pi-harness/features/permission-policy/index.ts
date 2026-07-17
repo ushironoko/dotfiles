@@ -1,12 +1,10 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { PiLike } from "../../lib/pi-like";
-import {
-  DEFAULT_PERMISSION_JUDGE_CONFIG,
-  type HarnessConfig,
-} from "../../config";
+import type { HarnessConfig } from "../../config";
 import { createPermissionJudge, type JudgeOutcome } from "./judge";
 import { evaluateCommand, loadRules } from "./rules";
+import { resolveTrustedLeadingCd } from "./trusted-cd";
 
 const readPermissionRules = (): string | undefined => {
   try {
@@ -55,7 +53,7 @@ const setupPermissionPolicy = (pi: PiLike, config: HarnessConfig): void => {
         return { block: true, reason: MALFORMED_REASON };
       }
 
-      const result = evaluateCommand(command, rules);
+      let result = evaluateCommand(command, rules);
       if (result.verdict === "deny") {
         return { block: true, reason: result.reason };
       }
@@ -74,12 +72,7 @@ const setupPermissionPolicy = (pi: PiLike, config: HarnessConfig): void => {
         const confirmed = await ctx.ui.confirm(
           title,
           `${reason}\n\n${command}`,
-          {
-            signal,
-            timeout:
-              judgeConfig?.confirmTimeoutMs ??
-              DEFAULT_PERMISSION_JUDGE_CONFIG.confirmTimeoutMs,
-          },
+          { signal },
         );
         return confirmed && !isAborted() ? undefined : { block: true, reason };
       };
@@ -88,6 +81,22 @@ const setupPermissionPolicy = (pi: PiLike, config: HarnessConfig): void => {
         return confirm("危険なコマンドを実行しますか？", result.reason);
       }
       if (result.verdict === "allow" || judge === undefined) return undefined;
+
+      // Preserve deny/ask precedence above. Only a command that would
+      // otherwise reach the local judge can gain the narrow same-repository
+      // cd optimization.
+      if (ctx.cwd !== undefined) {
+        const trustedLeadingCdTarget = await resolveTrustedLeadingCd(
+          command,
+          ctx.cwd,
+        );
+        if (trustedLeadingCdTarget !== undefined) {
+          result = evaluateCommand(command, rules, {
+            trustedLeadingCdTarget,
+          });
+          if (result.verdict === "allow") return undefined;
+        }
+      }
 
       const outcome = await judge.judge(command, {
         cwd: ctx.cwd,
