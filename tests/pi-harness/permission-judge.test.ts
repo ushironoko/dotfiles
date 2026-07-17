@@ -498,6 +498,52 @@ describe("local Ollama permission judge", () => {
     },
   );
 
+  test("rejects invalid UTF-8 even when replacement decoding would preserve ALLOW", async () => {
+    const prefix = Buffer.from(
+      JSON.stringify({
+        model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+        message: { role: "assistant", content: "ALLOW" },
+        done: true,
+        done_reason: "stop",
+        ignored: "",
+      }).replace('"ignored":""', '"ignored":"'),
+    );
+    const body = Buffer.concat([
+      prefix,
+      Buffer.from([0xff]),
+      Buffer.from('"}'),
+    ]);
+    expect(JSON.parse(body.toString("utf8"))).toMatchObject({
+      message: { content: "ALLOW" },
+    });
+    const lossyUpstream = await start(
+      () => new Response(body.toString("utf8")),
+    );
+    expect(
+      await createPermissionJudge(configFor(lossyUpstream)).judge("git status"),
+    ).toEqual({ kind: "allow", cached: false });
+
+    const upstream = await startRaw((socket) => {
+      socket.end(
+        Buffer.concat([
+          Buffer.from(
+            `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${body.byteLength}\r\nConnection: close\r\n\r\n`,
+          ),
+          body,
+        ]),
+      );
+    });
+
+    const outcome = await createPermissionJudge({
+      ...DEFAULT_PERMISSION_JUDGE_CONFIG,
+      url: `${upstream.url}/api/chat`,
+    }).judge("git status");
+    expect(outcome).toEqual({
+      kind: "invalid-response",
+      reason: "local judge response was not valid UTF-8",
+    });
+  });
+
   test("ignores ambient proxy variables and connects directly", async () => {
     const proxy = await start(() => validResponse("ASK"));
     const target = await start(() => validResponse("ALLOW"));

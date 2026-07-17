@@ -152,9 +152,16 @@ const cacheKey = (
 interface DirectHttpResponse {
   status: number;
   body?: string;
+  bodyFailure?: "invalid-utf8";
 }
 
 const MAX_HTTP_HEADER_BYTES = 16 * 1024;
+const FATAL_UTF8_DECODER = new TextDecoder("utf-8", {
+  fatal: true,
+  // Buffer.toString previously left a leading BOM visible to JSON.parse.
+  // Preserve that rejection behavior instead of silently stripping the BOM.
+  ignoreBOM: true,
+});
 
 const decodeChunkedBody = (encoded: Buffer): Buffer | undefined => {
   const chunks: Buffer[] = [];
@@ -244,7 +251,11 @@ const parseHttpResponse = (wire: Buffer): DirectHttpResponse => {
     }
   }
   if (body.byteLength > MAX_RESPONSE_BYTES) return { status };
-  return { status, body: body.toString("utf8") };
+  try {
+    return { status, body: FATAL_UTF8_DECODER.decode(body) };
+  } catch {
+    return { status, bodyFailure: "invalid-utf8" };
+  }
 };
 
 // A raw TCP connection to the validated numeric loopback address cannot honor
@@ -427,10 +438,16 @@ export const readLocalOllamaVersion = async (
       undefined,
       controller.signal,
     );
-    if (response.status !== 200 || response.body === undefined) {
+    if (response.status !== 200) {
       throw new Error(
         `Ollama version endpoint returned HTTP ${response.status}`,
       );
+    }
+    if (response.bodyFailure === "invalid-utf8") {
+      throw new Error("Ollama version endpoint returned invalid UTF-8");
+    }
+    if (response.body === undefined) {
+      throw new Error("Ollama version endpoint returned an invalid body");
     }
     const value: unknown = JSON.parse(response.body);
     if (
@@ -637,7 +654,10 @@ export const createPermissionJudge = (
         if (statusResponse.body === undefined) {
           return {
             kind: "unavailable",
-            reason: "local Ollama cloud status exceeded the size limit",
+            reason:
+              statusResponse.bodyFailure === "invalid-utf8"
+                ? "local Ollama cloud status was not valid UTF-8"
+                : "local Ollama cloud status exceeded the size limit",
           };
         }
         const cloudVerification = verifyCloudStatus(statusResponse.body);
@@ -670,7 +690,10 @@ export const createPermissionJudge = (
         if (tagsResponse.body === undefined) {
           return {
             kind: "unavailable",
-            reason: "local Ollama model list exceeded the size limit",
+            reason:
+              tagsResponse.bodyFailure === "invalid-utf8"
+                ? "local Ollama model list was not valid UTF-8"
+                : "local Ollama model list exceeded the size limit",
           };
         }
         const modelVerification = verifyModelTags(
@@ -750,7 +773,10 @@ export const createPermissionJudge = (
         if (body === undefined) {
           return {
             kind: "invalid-response",
-            reason: "local judge response exceeded the size limit",
+            reason:
+              response.bodyFailure === "invalid-utf8"
+                ? "local judge response was not valid UTF-8"
+                : "local judge response exceeded the size limit",
           };
         }
 

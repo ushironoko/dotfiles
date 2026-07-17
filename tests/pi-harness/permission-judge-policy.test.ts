@@ -119,6 +119,105 @@ describe("permission policy local judge routing", () => {
     ]);
   });
 
+  test("a hidden substitution does not inherit the outer explicit allow", async () => {
+    const upstream = await start(() => ollamaResponse("ASK"));
+    const pi = createFakePi({ hasUI: false });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
+
+    expect(await pi.emitToolCall(bashCall(`bun "$'$(printf PWN)'"`))).toEqual({
+      block: true,
+      reason: "local judge requested user confirmation",
+    });
+    expect(chatRequests(upstream)).toHaveLength(1);
+  });
+
+  test("hidden substitutions and unsupported `<<` never reach the judge", async () => {
+    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const pi = createFakePi();
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
+    let deeplyNested = "bit issue claim";
+    for (let depth = 0; depth < 66; depth += 1) {
+      deeplyNested = `$(${deeplyNested})`;
+    }
+    const cases = [
+      {
+        command: `bun "$'$(bit relay sync)'"`,
+        reason: "bit relay は禁止です",
+      },
+      {
+        command: `bun "\${v:-$'$(bit issue claim)'}"`,
+        reason: "コマンドを解析できませんでした",
+      },
+      {
+        command: `bun "\${v:-'$(bit issue claim)'}"`,
+        reason: "コマンドを解析できませんでした",
+      },
+      {
+        command: `bun "\${v:-"$'$(bit issue claim)'"}"`,
+        reason: "bit issue claim は禁止です",
+      },
+      {
+        command: `bun "\${v:-$(printf %s 'x}'; bit issue claim)}"`,
+        reason: "bit issue claim は禁止です",
+      },
+      {
+        command: `v=x; echo "\${v#'{'}"; bit issue claim; echo "}"`,
+        reason: "コマンドを解析できませんでした",
+      },
+      {
+        command: `bun "\${v:-"${deeplyNested}"}"`,
+        reason: "コマンドを解析できませんでした",
+      },
+      {
+        command: 'bun "$\\\n(bit relay sync)"',
+        reason: "コマンドを解析できませんでした",
+      },
+      {
+        command: "cat <<EOF\n'$(bit relay sync)'\nEOF",
+        reason: "コマンドを解析できませんでした",
+      },
+      {
+        command: "cat <<EOF\n$(\nbit relay sync\n)\nEOF",
+        reason: "コマンドを解析できませんでした",
+      },
+      {
+        command: "cat <<EOF; echo $(bit relay sync)\nplain\nEOF",
+        reason: "コマンドを解析できませんでした",
+      },
+      {
+        command: "cat <<A <<B\nplain\nA\n'$(bit relay sync)'\nB",
+        reason: "コマンドを解析できませんでした",
+      },
+      {
+        command: "cat <<EOF\n EOF\n'$(bit relay sync)'\nEOF",
+        reason: "コマンドを解析できませんでした",
+      },
+      {
+        command: "cat <<$'\\q'\nbody\n\\q\nbit relay sync",
+        reason: "コマンドを解析できませんでした",
+      },
+      {
+        command: "cat <\\\n<EOF\n'$(bit relay sync)'\nEOF",
+        reason: "コマンドを解析できませんでした",
+      },
+      {
+        command: "! ((1 << 2))\nbit relay sync",
+        reason: "コマンドを解析できませんでした",
+      },
+    ];
+
+    for (const [index, sample] of cases.entries()) {
+      const result = await pi.emitToolCall(
+        bashCall(sample.command, `bypass-${index}`),
+      );
+      expect(result).toEqual({
+        block: true,
+        reason: expect.stringContaining(sample.reason),
+      });
+    }
+    expect(upstream.received).toHaveLength(0);
+  });
+
   test("deny, explicit allow, and built-in ask never call the judge", async () => {
     const upstream = await start(() => ollamaResponse("ALLOW"));
     const pi = createFakePi();

@@ -126,8 +126,14 @@ unverified, and unavailable results are never cached.
 
 A small LLM is a best-effort classifier, not a proof of safety. Prompt text
 inside comments, quoted strings, or here-documents can be adversarial. The
-existing parser and deterministic deny/ask floor run first, and any uncertainty
-must return `ASK`.
+existing parser and deterministic deny/ask floor run first. Parser uncertainty
+is blocked without consulting the classifier; classifier uncertainty must return
+`ASK`. Top-level `<<` syntax and backslash-newline continuations in executable
+contexts are deliberately unsupported and blocked before the judge: partial
+reconstruction can otherwise hide executable substitutions or later commands.
+Balanced arithmetic expansions such as
+`$((1 << 2))` remain supported because their contents are consumed as one
+expansion.
 
 The policy covers LLM-issued `bash` tool calls. User-entered `!`/`!!` commands
 are intentionally outside it. pi also permits later third-party `tool_call`

@@ -306,7 +306,7 @@ const loadRules = (jsonText: string | undefined): LoadedRules => {
 const MAX_SUBSTITUTION_DEPTH = 20;
 
 const UNPARSEABLE_REASON =
-  "permission-policy: コマンドを解析できませんでした（引用符または括弧が不整合のため fail-closed でブロックしました）";
+  "permission-policy: コマンドを解析できませんでした（引用符/括弧の不整合または未対応構文のため fail-closed でブロックしました）";
 const OPAQUE_EXECUTOR_REASON =
   "不透明な実行子（eval / sh -c / xargs 等）は内容を静的に検査できないため確認が必要です";
 const POTENTIALLY_SENSITIVE_REASON =

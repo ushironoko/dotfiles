@@ -661,19 +661,97 @@ describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", ()
     "b\\it issue claim",
     "bit issue cl\\aim",
     "bit issue $'claim'",
-    // an unquoted here-doc body substitution still executes → caught
-    "cat <<EOF\n$(bit issue claim)\nEOF",
   ])("denies after normalization/recursion: %s", (command) => {
     expect(verdictOf(command)).toBe("deny");
   });
 
-  // A here-doc body is data, not commands — it must not be denied.
+  test.each([
+    [`bun "$'$(bit issue claim)'"`, "bit issue claim は禁止です"],
+    [`bun "\${v:-$'$(bit issue claim)'}"`, "コマンドを解析できませんでした"],
+    [`bun "\${v:-'$(bit issue claim)'}"`, "コマンドを解析できませんでした"],
+    [`bun "\${v:-"$'$(bit issue claim)'"}"`, "bit issue claim は禁止です"],
+    [`bun "\${v:-"'$(bit issue claim)'"}"`, "bit issue claim は禁止です"],
+    [
+      `bun "\${v:-$(printf %s 'x}'; bit issue claim)}"`,
+      "bit issue claim は禁止です",
+    ],
+    [`bun "\${v:-$'\`bit issue claim\`'}"`, "コマンドを解析できませんでした"],
+    [
+      `v=x; echo "\${v#'{'}"; bit issue claim; echo "}"`,
+      "コマンドを解析できませんでした",
+    ],
+  ])(
+    "denies a substitution or brace hidden by ambiguous apostrophes: %s",
+    (command, reason) => {
+      expect(evaluateCommand(command, floor)).toEqual({
+        verdict: "deny",
+        reason: expect.stringContaining(reason),
+      });
+    },
+  );
+
+  test.each(['bun "$\\\n(bit issue claim)"', "bit issue cl\\\naim"])(
+    "fails closed when a line continuation can synthesize syntax: %s",
+    (command) => {
+      expect(evaluateCommand(command, floor)).toEqual({
+        verdict: "deny",
+        reason: expect.stringContaining("コマンドを解析できませんでした"),
+      });
+    },
+  );
+
+  test("fails closed when nested substitution exceeds the reader cap", () => {
+    let nested = "bit issue claim";
+    for (let depth = 0; depth < 66; depth += 1) nested = `$(${nested})`;
+    const command = `bun "\${v:-"${nested}"}"`;
+
+    expect(evaluateCommand(command, floor)).toEqual({
+      verdict: "deny",
+      reason: expect.stringContaining("コマンドを解析できませんでした"),
+    });
+  });
+
+  // Bash here-doc parsing needs header-wide FIFO state, quote removal, and
+  // logical-line handling. Until that grammar is implemented completely,
+  // every top-level `<<` form fails closed instead of risking that its body or
+  // a later command gets swallowed by the scanner. `$((... << ...))` remains
+  // supported because readDollar consumes the balanced arithmetic expansion.
   test.each([
     "cat <<EOF\nbit issue claim\nEOF",
     "cat <<'EOF'\nbit issue claim\nEOF",
-  ])("treats a here-doc body as data: %s", (command) => {
-    expect(verdictOf(command)).toBe("default-continue");
+    "cat <<EOF\n'$(bit issue claim)'\nEOF",
+    "cat <<EOF\n$(\nbit issue claim\n)\nEOF",
+    "cat <<EOF; echo $(bit issue claim)\nplain\nEOF",
+    "cat <<A <<B\nplain\nA\n'$(bit issue claim)'\nB",
+    "cat <<EOF\n EOF\n'$(bit issue claim)'\nEOF",
+    "cat <<$'\\q'\nbody\n\\q\nbit issue claim",
+    "cat <<-EOF\n\tplain\n\tEOF\nbit issue claim",
+    "cat <\\\n<EOF\n'$(bit issue claim)'\nEOF",
+    "! ((1 << 2))\nbit issue claim",
+  ])("fails closed on unsupported or ambiguous `<<` syntax: %s", (command) => {
+    expect(evaluateCommand(command, floor)).toEqual({
+      verdict: "deny",
+      reason: expect.stringContaining("コマンドを解析できませんでした"),
+    });
   });
+
+  test.each([
+    "bun '$(bit issue claim)'",
+    "bun $'$(bit issue claim)'",
+    "bun '$\\\n(bit issue claim)'",
+  ])(
+    "keeps substitutions inside genuine literal quotes inert: %s",
+    (command) => {
+      expect(verdictOf(command)).toBe("default-continue");
+    },
+  );
+
+  test.each(["echo $((1 << 2))", 'cat <<<"hello"'])(
+    "keeps a supported less-than form: %s",
+    (command) => {
+      expect(verdictOf(command)).toBe("default-continue");
+    },
+  );
 
   // Documented ASK-family residuals: an opaque DANGER flag (not an operand) is
   // NOT escalated, so `git push origin "$branch"` stays quiet. These stay
