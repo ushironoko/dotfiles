@@ -12,6 +12,7 @@
  *   Created worktrees are never merged or removed by the engine.
  */
 import { randomUUID } from "node:crypto";
+import { realpath, stat } from "node:fs/promises";
 import type { HarnessConfig } from "../../config";
 import type { ChildRunsIntegration } from "../child-runs/index";
 import type { ChildObservation } from "../child-runs/model";
@@ -262,6 +263,25 @@ const setupWorkflow = (
       }
 
       const defaultCwd = ctx.cwd ?? process.cwd();
+      let workflowRoot: string;
+      try {
+        workflowRoot = await realpath(defaultCwd);
+        if (!(await stat(workflowRoot)).isDirectory()) {
+          throw new Error("not a directory");
+        }
+      } catch {
+        throw new Error(
+          capText(
+            `workflow root does not resolve to a directory: ${defaultCwd}`,
+          ),
+        );
+      }
+      if (isAborted(signal)) throw new Error("Workflow was aborted");
+
+      // Freeze the root's canonical spelling once. This prevents a mutable
+      // ctx.cwd symlink from retargeting inherited tasks or later checks while
+      // the workflow runs. Node's path-only spawn API cannot pin the target
+      // inode against replacement after final validation.
 
       // Pre-flight every explicit task cwd before any side effect: an unvalidated
       // cwd is passed straight to the spawned child, so verify it resolves inside
@@ -279,7 +299,7 @@ const setupWorkflow = (
         ),
       ];
       for (const explicitCwd of explicitCwds) {
-        const boundary = await validateCwd(explicitCwd, defaultCwd);
+        const boundary = await validateCwd(explicitCwd, workflowRoot);
         if (isAborted(signal)) throw new Error("Workflow was aborted");
         if (!boundary.ok) {
           throw new Error(
@@ -397,7 +417,7 @@ const setupWorkflow = (
               try {
                 if (task.isolation === "worktree") {
                   const worktree = await createWorktree(
-                    defaultCwd,
+                    workflowRoot,
                     worktreeBranchName(stageIndex, taskIndex),
                     executionSignal,
                     (createdPath) => {
@@ -440,39 +460,43 @@ const setupWorkflow = (
               if (isAborted(executionSignal)) {
                 throw new Error("Workflow was aborted");
               }
-              const cwd = worktrees[taskIndex] ?? task.cwd ?? defaultCwd;
+              let cwd = worktrees[taskIndex] ?? task.cwd ?? workflowRoot;
               const runId = runIdsByStage[stageIndex]?.[taskIndex];
               const taskText = replacePrevious(task.task, previous);
-              const base = {
+              const reportBase = () => ({
                 agentType: task.agentType,
                 task: task.task,
                 cwd,
                 ...(worktrees[taskIndex] === undefined
                   ? {}
                   : { worktree: worktrees[taskIndex] }),
-              };
+              });
               let release: (() => void) | undefined;
               try {
-                // Revalidate explicit paths at the last practical boundary to
-                // narrow the post-acceptance symlink TOCTOU window.
-                if (background !== undefined && task.cwd !== undefined) {
-                  const boundary = await validateCwd(task.cwd, defaultCwd);
+                if (background !== undefined) {
+                  release = await background.acquireChildSlot(executionSignal);
+                }
+                if (isAborted(executionSignal)) {
+                  throw new Error("Workflow was aborted");
+                }
+                // Revalidate every explicit path at the last practical boundary.
+                // Background tasks do this only after owning a child slot, so a
+                // queued symlink cannot be swapped after its final check. The
+                // returned canonical spelling is mandatory and is used for both
+                // spawn and reporting.
+                if (task.cwd !== undefined) {
+                  const boundary = await validateCwd(task.cwd, workflowRoot);
                   if (isAborted(executionSignal)) {
                     throw new Error("Workflow was aborted");
                   }
                   if (!boundary.ok) {
                     throw new Error(
                       capText(
-                        `workflow cwd rejected before spawn: ${boundary.reason ?? task.cwd}`,
+                        `workflow cwd rejected before spawn: ${boundary.reason}`,
                       ),
                     );
                   }
-                }
-                if (background !== undefined) {
-                  release = await background.acquireChildSlot(executionSignal);
-                }
-                if (isAborted(executionSignal)) {
-                  throw new Error("Workflow was aborted");
+                  cwd = boundary.canonicalCwd;
                 }
                 const result = await spawnAgent(
                   findAgent(agents, task.agentType),
@@ -513,7 +537,7 @@ const setupWorkflow = (
                     model: result.model,
                   });
                 }
-                taskReports[taskIndex] = { ...base, result };
+                taskReports[taskIndex] = { ...reportBase(), result };
               } catch (error) {
                 if (isAborted(executionSignal)) {
                   if (runId !== undefined) {
@@ -535,7 +559,7 @@ const setupWorkflow = (
                   });
                 }
                 taskReports[taskIndex] = {
-                  ...base,
+                  ...reportBase(),
                   result: { failed: true, errorMessage: errorMessage(error) },
                 };
               } finally {

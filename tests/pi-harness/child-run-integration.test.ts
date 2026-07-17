@@ -1014,10 +1014,10 @@ describe("child-run subagent integration", () => {
     setupWorkflow(runtime.pi, makeConfig(home), {
       childRuns,
       spawnFn: scriptedSpawn("must not spawn"),
-      validateCwd: async () => {
+      validateCwd: async (candidate) => {
         validationStartedResolve();
         await validationGate;
-        return { ok: true };
+        return { ok: true, canonicalCwd: candidate };
       },
     });
     const tool = runtime.tools.find((item) => item.name === "workflow")!;
@@ -1062,7 +1062,10 @@ describe("child-run subagent integration", () => {
     setupWorkflow(runtime.pi, makeConfig(home), {
       childRuns,
       spawnFn: scriptedSpawn("workflow background answer"),
-      validateCwd: async () => ({ ok: true }),
+      validateCwd: async (candidate) => ({
+        ok: true,
+        canonicalCwd: candidate,
+      }),
     });
     const tool = runtime.tools.find((item) => item.name === "workflow")!;
     await runtime.emit("agent_start", { type: "agent_start" });
@@ -1114,7 +1117,10 @@ describe("child-run subagent integration", () => {
     setupWorkflow(runtime.pi, makeConfig(home), {
       childRuns,
       spawnFn: pool.spawnFn,
-      validateCwd: async () => ({ ok: true }),
+      validateCwd: async (candidate) => ({
+        ok: true,
+        canonicalCwd: candidate,
+      }),
     });
     const subagent = runtime.tools.find((item) => item.name === "subagent")!;
     const workflow = runtime.tools.find((item) => item.name === "workflow")!;
@@ -1196,7 +1202,10 @@ describe("child-run subagent integration", () => {
         spawnCalls += 1;
         return scriptedSpawn("never")(...args);
       },
-      validateCwd: async () => ({ ok: true }),
+      validateCwd: async (candidate) => ({
+        ok: true,
+        canonicalCwd: candidate,
+      }),
     });
     const tool = runtime.tools.find((item) => item.name === "workflow")!;
     await runtime.emit("agent_start", { type: "agent_start" });

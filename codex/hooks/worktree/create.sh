@@ -83,13 +83,20 @@ mkdir -p "$CREATE_LOCK_PARENT" \
 chmod 700 "$CREATE_LOCK_PARENT" \
   || fail "could not secure worktree lock directory: $CREATE_LOCK_PARENT"
 CREATE_LOCK="$CREATE_LOCK_PARENT/$NAME_SHA1.lock"
-mkdir "$CREATE_LOCK" \
-  || fail "another worktree create is already using branch: $NAME"
+CREATE_LOCK_OWNER_TOKEN="owner.${BASHPID:-$$}.${RANDOM}.${RANDOM}"
+CREATE_LOCK_OWNER_PATH="$CREATE_LOCK/$CREATE_LOCK_OWNER_TOKEN"
+CREATE_LOCK_RELEASE="$CREATE_LOCK.releasing.$CREATE_LOCK_OWNER_TOKEN"
+CREATE_LOCK_RELEASE_OWNER_PATH="$CREATE_LOCK_RELEASE/$CREATE_LOCK_OWNER_TOKEN"
 
-CREATE_LOCK_HELD=1
+# Every value read by a signal/EXIT handler is initialized before traps are
+# armed. IN_CRITICAL defers trappable cancellation until a short ownership
+# command and its parent-shell flags have committed together.
+CREATE_LOCK_HELD=0
+CREATE_LOCK_OWNER_PUBLISHED=0
 BRANCH_OWNED=0
 ROLLBACK_ARMED=0
 CANCELLED=0
+IN_CRITICAL=0
 PUBLISHED=0
 CREATED_PATH=''
 MARKER_TMP=''
@@ -134,6 +141,32 @@ install_marker() {
   ln "$MARKER_TMP" "$MARKER_PATH" || return 1
   rm "$MARKER_TMP" || return 1
   MARKER_TMP=''
+}
+
+release_create_lock() {
+  [ "$CREATE_LOCK_HELD" -eq 1 ] || return 0
+
+  # Rename ownership out of the shared branch-lock namespace first. A successor
+  # may acquire CREATE_LOCK immediately after mv; every remaining cleanup step
+  # uses this invocation's unique tombstone and can never remove that successor.
+  if [ ! -e "$CREATE_LOCK_RELEASE" ] && [ ! -L "$CREATE_LOCK_RELEASE" ]; then
+    if [ "$CREATE_LOCK_OWNER_PUBLISHED" -eq 1 ]; then
+      [ -f "$CREATE_LOCK_OWNER_PATH" ] && [ ! -L "$CREATE_LOCK_OWNER_PATH" ] \
+        || return 1
+    else
+      [ -d "$CREATE_LOCK" ] && [ ! -L "$CREATE_LOCK" ] || return 1
+      chmod 700 "$CREATE_LOCK" || return 1
+    fi
+    mv "$CREATE_LOCK" "$CREATE_LOCK_RELEASE" || return 1
+  fi
+  [ -d "$CREATE_LOCK_RELEASE" ] && [ ! -L "$CREATE_LOCK_RELEASE" ] \
+    || return 1
+  if [ -e "$CREATE_LOCK_RELEASE_OWNER_PATH" ] || [ -L "$CREATE_LOCK_RELEASE_OWNER_PATH" ]; then
+    [ -f "$CREATE_LOCK_RELEASE_OWNER_PATH" ] && [ ! -L "$CREATE_LOCK_RELEASE_OWNER_PATH" ] \
+      || return 1
+    rm -f "$CREATE_LOCK_RELEASE_OWNER_PATH" || return 1
+  fi
+  rmdir "$CREATE_LOCK_RELEASE" || rmdir "$CREATE_LOCK_RELEASE"
 }
 
 cleanup_create() {
@@ -216,25 +249,78 @@ cleanup_create() {
     fi
   fi
 
-  if [ "$CREATE_LOCK_HELD" -eq 1 ]; then
-    rmdir "$CREATE_LOCK"
+  if [ "$CREATE_LOCK_HELD" -eq 1 ] && release_create_lock; then
+    CREATE_LOCK_HELD=0
   fi
   exit "$status"
 }
 
 handle_cancel() {
   CANCELLED=1
+  if [ "$IN_CRITICAL" -eq 1 ]; then
+    return 0
+  fi
   exit 130
+}
+
+honor_deferred_cancel() {
+  if [ "$CANCELLED" -eq 1 ]; then
+    exit 130
+  fi
 }
 
 trap cleanup_create EXIT
 trap handle_cancel HUP INT TERM
 
-if ! git -C "$SOURCE_TOP" update-ref "refs/heads/$NAME" "$SOURCE_HEAD" ''; then
-  fail "branch already exists or is invalid: $NAME"
+LOCK_STATUS=0
+IN_CRITICAL=1
+if (
+  trap '' HUP INT TERM
+  mkdir "$CREATE_LOCK" || exit 10
+  : >"$CREATE_LOCK_OWNER_PATH" || exit 11
+  chmod 600 "$CREATE_LOCK_OWNER_PATH" || exit 12
+); then
+  CREATE_LOCK_HELD=1
+  CREATE_LOCK_OWNER_PUBLISHED=1
+else
+  LOCK_STATUS=$?
+  # Distinct setup statuses prove mkdir ownership even when owner publication
+  # itself failed. Commit that identity so EXIT cleanup can atomically rename
+  # the directory into our unique tombstone instead of stranding the lock.
+  case "$LOCK_STATUS" in
+    11)
+      CREATE_LOCK_HELD=1
+      ;;
+    12)
+      CREATE_LOCK_HELD=1
+      CREATE_LOCK_OWNER_PUBLISHED=1
+      ;;
+  esac
 fi
-BRANCH_OWNED=1
-ROLLBACK_ARMED=1
+IN_CRITICAL=0
+honor_deferred_cancel
+if [ "$LOCK_STATUS" -ne 0 ]; then
+  if [ "$CREATE_LOCK_HELD" -eq 1 ]; then
+    fail "could not initialize worktree create lock for branch: $NAME"
+  fi
+  fail "another worktree create is already using branch: $NAME"
+fi
+
+REF_STATUS=0
+IN_CRITICAL=1
+if (
+  trap '' HUP INT TERM
+  exec git -C "$SOURCE_TOP" update-ref "refs/heads/$NAME" "$SOURCE_HEAD" ''
+); then
+  BRANCH_OWNED=1
+  ROLLBACK_ARMED=1
+else
+  REF_STATUS=$?
+fi
+IN_CRITICAL=0
+honor_deferred_cancel
+[ "$REF_STATUS" -eq 0 ] \
+  || fail "branch already exists or is invalid: $NAME"
 "$GWQ" add "$NAME" >&2 || fail "gwq could not create worktree for branch: $NAME"
 if ! CREATED_PATH_RAW=$("$GWQ" get "$NAME" 2>/dev/null); then
   fail "gwq created the worktree but its path could not be resolved: $NAME"
@@ -284,6 +370,18 @@ install_marker "$CREATED_PATH" "$BRANCH" \
 printf '%s\n' "$CREATED_PATH"
 PUBLISHED=1
 ROLLBACK_ARMED=0
-rmdir "$CREATE_LOCK" || fail "could not release worktree create lock: $CREATE_LOCK"
-CREATE_LOCK_HELD=0
+LOCK_RELEASE_STATUS=0
+IN_CRITICAL=1
+if (
+  trap '' HUP INT TERM
+  release_create_lock
+); then
+  CREATE_LOCK_HELD=0
+else
+  LOCK_RELEASE_STATUS=$?
+fi
+IN_CRITICAL=0
+honor_deferred_cancel
+[ "$LOCK_RELEASE_STATUS" -eq 0 ] \
+  || fail "could not release worktree create lock: $CREATE_LOCK"
 trap - EXIT HUP INT TERM
