@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { CHILD_RUN_COMPLETION_ENTRY } from "../../pi/extensions/pi-harness/features/child-runs/background";
 import {
   CHILD_RUNS_SCHEMA,
   CHILD_RUNS_VERSION,
@@ -20,6 +21,12 @@ const serializedBytes = (value: unknown): number =>
 const toolResult = (childRuns: PersistedChildRunsV1) => ({
   type: "message",
   message: { role: "toolResult", details: { childRuns } },
+});
+
+const completionEntry = (childRuns: PersistedChildRunsV1) => ({
+  type: "custom",
+  customType: CHILD_RUN_COMPLETION_ENTRY,
+  data: { childRuns },
 });
 
 const payload = (
@@ -163,6 +170,23 @@ describe("child-run persisted details", () => {
       },
     ];
     expect(extractPersistedChildRuns(branch)).toEqual([newer]);
+  });
+
+  test("replays dedicated completion entries and lets the newest source win", () => {
+    const legacy = payload({ label: "legacy" });
+    const completed = payload({ label: "background-completion" });
+    completed.runs[0]!.worktree = "/tmp/review-worktree";
+    const selected = extractPersistedChildRuns([
+      toolResult(legacy),
+      {
+        type: "custom",
+        customType: "unrelated",
+        data: { childRuns: completed },
+      },
+      completionEntry(completed),
+    ]);
+    expect(selected).toEqual([completed]);
+    expect(selected[0]?.runs[0]?.worktree).toBe("/tmp/review-worktree");
   });
 
   test("retains a contiguous newest suffix at the replay byte boundary", () => {

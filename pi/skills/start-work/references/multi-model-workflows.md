@@ -20,7 +20,10 @@ shapes:
 
 ## Plan shape
 
-The `workflow` tool takes one declarative JSON plan:
+The `workflow` tool takes one declarative JSON plan. It immediately returns an
+acceptance result with an invocation ID; the staged result arrives later in an
+automatic background-completion message. Never synthesize or judge from the
+acceptance text.
 
 ```jsonc
 // Shape reference (not a runnable plan — "a | b" marks the allowed values)
@@ -70,7 +73,8 @@ The plan validator rejects violations — these are contracts, not advice:
   non-overlapping.
 - A failing task degrades its stage (the stage is reported as FAILED) instead
   of aborting the workflow. Synthesis and judging over the reported results
-  are the PARENT agent's job: do them yourself after the tool returns. A
+  are the PARENT agent's job: do them yourself after the automatic
+  background-completion message arrives. A
   `"mode": "single"` stage is NOT a parent stand-in — it spawns an agent like
   any other task and requires an explicit `agentType` naming an existing
   `~/.claude/agents/*.md` definition (the validator rejects single-mode tasks
@@ -135,7 +139,8 @@ validator:
 
 ## Template A: codex-default review fan-out
 
-Every reviewer is codex; you synthesize after the tool returns. Replace
+Every reviewer is codex; you synthesize after the automatic background-
+completion message arrives, not after the immediate acceptance result. Replace
 `<REPO>` with the absolute path to the repo or worktree under review.
 
 ```json
@@ -163,7 +168,8 @@ Every reviewer is codex; you synthesize after the tool returns. Replace
 }
 ```
 
-After the tool returns, synthesize the reported results yourself: rank
+After the automatic background-completion message arrives, synthesize the
+reported results yourself: rank
 cross-lens DISAGREEMENTS first (issues one lens found and the others missed),
 then agreements by severity. If any reviewer task was reported FAILED (e.g.
 rate-limited), state the coverage gap explicitly. Synthesis is the parent's
@@ -226,7 +232,8 @@ verification).
 }
 ```
 
-Judge the outcome yourself after the tool returns: recommend ONE PoC to adopt
+Judge the outcome yourself after the automatic background-completion message
+arrives: recommend ONE PoC to adopt
 (with required fixes) and say what to graft from the losers. NEVER merge
 anything — each diff stays in its worktree for a human decision; list the
 worktree absolute paths in the verdict. Judging is the parent's role — do not

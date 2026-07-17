@@ -101,6 +101,9 @@ const persistedAgent = (agent: string): string =>
 const persistedLabel = (label: string): string =>
   capUtf8(stripTerminalControls(label, " "), 512);
 
+const persistedWorktree = (worktree: string): string =>
+  capUtf8(stripTerminalControls(worktree, " "), 4 * 1024);
+
 export class ChildRunRegistry {
   private readonly now: () => number;
   private readonly idFactory: () => string;
@@ -263,6 +266,35 @@ export class ChildRunRegistry {
     }
   }
 
+  getNonTerminalRunIds(invocationId: string): string[] {
+    return (
+      this.invocations
+        .get(invocationId)
+        ?.runs.filter((run) => !isTerminalStatus(run.status))
+        .map((run) => run.runId) ?? []
+    );
+  }
+
+  retagAbortedRuns(
+    runIds: readonly string[],
+    reason: ChildRunTerminalReason,
+  ): void {
+    let changed = false;
+    for (const runId of runIds) {
+      const run = this.findRun(runId);
+      if (
+        run === undefined ||
+        run.status !== "aborted" ||
+        run.terminalReason === reason
+      ) {
+        continue;
+      }
+      run.terminalReason = reason;
+      changed = true;
+    }
+    if (changed) this.publish();
+  }
+
   getInvocationIdForToolCall(toolCallId: string): string | undefined {
     return this.toolCallToInvocation.get(toolCallId);
   }
@@ -275,6 +307,21 @@ export class ChildRunRegistry {
 
   getRunStatus(runId: string): ChildRunStatus | undefined {
     return this.findRun(runId)?.status;
+  }
+
+  setRunWorktree(runId: string, worktree: string): void {
+    const run = this.findRun(runId);
+    if (run === undefined) return;
+    run.worktree = persistedWorktree(worktree);
+    this.publish();
+  }
+
+  isInvocationTerminal(invocationId: string): boolean {
+    const invocation = this.invocations.get(invocationId);
+    return (
+      invocation !== undefined &&
+      invocation.runs.every((run) => isTerminalStatus(run.status))
+    );
   }
 
   getSnapshots(): ChildInvocationSnapshot[] {
@@ -356,7 +403,12 @@ export class ChildRunRegistry {
 
   completeToolCall(toolCallId: string): PersistedChildRunsV1 | undefined {
     const invocationId = this.toolCallToInvocation.get(toolCallId);
-    if (invocationId === undefined) return undefined;
+    if (
+      invocationId === undefined ||
+      !this.isInvocationTerminal(invocationId)
+    ) {
+      return undefined;
+    }
     const payload = this.toPersisted(invocationId);
     this.toolCallToInvocation.delete(toolCallId);
     if (payload === undefined) return undefined;
@@ -563,6 +615,10 @@ export class ChildRunRegistry {
       stageIndex: run.stageIndex,
       stageName:
         run.stageName === undefined ? undefined : persistedLabel(run.stageName),
+      worktree:
+        run.worktree === undefined
+          ? undefined
+          : persistedWorktree(run.worktree),
       status,
       terminalReason:
         run.terminalReason ?? (status === "aborted" ? "shutdown" : undefined),

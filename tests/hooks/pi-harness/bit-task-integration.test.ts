@@ -116,8 +116,8 @@ const setupRepo = async (branch = "feature/pi-bit-task"): Promise<TestRepo> => {
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
-      'if [ "$1" = "add" ] && [ "$2" = "-b" ]; then',
-      '  git -C "$GWQ_REPO" worktree add -b "$3" "$GWQ_BASE/$3" >&2',
+      'if [ "$1" = "add" ]; then',
+      '  git -C "$GWQ_REPO" worktree add "$GWQ_BASE/$2" "$2" >&2',
       'elif [ "$1" = "get" ]; then',
       String.raw`  printf "%s\n" "$GWQ_BASE/$2"`,
       "else",
