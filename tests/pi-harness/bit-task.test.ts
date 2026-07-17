@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
-import setupBitTask from "../../pi/extensions/pi-harness/features/bit-task/index";
+import setupBitTask, {
+  createValidatedWorktree,
+  type WorktreeCreator,
+} from "../../pi/extensions/pi-harness/features/bit-task/index";
 import {
   buildTaskMarker,
   matchesTaskMarker,
@@ -35,12 +38,13 @@ const executeTool = (
   tool: ToolDefLike,
   params: Record<string, unknown>,
   ctx: CtxLike,
+  signal?: AbortSignal,
 ): Promise<unknown> =>
   Promise.resolve(
     Reflect.apply(tool.execute, undefined, [
       "bit-task-test",
       params,
-      undefined,
+      signal,
       undefined,
       ctx,
     ]),
@@ -255,6 +259,128 @@ describe("bit-task tool registration", () => {
       for (const env of commandEnvs) {
         expect(env?.PI_HARNESS_CHILD).toBe("1");
       }
+    } finally {
+      await cleanupTestDirectory(directory);
+    }
+  });
+
+  test("passes cancellation into worktree provisioning and stops before verification", async () => {
+    const directory = await setupTestDirectory("pi-bit-task-abort", [
+      "created",
+    ]);
+    try {
+      const created = await fs.realpath(join(directory, "created"));
+      const controller = new AbortController() as unknown as {
+        signal: AbortSignal;
+        abort(): void;
+      };
+      let commandCalls = 0;
+      const pi = createFakePi({ cwd: directory });
+      setupBitTask(pi, makeConfig(), {
+        runHook: async (_script, _stdin, options) => {
+          expect(options?.signal).toBe(controller.signal);
+          controller.abort();
+          return {
+            exitCode: 0,
+            timedOut: false,
+            stdout: `${created}\n`,
+            stderr: "",
+          };
+        },
+        runCommand: async () => {
+          commandCalls += 1;
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      });
+
+      await expect(
+        executeTool(
+          getTool(pi.tools, "worktree_create"),
+          { name: "cancelled" },
+          pi.ctx,
+          controller.signal,
+        ),
+      ).rejects.toThrow("Worktree creation was aborted");
+      expect(commandCalls).toBe(0);
+    } finally {
+      await cleanupTestDirectory(directory);
+    }
+  });
+
+  test("reports a published path from an aborted create hook", async () => {
+    const directory = await setupTestDirectory("pi-bit-task-provisional", [
+      "created",
+    ]);
+    try {
+      const created = await fs.realpath(join(directory, "created"));
+      const controller = new AbortController() as unknown as {
+        signal: AbortSignal;
+        abort(): void;
+      };
+      const reported: string[] = [];
+      const creator: WorktreeCreator = {
+        createScript: "/tmp/create.sh",
+        invokeHook: async () => {
+          controller.abort();
+          return {
+            exitCode: null,
+            timedOut: false,
+            stdout: `${created}\n`,
+            stderr: "Hook aborted.",
+          };
+        },
+        invokeCommand: async () => {
+          throw new Error("verification must not run after cancellation");
+        },
+        env: () => ({}),
+      };
+
+      await expect(
+        createValidatedWorktree(
+          creator,
+          directory,
+          "cancelled",
+          controller.signal,
+          (path) => reported.push(path),
+        ),
+      ).rejects.toThrow("Worktree creation was aborted");
+      expect(reported).toEqual([created]);
+    } finally {
+      await cleanupTestDirectory(directory);
+    }
+  });
+
+  test("reports a published path when worktree creation times out", async () => {
+    const directory = await setupTestDirectory("pi-bit-task-timeout", [
+      "created",
+    ]);
+    try {
+      const created = await fs.realpath(join(directory, "created"));
+      const reported: string[] = [];
+      const creator: WorktreeCreator = {
+        createScript: "/tmp/create.sh",
+        invokeHook: async () => ({
+          exitCode: null,
+          timedOut: true,
+          stdout: `${created}\n`,
+          stderr: "Hook timed out.",
+        }),
+        invokeCommand: async () => {
+          throw new Error("verification must not run after timeout");
+        },
+        env: () => ({}),
+      };
+
+      await expect(
+        createValidatedWorktree(
+          creator,
+          directory,
+          "timed-out",
+          undefined,
+          (path) => reported.push(path),
+        ),
+      ).rejects.toThrow("worktree_create timed out");
+      expect(reported).toEqual([created]);
     } finally {
       await cleanupTestDirectory(directory);
     }

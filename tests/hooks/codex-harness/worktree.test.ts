@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join, resolve } from "node:path";
+import { runHook } from "../../../pi/extensions/pi-harness/lib/run-hook";
 import { cleanupTestDirectory, setupTestDirectory } from "../../test-helpers";
 
 const ROOT = resolve(import.meta.dir, "../../..");
@@ -236,8 +237,8 @@ describe("Codex worktree removal safety", () => {
       join(binDirectory, "gwq"),
       [
         "#!/usr/bin/env bash",
-        'if [ "$1" = "add" ] && [ "$2" = "-b" ]; then',
-        '  exec "$REAL_GIT" -C "$GWQ_REPOSITORY" worktree add -q -b "$3" "$GWQ_WORKTREE"',
+        'if [ "$1" = "add" ]; then',
+        '  exec "$REAL_GIT" -C "$GWQ_REPOSITORY" worktree add -q "$GWQ_WORKTREE" "$2"',
         "fi",
         String.raw`if [ "$1" = "get" ]; then printf "%s\n" "$GWQ_WORKTREE"; exit 0; fi`,
         "exit 1",
@@ -284,6 +285,107 @@ describe("Codex worktree removal safety", () => {
       worktree_path: worktree,
       confirmed: true,
     });
+    expect(removed.exitCode).toBe(0);
+    expect(await pathExists(worktree)).toBe(false);
+    expect(await pathExists(markerPath)).toBe(false);
+  });
+
+  test("cancellation publishes a removable worktree created mid-hook", async () => {
+    const root = await fs.realpath(
+      await setupTestDirectory("codex-worktree-cancel"),
+    );
+    temporaryDirectories.push(root);
+    const repository = join(root, "repository");
+    const worktree = join(root, "linked-worktree");
+    const readyPath = join(root, "gwq-created");
+    const binDirectory = join(root, "bin");
+    const branch = "harness-cancel-test";
+    const realGit = Bun.which("git");
+    if (realGit === null) throw new Error("git is required for this test");
+    await fs.mkdir(repository);
+    await fs.mkdir(binDirectory);
+    await runGit(["init", "-q", "-b", "main", repository]);
+    await runGit(
+      ["config", "user.email", "codex-test@example.com"],
+      repository,
+    );
+    await runGit(["config", "user.name", "Codex Test"], repository);
+    await runGit(
+      ["commit", "-q", "--allow-empty", "-m", "initial"],
+      repository,
+    );
+    await fs.writeFile(
+      join(binDirectory, "gwq"),
+      [
+        "#!/usr/bin/env bash",
+        'if [ "$1" = "add" ]; then',
+        '  "$REAL_GIT" -C "$GWQ_REPOSITORY" worktree add -q "$GWQ_WORKTREE" "$2" || exit 1',
+        '  : > "$GWQ_READY"',
+        "  sleep 30",
+        "  exit 0",
+        "fi",
+        String.raw`if [ "$1" = "get" ]; then printf "%s\n" "$GWQ_WORKTREE"; exit 0; fi`,
+        "exit 1",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const controller = new AbortController() as unknown as {
+      signal: AbortSignal;
+      abort(): void;
+    };
+    const running = runHook(CREATE_HOOK, JSON.stringify({ name: branch }), {
+      cwd: repository,
+      env: {
+        PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+        REAL_GIT: realGit,
+        GWQ_REPOSITORY: repository,
+        GWQ_WORKTREE: worktree,
+        GWQ_READY: readyPath,
+      },
+      timeoutMs: 10_000,
+      termGraceMs: 3_000,
+      signal: controller.signal,
+    });
+
+    let createdBeforeAbort = false;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      if (await pathExists(readyPath)) {
+        createdBeforeAbort = true;
+        break;
+      }
+      await Bun.sleep(10);
+    }
+    controller.abort();
+    const result = await running;
+
+    expect(createdBeforeAbort).toBe(true);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.timedOut).toBe(false);
+    expect(result.stdout.trim()).toBe(worktree);
+    expect(await pathExists(worktree)).toBe(true);
+    const branchLookup = await runCommand(
+      ["git", "show-ref", "--verify", `refs/heads/${branch}`],
+      { cwd: repository },
+    );
+    expect(branchLookup.exitCode).toBe(0);
+    const commonDirectory = await fs.realpath(join(repository, ".git"));
+    const pathSha1 = createHash("sha1").update(worktree).digest("hex");
+    const markerPath = join(
+      commonDirectory,
+      "codex-harness-worktrees",
+      `${pathSha1}.json`,
+    );
+    expect(await pathExists(markerPath)).toBe(true);
+    expect(JSON.parse(await fs.readFile(markerPath, "utf8"))).toEqual({
+      path: worktree,
+      branch,
+    });
+
+    const removed = await runRemoveHook(
+      { root, repository, worktree, commonDirectory, markerPath },
+      { worktree_path: worktree, confirmed: true },
+    );
     expect(removed.exitCode).toBe(0);
     expect(await pathExists(worktree)).toBe(false);
     expect(await pathExists(markerPath)).toBe(false);

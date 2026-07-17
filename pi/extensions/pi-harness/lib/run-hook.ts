@@ -17,6 +17,7 @@ export interface RunHookOptions {
   timeoutMs?: number;
   maxOutputBytes?: number;
   termGraceMs?: number;
+  signal?: AbortSignal;
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -39,6 +40,19 @@ export function runHook(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const termGraceMs = options.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
+  const signalAborted = (): boolean =>
+    options.signal !== undefined &&
+    "aborted" in options.signal &&
+    options.signal.aborted === true;
+
+  if (signalAborted()) {
+    return Promise.resolve({
+      exitCode: null,
+      timedOut: false,
+      stdout: "",
+      stderr: "Hook aborted.",
+    });
+  }
 
   return new Promise((resolve) => {
     const child = spawn("bash", [scriptPath], {
@@ -51,23 +65,73 @@ export function runHook(
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let aborted = false;
+    let terminating = false;
     let settled = false;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
-
-    const timeoutTimer = setTimeout(() => {
-      timedOut = true;
-      if (child.pid !== undefined) {
-        killGroup(child.pid, "SIGTERM");
-        killTimer = setTimeout(() => {
-          if (child.pid !== undefined) killGroup(child.pid, "SIGKILL");
-        }, termGraceMs);
-      }
-    }, timeoutMs);
+    let forceSettleTimer: ReturnType<typeof setTimeout> | undefined;
 
     const appendCapped = (current: string, chunk: string): string => {
       if (current.length >= maxOutputBytes) return current;
       return (current + chunk).slice(0, maxOutputBytes);
     };
+
+    const removeAbortListener = () => {
+      if (
+        options.signal !== undefined &&
+        "removeEventListener" in options.signal &&
+        typeof options.signal.removeEventListener === "function"
+      ) {
+        options.signal.removeEventListener("abort", onAbort);
+      }
+    };
+
+    const settle = (exitCode: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      if (forceSettleTimer !== undefined) clearTimeout(forceSettleTimer);
+      removeAbortListener();
+      resolve({
+        exitCode,
+        timedOut,
+        stdout,
+        stderr: aborted ? appendCapped(stderr, "\nHook aborted.") : stderr,
+      });
+    };
+
+    const terminate = () => {
+      if (terminating || settled) return;
+      terminating = true;
+      if (child.pid === undefined) {
+        if (!settled) settle(null);
+        return;
+      }
+      killGroup(child.pid, "SIGTERM");
+      killTimer = setTimeout(() => {
+        if (child.pid !== undefined) killGroup(child.pid, "SIGKILL");
+        forceSettleTimer = setTimeout(() => settle(null), 100);
+        if (
+          typeof forceSettleTimer === "object" &&
+          "unref" in forceSettleTimer
+        ) {
+          forceSettleTimer.unref();
+        }
+      }, termGraceMs);
+    };
+
+    const onAbort = () => {
+      if (aborted || settled) return;
+      aborted = true;
+      clearTimeout(timeoutTimer);
+      terminate();
+    };
+
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      terminate();
+    }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout = appendCapped(stdout, chunk.toString("utf8"));
@@ -76,16 +140,17 @@ export function runHook(
       stderr = appendCapped(stderr, chunk.toString("utf8"));
     });
 
-    const settle = (exitCode: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeoutTimer);
-      if (killTimer !== undefined) clearTimeout(killTimer);
-      resolve({ exitCode, timedOut, stdout, stderr });
-    };
-
     child.on("error", () => settle(null));
     child.on("close", (code) => settle(code));
+
+    if (
+      options.signal !== undefined &&
+      "addEventListener" in options.signal &&
+      typeof options.signal.addEventListener === "function"
+    ) {
+      options.signal.addEventListener("abort", onAbort, { once: true });
+    }
+    if (signalAborted()) onAbort();
 
     child.stdin.on("error", () => {
       // The script may exit without reading stdin; ignore EPIPE.

@@ -145,9 +145,16 @@ Plan File: <path>
 **Important**: do NOT issue one `subagent` call per reviewer — pass all
 reviewers in a single parallel-mode `tasks` array so they run concurrently.
 
+The tool returns an **acceptance** result with an invocation ID immediately.
+Do not mistake that acceptance text for reviewer output and do not aggregate
+yet. Tell the user the review invocation was started if useful, then wait for
+the automatic background-completion message. That message triggers a parent
+turn containing the aggregate reviewer results.
+
 ### Phase 4: Aggregate and report
 
-Aggregate all reviewers' results in this format:
+Only after the background-completion message arrives, aggregate all reviewers'
+results in this format:
 
 ```
 === Plan Review Results ===
@@ -187,7 +194,9 @@ Project analysis:
   - Test infrastructure: ✓ (vitest.config.ts detected)
 
 Reviewers to launch: rust-reviewer, codex-reviewer, tdd-reviewer
-Reviewing... (3 agents in parallel via one subagent call)
+Reviewing... (3 agents accepted in one background subagent invocation)
+
+[automatic background-completion message arrives]
 
 === Plan Review Results ===
 
@@ -212,7 +221,9 @@ Reviewing... (3 agents in parallel via one subagent call)
 Latest plan file detected: ./plans/kind-cuddling-dragon.md
 Agent: rust-reviewer (manually specified)
 
-Reviewing...
+Reviewing... (background invocation accepted)
+
+[automatic background-completion message arrives]
 
 === Plan Review Results ===
 
@@ -222,12 +233,13 @@ Reviewing...
 
 ## Error Handling
 
-| Situation                          | Response                                                             |
-| ---------------------------------- | -------------------------------------------------------------------- |
-| No plan file found                 | Notify that the plans directory has no files                         |
-| Auto-selection matched no reviewer | Show available agents and ask for manual specification               |
-| Manually specified agent not found | Show available agents (from `~/.claude/agents/`) and stop with error |
-| Some agents failed                 | Report results from successful agents and state the failures clearly |
+| Situation                          | Response                                                                                   |
+| ---------------------------------- | ------------------------------------------------------------------------------------------ |
+| No plan file found                 | Notify that the plans directory has no files                                               |
+| Auto-selection matched no reviewer | Show available agents and ask for manual specification                                     |
+| Manually specified agent not found | Show available agents (from `~/.claude/agents/`) and stop with error                       |
+| Some agents failed                 | On completion, report successful results and state the failures clearly                    |
+| Invocation only accepted           | Wait for its automatic background-completion message; do not aggregate the acceptance text |
 
 ## Notes
 

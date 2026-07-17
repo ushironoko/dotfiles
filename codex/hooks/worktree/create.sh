@@ -63,8 +63,179 @@ if ! SOURCE_COMMON_RAW=$(git -C "$SOURCE_TOP" rev-parse --git-common-dir 2>/dev/
 fi
 SOURCE_COMMON=$(resolve_git_dir "$SOURCE_TOP" "$SOURCE_COMMON_RAW") \
   || fail 'could not canonicalize the source Git common directory'
+if ! SOURCE_HEAD=$(git -C "$SOURCE_TOP" rev-parse --verify HEAD 2>/dev/null); then
+  fail 'could not resolve the source HEAD commit'
+fi
 
-"$GWQ" add -b "$NAME" >&2 || fail "gwq could not create branch: $NAME"
+# Creation is a side effect, but the caller may cancel this hook at any point.
+# Serialize the branch name and reserve its ref atomically. On SIGTERM, a
+# created worktree is completed by publishing its safe-removal marker + path;
+# failures before creation roll back only the exact ref reserved below.
+NAME_SHA1=$(sha1_text "$NAME") \
+  || fail 'no SHA-1 implementation is available (shasum, sha1sum, or openssl)'
+CREATE_LOCK_PARENT="$SOURCE_COMMON/codex-harness-worktree-create-locks"
+if [ -e "$CREATE_LOCK_PARENT" ] && { [ ! -d "$CREATE_LOCK_PARENT" ] || [ -L "$CREATE_LOCK_PARENT" ]; }; then
+  fail "create lock location is not a safe directory: $CREATE_LOCK_PARENT"
+fi
+umask 077
+mkdir -p "$CREATE_LOCK_PARENT" \
+  || fail "could not create worktree lock directory: $CREATE_LOCK_PARENT"
+chmod 700 "$CREATE_LOCK_PARENT" \
+  || fail "could not secure worktree lock directory: $CREATE_LOCK_PARENT"
+CREATE_LOCK="$CREATE_LOCK_PARENT/$NAME_SHA1.lock"
+mkdir "$CREATE_LOCK" \
+  || fail "another worktree create is already using branch: $NAME"
+
+CREATE_LOCK_HELD=1
+BRANCH_OWNED=0
+ROLLBACK_ARMED=0
+CANCELLED=0
+PUBLISHED=0
+CREATED_PATH=''
+MARKER_TMP=''
+MARKER_PATH=''
+
+install_marker() {
+  local worktree_path=$1
+  local branch=$2
+  local path_sha1=''
+  local marker_dir=''
+
+  path_sha1=$(sha1_text "$worktree_path") || return 1
+  [ "${#path_sha1}" -eq 40 ] || return 1
+  case "$path_sha1" in
+    *[!0-9a-f]*) return 1 ;;
+  esac
+
+  marker_dir="$SOURCE_COMMON/codex-harness-worktrees"
+  MARKER_PATH="$marker_dir/$path_sha1.json"
+  if [ -e "$marker_dir" ] && { [ ! -d "$marker_dir" ] || [ -L "$marker_dir" ]; }; then
+    return 1
+  fi
+  umask 077
+  mkdir -p "$marker_dir" || return 1
+  chmod 700 "$marker_dir" || return 1
+
+  if [ -e "$MARKER_PATH" ] || [ -L "$MARKER_PATH" ]; then
+    [ -f "$MARKER_PATH" ] && [ ! -L "$MARKER_PATH" ] && \
+      jq -e --arg path "$worktree_path" --arg branch "$branch" '
+        type == "object"
+        and .path == $path
+        and .branch == $branch
+        and (keys | sort) == ["branch", "path"]
+      ' "$MARKER_PATH" >/dev/null 2>&1
+    return
+  fi
+
+  MARKER_TMP=$(mktemp "$marker_dir/.${path_sha1}.XXXXXX") || return 1
+  jq -n --arg path "$worktree_path" --arg branch "$branch" \
+    '{path: $path, branch: $branch}' >"$MARKER_TMP" || return 1
+  chmod 600 "$MARKER_TMP" || return 1
+  ln "$MARKER_TMP" "$MARKER_PATH" || return 1
+  rm "$MARKER_TMP" || return 1
+  MARKER_TMP=''
+}
+
+cleanup_create() {
+  local status=$?
+  local candidate_raw=''
+  local candidate_path=''
+  local candidate_top_raw=''
+  local candidate_top=''
+  local candidate_git_raw=''
+  local candidate_git=''
+  local candidate_common_raw=''
+  local candidate_common=''
+  local candidate_branch=''
+  local candidate_valid=0
+
+  trap - EXIT HUP INT TERM
+  set +e
+  if [ -n "$MARKER_TMP" ]; then
+    rm -f "$MARKER_TMP"
+    MARKER_TMP=''
+  fi
+
+  if [ "$ROLLBACK_ARMED" -eq 1 ] && [ "$PUBLISHED" -eq 0 ]; then
+    candidate_path=$CREATED_PATH
+    if [ -z "$candidate_path" ]; then
+      candidate_raw=$("$GWQ" get "$NAME" 2>/dev/null)
+      if [ -z "$candidate_raw" ]; then
+        candidate_raw=$(git --git-dir="$SOURCE_COMMON" worktree list --porcelain 2>/dev/null | \
+          awk -v ref="refs/heads/$NAME" '
+            $1 == "worktree" { path = substr($0, 10) }
+            $1 == "branch" && $2 == ref { print path; exit }
+          ')
+      fi
+      if [ -n "$candidate_raw" ]; then
+        candidate_path=$(canonical_dir "$candidate_raw" 2>/dev/null)
+      fi
+    fi
+
+    if [ -n "$candidate_path" ] && [ -d "$candidate_path" ]; then
+      candidate_top_raw=$(git -C "$candidate_path" rev-parse --show-toplevel 2>/dev/null)
+      candidate_top=$(canonical_dir "$candidate_top_raw" 2>/dev/null)
+      candidate_git_raw=$(git -C "$candidate_path" rev-parse --git-dir 2>/dev/null)
+      candidate_git=$(resolve_git_dir "$candidate_path" "$candidate_git_raw" 2>/dev/null)
+      candidate_common_raw=$(git -C "$candidate_path" rev-parse --git-common-dir 2>/dev/null)
+      candidate_common=$(resolve_git_dir "$candidate_path" "$candidate_common_raw" 2>/dev/null)
+      candidate_branch=$(git -C "$candidate_path" symbolic-ref --quiet --short HEAD 2>/dev/null)
+      if [ "$candidate_top" = "$candidate_path" ] && \
+        [ "$candidate_common" = "$SOURCE_COMMON" ] && \
+        [ "$candidate_branch" = "$NAME" ]; then
+        case "$candidate_git" in
+          "$SOURCE_COMMON"/worktrees/*) candidate_valid=1 ;;
+        esac
+      fi
+    fi
+
+    if [ "$CANCELLED" -eq 1 ] && [ "$candidate_valid" -eq 1 ] && \
+      install_marker "$candidate_path" "$NAME"; then
+      # The caller accepts one unique non-empty path line, so a duplicate write
+      # from a signal racing the normal printf remains unambiguous.
+      printf '%s\n' "$candidate_path"
+      PUBLISHED=1
+      ROLLBACK_ARMED=0
+    else
+      if [ "$candidate_valid" -eq 1 ]; then
+        if [ -n "$MARKER_PATH" ] && [ -f "$MARKER_PATH" ] && [ ! -L "$MARKER_PATH" ] && \
+          jq -e --arg path "$candidate_path" --arg branch "$NAME" '
+            type == "object" and .path == $path and .branch == $branch
+          ' "$MARKER_PATH" >/dev/null 2>&1; then
+          rm -f "$MARKER_PATH"
+        fi
+        git --git-dir="$SOURCE_COMMON" worktree remove --force "$candidate_path" >&2
+      fi
+
+      if [ "$BRANCH_OWNED" -eq 1 ] && \
+        ! git --git-dir="$SOURCE_COMMON" worktree list --porcelain 2>/dev/null | \
+          grep -Fqx "branch refs/heads/$NAME"; then
+        # Delete only the unchanged ref this invocation atomically reserved.
+        git -C "$SOURCE_TOP" update-ref -d "refs/heads/$NAME" "$SOURCE_HEAD"
+      fi
+    fi
+  fi
+
+  if [ "$CREATE_LOCK_HELD" -eq 1 ]; then
+    rmdir "$CREATE_LOCK"
+  fi
+  exit "$status"
+}
+
+handle_cancel() {
+  CANCELLED=1
+  exit 130
+}
+
+trap cleanup_create EXIT
+trap handle_cancel HUP INT TERM
+
+if ! git -C "$SOURCE_TOP" update-ref "refs/heads/$NAME" "$SOURCE_HEAD" ''; then
+  fail "branch already exists or is invalid: $NAME"
+fi
+BRANCH_OWNED=1
+ROLLBACK_ARMED=1
+"$GWQ" add "$NAME" >&2 || fail "gwq could not create worktree for branch: $NAME"
 if ! CREATED_PATH_RAW=$("$GWQ" get "$NAME" 2>/dev/null); then
   fail "gwq created the worktree but its path could not be resolved: $NAME"
 fi
@@ -105,39 +276,14 @@ fi
 [ "$BRANCH" = "$NAME" ] \
   || fail "created worktree branch mismatch (expected '$NAME', got '$BRANCH')"
 
-PATH_SHA1=$(sha1_text "$CREATED_PATH") \
-  || fail 'no SHA-1 implementation is available (shasum, sha1sum, or openssl)'
-[ "${#PATH_SHA1}" -eq 40 ] || fail 'failed to compute the canonical path SHA-1'
-case "$PATH_SHA1" in
-  *[!0-9a-f]*) fail 'failed to compute the canonical path SHA-1' ;;
-esac
+install_marker "$CREATED_PATH" "$BRANCH" \
+  || fail "could not atomically install a safe-removal marker for: $CREATED_PATH"
 
-MARKER_DIR="$COMMON_DIR/codex-harness-worktrees"
-MARKER_PATH="$MARKER_DIR/$PATH_SHA1.json"
-if [ -e "$MARKER_DIR" ] && { [ ! -d "$MARKER_DIR" ] || [ -L "$MARKER_DIR" ]; }; then
-  fail "marker location is not a safe directory: $MARKER_DIR"
-fi
-umask 077
-mkdir -p "$MARKER_DIR" || fail "could not create marker directory: $MARKER_DIR"
-chmod 700 "$MARKER_DIR" || fail "could not secure marker directory: $MARKER_DIR"
-if [ -e "$MARKER_PATH" ] || [ -L "$MARKER_PATH" ]; then
-  fail "refusing to overwrite an existing worktree marker: $MARKER_PATH"
-fi
-
-MARKER_TMP=$(mktemp "$MARKER_DIR/.${PATH_SHA1}.XXXXXX") \
-  || fail 'could not create a temporary worktree marker'
-cleanup_marker_tmp() {
-  rm -f "$MARKER_TMP"
-}
-trap cleanup_marker_tmp EXIT
-if ! jq -n --arg path "$CREATED_PATH" --arg branch "$BRANCH" \
-  '{path: $path, branch: $branch}' >"$MARKER_TMP"; then
-  fail 'could not serialize the worktree marker'
-fi
-chmod 600 "$MARKER_TMP" || fail 'could not secure the worktree marker'
-ln "$MARKER_TMP" "$MARKER_PATH" \
-  || fail "could not atomically install marker without overwriting: $MARKER_PATH"
-rm "$MARKER_TMP" || fail "could not remove temporary marker: $MARKER_TMP"
-trap - EXIT
-
+# stdout is the publication record consumed by the TypeScript caller. A signal
+# before this write publishes the same marker/path from cleanup_create.
 printf '%s\n' "$CREATED_PATH"
+PUBLISHED=1
+ROLLBACK_ARMED=0
+rmdir "$CREATE_LOCK" || fail "could not release worktree create lock: $CREATE_LOCK"
+CREATE_LOCK_HELD=0
+trap - EXIT HUP INT TERM

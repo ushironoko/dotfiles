@@ -183,6 +183,7 @@ const spawnAgent = async (
   task: string,
   options: SpawnAgentOptions,
 ): Promise<SpawnResult> => {
+  if (isAborted(options.signal)) throw new Error("Subagent was aborted");
   const args = ["--mode", "json", "-p", "--no-session"];
   if (agent.model !== undefined) args.push("--model", agent.model);
   if (agent.tools !== undefined && agent.tools.length > 0) {
@@ -199,6 +200,7 @@ const spawnAgent = async (
       promptDirectory = promptFile.directory;
       args.push("--append-system-prompt", promptFile.filePath);
     }
+    if (isAborted(options.signal)) throw new Error("Subagent was aborted");
     args.push(`Task: ${task}`);
 
     const spawnFn = options.spawnFn ?? defaultSpawn;
@@ -320,7 +322,16 @@ const spawnAgent = async (
               "Failed to terminate subagent with SIGKILL.",
             );
             settle({ exitCode: null, signal: "SIGKILL" });
+            return;
           }
+          // A broken child-process adapter may never emit close even after the
+          // process group is gone. Bound abort draining so session shutdown and
+          // tree navigation cannot hang forever.
+          const settleTimer = setTimeout(
+            () => settle({ exitCode: null, signal: "SIGKILL" }),
+            100,
+          );
+          unrefTimer(settleTimer);
         };
 
         abortHandler = () => {

@@ -1,9 +1,9 @@
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import type { HarnessConfig } from "../../config";
 import { replacePrevious } from "../../lib/placeholder";
+import type { ChildRunsIntegration } from "../child-runs/index";
 import type { ChildObservation } from "../child-runs/model";
 import { renderChildRunsResult } from "../child-runs/presentation";
-import { ChildRunRegistry } from "../child-runs/registry";
 import { findAgent, loadAgents } from "./loader";
 import { MAX_CHAIN_DEPTH, MAX_PARALLEL_TASKS } from "./limits";
 import { SubagentParameters } from "./parameters.generated";
@@ -30,11 +30,6 @@ interface SubagentParams {
   cwd?: string;
 }
 
-interface ChildRunsIntegration {
-  registry: ChildRunRegistry;
-  ensureVisible(ctx: CtxLike): void;
-}
-
 interface SetupSubagentOptions {
   spawnFn?: SpawnFunction;
   termGraceMs?: number;
@@ -44,6 +39,16 @@ interface SetupSubagentOptions {
 interface SubagentDetails {
   mode: "single" | "parallel" | "chain";
   results: SpawnResult[];
+}
+
+interface BackgroundAcceptanceDetails {
+  mode: "single" | "parallel" | "chain";
+  background: {
+    status: "accepted";
+    invocationId: string;
+    source: "subagent";
+  };
+  childRuns?: unknown;
 }
 
 interface Semaphore {
@@ -229,7 +234,7 @@ const setupSubagent = (
     name: "subagent",
     label: "Subagent",
     description:
-      "Delegate work to a configured agent in single, parallel, or chain mode.",
+      "Start configured agents in single, parallel, or chain mode. Returns an invocation ID immediately; completion is delivered to the parent automatically.",
     parameters: SubagentParameters,
     async execute(
       toolCallId: string,
@@ -262,9 +267,7 @@ const setupSubagent = (
           `Too many parallel tasks (${params.tasks.length}). Max is ${MAX_PARALLEL_TASKS}.`,
         );
       }
-      if (params.tasks !== undefined) {
-        for (const task of params.tasks) findAgent(agents, task.agent);
-      }
+      if (isAborted(signal)) throw new Error("Subagent was aborted");
 
       const defaultCwd = ctx.cwd ?? process.cwd();
       const declaredItems: TaskItem[] =
@@ -275,8 +278,25 @@ const setupSubagent = (
             : params.agent !== undefined && params.task !== undefined
               ? [{ agent: params.agent, task: params.task, cwd: params.cwd }]
               : [];
+      // Resolve every agent before registering or scheduling any background
+      // work. Single/chain used to defer this lookup until execution, which
+      // would turn an input error into a late completion failure.
+      for (const item of declaredItems) findAgent(agents, item.agent);
+
       const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
       const childRuns = options.childRuns;
+      const background = childRuns?.background;
+      if (
+        background !== undefined &&
+        (ctx.mode === "print" || ctx.mode === "json")
+      ) {
+        throw new Error(
+          "Background subagent requires persistent TUI or RPC mode.",
+        );
+      }
+      background?.assertCanAccept();
+      if (isAborted(signal)) throw new Error("Subagent was aborted");
+
       const started = childRuns?.registry.beginInvocation({
         toolCallId,
         source: "subagent",
@@ -294,7 +314,7 @@ const setupSubagent = (
 
       let lastUpdateText = `Subagent ${mode} started`;
       const emitUpdate =
-        typeof onUpdate === "function"
+        background === undefined && typeof onUpdate === "function"
           ? (text: string) => {
               lastUpdateText = text;
               const details =
@@ -351,11 +371,15 @@ const setupSubagent = (
       const runTask = async (
         item: TaskItem,
         runId: string | undefined,
-        taskSignal: AbortSignal | undefined = signal,
+        taskSignal: AbortSignal | undefined,
+        invocationSignal: AbortSignal | undefined,
       ): Promise<SpawnResult> => {
         let release: (() => void) | undefined;
         try {
-          release = await semaphore.acquire(taskSignal);
+          release =
+            background === undefined
+              ? await semaphore.acquire(taskSignal)
+              : await background.acquireChildSlot(taskSignal);
           if (isAborted(taskSignal)) {
             throw new Error("Subagent was aborted");
           }
@@ -376,7 +400,7 @@ const setupSubagent = (
         } catch (error) {
           if (runId !== undefined && childRuns !== undefined) {
             const status = childRuns.registry.getRunStatus(runId);
-            const parentAborted = isAborted(signal);
+            const parentAborted = isAborted(invocationSignal);
             const taskAborted = isAborted(taskSignal);
             let terminalStatus: "skipped" | "aborted" | "failed" = "failed";
             if (taskAborted) {
@@ -402,125 +426,193 @@ const setupSubagent = (
         }
       };
 
-      let incompleteReason: "dependency-failed" | "fail-fast" =
-        "dependency-failed";
-      try {
-        if (params.chain !== undefined && params.chain.length > 0) {
-          const results: SpawnResult[] = [];
-          let previous = "";
-          for (const [index, step] of params.chain.entries()) {
+      const runInvocation = async (
+        executionSignal: AbortSignal | undefined,
+      ) => {
+        let incompleteReason: "dependency-failed" | "fail-fast" =
+          "dependency-failed";
+        try {
+          if (params.chain !== undefined && params.chain.length > 0) {
+            const results: SpawnResult[] = [];
+            let previous = "";
+            for (const [index, step] of params.chain.entries()) {
+              const result = await runTask(
+                { ...step, task: replacePrevious(step.task, previous) },
+                runIds[index],
+                executionSignal,
+                executionSignal,
+              );
+              assertSuccessful(result);
+              results.push(result);
+              previous = result.output;
+            }
+            return {
+              content: [
+                { type: "text", text: capText(previous || "(no output)") },
+              ],
+              details: { mode: "chain", results } satisfies SubagentDetails,
+            };
+          }
+
+          if (params.tasks !== undefined && params.tasks.length > 0) {
+            const controller = createAbortController();
+            const forwardAbort = () => controller.abort();
+            if (isAborted(executionSignal)) controller.abort();
+            else if (
+              executionSignal !== undefined &&
+              "addEventListener" in executionSignal &&
+              typeof executionSignal.addEventListener === "function"
+            ) {
+              executionSignal.addEventListener("abort", forwardAbort, {
+                once: true,
+              });
+            }
+
+            let results: SpawnResult[];
+            try {
+              results = await mapWithConcurrencyLimit(
+                params.tasks,
+                MAX_CONCURRENCY,
+                async (task, index) => {
+                  const result = await runTask(
+                    task,
+                    runIds[index],
+                    controller.signal,
+                    executionSignal,
+                  );
+                  assertSuccessful(result);
+                  return result;
+                },
+                () => {
+                  incompleteReason = "fail-fast";
+                  controller.abort();
+                },
+              );
+            } finally {
+              if (
+                executionSignal !== undefined &&
+                "removeEventListener" in executionSignal &&
+                typeof executionSignal.removeEventListener === "function"
+              ) {
+                executionSignal.removeEventListener("abort", forwardAbort);
+              }
+            }
+
+            const summaries = results.map(
+              (result) =>
+                `### [${result.agent}] completed\n\n${getResultOutput(result)}`,
+            );
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: capText(
+                    `Parallel: ${results.length}/${results.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`,
+                  ),
+                },
+              ],
+              details: {
+                mode: "parallel",
+                results,
+              } satisfies SubagentDetails,
+            };
+          }
+
+          if (params.agent !== undefined && params.task !== undefined) {
             const result = await runTask(
-              { ...step, task: replacePrevious(step.task, previous) },
-              runIds[index],
+              { agent: params.agent, task: params.task, cwd: params.cwd },
+              runIds[0],
+              executionSignal,
+              executionSignal,
             );
             assertSuccessful(result);
-            results.push(result);
-            previous = result.output;
-          }
-          return {
-            content: [
-              { type: "text", text: capText(previous || "(no output)") },
-            ],
-            details: { mode: "chain", results } satisfies SubagentDetails,
-          };
-        }
-
-        if (params.tasks !== undefined && params.tasks.length > 0) {
-          const controller = createAbortController();
-          const forwardAbort = () => controller.abort();
-          if (isAborted(signal)) controller.abort();
-          else if (
-            signal !== undefined &&
-            "addEventListener" in signal &&
-            typeof signal.addEventListener === "function"
-          ) {
-            signal.addEventListener("abort", forwardAbort, { once: true });
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: capText(result.output || "(no output)"),
+                },
+              ],
+              details: {
+                mode: "single",
+                results: [result],
+              } satisfies SubagentDetails,
+            };
           }
 
-          let results: SpawnResult[];
-          try {
-            results = await mapWithConcurrencyLimit(
-              params.tasks,
-              MAX_CONCURRENCY,
-              async (task, index) => {
-                const result = await runTask(
-                  task,
-                  runIds[index],
-                  controller.signal,
-                );
-                assertSuccessful(result);
-                return result;
+          throw new Error("Invalid subagent parameters.");
+        } finally {
+          if (invocationId !== undefined && childRuns !== undefined) {
+            const parentAborted = isAborted(executionSignal);
+            childRuns.registry.terminalizeInvocation(
+              invocationId,
+              {
+                status: parentAborted ? "aborted" : "skipped",
+                reason: parentAborted ? "parent-abort" : incompleteReason,
               },
-              () => {
-                incompleteReason = "fail-fast";
-                controller.abort();
+              {
+                status: "aborted",
+                reason: parentAborted ? "parent-abort" : "fail-fast",
               },
             );
-          } finally {
-            if (
-              signal !== undefined &&
-              "removeEventListener" in signal &&
-              typeof signal.removeEventListener === "function"
-            ) {
-              signal.removeEventListener("abort", forwardAbort);
-            }
+            emitUpdate?.(lastUpdateText);
           }
+        }
+      };
 
-          const summaries = results.map(
-            (result) =>
-              `### [${result.agent}] completed\n\n${getResultOutput(result)}`,
-          );
-          return {
-            content: [
-              {
-                type: "text",
+      if (
+        background !== undefined &&
+        childRuns !== undefined &&
+        invocationId !== undefined
+      ) {
+        try {
+          background.schedule({
+            invocationId,
+            toolCallId,
+            source: "subagent",
+            async run(backgroundSignal) {
+              const result = await runInvocation(backgroundSignal);
+              return {
                 text: capText(
-                  `Parallel: ${results.length}/${results.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`,
+                  result.content
+                    .map((item) => item.text)
+                    .filter((text): text is string => typeof text === "string")
+                    .join("\n") || "(no output)",
                 ),
-              },
-            ],
-            details: { mode: "parallel", results } satisfies SubagentDetails,
-          };
-        }
-
-        if (params.agent !== undefined && params.task !== undefined) {
-          const result = await runTask(
-            { agent: params.agent, task: params.task, cwd: params.cwd },
-            runIds[0],
-          );
-          assertSuccessful(result);
-          return {
-            content: [
-              {
-                type: "text",
-                text: capText(result.output || "(no output)"),
-              },
-            ],
-            details: {
-              mode: "single",
-              results: [result],
-            } satisfies SubagentDetails,
-          };
-        }
-
-        throw new Error("Invalid subagent parameters.");
-      } finally {
-        if (invocationId !== undefined && childRuns !== undefined) {
-          const parentAborted = isAborted(signal);
+              };
+            },
+          });
+        } catch (error) {
           childRuns.registry.terminalizeInvocation(
             invocationId,
-            {
-              status: parentAborted ? "aborted" : "skipped",
-              reason: parentAborted ? "parent-abort" : incompleteReason,
-            },
-            {
-              status: "aborted",
-              reason: parentAborted ? "parent-abort" : "fail-fast",
-            },
+            { status: "failed", reason: "setup-error" },
+            { status: "failed", reason: "setup-error" },
           );
-          emitUpdate?.(lastUpdateText);
+          throw error;
         }
+        const summary = childRuns.registry.getUpdateDetails(invocationId);
+        return {
+          content: [
+            {
+              type: "text",
+              text: capText(
+                `Background subagent ${mode} accepted.\nInvocation ID: ${invocationId}\nUse /subagents to inspect progress; completion will be delivered to the parent automatically.`,
+              ),
+            },
+          ],
+          details: {
+            mode,
+            background: {
+              status: "accepted",
+              invocationId,
+              source: "subagent",
+            },
+            ...(summary === undefined ? {} : { childRuns: summary.childRuns }),
+          } satisfies BackgroundAcceptanceDetails,
+        };
       }
+
+      return runInvocation(signal);
     },
     renderResult: renderChildRunsResult,
   };
