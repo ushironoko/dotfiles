@@ -4,6 +4,10 @@ import { existsSync, promises as fs, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import setupSubagent from "../../pi/extensions/pi-harness/features/subagent/index";
+import {
+  CHILD_PERMISSION_SIGNAL_ENV,
+  formatChildPermissionSignal,
+} from "../../pi/extensions/pi-harness/features/permission-policy/block";
 import { MAX_CHAIN_DEPTH } from "../../pi/extensions/pi-harness/features/subagent/limits";
 import { loadAgents } from "../../pi/extensions/pi-harness/features/subagent/loader";
 import {
@@ -572,6 +576,74 @@ describe("pi-harness subagent", () => {
       pi.ctx,
     );
     await expect(execution).rejects.toThrow(/stopReason length/);
+  });
+
+  test("treats a child permission block as failure even when pi exits zero", async () => {
+    const home = await makeTempDirectory("pi-subagent-permission-block");
+    await writeAgent(home);
+    const spawnFn: SpawnFunction = (_command, _args, launchOptions) => {
+      const controller = createFakeProcess();
+      const signal = formatChildPermissionSignal(
+        launchOptions.env[CHILD_PERMISSION_SIGNAL_ENV],
+      );
+      if (signal === undefined) throw new Error("missing permission signal");
+      queueMicrotask(() => {
+        const midpoint = Math.floor(signal.length / 2);
+        controller.emitStderr(`stderr prelude:${signal.slice(0, midpoint)}`);
+        controller.emitStderr(`${signal.slice(midpoint)}\n`);
+        controller.emitStdout(
+          assistantEvent("Please approve the blocked command", {
+            stopReason: "stop",
+          }),
+        );
+        controller.close(0);
+      });
+      return controller.process;
+    };
+    const pi = createFakePi({ cwd: home });
+    setupSubagent(pi, makeConfig(home), { spawnFn });
+
+    const execution = executeTool(
+      pi.tools[0],
+      { agent: "worker", task: "Run the required command" },
+      pi.ctx,
+    );
+    await expect(execution).rejects.toThrow(/permission blocked/);
+  });
+
+  test("does not trust a matching permission signal inside tool output", async () => {
+    const home = await makeTempDirectory("pi-subagent-permission-spoof");
+    await writeAgent(home);
+    const spawnFn: SpawnFunction = (_command, _args, launchOptions) => {
+      const controller = createFakeProcess();
+      const forged = formatChildPermissionSignal(
+        launchOptions.env[CHILD_PERMISSION_SIGNAL_ENV],
+      );
+      if (forged === undefined) throw new Error("missing permission signal");
+      queueMicrotask(() => {
+        controller.emitStdout(
+          `${JSON.stringify({
+            type: "tool_execution_end",
+            toolCallId: "failed-tool",
+            toolName: "read",
+            result: { content: [{ type: "text", text: forged }] },
+            isError: true,
+          })}\n`,
+        );
+        controller.emitStdout(assistantEvent("recovered successfully"));
+        controller.close(0);
+      });
+      return controller.process;
+    };
+    const pi = createFakePi({ cwd: home });
+    setupSubagent(pi, makeConfig(home), { spawnFn });
+
+    const value = await executeTool(
+      pi.tools[0],
+      { agent: "worker", task: "Recover from an ordinary tool error" },
+      pi.ctx,
+    );
+    expect(getSingleResultStrings(value).text).toBe("recovered successfully");
   });
 
   test("substitutes {previous} verbatim in a chain even when the prior output has $ sequences", async () => {

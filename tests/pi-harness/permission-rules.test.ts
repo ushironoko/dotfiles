@@ -245,6 +245,32 @@ describe("explicit allow matching", () => {
     ),
   );
 
+  test("allows the documented printf-to-codex-stage prompt pipeline", () => {
+    const wrapper = "~/.claude/hooks/lib/codex-stage.sh prompt --dir /tmp";
+    expect(
+      evaluateCommand(`printf '%s' 'review this' | ${wrapper}`, productionRules)
+        .verdict,
+    ).toBe("allow");
+    expect(
+      evaluateCommand(
+        `printf '%s' "$(bit relay sync)" | ${wrapper}`,
+        productionRules,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      evaluateCommand(
+        `printf '%s' "$(cat ~/.ssh/id_ed25519)" | ${wrapper}`,
+        productionRules,
+      ).verdict,
+    ).toBe("default-continue");
+    expect(
+      evaluateCommand(
+        "printf '%s' 'review this' | /tmp/codex-stage.sh prompt",
+        productionRules,
+      ).verdict,
+    ).toBe("default-continue");
+  });
+
   test.each([
     "bun\u00a0evil",
     "bun\u000cevil",

@@ -1,10 +1,14 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { PiLike } from "../../lib/pi-like";
 import {
   DEFAULT_PERMISSION_JUDGE_CONFIG,
   type HarnessConfig,
 } from "../../config";
+import {
+  CHILD_PERMISSION_SIGNAL_ENV,
+  formatChildPermissionSignal,
+} from "./block";
 import { createPermissionJudge, type JudgeOutcome } from "./judge";
 import { evaluateCommand, loadRules } from "./rules";
 
@@ -30,7 +34,16 @@ const JUDGE_WARNING_KINDS: ReadonlySet<JudgeOutcome["kind"]> = new Set([
   "unavailable",
 ]);
 
-const setupPermissionPolicy = (pi: PiLike, config: HarnessConfig): void => {
+interface SetupPermissionPolicyOptions {
+  permissionSignalToken?: string;
+  writePermissionSignal?: (text: string) => void;
+}
+
+const setupPermissionPolicy = (
+  pi: PiLike,
+  config: HarnessConfig,
+  options: SetupPermissionPolicyOptions = {},
+): void => {
   const rules = loadRules(readPermissionRules());
   const judgeConfig = config.permissionJudge;
   const judge =
@@ -38,6 +51,28 @@ const setupPermissionPolicy = (pi: PiLike, config: HarnessConfig): void => {
       ? createPermissionJudge(judgeConfig)
       : undefined;
   let judgeWarningShown = false;
+  const permissionSignalToken =
+    options.permissionSignalToken ?? process.env[CHILD_PERMISSION_SIGNAL_ENV];
+  if (config.isChild && options.permissionSignalToken === undefined) {
+    // Keep the per-spawn token in this closure; child tools and grandchildren
+    // must not inherit the diagnostic authenticator from process.env.
+    delete process.env[CHILD_PERMISSION_SIGNAL_ENV];
+  }
+  const writePermissionSignal =
+    options.writePermissionSignal ?? ((text: string) => writeSync(2, text));
+  const blocked = (reason: string): { block: true; reason: string } => {
+    if (config.isChild) {
+      const signal = formatChildPermissionSignal(permissionSignalToken);
+      if (signal !== undefined) {
+        try {
+          writePermissionSignal(`${signal}\n`);
+        } catch {
+          // A diagnostic side-channel failure must never unblock the command.
+        }
+      }
+    }
+    return { block: true, reason };
+  };
 
   pi.on("session_shutdown", () => {
     judge?.clear();
@@ -52,12 +87,12 @@ const setupPermissionPolicy = (pi: PiLike, config: HarnessConfig): void => {
       // A bash call whose command is missing or not a string is malformed;
       // the safety floor blocks it instead of letting it through (fail-closed).
       if (typeof command !== "string") {
-        return { block: true, reason: MALFORMED_REASON };
+        return blocked(MALFORMED_REASON);
       }
 
       const result = evaluateCommand(command, rules);
       if (result.verdict === "deny") {
-        return { block: true, reason: result.reason };
+        return blocked(result.reason);
       }
       const signal = (
         ctx as typeof ctx & {
@@ -70,7 +105,7 @@ const setupPermissionPolicy = (pi: PiLike, config: HarnessConfig): void => {
         title: string,
         reason: string,
       ): Promise<{ block: true; reason: string } | undefined> => {
-        if (!ctx.hasUI || isAborted()) return { block: true, reason };
+        if (!ctx.hasUI || isAborted()) return blocked(reason);
         const confirmed = await ctx.ui.confirm(
           title,
           `${reason}\n\n${command}`,
@@ -81,7 +116,7 @@ const setupPermissionPolicy = (pi: PiLike, config: HarnessConfig): void => {
               DEFAULT_PERMISSION_JUDGE_CONFIG.confirmTimeoutMs,
           },
         );
-        return confirmed && !isAborted() ? undefined : { block: true, reason };
+        return confirmed && !isAborted() ? undefined : blocked(reason);
       };
 
       if (result.verdict === "ask") {
@@ -98,7 +133,7 @@ const setupPermissionPolicy = (pi: PiLike, config: HarnessConfig): void => {
         return undefined;
       }
       if (outcome.kind === "parent-aborted") {
-        return { block: true, reason: outcome.reason };
+        return blocked(outcome.reason);
       }
       if (outcome.kind === "ask" || outcome.kind === "invalid-response") {
         // A live backend response ends the previous unavailable period even
@@ -119,10 +154,9 @@ const setupPermissionPolicy = (pi: PiLike, config: HarnessConfig): void => {
       return confirm("ローカル判定器が自動承認しませんでした", outcome.reason);
     } catch (error) {
       // Any evaluation failure blocks rather than failing open.
-      return {
-        block: true,
-        reason: `permission-policy: 評価中にエラーが発生したためブロックしました (${String(error)})`,
-      };
+      return blocked(
+        `permission-policy: 評価中にエラーが発生したためブロックしました (${String(error)})`,
+      );
     }
   });
 };

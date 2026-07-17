@@ -121,7 +121,7 @@ describe("child JSON protocol normalization", () => {
         args: { command: "rm SECRET" },
       }),
     );
-    parser.processLine(
+    const ordinaryFailure = parser.processLine(
       JSON.stringify({
         type: "tool_execution_end",
         toolCallId: "provider-secret-id",
@@ -131,6 +131,7 @@ describe("child JSON protocol normalization", () => {
       }),
     );
 
+    expect(ordinaryFailure).toBeUndefined();
     expect(observations).toEqual([
       { type: "tool_started", localId: 1, name: "bash", at: 9 },
       {
