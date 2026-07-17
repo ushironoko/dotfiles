@@ -4,7 +4,8 @@
  * must not import repo code outside its own directory. Allowed runtime imports:
  *   (a) relative paths that stay inside that extension's directory
  *   (b) node: builtins
- *   (c) @earendil-works/* — type-only imports only (erased at runtime)
+ *   (c) @earendil-works/* — type-only imports, plus exact documented
+ *       runtime roots explicitly allowlisted per extension
  *
  * Detection is syntax-aware via Bun.Transpiler (static + dynamic import,
  * require, require.resolve — literal specifiers), so strings/comments never
@@ -27,6 +28,13 @@ export const EXTENSION_ROOTS = [
   EXTENSION_ROOT,
   CODEX_WEB_EXTENSION_ROOT,
 ] as const;
+
+// pi's extension loader aliases this documented root import to the copy bundled
+// with the running pi process. Keep this allowlist exact: subpaths, lookalikes,
+// other pi packages, and codex-web runtime imports remain denied.
+const RUNTIME_IMPORTS_BY_ROOT = new Map<string, ReadonlySet<string>>([
+  [EXTENSION_ROOT, new Set(["@earendil-works/pi-tui"])],
+]);
 
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 
@@ -199,10 +207,11 @@ export const collectViolations = (
   for (const specifier of specifiers) {
     if (specifier.startsWith("node:")) continue;
     if (specifier.startsWith("@earendil-works/")) {
-      // Only type-only @earendil-works imports are allowed; the transpiler
-      // erases those, so anything reaching here is a runtime import.
+      // Type-only imports are erased before this scan. Runtime imports are
+      // limited to exact roots virtualized by pi for this extension.
+      if (RUNTIME_IMPORTS_BY_ROOT.get(root)?.has(specifier) === true) continue;
       violations.push(
-        `${relFile}: runtime import of ${specifier} (type-only imports allowed)`,
+        `${relFile}: runtime import of ${specifier} (type-only imports and explicitly bundled roots only)`,
       );
       continue;
     }

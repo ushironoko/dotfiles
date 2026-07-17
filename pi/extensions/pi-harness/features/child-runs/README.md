@@ -20,6 +20,12 @@ resident full-width TUI browser between the chat editor and statusline.
   retain native Down handling and use `/subagents` or `Ctrl+Alt+S` for explicit
   focus. Remapped Down is honored when the editor's runtime keybindings manager
   is detectable; otherwise default terminal sequences are used.
+- pi currently has a public focus setter but no public focus getter. The one
+  private getter seam is capability-isolated. If a pi update removes or changes
+  it, the resident list becomes passive, Down is left entirely to the editor,
+  and `/subagents` / `Ctrl+Alt+S` opens a fresh public `ui.custom` overlay. The
+  degradation warns once and never disables child execution or other harness
+  features.
 - `Esc` returns focus to the main editor while leaving the browser visible.
 - `q` hides the browser. A new child run, `/subagents`, or the shortcut shows
   it again.
@@ -78,5 +84,7 @@ raw source data.
 6. Press Escape and confirm focus returns to the resident list, then Escape
    again and confirm normal editor input continues.
 7. Press `q` in the list, then run `/subagents` and confirm it reappears.
-8. Resume the parent session and confirm completed transcripts open from the
+8. With the private focus capability disabled in a test runtime, confirm Down
+   remains native and `/subagents` opens/closes the public overlay fallback.
+9. Resume the parent session and confirm completed transcripts open from the
    beginning and remain scrollable within the documented retention bounds.

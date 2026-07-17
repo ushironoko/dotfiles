@@ -16,6 +16,7 @@
       "devDependencies": {
         "@earendil-works/pi-ai": "0.80.7",
         "@earendil-works/pi-coding-agent": "0.80.7",
+        "@earendil-works/pi-tui": "0.80.7",
         "@prettier/plugin-oxc": "0.0.4",
         "@tskm/compiler": "0.4.1",
         "@tskm/core": "0.3.0",
