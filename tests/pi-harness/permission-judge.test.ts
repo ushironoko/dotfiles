@@ -15,7 +15,21 @@ import { startMockUpstream, type MockUpstream } from "../test-helpers";
 const upstreams: MockUpstream[] = [];
 const rawUpstreams: { close: () => Promise<void> }[] = [];
 
-const start = async (
+const localStatusResponse = (): Response =>
+  Response.json({ cloud: { disabled: true, source: "test" } });
+
+const localTagsResponse = (): Response =>
+  Response.json({
+    models: [
+      {
+        name: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+        model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+        digest: DEFAULT_PERMISSION_JUDGE_CONFIG.expectedDigest,
+      },
+    ],
+  });
+
+const startDirect = async (
   handler: Parameters<typeof startMockUpstream>[0],
 ): Promise<MockUpstream> => {
   const upstream = await startMockUpstream(handler);
@@ -23,12 +37,57 @@ const start = async (
   return upstream;
 };
 
+const start = async (
+  chatHandler: Parameters<typeof startMockUpstream>[0],
+): Promise<MockUpstream> =>
+  startDirect((request, received) => {
+    if (received.path === "/api/version") {
+      return Response.json({ version: "0.test.0" });
+    }
+    if (received.path === "/api/status") return localStatusResponse();
+    if (received.path === "/api/tags") return localTagsResponse();
+    return chatHandler(request, received);
+  });
+
+const chatRequests = (upstream: MockUpstream) =>
+  upstream.received.filter((request) => request.path === "/api/chat");
+
+const rawJsonResponse = (socket: Socket, payload: unknown): void => {
+  const body = JSON.stringify(payload);
+  socket.end(
+    `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+  );
+};
+
 const startRaw = async (
   respond: (socket: Socket) => void,
 ): Promise<{ url: string }> => {
   const server = createServer((socket) => {
     socket.on("error", () => {});
-    socket.once("data", () => respond(socket));
+    socket.once("data", (data) => {
+      const requestLine = Buffer.from(data)
+        .toString("latin1")
+        .split("\r\n", 1)[0];
+      if (requestLine === "GET /api/status HTTP/1.1") {
+        rawJsonResponse(socket, {
+          cloud: { disabled: true, source: "test" },
+        });
+        return;
+      }
+      if (requestLine === "GET /api/tags HTTP/1.1") {
+        rawJsonResponse(socket, {
+          models: [
+            {
+              name: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+              model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+              digest: DEFAULT_PERMISSION_JUDGE_CONFIG.expectedDigest,
+            },
+          ],
+        });
+        return;
+      }
+      respond(socket);
+    });
   });
   await new Promise<void>((resolveListen, reject) => {
     server.once("error", reject);
@@ -64,7 +123,7 @@ afterEach(async () => {
 
 const validResponse = (content = "ALLOW"): Response =>
   Response.json({
-    model: "qwen2.5:1.5b",
+    model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
     message: { role: "assistant", content },
     done: true,
     done_reason: "stop",
@@ -125,14 +184,20 @@ describe("local Ollama permission judge", () => {
         cwd: "/private/project-not-sent",
       }),
     ).toEqual({ kind: "allow", cached: false });
-    expect(upstream.received).toHaveLength(1);
+    expect(upstream.received.map((request) => request.path)).toEqual([
+      "/api/status",
+      "/api/tags",
+      "/api/chat",
+    ]);
+    expect(upstream.received[0]?.body).toBe("");
+    expect(upstream.received[1]?.body).toBe("");
 
-    const request = upstream.received[0];
+    const request = chatRequests(upstream)[0];
     expect(request?.method).toBe("POST");
     expect(request?.path).toBe("/api/chat");
     const body = JSON.parse(request?.body ?? "") as Record<string, unknown>;
     expect(body).toMatchObject({
-      model: "qwen2.5:1.5b",
+      model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
       stream: false,
       think: false,
       keep_alive: "30m",
@@ -149,6 +214,132 @@ describe("local Ollama permission judge", () => {
     expect(request?.body).toContain("git status --short");
     expect(request?.body).not.toContain("/private/project-not-sent");
     expect(request?.body).not.toContain("conversation");
+  });
+
+  test("fails closed before chat when Ollama cloud is not disabled", async () => {
+    const upstream = await startDirect((_request, received) => {
+      if (received.path === "/api/status") {
+        return Response.json({ cloud: { disabled: false, source: "test" } });
+      }
+      if (received.path === "/api/tags") return localTagsResponse();
+      return validResponse();
+    });
+
+    const outcome = await createPermissionJudge(configFor(upstream)).judge(
+      "echo secret-command",
+    );
+    expect(outcome).toEqual({
+      kind: "unavailable",
+      reason: "local Ollama cloud features are not disabled",
+    });
+    expect(upstream.received.map((request) => request.path)).toEqual([
+      "/api/status",
+    ]);
+  });
+
+  test.each([
+    {
+      label: "digest mismatch",
+      tags: {
+        models: [
+          {
+            name: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+            model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+            digest: "a".repeat(64),
+          },
+        ],
+      },
+    },
+    {
+      label: "remote alias",
+      tags: {
+        models: [
+          {
+            name: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+            model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+            digest: DEFAULT_PERMISSION_JUDGE_CONFIG.expectedDigest,
+            remote_host: "https://ollama.example",
+          },
+        ],
+      },
+    },
+    { label: "missing configured model", tags: { models: [] } },
+    { label: "malformed model list", tags: { models: {} } },
+  ])("fails closed before chat for $label", async ({ tags }) => {
+    const upstream = await startDirect((_request, received) => {
+      if (received.path === "/api/status") return localStatusResponse();
+      if (received.path === "/api/tags") return Response.json(tags);
+      return validResponse();
+    });
+
+    const outcome = await createPermissionJudge(configFor(upstream)).judge(
+      "echo secret-command",
+    );
+    expect(outcome.kind).toBe("unavailable");
+    expect(upstream.received.map((request) => request.path)).toEqual([
+      "/api/status",
+      "/api/tags",
+    ]);
+  });
+
+  test.each([
+    {
+      label: "unexpected model",
+      response: {
+        model: "other:latest",
+        message: { role: "assistant", content: "ALLOW" },
+        done: true,
+        done_reason: "stop",
+      },
+    },
+    {
+      label: "remote response metadata",
+      response: {
+        model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+        remote_model: "upstream-model",
+        remote_host: "https://ollama.example",
+        message: { role: "assistant", content: "ALLOW" },
+        done: true,
+        done_reason: "stop",
+      },
+    },
+  ])("rejects $label after a valid preflight", async ({ response }) => {
+    const upstream = await start(() => Response.json(response));
+    const outcome = await createPermissionJudge(configFor(upstream)).judge(
+      "git status",
+    );
+    expect(outcome.kind).toBe("invalid-response");
+  });
+
+  test("does not start chat after preflight exhausts the shared budget", async () => {
+    const upstream = await start(() => validResponse());
+    let clockCalls = 0;
+    const judge = createPermissionJudge(
+      configFor(upstream, { timeoutMs: 25 }),
+      {
+        monotonicNow: () => (clockCalls++ === 0 ? 0 : 25),
+      },
+    );
+
+    expect((await judge.judge("git status")).kind).toBe("timeout");
+    expect(upstream.received.map((request) => request.path)).toEqual([
+      "/api/status",
+      "/api/tags",
+    ]);
+  });
+
+  test("does not accept a chat response after the shared deadline", async () => {
+    const upstream = await start(() => validResponse());
+    const readings = [0, 0, 25];
+    const judge = createPermissionJudge(
+      configFor(upstream, { timeoutMs: 25 }),
+      {
+        monotonicNow: () => readings.shift() ?? 25,
+      },
+    );
+
+    expect((await judge.judge("git status")).kind).toBe("timeout");
+    expect(chatRequests(upstream)).toHaveLength(1);
   });
 
   test("returns ask without auto-approving", async () => {
@@ -228,7 +419,12 @@ describe("local Ollama permission judge", () => {
       },
     },
   ])("escalates $label", async ({ payload }) => {
-    const upstream = await start(() => Response.json(payload));
+    const upstream = await start(() =>
+      Response.json({
+        model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+        ...payload,
+      }),
+    );
     const outcome = await createPermissionJudge(configFor(upstream)).judge(
       "git status",
     );
@@ -245,6 +441,7 @@ describe("local Ollama permission judge", () => {
 
   test("never approves a valid JSON prefix after the response grows oversized", async () => {
     const payload = JSON.stringify({
+      model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
       message: { role: "assistant", content: "ALLOW" },
       done: true,
       done_reason: "stop",
@@ -276,6 +473,7 @@ describe("local Ollama permission judge", () => {
     "rejects malformed HTTP framing: %s",
     async (variant) => {
       const payload = JSON.stringify({
+        model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
         message: { role: "assistant", content: "ALLOW" },
         done: true,
         done_reason: "stop",
@@ -310,10 +508,11 @@ describe("local Ollama permission judge", () => {
       ),
     ).href;
     const script = `
-      import { createPermissionJudge } from ${JSON.stringify(moduleUrl)};
+      import { createPermissionJudge, readLocalOllamaVersion } from ${JSON.stringify(moduleUrl)};
       const config = ${JSON.stringify(configFor(target))};
+      const version = await readLocalOllamaVersion(config);
       const outcome = await createPermissionJudge(config).judge("git status");
-      console.log(JSON.stringify(outcome));
+      console.log(JSON.stringify({ version, outcome }));
     `;
     const child = Bun.spawn([process.execPath, "-e", script], {
       env: {
@@ -333,8 +532,14 @@ describe("local Ollama permission judge", () => {
     ]);
 
     expect(exitCode, stderr).toBe(0);
-    expect(JSON.parse(stdout.trim())).toEqual({ kind: "allow", cached: false });
-    expect(target.received).toHaveLength(1);
+    expect(JSON.parse(stdout.trim())).toEqual({
+      version: "0.test.0",
+      outcome: { kind: "allow", cached: false },
+    });
+    expect(target.received.map((request) => request.path)).toContain(
+      "/api/version",
+    );
+    expect(chatRequests(target)).toHaveLength(1);
     expect(proxy.received).toHaveLength(0);
   });
 
@@ -352,7 +557,7 @@ describe("local Ollama permission judge", () => {
     );
 
     expect(outcome.kind).toBe("unavailable");
-    expect(origin.received).toHaveLength(1);
+    expect(chatRequests(origin)).toHaveLength(1);
     expect(target.received).toHaveLength(0);
   });
 
@@ -369,6 +574,7 @@ describe("local Ollama permission judge", () => {
 
   test("times out while waiting for a delayed response body", async () => {
     const payload = JSON.stringify({
+      model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
       message: { role: "assistant", content: "ALLOW" },
       done: true,
       done_reason: "stop",
@@ -438,7 +644,7 @@ describe("local Ollama permission judge", () => {
       cached: true,
     });
     expect((await judge.judge("git status", { cwd: "/b" })).kind).toBe("allow");
-    expect(upstream.received).toHaveLength(2);
+    expect(chatRequests(upstream)).toHaveLength(2);
   });
 
   test("keeps caches isolated between judge instances", async () => {
@@ -448,7 +654,7 @@ describe("local Ollama permission judge", () => {
 
     expect((await first.judge("git status")).kind).toBe("allow");
     expect((await second.judge("git status")).kind).toBe("allow");
-    expect(upstream.received).toHaveLength(2);
+    expect(chatRequests(upstream)).toHaveLength(2);
   });
 
   test("uses LRU recency and TTL without sharing raw verdict failures", async () => {
@@ -465,11 +671,11 @@ describe("local Ollama permission judge", () => {
     await judge.judge("A"); // refresh A, so B is oldest
     await judge.judge("C");
     await judge.judge("B");
-    expect(upstream.received).toHaveLength(4);
+    expect(chatRequests(upstream)).toHaveLength(4);
 
     now = 101;
     await judge.judge("A");
-    expect(upstream.received).toHaveLength(5);
+    expect(chatRequests(upstream)).toHaveLength(5);
   });
 
   test("opens a short fail-closed circuit after backend failure", async () => {
@@ -478,7 +684,7 @@ describe("local Ollama permission judge", () => {
 
     expect((await judge.judge("git status")).kind).toBe("unavailable");
     expect((await judge.judge("git log -1")).kind).toBe("unavailable");
-    expect(upstream.received).toHaveLength(1);
+    expect(chatRequests(upstream)).toHaveLength(1);
   });
 
   test("does not cache ASK outcomes and clear removes cached approvals", async () => {
@@ -488,15 +694,15 @@ describe("local Ollama permission judge", () => {
 
     await judge.judge("git status");
     await judge.judge("git status");
-    expect(upstream.received).toHaveLength(2);
+    expect(chatRequests(upstream)).toHaveLength(2);
 
     content = "ALLOW";
     await judge.judge("git status");
     await judge.judge("git status");
-    expect(upstream.received).toHaveLength(3);
+    expect(chatRequests(upstream)).toHaveLength(3);
     judge.clear();
     await judge.judge("git status");
-    expect(upstream.received).toHaveLength(4);
+    expect(chatRequests(upstream)).toHaveLength(4);
   });
 
   test("fails closed for explicit configuration errors and cloud models", async () => {

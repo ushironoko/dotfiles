@@ -18,6 +18,7 @@
     "check:pi-imports": "bun scripts/check-pi-imports.ts",
     "check:pi-schemas": "bun scripts/gen-pi-schemas.ts --check",
     "check:pi-version": "bun scripts/check-pi-version.ts",
+    "qualify:pi-permission-judge": "bun scripts/qualify-permission-judge.ts",
     "gen:pi-schemas": "bun scripts/gen-pi-schemas.ts",
     "format": "prettier --write .",
     "lint:fix": "oxlint --fix",

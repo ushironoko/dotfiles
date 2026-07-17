@@ -13,12 +13,31 @@ import { createFakePi } from "./fake-pi";
 const upstreams: MockUpstream[] = [];
 
 const start = async (
-  handler: Parameters<typeof startMockUpstream>[0],
+  chatHandler: Parameters<typeof startMockUpstream>[0],
 ): Promise<MockUpstream> => {
-  const upstream = await startMockUpstream(handler);
+  const upstream = await startMockUpstream((request, received) => {
+    if (received.path === "/api/status") {
+      return Response.json({ cloud: { disabled: true, source: "test" } });
+    }
+    if (received.path === "/api/tags") {
+      return Response.json({
+        models: [
+          {
+            name: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+            model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+            digest: DEFAULT_PERMISSION_JUDGE_CONFIG.expectedDigest,
+          },
+        ],
+      });
+    }
+    return chatHandler(request, received);
+  });
   upstreams.push(upstream);
   return upstream;
 };
+
+const chatRequests = (upstream: MockUpstream) =>
+  upstream.received.filter((request) => request.path === "/api/chat");
 
 afterEach(async () => {
   await Promise.all(upstreams.splice(0).map((upstream) => upstream.close()));
@@ -26,6 +45,7 @@ afterEach(async () => {
 
 const ollamaResponse = (content: string): Response =>
   Response.json({
+    model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
     message: { role: "assistant", content },
     done: true,
     done_reason: "stop",
@@ -92,7 +112,11 @@ describe("permission policy local judge routing", () => {
     expect(
       await pi.emitToolCall(bashCall("git status --short")),
     ).toBeUndefined();
-    expect(upstream.received).toHaveLength(1);
+    expect(upstream.received.map((request) => request.path)).toEqual([
+      "/api/status",
+      "/api/tags",
+      "/api/chat",
+    ]);
   });
 
   test("deny, explicit allow, and built-in ask never call the judge", async () => {
@@ -185,7 +209,7 @@ describe("permission policy local judge routing", () => {
     expect(
       await pi.emitToolCall(bashCall("git log -1", "second")),
     ).toBeUndefined();
-    expect(upstream.received).toHaveLength(1);
+    expect(chatRequests(upstream)).toHaveLength(1);
     expect(pi.notifications).toEqual([
       {
         level: "warning",
@@ -212,7 +236,7 @@ describe("permission policy local judge routing", () => {
     await pi.emitToolCall(bashCall("git status", "cache-hit"));
     await pi.emitToolCall(bashCall("git diff --stat", "same-outage"));
 
-    expect(upstream.received).toHaveLength(2);
+    expect(chatRequests(upstream)).toHaveLength(2);
     expect(pi.notifications).toHaveLength(1);
   });
 
@@ -258,10 +282,10 @@ describe("permission policy local judge routing", () => {
 
     await pi.emitToolCall(bashCall("git status", "one"));
     await pi.emitToolCall(bashCall("git status", "two"));
-    expect(upstream.received).toHaveLength(1);
+    expect(chatRequests(upstream)).toHaveLength(1);
 
     await pi.emitSessionShutdown();
     await pi.emitToolCall(bashCall("git status", "three"));
-    expect(upstream.received).toHaveLength(2);
+    expect(chatRequests(upstream)).toHaveLength(2);
   });
 });

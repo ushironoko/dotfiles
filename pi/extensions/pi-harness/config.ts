@@ -46,6 +46,7 @@ export interface PermissionJudgeConfig {
   enabled: boolean;
   url: string;
   model: string;
+  expectedDigest: string;
   timeoutMs: number;
   confirmTimeoutMs: number;
   keepAlive: string;
@@ -56,7 +57,9 @@ export const DEFAULT_PERMISSION_JUDGE_CONFIG: Readonly<PermissionJudgeConfig> =
   {
     enabled: true,
     url: "http://127.0.0.1:11434/api/chat",
-    model: "qwen2.5:1.5b",
+    model: "qwen2.5:latest",
+    expectedDigest:
+      "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
     timeoutMs: 2_000,
     confirmTimeoutMs: 30_000,
     keepAlive: "30m",
@@ -113,8 +116,10 @@ const validJudgeUrl = (value: string): boolean => {
 const validModel = (value: string): boolean =>
   value.length > 0 &&
   value.length <= 128 &&
-  /^[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+)?$/.test(value) &&
+  /^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$/.test(value) &&
   !value.toLowerCase().includes("cloud");
+
+const validDigest = (value: string): boolean => /^[0-9a-f]{64}$/.test(value);
 
 const validKeepAlive = (value: string): boolean => {
   const match = /^(\d{1,4})(ms|s|m|h)$/.exec(value);
@@ -178,6 +183,10 @@ const readPermissionJudgeConfig = (
     value.model === undefined
       ? DEFAULT_PERMISSION_JUDGE_CONFIG.model
       : value.model;
+  const expectedDigest =
+    value.expectedDigest === undefined
+      ? DEFAULT_PERMISSION_JUDGE_CONFIG.expectedDigest
+      : value.expectedDigest;
   const timeoutMs =
     value.timeoutMs === undefined
       ? DEFAULT_PERMISSION_JUDGE_CONFIG.timeoutMs
@@ -194,6 +203,9 @@ const readPermissionJudgeConfig = (
   if (typeof enabled !== "boolean") errors.push("enabled");
   if (typeof url !== "string" || !validJudgeUrl(url)) errors.push("url");
   if (typeof model !== "string" || !validModel(model)) errors.push("model");
+  if (typeof expectedDigest !== "string" || !validDigest(expectedDigest)) {
+    errors.push("expectedDigest");
+  }
   if (
     typeof timeoutMs !== "number" ||
     !Number.isInteger(timeoutMs) ||
@@ -227,6 +239,10 @@ const readPermissionJudgeConfig = (
       typeof model === "string" && validModel(model)
         ? model
         : DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+    expectedDigest:
+      typeof expectedDigest === "string" && validDigest(expectedDigest)
+        ? expectedDigest
+        : DEFAULT_PERMISSION_JUDGE_CONFIG.expectedDigest,
     timeoutMs:
       typeof timeoutMs === "number" &&
       Number.isInteger(timeoutMs) &&

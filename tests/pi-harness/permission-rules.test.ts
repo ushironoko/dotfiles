@@ -235,6 +235,16 @@ describe("explicit allow matching", () => {
     }
   });
 
+  const productionRules = loadRules(
+    readFileSync(
+      resolve(
+        import.meta.dir,
+        "../../pi/extensions/pi-harness/permission-rules.json",
+      ),
+      "utf8",
+    ),
+  );
+
   test.each([
     "bun\u00a0evil",
     "bun\u000cevil",
@@ -247,20 +257,22 @@ describe("explicit allow matching", () => {
   ])(
     "does not treat non-shell Unicode whitespace as a separator: %s",
     (command) => {
-      const productionRules = loadRules(
-        readFileSync(
-          resolve(
-            import.meta.dir,
-            "../../pi/extensions/pi-harness/permission-rules.json",
-          ),
-          "utf8",
-        ),
-      );
       expect(evaluateCommand(command, productionRules).verdict).toBe(
         "default-continue",
       );
     },
   );
+
+  test.each([
+    "codex 'login status' --foo",
+    "bit issue 'create --foo'",
+    String.raw`codex login\ status --foo`,
+    String.raw`codex $'login status' --foo`,
+  ])("preserves an embedded-whitespace argv boundary: %s", (command) => {
+    expect(evaluateCommand(command, productionRules).verdict).toBe(
+      "default-continue",
+    );
+  });
 });
 
 describe("permission judge config", () => {
@@ -282,6 +294,8 @@ describe("permission judge config", () => {
           enabled: false,
           url: "http://[::1]:11500/api/chat",
           model: "local/model:1.5b",
+          expectedDigest:
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           timeoutMs: 750,
           confirmTimeoutMs: 5_000,
           keepAlive: "2h",
@@ -299,6 +313,8 @@ describe("permission judge config", () => {
         enabled: false,
         url: "http://[::1]:11500/api/chat",
         model: "local/model:1.5b",
+        expectedDigest:
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         timeoutMs: 750,
         confirmTimeoutMs: 5_000,
         keepAlive: "2h",
@@ -307,6 +323,8 @@ describe("permission judge config", () => {
         enabled: false,
         url: "http://[::1]:11500/api/chat",
         model: "local/model:1.5b",
+        expectedDigest:
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         timeoutMs: 750,
         confirmTimeoutMs: 5_000,
         keepAlive: "2h",
@@ -325,7 +343,8 @@ describe("permission judge config", () => {
       JSON.stringify({
         permissionJudge: {
           url: "https://example.com/api/chat",
-          model: "qwen:cloud",
+          model: "qwen2.5",
+          expectedDigest: "sha256:not-a-digest",
           timeoutMs: 10,
           confirmTimeoutMs: 500,
           keepAlive: "0m",
@@ -335,7 +354,7 @@ describe("permission judge config", () => {
 
     try {
       expect(loadConfig({}, paths).permissionJudge?.configurationError).toBe(
-        "invalid permissionJudge fields: url, model, timeoutMs, confirmTimeoutMs, keepAlive",
+        "invalid permissionJudge fields: url, model, expectedDigest, timeoutMs, confirmTimeoutMs, keepAlive",
       );
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -353,6 +372,7 @@ describe("permission judge config", () => {
           enabled: null,
           url: null,
           model: null,
+          expectedDigest: null,
           timeoutMs: null,
           confirmTimeoutMs: null,
           keepAlive: null,
@@ -362,7 +382,7 @@ describe("permission judge config", () => {
 
     try {
       expect(loadConfig({}, paths).permissionJudge?.configurationError).toBe(
-        "invalid permissionJudge fields: enabled, url, model, timeoutMs, confirmTimeoutMs, keepAlive",
+        "invalid permissionJudge fields: enabled, url, model, expectedDigest, timeoutMs, confirmTimeoutMs, keepAlive",
       );
     } finally {
       await rm(home, { recursive: true, force: true });

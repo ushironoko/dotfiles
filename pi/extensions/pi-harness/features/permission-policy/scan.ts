@@ -512,9 +512,15 @@ export const scanCommand = (command: string): ScanResult => {
     flushWord();
     pendingRedirectTarget = false;
     if (words.length > 0 || !allowEligible) {
+      // Preserve argv boundaries when rendering the regex candidate. Literal
+      // whitespace produced inside one quoted/escaped shell word must not turn
+      // into the separator between two words: `codex 'login status'` is not
+      // the granted argv prefix `codex login status`. OPAQUE is a private-use
+      // non-whitespace sentinel that cannot satisfy either a literal space or
+      // a custom `\s` separator, while broad single-head grants still match.
       const allowCandidate =
         allowEligible && opaque.size === 0 && words.length > 0
-          ? words.join(" ")
+          ? words.map((value) => value.replace(/\s/gu, OPAQUE)).join(" ")
           : undefined;
       segments.push({
         words,

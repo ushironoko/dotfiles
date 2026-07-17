@@ -43,6 +43,7 @@ export interface PermissionJudge {
 
 interface JudgeOptions {
   now?: () => number;
+  monotonicNow?: () => number;
   cacheCapacity?: number;
   cacheTtlMs?: number;
   circuitMs?: number;
@@ -119,7 +120,7 @@ export const isLocalOllamaChatUrl = (value: string): boolean => {
 const isLocalModel = (model: string): boolean =>
   model.length > 0 &&
   model.length <= 128 &&
-  /^[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+)?$/.test(model) &&
+  /^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$/.test(model) &&
   !model.toLowerCase().includes("cloud");
 
 const canonicalCwd = (cwd: string | undefined): string => {
@@ -140,6 +141,8 @@ const cacheKey = (
     .update(POLICY_VERSION)
     .update("\0")
     .update(config.model)
+    .update("\0")
+    .update(config.expectedDigest)
     .update("\0")
     .update(canonicalCwd(cwd))
     .update("\0")
@@ -247,9 +250,10 @@ const parseHttpResponse = (wire: Buffer): DirectHttpResponse => {
 // A raw TCP connection to the validated numeric loopback address cannot honor
 // HTTP_PROXY/HTTPS_PROXY. Bun.fetch and Bun's node:http compatibility layer do,
 // which could otherwise disclose command text to a proxy.
-const directPostJson = (
+const directRequest = (
   urlText: string,
-  body: string,
+  method: "GET" | "POST",
+  body: string | undefined,
   signal: ActiveAbortSignal,
 ): Promise<DirectHttpResponse> =>
   new Promise((resolve, reject) => {
@@ -293,18 +297,22 @@ const directPostJson = (
         port: url.port === "" ? 80 : Number(url.port),
       });
       socket.on("connect", () => {
-        const requestHead = [
-          `POST ${url.pathname} HTTP/1.1`,
+        const requestHeaders = [
+          `${method} ${url.pathname} HTTP/1.1`,
           `Host: ${url.host}`,
-          "Content-Type: application/json",
-          `Content-Length: ${Buffer.byteLength(body)}`,
+          ...(body === undefined
+            ? []
+            : [
+                "Content-Type: application/json",
+                `Content-Length: ${Buffer.byteLength(body)}`,
+              ]),
           "Connection: close",
           "",
           "",
-        ].join("\r\n");
+        ];
         // Do not half-close here: Bun's node:net compatibility can discard
         // queued bytes on end(). The HTTP `Connection: close` response ends it.
-        socket?.write(requestHead + body);
+        socket?.write(requestHeaders.join("\r\n") + (body ?? ""));
       });
       socket.on("data", (chunk: Uint8Array) => {
         const maxWireBytes = MAX_HTTP_HEADER_BYTES + MAX_RESPONSE_BYTES;
@@ -328,7 +336,122 @@ const directPostJson = (
     }
   });
 
-const parseResponse = (text: string): JudgeOutcome => {
+interface VerificationResult {
+  readonly ok: boolean;
+  readonly reason?: string;
+}
+
+const verificationFailure = (reason: string): VerificationResult => ({
+  ok: false,
+  reason,
+});
+
+const verifyCloudStatus = (text: string): VerificationResult => {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return verificationFailure(
+      "local Ollama returned invalid cloud status JSON",
+    );
+  }
+  if (!isRecord(value) || !isRecord(value.cloud)) {
+    return verificationFailure("local Ollama returned malformed cloud status");
+  }
+  if (value.cloud.disabled !== true) {
+    return verificationFailure("local Ollama cloud features are not disabled");
+  }
+  return { ok: true };
+};
+
+const verifyModelTags = (
+  text: string,
+  expectedModel: string,
+  expectedDigest: string,
+): VerificationResult => {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return verificationFailure("local Ollama returned invalid model list JSON");
+  }
+  if (!isRecord(value) || !Array.isArray(value.models)) {
+    return verificationFailure("local Ollama returned a malformed model list");
+  }
+  if (!value.models.every(isRecord)) {
+    return verificationFailure("local Ollama returned a malformed model entry");
+  }
+  const candidates = value.models.filter(
+    (entry) => entry.name === expectedModel || entry.model === expectedModel,
+  );
+  if (candidates.length !== 1) {
+    return verificationFailure(
+      "local Ollama did not return exactly one configured model",
+    );
+  }
+  const candidate = candidates[0];
+  if (
+    candidate?.name !== expectedModel ||
+    candidate.model !== expectedModel ||
+    typeof candidate.digest !== "string"
+  ) {
+    return verificationFailure("local Ollama model identity was malformed");
+  }
+  if ("remote_host" in candidate || "remote_model" in candidate) {
+    return verificationFailure("configured Ollama model is remote");
+  }
+  if (candidate.digest !== expectedDigest) {
+    return verificationFailure("configured Ollama model digest did not match");
+  }
+  return { ok: true };
+};
+
+const endpointFor = (chatUrl: string, pathname: string): string => {
+  const url = new URL(chatUrl);
+  url.pathname = pathname;
+  return url.href;
+};
+
+export const readLocalOllamaVersion = async (
+  config: Pick<PermissionJudgeConfig, "url" | "timeoutMs">,
+): Promise<string> => {
+  if (!isLocalOllamaChatUrl(config.url)) {
+    throw new Error("Ollama version endpoint is not local-only");
+  }
+  const controller = createAbortController();
+  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const response = await directRequest(
+      endpointFor(config.url, "/api/version"),
+      "GET",
+      undefined,
+      controller.signal,
+    );
+    if (response.status !== 200 || response.body === undefined) {
+      throw new Error(
+        `Ollama version endpoint returned HTTP ${response.status}`,
+      );
+    }
+    const value: unknown = JSON.parse(response.body);
+    if (
+      !isRecord(value) ||
+      typeof value.version !== "string" ||
+      value.version.length === 0
+    ) {
+      throw new Error("Ollama version endpoint returned malformed JSON");
+    }
+    return value.version;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("Ollama version endpoint timed out", { cause: error });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const parseResponse = (text: string, expectedModel: string): JudgeOutcome => {
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -342,6 +465,18 @@ const parseResponse = (text: string): JudgeOutcome => {
     return {
       kind: "invalid-response",
       reason: "local judge response was incomplete or truncated",
+    };
+  }
+  if (value.model !== expectedModel) {
+    return {
+      kind: "invalid-response",
+      reason: "local judge response came from an unexpected model",
+    };
+  }
+  if ("remote_host" in value || "remote_model" in value) {
+    return {
+      kind: "invalid-response",
+      reason: "local judge response came from a remote model",
     };
   }
   const message = value.message;
@@ -381,6 +516,8 @@ export const createPermissionJudge = (
   options: JudgeOptions = {},
 ): PermissionJudge => {
   const now = options.now ?? Date.now;
+  const monotonicNow =
+    options.monotonicNow ?? (() => globalThis.performance.now());
   const capacity = options.cacheCapacity ?? DEFAULT_CACHE_CAPACITY;
   const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
   const circuitMs = options.circuitMs ?? DEFAULT_CIRCUIT_MS;
@@ -450,10 +587,14 @@ export const createPermissionJudge = (
           reason: config.configurationError,
         };
       }
-      if (!isLocalOllamaChatUrl(config.url) || !isLocalModel(config.model)) {
+      if (
+        !isLocalOllamaChatUrl(config.url) ||
+        !isLocalModel(config.model) ||
+        !/^[0-9a-f]{64}$/.test(config.expectedDigest)
+      ) {
         return {
           kind: "unavailable",
-          reason: "local judge configuration is not local-only",
+          reason: "local judge configuration is not local-only and pinned",
         };
       }
       if (now() < unavailableUntil) {
@@ -464,6 +605,7 @@ export const createPermissionJudge = (
       }
 
       const controller = createAbortController();
+      const deadline = monotonicNow() + config.timeoutMs;
       let timedOut = false;
       const onParentAbort = (): void => controller.abort();
       parentSignal?.addEventListener("abort", onParentAbort, { once: true });
@@ -473,6 +615,88 @@ export const createPermissionJudge = (
       }, config.timeoutMs);
 
       try {
+        const statusResponse = await directRequest(
+          endpointFor(config.url, "/api/status"),
+          "GET",
+          undefined,
+          controller.signal,
+        );
+        if (parentSignal?.aborted) {
+          return {
+            kind: "parent-aborted",
+            reason: "the active pi operation was cancelled",
+          };
+        }
+        if (statusResponse.status !== 200) {
+          openCircuit();
+          return {
+            kind: "unavailable",
+            reason: `local Ollama status returned HTTP ${statusResponse.status}`,
+          };
+        }
+        if (statusResponse.body === undefined) {
+          return {
+            kind: "unavailable",
+            reason: "local Ollama cloud status exceeded the size limit",
+          };
+        }
+        const cloudVerification = verifyCloudStatus(statusResponse.body);
+        if (!cloudVerification.ok) {
+          return {
+            kind: "unavailable",
+            reason: cloudVerification.reason ?? "local Ollama was not verified",
+          };
+        }
+
+        const tagsResponse = await directRequest(
+          endpointFor(config.url, "/api/tags"),
+          "GET",
+          undefined,
+          controller.signal,
+        );
+        if (parentSignal?.aborted) {
+          return {
+            kind: "parent-aborted",
+            reason: "the active pi operation was cancelled",
+          };
+        }
+        if (tagsResponse.status !== 200) {
+          openCircuit();
+          return {
+            kind: "unavailable",
+            reason: `local Ollama model list returned HTTP ${tagsResponse.status}`,
+          };
+        }
+        if (tagsResponse.body === undefined) {
+          return {
+            kind: "unavailable",
+            reason: "local Ollama model list exceeded the size limit",
+          };
+        }
+        const modelVerification = verifyModelTags(
+          tagsResponse.body,
+          config.model,
+          config.expectedDigest,
+        );
+        if (!modelVerification.ok) {
+          return {
+            kind: "unavailable",
+            reason:
+              modelVerification.reason ?? "local Ollama model was not verified",
+          };
+        }
+
+        // The timer and this explicit monotonic deadline form one budget for
+        // status + tags + chat. Never start the command-bearing POST after the
+        // preflight has consumed that budget, even if the timer callback has
+        // not yet run on a busy event loop.
+        if (timedOut || monotonicNow() >= deadline) {
+          timedOut = true;
+          controller.abort();
+          openCircuit();
+          return { kind: "timeout", reason: "local judge timed out" };
+        }
+
         const requestBody = JSON.stringify({
           model: config.model,
           stream: false,
@@ -489,8 +713,9 @@ export const createPermissionJudge = (
             num_predict: 8,
           },
         });
-        const response = await directPostJson(
+        const response = await directRequest(
           config.url,
+          "POST",
           requestBody,
           controller.signal,
         );
@@ -500,6 +725,12 @@ export const createPermissionJudge = (
             kind: "parent-aborted",
             reason: "the active pi operation was cancelled",
           };
+        }
+        if (timedOut || monotonicNow() >= deadline) {
+          timedOut = true;
+          controller.abort();
+          openCircuit();
+          return { kind: "timeout", reason: "local judge timed out" };
         }
         if (response.status !== 200) {
           openCircuit();
@@ -523,7 +754,7 @@ export const createPermissionJudge = (
           };
         }
 
-        const outcome = parseResponse(body);
+        const outcome = parseResponse(body, config.model);
         if (parentSignal?.aborted) {
           return {
             kind: "parent-aborted",
