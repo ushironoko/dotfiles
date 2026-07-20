@@ -33,7 +33,10 @@ export const EXTENSION_ROOTS = [
 // with the running pi process. Keep this allowlist exact: subpaths, lookalikes,
 // other pi packages, and codex-web runtime imports remain denied.
 const RUNTIME_IMPORTS_BY_ROOT = new Map<string, ReadonlySet<string>>([
-  [EXTENSION_ROOT, new Set(["@earendil-works/pi-tui"])],
+  [
+    EXTENSION_ROOT,
+    new Set(["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]),
+  ],
 ]);
 
 const transpiler = new Bun.Transpiler({ loader: "ts" });
