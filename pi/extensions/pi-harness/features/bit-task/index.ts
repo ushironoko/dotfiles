@@ -6,6 +6,10 @@ import { sanitizeChildEnv } from "../../lib/child-env";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import { runHook as defaultRunHook } from "../../lib/run-hook";
 import {
+  PROCESS_FORCE_SETTLE_MS,
+  WORKTREE_CREATE_TERM_GRACE_MS,
+} from "../../lib/termination";
+import {
   buildTaskCompletedArgs,
   buildWorktreeCreatePayload,
   buildWorktreeRemovePayload,
@@ -27,6 +31,7 @@ interface RunCommandOptions {
   cwd?: string;
   env?: Record<string, string | undefined>;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 type RunCommand = (
@@ -93,6 +98,15 @@ const killGroup = (pid: number, signal: NodeJS.Signals): void => {
 
 const runCommand: RunCommand = (command, args, options) =>
   new Promise((resolve, reject) => {
+    const signalAborted = (): boolean =>
+      options.signal !== undefined &&
+      "aborted" in options.signal &&
+      options.signal.aborted === true;
+    if (signalAborted()) {
+      resolve({ exitCode: 130, stdout: "", stderr: "Command aborted." });
+      return;
+    }
+
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: sanitizeChildEnv(process.env, options.env, { cwd: options.cwd }),
@@ -102,22 +116,71 @@ const runCommand: RunCommand = (command, args, options) =>
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let aborted = false;
+    let terminating = false;
     let settled = false;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      if (child.pid !== undefined) {
-        killGroup(child.pid, "SIGTERM");
-        killTimer = setTimeout(() => {
-          if (child.pid !== undefined) killGroup(child.pid, "SIGKILL");
-        }, COMMAND_TERM_GRACE_MS);
-      }
-    }, options.timeoutMs ?? COMMAND_TIMEOUT_MS);
+    let forceSettleTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const clearTimers = (): void => {
+    const removeAbortListener = (): void => {
+      if (
+        options.signal !== undefined &&
+        "removeEventListener" in options.signal &&
+        typeof options.signal.removeEventListener === "function"
+      ) {
+        options.signal.removeEventListener("abort", onAbort);
+      }
+    };
+    const settle = (code: number | null): void => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       if (killTimer !== undefined) clearTimeout(killTimer);
+      if (forceSettleTimer !== undefined) clearTimeout(forceSettleTimer);
+      removeAbortListener();
+      let exitCode = code ?? 1;
+      let finalStderr = stderr;
+      if (timedOut) {
+        exitCode = 124;
+        finalStderr = `${stderr}\nCommand timed out.`;
+      } else if (aborted) {
+        exitCode = 130;
+        finalStderr = `${stderr}\nCommand aborted.`;
+      }
+      resolve({ exitCode, stdout, stderr: finalStderr });
     };
+    const terminate = (): void => {
+      if (terminating || settled) return;
+      terminating = true;
+      if (child.pid === undefined) {
+        if (!settled) settle(null);
+        return;
+      }
+      killGroup(child.pid, "SIGTERM");
+      killTimer = setTimeout(() => {
+        if (child.pid !== undefined) killGroup(child.pid, "SIGKILL");
+        forceSettleTimer = setTimeout(
+          () => settle(null),
+          PROCESS_FORCE_SETTLE_MS,
+        );
+        if (
+          typeof forceSettleTimer === "object" &&
+          "unref" in forceSettleTimer
+        ) {
+          forceSettleTimer.unref();
+        }
+      }, COMMAND_TERM_GRACE_MS);
+    };
+    const onAbort = (): void => {
+      if (aborted || settled) return;
+      aborted = true;
+      clearTimeout(timer);
+      terminate();
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminate();
+    }, options.timeoutMs ?? COMMAND_TIMEOUT_MS);
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout = appendCapped(stdout, chunk.toString("utf8"));
@@ -128,21 +191,22 @@ const runCommand: RunCommand = (command, args, options) =>
     child.on("error", (error) => {
       if (settled) return;
       settled = true;
-      clearTimers();
+      clearTimeout(timer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      if (forceSettleTimer !== undefined) clearTimeout(forceSettleTimer);
+      removeAbortListener();
       reject(error);
     });
-    child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimers();
-      // A timed-out command must never look successful: a child that traps
-      // SIGTERM and exits 0 after the deadline still reports 124.
-      resolve({
-        exitCode: timedOut ? 124 : (code ?? 1),
-        stdout,
-        stderr: timedOut ? `${stderr}\nCommand timed out.` : stderr,
-      });
-    });
+    child.on("close", (code) => settle(code));
+
+    if (
+      options.signal !== undefined &&
+      "addEventListener" in options.signal &&
+      typeof options.signal.addEventListener === "function"
+    ) {
+      options.signal.addEventListener("abort", onAbort, { once: true });
+    }
+    if (signalAborted()) onAbort();
   });
 
 const outputTail = (output: string): string => {
@@ -187,6 +251,49 @@ const worktreePaths = (porcelain: string): string[] =>
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+const isSignalAborted = (signal: AbortSignal | undefined): boolean =>
+  signal !== undefined && "aborted" in signal && signal.aborted === true;
+
+const throwIfAborted = (signal: AbortSignal | undefined): void => {
+  if (isSignalAborted(signal)) {
+    throw new Error("Worktree creation was aborted");
+  }
+};
+
+const validateReturnedWorktreePath = async (
+  stdout: string,
+): Promise<string> => {
+  const outputLines = stdout.trim().split(/\r?\n/).filter(Boolean);
+  const returnedPath = outputLines[0] ?? "";
+  if (returnedPath === "") {
+    throw new Error(
+      "worktree_create postcondition failed: hook returned an empty path",
+    );
+  }
+  if (outputLines.some((line) => line !== returnedPath)) {
+    throw new Error(
+      "worktree_create postcondition failed: hook returned multiple paths",
+    );
+  }
+  if (!isAbsolute(returnedPath)) {
+    throw new Error(
+      `worktree_create postcondition failed: hook returned a non-absolute path: ${returnedPath}`,
+    );
+  }
+  try {
+    const canonicalPath = await realpath(returnedPath);
+    const pathStat = await stat(canonicalPath);
+    if (!pathStat.isDirectory()) {
+      throw new Error("returned path is not a directory");
+    }
+    return canonicalPath;
+  } catch (error) {
+    throw new Error(
+      `worktree_create postcondition failed: could not validate returned directory ${returnedPath}: ${errorMessage(error)}`,
+    );
+  }
+};
+
 /**
  * Dependencies for creating a validated worktree outside the tool boundary.
  * The workflow feature reuses this to provision isolated worktrees for
@@ -220,7 +327,10 @@ export const createValidatedWorktree = async (
   creator: WorktreeCreator,
   cwd: string,
   name: string,
+  signal?: AbortSignal,
+  onCreated?: (path: string) => void,
 ): Promise<string> => {
+  throwIfAborted(signal);
   const result = await creator.invokeHook(
     creator.createScript,
     buildWorktreeCreatePayload(name),
@@ -229,49 +339,52 @@ export const createValidatedWorktree = async (
       env: creator.env(),
       timeoutMs: HOOK_TIMEOUT_MS,
       maxOutputBytes: MAX_OUTPUT_BYTES,
+      termGraceMs: WORKTREE_CREATE_TERM_GRACE_MS,
+      signal,
     },
   );
   if (result.exitCode !== 0 || result.timedOut) {
+    // The create hook prints only after atomically publishing its removal
+    // marker. Cancellation and timeout both terminate it with SIGTERM, so
+    // retain any validated published identity even when the process is nonzero.
+    if (result.stdout.trim() !== "") {
+      try {
+        onCreated?.(await validateReturnedWorktreePath(result.stdout));
+      } catch {
+        // An interrupted hook may also print immediately before rolling back.
+        // Never publish a path that no longer validates locally.
+      }
+    }
+    throwIfAborted(signal);
     throw hookFailure("worktree_create", result);
   }
 
-  const returnedPath = result.stdout.trim();
-  if (returnedPath === "") {
-    throw new Error(
-      "worktree_create postcondition failed: hook returned an empty path",
-    );
-  }
-  if (!isAbsolute(returnedPath)) {
-    throw new Error(
-      `worktree_create postcondition failed: hook returned a non-absolute path: ${returnedPath}`,
-    );
-  }
-
-  let canonicalPath: string;
-  try {
-    canonicalPath = await realpath(returnedPath);
-    const pathStat = await stat(canonicalPath);
-    if (!pathStat.isDirectory()) {
-      throw new Error("returned path is not a directory");
-    }
-  } catch (error) {
-    throw new Error(
-      `worktree_create postcondition failed: could not validate returned directory ${returnedPath}: ${errorMessage(error)}`,
-    );
-  }
+  const canonicalPath = await validateReturnedWorktreePath(result.stdout);
+  // The hook may have created the worktree immediately before cancellation.
+  // Publish its canonical identity after local filesystem validation but
+  // before honoring that abort, so background persistence can report the
+  // resource left behind without accepting an unvalidated hook path.
+  onCreated?.(canonicalPath);
+  throwIfAborted(signal);
 
   let listResult: CommandResult;
   try {
     listResult = await creator.invokeCommand(
       "git",
       ["worktree", "list", "--porcelain"],
-      { cwd, env: creator.env(), timeoutMs: COMMAND_TIMEOUT_MS },
+      {
+        cwd,
+        env: creator.env(),
+        timeoutMs: COMMAND_TIMEOUT_MS,
+        signal,
+      },
     );
   } catch (error) {
     throw new Error(
       `worktree_create postcondition failed: could not list current repository worktrees: ${errorMessage(error)}`,
     );
   }
+  throwIfAborted(signal);
   if (listResult.exitCode !== 0) {
     throw new Error(
       `worktree_create postcondition failed: ${commandFailure("could not list current repository worktrees", listResult).message}`,
@@ -298,7 +411,9 @@ export const createValidatedWorktree = async (
       cwd,
       env: creator.env(),
       timeoutMs: COMMAND_TIMEOUT_MS,
+      signal,
     });
+    throwIfAborted(signal);
     const rawPath = commonDirResult.stdout.trim();
     if (commonDirResult.exitCode !== 0 || rawPath === "") {
       throw new Error(
@@ -311,6 +426,7 @@ export const createValidatedWorktree = async (
     await commonDirOf(),
     await commonDirOf(canonicalPath),
   ];
+  throwIfAborted(signal);
   if (repoCommonDir !== createdCommonDir) {
     throw new Error(
       `worktree_create postcondition failed: created path belongs to a different repository (common-dir ${createdCommonDir} != ${repoCommonDir})`,
@@ -349,13 +465,25 @@ export default function setupBitTask(
     async execute(
       _toolCallId: string,
       params: unknown,
-      _signal: AbortSignal | undefined,
+      signal: AbortSignal | undefined,
       _onUpdate: unknown,
       ctx: CtxLike,
     ) {
       const cwd = deps.cwd ?? ctx.cwd ?? process.cwd();
       const name = requireString(params, "name", "worktree_create");
-      return textResult(await createValidatedWorktree(creator, cwd, name));
+      let createdPath: string | undefined;
+      try {
+        return textResult(
+          await createValidatedWorktree(creator, cwd, name, signal, (path) => {
+            createdPath = path;
+          }),
+        );
+      } catch (error) {
+        if (createdPath === undefined) throw error;
+        throw new Error(
+          `${errorMessage(error)}\n\nA worktree was left in place at: ${createdPath}\nIt can be removed with the user-approved worktree_remove tool.`,
+        );
+      }
     },
   });
 

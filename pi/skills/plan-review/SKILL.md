@@ -196,8 +196,9 @@ roster; remove tasks whose conditions did not match.
 }
 ```
 
-Tasks in the fan-out stage run concurrently. The parent waits for the complete
-workflow report before synthesis.
+Tasks in the fan-out stage run concurrently in the background after acceptance.
+The parent must wait for the automatic background-completion message before
+synthesis.
 
 #### Automatic mode after explicit Codex opt-out
 
@@ -321,10 +322,17 @@ Use the same isolated shape for `codex-runner`:
 }
 ```
 
+The tool returns an **acceptance** result with an invocation ID immediately.
+Do not mistake that acceptance text for reviewer output and do not aggregate
+yet. Tell the user the review invocation was started if useful, then wait for
+the automatic background-completion message. That message triggers a parent
+turn containing the aggregate reviewer results.
+
 ### Phase 4: Aggregate and report
 
-The parent agent must synthesize the workflow report itself.
-Do not add a workflow judge stage.
+Only after the automatic background-completion message arrives, the parent
+agent must synthesize the workflow report itself. Do not add a workflow judge
+stage.
 
 Classify every selected reviewer as one of:
 
@@ -368,18 +376,50 @@ Aggregate usable reviews in this form:
 | similarity     | Refactoring-type keywords in the plan                               | Code duplication analysis and refactoring proposals                 |
 | tdd-reviewer   | Test files / test config / test directories exist (primary signals) | TDD compliance, Testing Trophy, mock minimization, test duplication |
 
+## Usage Examples
+
+### Auto-selection mode (recommended)
+
+```text
+> /plan-review
+
+Latest plan file detected: ./plans/kind-cuddling-dragon.md
+Reviewers to launch: rust-reviewer, codex-reviewer, tdd-reviewer
+Reviewing... (background workflow invocation accepted)
+
+[automatic background-completion message arrives]
+
+=== Plan Review Results ===
+[reviewer results, coverage gaps, and parent synthesis]
+```
+
+### Manual mode (backward compatible)
+
+```text
+> /plan-review rust-reviewer
+
+Agent: rust-reviewer (manually specified)
+Reviewing... (background workflow invocation accepted)
+
+[automatic background-completion message arrives]
+
+=== Plan Review Results ===
+[rust-reviewer feedback and parent synthesis]
+```
+
 ## Error Handling
 
-| Situation                                        | Response                                                        |
-| ------------------------------------------------ | --------------------------------------------------------------- |
-| No plan file found                               | Report that `plans/` has no files                               |
-| `workflow` unavailable                           | Stop; never fall back to `subagent`                             |
-| Auto-selection matched no reviewer               | Show available agents and ask for manual specification          |
-| Codex missing but specialists matched            | Ask separately; set `codexSkip` only after explicit approval    |
-| Manual agent definition not found                | Show available agents and stop                                  |
-| Workflow validation or preflight failed          | Report that no review ran and stop                              |
-| Task failed, reported inability, or empty output | Keep usable reviews and report a reviewer-specific coverage gap |
-| Workflow output truncated                        | Synthesize available text and disclose the coverage limitation  |
+| Situation                                        | Response                                                                                   |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| No plan file found                               | Report that `plans/` has no files                                                          |
+| `workflow` unavailable                           | Stop; never fall back to `subagent`                                                        |
+| Auto-selection matched no reviewer               | Show available agents and ask for manual specification                                     |
+| Codex missing but specialists matched            | Ask separately; set `codexSkip` only after explicit approval                               |
+| Manual agent definition not found                | Show available agents and stop                                                             |
+| Workflow validation or preflight failed          | Report that no review ran and stop                                                         |
+| Invocation only accepted                         | Wait for its automatic background-completion message; do not aggregate the acceptance text |
+| Task failed, reported inability, or empty output | Keep usable reviews and report a reviewer-specific coverage gap                            |
+| Workflow output truncated                        | Synthesize available text and disclose the coverage limitation                             |
 
 ## Notes
 

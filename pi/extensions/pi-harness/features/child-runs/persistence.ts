@@ -1,4 +1,5 @@
 import { capUtf8, stripTerminalControls } from "../../lib/terminal-text";
+import { CHILD_RUN_COMPLETION_ENTRY } from "./background";
 import {
   CHILD_RUNS_SCHEMA,
   CHILD_RUNS_VERSION,
@@ -58,6 +59,7 @@ const terminalReasons: ReadonlySet<string> = new Set([
   "setup-error",
   "fail-fast",
   "parent-abort",
+  "branch-change",
   "shutdown",
   "dependency-failed",
 ]);
@@ -130,6 +132,7 @@ const decodeRun = (
   if (value.stageIndex !== undefined && stageIndex === undefined)
     return undefined;
   const stageName = optionalText(value.stageName, 512, " ");
+  const worktree = optionalText(value.worktree, 4 * 1024, " ");
   const reason =
     typeof value.terminalReason === "string" &&
     terminalReasons.has(value.terminalReason)
@@ -142,6 +145,7 @@ const decodeRun = (
     taskIndex,
     stageIndex,
     stageName,
+    worktree,
     status: value.status as Exclude<ChildRunStatus, "queued" | "running">,
     terminalReason: reason,
     startedAt: finiteTimestamp(value.startedAt),
@@ -245,18 +249,30 @@ export const decodePersistedChildRuns = (
     : undefined;
 };
 
-/** Read only the active branch's finalized tool-result details. */
+/** Read only finalized child-run payloads on the active session branch. */
 export const extractPersistedChildRuns = (
   entries: readonly unknown[],
 ): PersistedChildRunsV1[] => {
   const byId = new Map<string, PersistedChildRunsV1>();
   const order: string[] = [];
   for (const entry of entries) {
-    if (!isRecord(entry) || entry.type !== "message") continue;
-    const message = isRecord(entry.message) ? entry.message : undefined;
-    if (message?.role !== "toolResult") continue;
-    const details = isRecord(message.details) ? message.details : undefined;
-    const decoded = decodePersistedChildRuns(details?.childRuns);
+    if (!isRecord(entry)) continue;
+    let candidate: unknown;
+    if (entry.type === "message") {
+      const message = isRecord(entry.message) ? entry.message : undefined;
+      if (message?.role !== "toolResult") continue;
+      const details = isRecord(message.details) ? message.details : undefined;
+      candidate = details?.childRuns;
+    } else if (
+      entry.type === "custom" &&
+      entry.customType === CHILD_RUN_COMPLETION_ENTRY
+    ) {
+      const data = isRecord(entry.data) ? entry.data : undefined;
+      candidate = data?.childRuns;
+    } else {
+      continue;
+    }
+    const decoded = decodePersistedChildRuns(candidate);
     if (decoded === undefined) continue;
     if (!byId.has(decoded.invocationId)) order.push(decoded.invocationId);
     byId.set(decoded.invocationId, decoded);

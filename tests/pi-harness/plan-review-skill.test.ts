@@ -131,6 +131,10 @@ describe("pi plan-review skill workflow contract", () => {
     expect(executionSection).toContain("workflow");
     expect(executionSection).toContain('mode: "fanout"');
     expect(executionSection).toContain("one `workflow` tool call");
+    expect(executionSection).toContain("acceptance");
+    expect(executionSection).toContain(
+      "automatic background-completion message",
+    );
     expect(executionSection).not.toMatch(
       /(?:launch|invoke|call)[^\n]*`subagent`/i,
     );
@@ -209,8 +213,10 @@ describe("pi plan-review skill workflow contract", () => {
   });
 
   test("keeps synthesis with the parent and classifies incomplete coverage", () => {
-    expect(synthesisSection).toContain("The parent agent");
-    expect(synthesisSection).toContain("Do not add a workflow judge stage");
+    const normalized = synthesisSection.replace(/\s+/g, " ");
+    expect(normalized).toContain("the parent agent");
+    expect(normalized).toContain("automatic background-completion message");
+    expect(normalized).toContain("Do not add a workflow judge stage");
     expect(synthesisSection).toContain("**Usable review**");
     expect(synthesisSection).toContain("**Task failure**");
     expect(synthesisSection).toContain("**reviewer-reported inability**");
