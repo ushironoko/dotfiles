@@ -24,6 +24,7 @@ import type {
   FooterComponentLike,
   FooterDataLike,
   GenericEvent,
+  InputEvent,
   ModelLike,
   NotifyLevel,
   PiEventHandler,
@@ -65,7 +66,9 @@ interface ConfirmDialog {
 
 interface HandlerStore {
   session_start: PiEventHandler<"session_start">[];
+  input: PiEventHandler<"input">[];
   before_agent_start: PiEventHandler<"before_agent_start">[];
+  context: PiEventHandler<"context">[];
   tool_call: PiEventHandler<"tool_call">[];
   tool_result: PiEventHandler<"tool_result">[];
   agent_settled: PiEventHandler<"agent_settled">[];
@@ -76,9 +79,11 @@ interface HandlerStore {
 
 export interface FakePi extends PiLike {
   emitSessionStart(payload: SessionStartEvent): Promise<void>;
+  emitInput(payload: InputEvent): Promise<void>;
   emitBeforeAgentStart(
     payload: BeforeAgentStartEvent,
   ): Promise<AgentStartInjection | undefined>;
+  emitContext(messages: unknown[]): Promise<void>;
   emitToolCall(
     payload: ToolCallEvent,
   ): Promise<ToolCallBlockResult | undefined>;
@@ -129,7 +134,9 @@ export function createFakePi(
 ): FakePi {
   const store: HandlerStore = {
     session_start: [],
+    input: [],
     before_agent_start: [],
+    context: [],
     tool_call: [],
     tool_result: [],
     agent_settled: [],
@@ -210,7 +217,9 @@ export function createFakePi(
     [K in PiEventName]: (handler: PiEventHandler<K>) => void;
   } = {
     session_start: (handler) => store.session_start.push(handler),
+    input: (handler) => store.input.push(handler),
     before_agent_start: (handler) => store.before_agent_start.push(handler),
+    context: (handler) => store.context.push(handler),
     tool_call: (handler) => store.tool_call.push(handler),
     tool_result: (handler) => store.tool_result.push(handler),
     agent_settled: (handler) => store.agent_settled.push(handler),
@@ -231,6 +240,9 @@ export function createFakePi(
     async emitSessionStart(payload) {
       for (const handler of store.session_start) await handler(payload, ctx);
     },
+    async emitInput(payload) {
+      for (const handler of store.input) await handler(payload, ctx);
+    },
     async emitBeforeAgentStart(payload) {
       let injection: AgentStartInjection | undefined;
       for (const handler of store.before_agent_start) {
@@ -238,6 +250,11 @@ export function createFakePi(
         if (result !== undefined) injection = result;
       }
       return injection;
+    },
+    async emitContext(messages) {
+      for (const handler of store.context) {
+        await handler({ type: "context", messages }, ctx);
+      }
     },
     async emitToolCall(payload) {
       for (const handler of store.tool_call) {

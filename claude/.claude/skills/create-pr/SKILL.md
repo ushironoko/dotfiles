@@ -1,7 +1,7 @@
 ---
 name: create-pr
 description: "Create a pull request from current changes. Use when the user requests PR creation, pushing changes for review, or submitting work for code review."
-allowed-tools: Bash(git status *), Bash(git log *), Bash(git diff *), Bash(git add *), Bash(git commit *), Bash(git push *), Bash(git checkout *), Bash(git branch *), Bash(gh pr create *), Bash(gh repo view *)
+allowed-tools: Bash(git status *), Bash(git log *), Bash(git diff *), Bash(git add *), Bash(git commit *), Bash(git push *), Bash(git checkout *), Bash(git branch *), Bash(git -C * status *), Bash(git -C * log *), Bash(git -C * diff *), Bash(git -C * add *), Bash(git -C * commit *), Bash(git -C * push *), Bash(git -C * checkout *), Bash(git -C * branch *), Bash(gh pr create *), Bash(gh repo view *)
 ---
 
 ## Execution Flow

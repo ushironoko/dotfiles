@@ -25,7 +25,7 @@ export type CwdBoundaryResult =
 // Absolute, realpath'd git common-dir of `cwd`, or undefined when `cwd` is not
 // in a git repository / git is unavailable. The env is sanitized so an inherited
 // GIT_COMMON_DIR cannot make this self-satisfy.
-const gitCommonDir = (cwd: string): Promise<string | undefined> =>
+export const gitCommonDir = (cwd: string): Promise<string | undefined> =>
   new Promise((resolve) => {
     execFile(
       "git",
@@ -50,6 +50,45 @@ const gitCommonDir = (cwd: string): Promise<string | undefined> =>
   });
 
 export type GitCommonDirFn = (cwd: string) => Promise<string | undefined>;
+
+export const validateSameGitRepository = async (
+  candidateCwd: string,
+  rootCwd: string,
+  gitCommonDirFn: GitCommonDirFn = gitCommonDir,
+): Promise<CwdBoundaryResult> => {
+  let realCandidate: string;
+  let realRoot: string;
+  try {
+    [realCandidate, realRoot] = await Promise.all([
+      realpath(candidateCwd),
+      realpath(rootCwd),
+    ]);
+    const [candidateStats, rootStats] = await Promise.all([
+      stat(realCandidate),
+      stat(realRoot),
+    ]);
+    if (!candidateStats.isDirectory() || !rootStats.isDirectory()) {
+      return { ok: false, reason: "repository cwd is not a directory" };
+    }
+  } catch {
+    return { ok: false, reason: "repository cwd does not resolve" };
+  }
+
+  const [candidateCommon, rootCommon] = await Promise.all([
+    gitCommonDirFn(realCandidate),
+    gitCommonDirFn(realRoot),
+  ]);
+  if (candidateCommon === undefined || rootCommon === undefined) {
+    return { ok: false, reason: "repository identity could not be resolved" };
+  }
+  if (candidateCommon !== rootCommon) {
+    return {
+      ok: false,
+      reason: `cwd ${candidateCwd} belongs to a different git repository than ${rootCwd}`,
+    };
+  }
+  return { ok: true, canonicalCwd: realCandidate };
+};
 
 export const validateCwdWithinRepo = async (
   candidateCwd: string,
