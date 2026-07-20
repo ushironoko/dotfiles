@@ -14,14 +14,13 @@
  * `/Repo/sub` and `/repo` resolve to the same on-disk form before comparison.
  */
 import { execFile } from "node:child_process";
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { sanitizeChildEnv } from "./child-env";
 import { isPathWithin } from "./trust";
 
-export interface CwdBoundaryResult {
-  readonly ok: boolean;
-  readonly reason?: string;
-}
+export type CwdBoundaryResult =
+  | { readonly ok: true; readonly canonicalCwd: string }
+  | { readonly ok: false; readonly reason: string };
 
 // Absolute, realpath'd git common-dir of `cwd`, or undefined when `cwd` is not
 // in a git repository / git is unavailable. The env is sanitized so an inherited
@@ -67,12 +66,21 @@ export const validateCwdInSameRepo = async (
   let realCandidate: string;
   try {
     realCandidate = await realpath(candidateCwd);
+    if (!(await stat(realCandidate)).isDirectory()) {
+      return { ok: false, reason: `cwd is not a directory: ${candidateCwd}` };
+    }
   } catch {
     return { ok: false, reason: `cwd does not resolve: ${candidateCwd}` };
   }
   let realRoot: string;
   try {
     realRoot = await realpath(rootCwd);
+    if (!(await stat(realRoot)).isDirectory()) {
+      return {
+        ok: false,
+        reason: `repository cwd is not a directory: ${rootCwd}`,
+      };
+    }
   } catch {
     return { ok: false, reason: `repository cwd does not resolve: ${rootCwd}` };
   }
@@ -96,7 +104,7 @@ export const validateCwdInSameRepo = async (
       reason: `cwd ${candidateCwd} belongs to a different git repository`,
     };
   }
-  return { ok: true };
+  return { ok: true, canonicalCwd: realCandidate };
 };
 
 export const validateCwdWithinRepo = async (
@@ -110,9 +118,23 @@ export const validateCwdWithinRepo = async (
   } catch {
     return { ok: false, reason: `cwd does not resolve: ${candidateCwd}` };
   }
+  try {
+    if (!(await stat(realCandidate)).isDirectory()) {
+      return { ok: false, reason: `cwd is not a directory: ${candidateCwd}` };
+    }
+  } catch {
+    return { ok: false, reason: `cwd does not resolve: ${candidateCwd}` };
+  }
+
   let realRoot: string;
   try {
     realRoot = await realpath(rootCwd);
+    if (!(await stat(realRoot)).isDirectory()) {
+      return {
+        ok: false,
+        reason: `workflow root is not a directory: ${rootCwd}`,
+      };
+    }
   } catch {
     return { ok: false, reason: `workflow root does not resolve: ${rootCwd}` };
   }
@@ -131,7 +153,9 @@ export const validateCwdWithinRepo = async (
 
   // If the root is not a git repository, containment (above) is the only
   // boundary available and has already passed.
-  if (rootCommon === undefined) return { ok: true };
+  if (rootCommon === undefined) {
+    return { ok: true, canonicalCwd: realCandidate };
+  }
 
   if (candidateCommon === undefined) {
     return {
@@ -145,5 +169,5 @@ export const validateCwdWithinRepo = async (
       reason: `cwd ${candidateCwd} belongs to a different git repository than the workflow root (nested-repo boundary)`,
     };
   }
-  return { ok: true };
+  return { ok: true, canonicalCwd: realCandidate };
 };

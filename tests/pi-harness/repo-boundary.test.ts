@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   mkdir,
@@ -11,13 +11,27 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  type CwdBoundaryResult,
   validateCwdInSameRepo,
   validateCwdWithinRepo,
 } from "../../pi/extensions/pi-harness/lib/repo-boundary";
 
-const tempRoot = async (prefix: string): Promise<string> =>
+const temporaryDirectories: string[] = [];
+
+const tempRoot = async (prefix: string): Promise<string> => {
   // realpath so macOS /var → /private/var canonicalization matches the module's.
-  realpath(await mkdtemp(join(tmpdir(), prefix)));
+  const root = await realpath(await mkdtemp(join(tmpdir(), prefix)));
+  temporaryDirectories.push(root);
+  return root;
+};
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
+  );
+});
 
 const gitInit = (cwd: string): void => {
   execFileSync("git", ["init", "-q"], { cwd, stdio: "ignore" });
@@ -31,6 +45,7 @@ describe("validateCwdInSameRepo", () => {
 
     expect(await validateCwdInSameRepo(linked, root, sameRepo)).toEqual({
       ok: true,
+      canonicalCwd: linked,
     });
   });
 
@@ -109,6 +124,12 @@ describe("validateCwdInSameRepo", () => {
   });
 });
 
+const rejectionReason = (result: CwdBoundaryResult): string => {
+  if (result.ok)
+    throw new Error(`Expected rejection for ${result.canonicalCwd}`);
+  return result.reason;
+};
+
 describe("validateCwdWithinRepo (injected git identity)", () => {
   const sameRepo = async (): Promise<string> => "/common/.git";
 
@@ -118,6 +139,7 @@ describe("validateCwdWithinRepo (injected git identity)", () => {
     await mkdir(sub, { recursive: true });
     expect(await validateCwdWithinRepo(sub, root, sameRepo)).toEqual({
       ok: true,
+      canonicalCwd: sub,
     });
   });
 
@@ -126,7 +148,7 @@ describe("validateCwdWithinRepo (injected git identity)", () => {
     const outside = await tempRoot("rb-out-");
     const result = await validateCwdWithinRepo(outside, root, sameRepo);
     expect(result.ok).toBe(false);
-    expect(result.reason).toContain("outside");
+    expect(rejectionReason(result)).toContain("outside");
   });
 
   test("rejects a nested distinct repository (different common-dir)", async () => {
@@ -137,7 +159,7 @@ describe("validateCwdWithinRepo (injected git identity)", () => {
       cwd === nested ? `${nested}/.git` : `${root}/.git`;
     const result = await validateCwdWithinRepo(nested, root, perPath);
     expect(result.ok).toBe(false);
-    expect(result.reason).toContain("different git repository");
+    expect(rejectionReason(result)).toContain("different git repository");
   });
 
   test("accepts when the root is not a git repo (containment only)", async () => {
@@ -147,6 +169,7 @@ describe("validateCwdWithinRepo (injected git identity)", () => {
     const notARepo = async (): Promise<undefined> => undefined;
     expect(await validateCwdWithinRepo(sub, root, notARepo)).toEqual({
       ok: true,
+      canonicalCwd: sub,
     });
   });
 
@@ -158,7 +181,7 @@ describe("validateCwdWithinRepo (injected git identity)", () => {
       cwd === root ? "/r/.git" : undefined;
     const result = await validateCwdWithinRepo(sub, root, onlyRootIsRepo);
     expect(result.ok).toBe(false);
-    expect(result.reason).toContain("not in a git repository");
+    expect(rejectionReason(result)).toContain("not in a git repository");
   });
 
   test("rejects a symlinked cwd that resolves outside the root", async () => {
@@ -168,7 +191,29 @@ describe("validateCwdWithinRepo (injected git identity)", () => {
     await symlink(outside, link);
     const result = await validateCwdWithinRepo(link, root, sameRepo);
     expect(result.ok).toBe(false);
-    expect(result.reason).toContain("outside");
+    expect(rejectionReason(result)).toContain("outside");
+  });
+
+  test("rejects a regular file even under a non-repository root", async () => {
+    const root = await tempRoot("rb-");
+    const file = join(root, "not-a-directory");
+    await writeFile(file, "file\n");
+    const notARepo = async (): Promise<undefined> => undefined;
+    const result = await validateCwdWithinRepo(file, root, notARepo);
+    expect(result.ok).toBe(false);
+    expect(rejectionReason(result)).toContain("not a directory");
+  });
+
+  test("rejects a workflow root that is a regular file", async () => {
+    const parent = await tempRoot("rb-");
+    const candidate = join(parent, "candidate");
+    const rootFile = join(parent, "root-file");
+    await mkdir(candidate);
+    await writeFile(rootFile, "file\n");
+    const notARepo = async (): Promise<undefined> => undefined;
+    const result = await validateCwdWithinRepo(candidate, rootFile, notARepo);
+    expect(result.ok).toBe(false);
+    expect(rejectionReason(result)).toContain("root is not a directory");
   });
 
   test("rejects a nonexistent cwd", async () => {
@@ -179,7 +224,7 @@ describe("validateCwdWithinRepo (injected git identity)", () => {
       sameRepo,
     );
     expect(result.ok).toBe(false);
-    expect(result.reason).toContain("does not resolve");
+    expect(rejectionReason(result)).toContain("does not resolve");
   });
 });
 
@@ -197,7 +242,7 @@ describe("validateCwdWithinRepo (real git)", () => {
     gitInit(nested);
     const nestedResult = await validateCwdWithinRepo(nested, root);
     expect(nestedResult.ok).toBe(false);
-    expect(nestedResult.reason).toContain("different git repository");
+    expect(rejectionReason(nestedResult)).toContain("different git repository");
 
     const outside = await tempRoot("rb-real-out-");
     gitInit(outside);
