@@ -121,10 +121,6 @@ const BUILT_IN_ASK_DEFINITIONS: readonly AskDefinition[] = [
     reason: "再帰的な強制削除には確認が必要です",
   },
   {
-    pattern: "^git\\s+push\\b[^\\n]*(?:\\s--force|\\s-f)(?=\\s|$)",
-    reason: "強制 push には確認が必要です",
-  },
-  {
     pattern: "^git\\s+reset\\b[^\\n]*\\s--hard(?=\\s|$)",
     reason: "hard reset には確認が必要です",
   },
@@ -334,9 +330,145 @@ const structuralBitDeny = (seg: NormalizedSegment): string | undefined => {
   return undefined;
 };
 
+const GIT_GLOBAL_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set([
+  "-C",
+  "-c",
+  "--attr-source",
+  "--config-env",
+  "--git-dir",
+  "--namespace",
+  "--work-tree",
+]);
+
+interface GitSubcommandPosition {
+  readonly index: number;
+  readonly ambiguousOption: boolean;
+}
+
+const gitSubcommandPosition = (
+  words: readonly string[],
+): GitSubcommandPosition | undefined => {
+  if (words[0] !== "git") return undefined;
+  let index = 1;
+  let ambiguousOption = false;
+  while (index < words.length) {
+    const word = words[index];
+    if (word === undefined) return undefined;
+    if (GIT_GLOBAL_OPTIONS_WITH_VALUE.has(word)) {
+      index += 2;
+      continue;
+    }
+    if ((word.startsWith("-C") || word.startsWith("-c")) && word.length > 2) {
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("--") && word.includes("=")) {
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("-")) {
+      // Unknown no-equals options are ambiguous: Git may consume the next
+      // word as their value. Keep scanning, but let the caller conservatively
+      // inspect a later concrete `push` token as well.
+      ambiguousOption = true;
+      index += 1;
+      continue;
+    }
+    return { index, ambiguousOption };
+  }
+  return undefined;
+};
+
+const FORCE_PUSH_LONG_OPTIONS = [
+  "force",
+  "force-with-lease",
+  "force-if-includes",
+] as const;
+const DESTRUCTIVE_PUSH_LONG_OPTIONS = ["delete", "mirror", "prune"] as const;
+const COMMAND_PUSH_LONG_OPTIONS = ["exec", "receive-pack"] as const;
+
+const abbreviatesLongOption = (
+  word: string,
+  options: readonly string[],
+): boolean => {
+  if (!word.startsWith("--")) return false;
+  const name = word.slice(2).split("=", 1)[0] ?? "";
+  return name !== "" && options.some((option) => option.startsWith(name));
+};
+
+const remoteHelperExec = (word: string): boolean => {
+  const repository = word.startsWith("--repo=")
+    ? word.slice("--repo=".length)
+    : word;
+  return /^[A-Za-z0-9][A-Za-z0-9+.-]*::/.test(repository);
+};
+
+const clusteredPushRisk = (
+  word: string,
+): "force" | "destructive" | undefined => {
+  if (!/^-[^-]/.test(word)) return undefined;
+  for (const option of word.slice(1)) {
+    if (option === "f") return "force";
+    if (option === "d") return "destructive";
+    // -o consumes the rest of this word as a push-option value; letters in
+    // that value are not additional short options.
+    if (option === "o") return undefined;
+  }
+  return undefined;
+};
+
+const structuralGitAsk = (seg: NormalizedSegment): string | undefined => {
+  const position = gitSubcommandPosition(seg.words);
+  if (position === undefined) return undefined;
+
+  const candidates: number[] = [];
+  if (
+    !seg.opaque.has(position.index) &&
+    seg.words[position.index] === "push"
+  ) {
+    candidates.push(position.index);
+  } else if (position.ambiguousOption) {
+    for (let index = position.index + 1; index < seg.words.length; index += 1) {
+      if (!seg.opaque.has(index) && seg.words[index] === "push") {
+        candidates.push(index);
+      }
+    }
+  }
+
+  for (const subcommandIndex of candidates) {
+    for (let index = subcommandIndex + 1; index < seg.words.length; index += 1) {
+      const word = seg.words[index];
+      if (word === undefined) continue;
+      const shortRisk = clusteredPushRisk(word);
+      if (
+        abbreviatesLongOption(word, FORCE_PUSH_LONG_OPTIONS) ||
+        shortRisk === "force"
+      ) {
+        return "強制 push には確認が必要です";
+      }
+      if (
+        abbreviatesLongOption(word, COMMAND_PUSH_LONG_OPTIONS) ||
+        remoteHelperExec(word)
+      ) {
+        return "remote 側で任意コマンドを指定する push には確認が必要です";
+      }
+      if (
+        abbreviatesLongOption(word, DESTRUCTIVE_PUSH_LONG_OPTIONS) ||
+        shortRisk === "destructive" ||
+        word.startsWith("+") ||
+        word.startsWith(":")
+      ) {
+        return "remote ref を削除・強制更新する push には確認が必要です";
+      }
+    }
+  }
+  return undefined;
+};
+
 // One simple command. Precedence: concrete DENY > built-in DENY-potential
-// (unsuppressable by user allow — the data-leak floor) > user ALLOW > concrete
-// ASK > built-in ASK-potential > opaque executor > default-continue.
+// (unsuppressable by user allow — the data-leak floor) > mandatory structural
+// ASK (destructive push) > user ALLOW > concrete ASK > built-in ASK-potential >
+// opaque executor > default-continue.
 const evaluateNormalized = (
   segment: Segment,
   normalized: NormalizedSegment,
@@ -356,6 +488,11 @@ const evaluateNormalized = (
 
   if (potential === "deny") {
     return { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON };
+  }
+
+  const structuralAsk = structuralGitAsk(normalized);
+  if (structuralAsk !== undefined) {
+    return { verdict: "ask", reason: structuralAsk };
   }
 
   // A same-repository leading cd is neutral only for explicit-allow

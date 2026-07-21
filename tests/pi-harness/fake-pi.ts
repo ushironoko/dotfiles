@@ -252,8 +252,9 @@ export function createFakePi(
       return injection;
     },
     async emitContext(messages) {
-      const payload = { type: "context" as const, messages };
-      for (const handler of store.context) await handler(payload, ctx);
+      for (const handler of store.context) {
+        await handler({ type: "context", messages }, ctx);
+      }
     },
     async emitToolCall(payload) {
       for (const handler of store.tool_call) {

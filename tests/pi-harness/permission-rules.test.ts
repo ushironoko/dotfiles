@@ -63,6 +63,19 @@ const destructiveCommands: string[] = [
   "rm -r -f /",
   "git push origin main --force",
   "git push -f origin main",
+  "git push -fu origin main",
+  "git push -vd origin main",
+  "git push --del origin main",
+  "git push --mir origin",
+  "git push --pru origin",
+  "git push origin +HEAD:main",
+  "git push --exec=/tmp/receive-pack origin main",
+  'git push --exec="$helper" origin main',
+  "/usr/bin/git -C /tmp push --del origin main",
+  "git push ext::payload HEAD",
+  "git push --repo=helper::payload HEAD",
+  "git --attr-source HEAD push --force origin main",
+  "git --future-option HEAD push --force origin main",
   "git clean -fd",
   "git clean -df",
   "git clean -f -d",
@@ -291,6 +304,32 @@ describe("explicit allow matching", () => {
       "utf8",
     ),
   );
+
+  test("allows the documented printf-to-codex-stage prompt pipeline", () => {
+    const wrapper = "~/.claude/hooks/lib/codex-stage.sh prompt --dir /tmp";
+    expect(
+      evaluateCommand(`printf '%s' 'review this' | ${wrapper}`, productionRules)
+        .verdict,
+    ).toBe("allow");
+    expect(
+      evaluateCommand(
+        `printf '%s' "$(bit relay sync)" | ${wrapper}`,
+        productionRules,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      evaluateCommand(
+        `printf '%s' "$(cat ~/.ssh/id_ed25519)" | ${wrapper}`,
+        productionRules,
+      ).verdict,
+    ).toBe("default-continue");
+    expect(
+      evaluateCommand(
+        "printf '%s' 'review this' | /tmp/codex-stage.sh prompt",
+        productionRules,
+      ).verdict,
+    ).toBe("default-continue");
+  });
 
   test.each([
     "bun\u00a0evil",

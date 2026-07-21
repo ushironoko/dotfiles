@@ -25,7 +25,7 @@ export type CwdBoundaryResult =
 // Absolute, realpath'd git common-dir of `cwd`, or undefined when `cwd` is not
 // in a git repository / git is unavailable. The env is sanitized so an inherited
 // GIT_COMMON_DIR cannot make this self-satisfy.
-const gitCommonDir = (cwd: string): Promise<string | undefined> =>
+export const gitCommonDir = (cwd: string): Promise<string | undefined> =>
   new Promise((resolve) => {
     execFile(
       "git",
@@ -51,61 +51,48 @@ const gitCommonDir = (cwd: string): Promise<string | undefined> =>
 
 export type GitCommonDirFn = (cwd: string) => Promise<string | undefined>;
 
-/**
- * Verify repository identity without requiring path containment. Linked Git
- * worktrees deliberately live outside one another, but resolve to the same
- * canonical common directory. Both endpoints must be real Git worktrees; the
- * non-repository containment fallback used by validateCwdWithinRepo is not
- * appropriate for permission grants.
- */
-export const validateCwdInSameRepo = async (
+export const validateSameGitRepository = async (
   candidateCwd: string,
   rootCwd: string,
   gitCommonDirFn: GitCommonDirFn = gitCommonDir,
 ): Promise<CwdBoundaryResult> => {
   let realCandidate: string;
-  try {
-    realCandidate = await realpath(candidateCwd);
-    if (!(await stat(realCandidate)).isDirectory()) {
-      return { ok: false, reason: `cwd is not a directory: ${candidateCwd}` };
-    }
-  } catch {
-    return { ok: false, reason: `cwd does not resolve: ${candidateCwd}` };
-  }
   let realRoot: string;
   try {
-    realRoot = await realpath(rootCwd);
-    if (!(await stat(realRoot)).isDirectory()) {
-      return {
-        ok: false,
-        reason: `repository cwd is not a directory: ${rootCwd}`,
-      };
+    [realCandidate, realRoot] = await Promise.all([
+      realpath(candidateCwd),
+      realpath(rootCwd),
+    ]);
+    const [candidateStats, rootStats] = await Promise.all([
+      stat(realCandidate),
+      stat(realRoot),
+    ]);
+    if (!candidateStats.isDirectory() || !rootStats.isDirectory()) {
+      return { ok: false, reason: "repository cwd is not a directory" };
     }
   } catch {
-    return { ok: false, reason: `repository cwd does not resolve: ${rootCwd}` };
+    return { ok: false, reason: "repository cwd does not resolve" };
   }
 
   const [candidateCommon, rootCommon] = await Promise.all([
     gitCommonDirFn(realCandidate),
     gitCommonDirFn(realRoot),
   ]);
-  if (rootCommon === undefined) {
-    return { ok: false, reason: `cwd is not in a git repository: ${rootCwd}` };
-  }
-  if (candidateCommon === undefined) {
-    return {
-      ok: false,
-      reason: `cwd ${candidateCwd} is not in a git repository`,
-    };
+  if (candidateCommon === undefined || rootCommon === undefined) {
+    return { ok: false, reason: "repository identity could not be resolved" };
   }
   if (candidateCommon !== rootCommon) {
     return {
       ok: false,
-      reason: `cwd ${candidateCwd} belongs to a different git repository`,
+      reason: `cwd ${candidateCwd} belongs to a different git repository than ${rootCwd}`,
     };
   }
   return { ok: true, canonicalCwd: realCandidate };
 };
+
+// Trusted leading `cd` and skill-granted `git -C` share the same canonical
+// repository-identity boundary. Keep the descriptive alias for the former.
+export const validateCwdInSameRepo = validateSameGitRepository;
 
 export const validateCwdWithinRepo = async (
   candidateCwd: string,

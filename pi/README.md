@@ -88,6 +88,19 @@ the fallback by design. See
 [`LOCAL_PERMISSION_JUDGE.md`](./LOCAL_PERMISSION_JUDGE.md) for setup,
 configuration, data boundaries, and qualification steps.
 
+An explicitly invoked `/skill:<name>` may pre-approve parent-session Bash
+commands through its `allowed-tools` frontmatter. The permission policy records
+the accepted interactive/RPC input before Pi expands it, then requires the
+latest processed user message to exactly match that loaded `SKILL.md` and its
+arguments. The run snapshots both the skill body and grants, so later
+frontmatter edits cannot widen it. Pasted expansions and extension-generated
+messages grant nothing. It recalculates grants at every provider context,
+including queued prompts, and clears them when the run settles. Deterministic
+deny/ask and shell-structure
+rules still take precedence; child profiles never inherit grants. A skill's
+`git -C` grant is additionally limited to worktrees sharing the active cwd's
+canonical Git common directory.
+
 ## Codex web tools
 
 `extensions/codex-web` registers `web_search` and `web_fetch` for the current

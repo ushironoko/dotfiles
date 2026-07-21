@@ -50,6 +50,13 @@ requests an automatic follow-up parent turn. Completion delivery is serialized:
 only one result is handed to pi at a time, while later results remain in the
 manager-local queue until the preceding notification turn settles.
 
+A permission-policy block in a no-UI child emits a diagnostic signal bound to a
+random per-spawn token and makes that child run fail even if the model responds
+with a normal final message and pi exits zero. The signal is filtered from child
+stderr, transcripts, and persistence; marker-like text in ordinary tool output
+is ignored. Only the `permission-blocked` classification is retained, and
+parent-session permission messages keep their existing text.
+
 Background child runs require persistent TUI or RPC mode. Print (`-p`) and JSON
 modes reject `subagent` and `workflow` before side effects because the parent
 process would exit before completion delivery. A `/tree` request aborts and

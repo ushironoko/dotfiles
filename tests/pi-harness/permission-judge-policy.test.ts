@@ -6,6 +6,10 @@ import {
   type PermissionJudgeConfig,
 } from "../../pi/extensions/pi-harness/config";
 import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
+import {
+  CHILD_PERMISSION_SIGNAL_ENV,
+  formatChildPermissionSignal,
+} from "../../pi/extensions/pi-harness/features/permission-policy/block";
 import type { PermissionProjectContext } from "../../pi/extensions/pi-harness/features/permission-policy/context";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import type { ToolCallEvent } from "../../pi/extensions/pi-harness/lib/pi-like";
@@ -55,8 +59,9 @@ const ollamaResponse = (content: string): Response =>
 
 const makeConfig = (
   permissionJudge?: PermissionJudgeConfig,
+  isChild = false,
 ): HarnessConfig => ({
-  isChild: false,
+  isChild,
   features: {
     "hook-bridge": true,
     subagent: true,
@@ -439,6 +444,38 @@ describe("permission policy local judge routing", () => {
       block: true,
       reason: "local judge requested user confirmation",
     });
+  });
+
+  test("signals child-only permission blocks without changing the tool reason", async () => {
+    const upstream = await start(() => ollamaResponse("ASK"));
+    const pi = createFakePi({ hasUI: false });
+    const token = "123e4567-e89b-42d3-a456-426614174000";
+    const signals: string[] = [];
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream), true), {
+      permissionSignalToken: token,
+      writePermissionSignal: (text) => signals.push(text),
+    });
+
+    expect(await pi.emitToolCall(bashCall("git status"))).toEqual({
+      block: true,
+      reason: "local judge requested user confirmation",
+    });
+    expect(signals).toEqual([`${formatChildPermissionSignal(token)}\n`]);
+  });
+
+  test("consumes the inherited child signal token before tools can inherit it", () => {
+    const previous = process.env[CHILD_PERMISSION_SIGNAL_ENV];
+    process.env[CHILD_PERMISSION_SIGNAL_ENV] =
+      "123e4567-e89b-42d3-a456-426614174000";
+    try {
+      const pi = createFakePi({ hasUI: false });
+      setupPermissionPolicy(pi, makeConfig(undefined, true));
+      expect(process.env[CHILD_PERMISSION_SIGNAL_ENV]).toBeUndefined();
+    } finally {
+      if (previous === undefined)
+        delete process.env[CHILD_PERMISSION_SIGNAL_ENV];
+      else process.env[CHILD_PERMISSION_SIGNAL_ENV] = previous;
+    }
   });
 
   test("warns once and confirms when Ollama is unavailable", async () => {
