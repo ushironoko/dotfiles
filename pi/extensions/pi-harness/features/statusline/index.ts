@@ -13,14 +13,24 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { HarnessConfig } from "../../config";
 import { sanitizeChildEnv } from "../../lib/child-env";
 import { launchDetached, type DetachedSpawnFunction } from "../../lib/detached";
-import type { CtxLike, PiLike, ThemeLike } from "../../lib/pi-like";
-import { matchedTrustedRoot } from "../../lib/trust";
+import type {
+  CtxLike,
+  PiLike,
+  ThemeLike,
+  ToolResultEvent,
+} from "../../lib/pi-like";
+import { isPathWithin, matchedTrustedRoot } from "../../lib/trust";
+import {
+  matchesFileIdentity,
+  type WorktreeIdentityV1,
+  worktreeIdentityFromDetails,
+} from "../../lib/worktree-identity";
 import {
   formatModelName,
   type GitStatus,
@@ -37,7 +47,59 @@ interface StatuslineDeps {
   spawnDetached?: DetachedSpawnFunction;
   getGitStatus?: (cwd: string) => Promise<GitStatus>;
   getBranch?: (cwd: string) => Promise<string | undefined>;
+  gitOutput?: (cwd: string, args: string[]) => Promise<string | undefined>;
+  validateInheritedWorktree?: (
+    sourceCwd: string,
+    worktreePath: string,
+    identity: WorktreeIdentityV1,
+  ) => Promise<boolean>;
 }
+
+interface ActiveWorktree {
+  path: string;
+  branch?: string;
+  sourceCwd: string;
+  identity?: WorktreeIdentityV1;
+}
+
+const successfulToolResultText = (
+  event: ToolResultEvent,
+): string | undefined => {
+  if (event.isError === true || event.content?.length !== 1) return undefined;
+  const [block] = event.content;
+  if (block?.type !== "text" || typeof block.text !== "string") {
+    return undefined;
+  }
+  const text = block.text.trim();
+  return text !== "" && !text.includes("\n") ? text : undefined;
+};
+
+const toolInputString = (
+  event: ToolResultEvent,
+  key: string,
+): string | undefined => {
+  const input = event.input;
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    return undefined;
+  }
+  const value = Reflect.get(input, key);
+  return typeof value === "string" && value !== "" ? value : undefined;
+};
+
+const createdWorktreePath = (event: ToolResultEvent): string | undefined => {
+  if (event.toolName !== "worktree_create") return undefined;
+  const path = successfulToolResultText(event);
+  return path !== undefined && isAbsolute(path) ? path : undefined;
+};
+
+const removedWorktreePath = (event: ToolResultEvent): string | undefined => {
+  if (event.toolName !== "worktree_remove") return undefined;
+  const text = successfulToolResultText(event);
+  const prefix = "Removed worktree: ";
+  if (text === undefined || !text.startsWith(prefix)) return undefined;
+  const path = text.slice(prefix.length);
+  return isAbsolute(path) ? path : undefined;
+};
 
 const EMPTY_GIT_STATUS: GitStatus = {
   isRepository: false,
@@ -117,6 +179,143 @@ const gitOutput = (cwd: string, args: string[]): Promise<string | undefined> =>
     );
   });
 
+/**
+ * Revalidate the identity that worktree_create established before extending
+ * source-checkout trust to an external gwq path. Git registration, common-dir
+ * identity, linked-worktree git-dir placement, and the creation-time root,
+ * .git file, and admin git-dir must all still agree. This closes static path
+ * replacement; the later runner launch remains a separate best-effort TOCTOU
+ * boundary and therefore retains the runner's own trusted-root checks.
+ */
+const validateInheritedWorktree = async (
+  sourceCwd: string,
+  worktreePath: string,
+  identity: WorktreeIdentityV1,
+  readGit: (
+    cwd: string,
+    args: string[],
+  ) => Promise<string | undefined> = gitOutput,
+): Promise<boolean> => {
+  try {
+    const worktreeDotGit = join(worktreePath, ".git");
+    const [canonicalRoot, rootStats, dotGitStats] = await Promise.all([
+      realpath(worktreePath),
+      lstat(worktreePath, { bigint: true }),
+      lstat(worktreeDotGit, { bigint: true }),
+    ]);
+    if (
+      canonicalRoot !== worktreePath ||
+      !rootStats.isDirectory() ||
+      !dotGitStats.isFile() ||
+      !matchesFileIdentity(rootStats, identity.root) ||
+      !matchesFileIdentity(dotGitStats, identity.dotGit)
+    ) {
+      return false;
+    }
+    const [sourceCommon, worktreeCommon, worktreeTop, worktreeGitDir, list] =
+      await Promise.all([
+        readGit(sourceCwd, [
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-common-dir",
+        ]),
+        readGit(worktreePath, [
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-common-dir",
+        ]),
+        readGit(worktreePath, [
+          "rev-parse",
+          "--path-format=absolute",
+          "--show-toplevel",
+        ]),
+        readGit(worktreePath, ["rev-parse", "--absolute-git-dir"]),
+        readGit(sourceCwd, ["worktree", "list", "--porcelain"]),
+      ]);
+    const required = [
+      sourceCommon,
+      worktreeCommon,
+      worktreeTop,
+      worktreeGitDir,
+      list,
+    ];
+    if (required.some((value) => value === undefined || value.trim() === "")) {
+      return false;
+    }
+
+    const [
+      canonicalSourceCommon,
+      canonicalWorktreeCommon,
+      canonicalTop,
+      gitDir,
+    ] = await Promise.all([
+      realpath(sourceCommon?.trim() ?? ""),
+      realpath(worktreeCommon?.trim() ?? ""),
+      realpath(worktreeTop?.trim() ?? ""),
+      realpath(worktreeGitDir?.trim() ?? ""),
+    ]);
+    const linkedGitDirRoot = join(canonicalSourceCommon, "worktrees");
+    const registered = (list ?? "")
+      .split("\n")
+      .some((line) => line === `worktree ${worktreePath}`);
+    if (
+      canonicalSourceCommon !== canonicalWorktreeCommon ||
+      canonicalTop !== worktreePath ||
+      gitDir !== identity.gitDir ||
+      gitDir === linkedGitDirRoot ||
+      !isPathWithin(gitDir, linkedGitDirRoot) ||
+      !registered
+    ) {
+      return false;
+    }
+
+    // Only inspect admin metadata after Git has proved that `gitDir` is a
+    // registered linked-worktree directory inside the trusted common dir.
+    // This prevents an attacker-controlled replacement path from making us
+    // read an arbitrary path (or FIFO) before the containment checks run.
+    const backlinkFile = join(gitDir, "gitdir");
+    const backlinkStats = await lstat(backlinkFile);
+    if (!backlinkStats.isFile() || backlinkStats.size > 4_096) {
+      return false;
+    }
+
+    const backlinkContents = await readFile(backlinkFile, "utf8");
+    const backlink = backlinkContents.trim();
+    if (
+      backlink === "" ||
+      backlink.includes("\0") ||
+      backlink.includes("\r") ||
+      backlink.includes("\n")
+    ) {
+      return false;
+    }
+    const backlinkTarget = isAbsolute(backlink)
+      ? backlink
+      : resolve(gitDir, backlink);
+    const [canonicalDotGit, canonicalBacklink] = await Promise.all([
+      realpath(worktreeDotGit),
+      realpath(backlinkTarget),
+    ]);
+    if (canonicalDotGit !== canonicalBacklink) return false;
+
+    // Git and backlink discovery above are asynchronous. Re-check both inode
+    // identities at the end so a replacement during that interval cannot be
+    // trusted before the runner performs its own pinned-cwd verification.
+    const [finalRootStats, finalDotGitStats] = await Promise.all([
+      lstat(worktreePath, { bigint: true }),
+      lstat(worktreeDotGit, { bigint: true }),
+    ]);
+    return (
+      finalRootStats.isDirectory() &&
+      finalDotGitStats.isFile() &&
+      matchesFileIdentity(finalRootStats, identity.root) &&
+      matchesFileIdentity(finalDotGitStats, identity.dotGit)
+    );
+  } catch {
+    return false;
+  }
+};
+
 /** Extract the final org/repo pair from SSH, HTTPS, or file-style remotes. */
 export const parseOriginRepository = (origin: string): string | undefined => {
   const trimmed = origin.trim().replace(/\.git$/, "");
@@ -182,6 +381,15 @@ export default function setupStatusline(
   const spawnDetached = deps.spawnDetached ?? launchDetached;
   const getGitStatus = deps.getGitStatus ?? defaultGetGitStatus;
   const getBranch = deps.getBranch ?? defaultGetBranch;
+  const validateWorktree =
+    deps.validateInheritedWorktree ??
+    ((sourceCwd, worktreePath, identity) =>
+      validateInheritedWorktree(
+        sourceCwd,
+        worktreePath,
+        identity,
+        deps.gitOutput ?? gitOutput,
+      ));
   const runner = join(
     config.paths.claudeHooksDir,
     "lib/statusline_checks_run.sh",
@@ -192,6 +400,7 @@ export default function setupStatusline(
     git: { ...EMPTY_GIT_STATUS },
   };
   let activeContext: CtxLike | undefined;
+  let activeWorktree: ActiveWorktree | undefined;
   let footerInstalled = false;
   let requestFooterRender: (() => void) | undefined;
 
@@ -215,7 +424,10 @@ export default function setupStatusline(
               return renderStatusline(
                 snapshot,
                 {
-                  branch: footerData.getGitBranch(),
+                  branch:
+                    activeWorktree === undefined
+                      ? footerData.getGitBranch()
+                      : activeWorktree.branch,
                   modelName: formatModelName(current?.model),
                   remainingContext: remainingContextPercent(
                     current?.getContextUsage?.(),
@@ -241,9 +453,12 @@ export default function setupStatusline(
 
     // RPC supports widgets but intentionally ignores component factories.
     // Git subprocesses remain trust-gated in this fallback too.
-    const branch = allowGit
-      ? await getBranch(ctx.cwd ?? process.cwd())
-      : undefined;
+    const branch =
+      activeWorktree === undefined
+        ? allowGit
+          ? await getBranch(ctx.cwd ?? process.cwd())
+          : undefined
+        : activeWorktree.branch;
     ctx.ui.setWidget?.(
       STATUSLINE_WIDGET_KEY,
       renderStatusline(
@@ -260,13 +475,51 @@ export default function setupStatusline(
   };
 
   const refresh = async (ctx: CtxLike, launchChecks: boolean) => {
-    const cwd = ctx.cwd ?? process.cwd();
-    // Pass the canonical trusted root down as a boundary: the runner executes
-    // repository-defined commands, and its own find_project_root can otherwise
-    // ascend past the trusted root into an untrusted parent.
-    const trustedRoot = matchedTrustedRoot(cwd, config.trust);
+    const cwd = activeWorktree?.path ?? ctx.cwd ?? process.cwd();
+    // A worktree created by the validated harness tool inherits the trust of
+    // its source checkout even though gwq places it outside that root. Keep
+    // re-checking the source path so a vanished or retargeted trust root fails
+    // closed. The worktree itself is the shell runner boundary.
+    const directlyTrustedRoot = matchedTrustedRoot(cwd, config.trust);
+    let trustedRoot = directlyTrustedRoot;
+    let trustedWorktreeIdentity: WorktreeIdentityV1 | undefined;
+    if (
+      trustedRoot === undefined &&
+      activeWorktree?.path === cwd &&
+      matchedTrustedRoot(activeWorktree.sourceCwd, config.trust) !== undefined
+    ) {
+      try {
+        if (
+          activeWorktree.identity !== undefined &&
+          (await validateWorktree(
+            activeWorktree.sourceCwd,
+            cwd,
+            activeWorktree.identity,
+          ))
+        ) {
+          trustedRoot = cwd;
+          trustedWorktreeIdentity = activeWorktree.identity;
+        }
+      } catch {
+        trustedRoot = undefined;
+      }
+    }
     if (launchChecks && trustedRoot !== undefined && existsSync(runner)) {
-      spawnDetached("bash", [runner, cwd, trustedRoot], { cwd });
+      spawnDetached(
+        "bash",
+        [
+          runner,
+          cwd,
+          trustedRoot,
+          ...(trustedWorktreeIdentity === undefined
+            ? []
+            : [
+                trustedWorktreeIdentity.root.dev,
+                trustedWorktreeIdentity.root.ino,
+              ]),
+        ],
+        { cwd },
+      );
     }
 
     // Print/JSON modes expose no-op UI methods. Preserve lifecycle checks, but
@@ -293,6 +546,13 @@ export default function setupStatusline(
       } catch {
         git = { ...EMPTY_GIT_STATUS };
       }
+      if (activeWorktree?.path === cwd) {
+        try {
+          activeWorktree.branch = await getBranch(cwd);
+        } catch {
+          activeWorktree.branch = undefined;
+        }
+      }
     }
     snapshot = {
       directory: basename(cwd),
@@ -304,7 +564,28 @@ export default function setupStatusline(
   };
 
   pi.on("session_start", async (_event, ctx) => {
+    activeWorktree = undefined;
     await refresh(ctx, false);
+  });
+  pi.on("tool_result", async (event, ctx) => {
+    const createdPath = createdWorktreePath(event);
+    if (createdPath !== undefined) {
+      const identity = worktreeIdentityFromDetails(event.details, createdPath);
+      activeWorktree = {
+        path: createdPath,
+        branch: toolInputString(event, "name"),
+        sourceCwd: ctx.cwd ?? process.cwd(),
+        ...(identity === undefined ? {} : { identity }),
+      };
+      await refresh(ctx, false);
+      return;
+    }
+
+    const removedPath = removedWorktreePath(event);
+    if (removedPath !== undefined && removedPath === activeWorktree?.path) {
+      activeWorktree = undefined;
+      await refresh(ctx, false);
+    }
   });
   pi.on("agent_settled", async (_event, ctx) => {
     await refresh(ctx, true);

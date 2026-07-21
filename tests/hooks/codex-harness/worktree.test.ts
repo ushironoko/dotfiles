@@ -3,6 +3,10 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join, resolve } from "node:path";
 import { runHook } from "../../../pi/extensions/pi-harness/lib/run-hook";
+import {
+  matchesFileIdentity,
+  parseWorktreeIdentity,
+} from "../../../pi/extensions/pi-harness/lib/worktree-identity";
 import { cleanupTestDirectory, setupTestDirectory } from "../../test-helpers";
 
 const ROOT = resolve(import.meta.dir, "../../..");
@@ -77,6 +81,21 @@ const pathExists = async (path: string): Promise<boolean> => {
   } catch {
     return false;
   }
+};
+
+const parseCreateOutput = (stdout: string) => {
+  const [path = "", identityLine, ...extra] = stdout
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean);
+  expect(extra).toEqual([]);
+  return {
+    path,
+    identity:
+      identityLine === undefined
+        ? undefined
+        : parseWorktreeIdentity(JSON.parse(identityLine)),
+  };
 };
 
 const createFixture = async (): Promise<WorktreeFixture> => {
@@ -295,7 +314,22 @@ describe("Codex worktree removal safety", () => {
     });
 
     expect(created.exitCode).toBe(0);
-    expect(created.stdout).toBe(worktree);
+    const publication = parseCreateOutput(created.stdout);
+    expect(publication.path).toBe(worktree);
+    expect(publication.identity).toBeDefined();
+    const { identity } = publication;
+    if (identity === undefined) throw new Error("missing creation identity");
+    const [rootStats, dotGitStats] = await Promise.all([
+      fs.lstat(worktree, { bigint: true }),
+      fs.lstat(join(worktree, ".git"), { bigint: true }),
+    ]);
+    expect(matchesFileIdentity(rootStats, identity.root)).toBe(true);
+    expect(matchesFileIdentity(dotGitStats, identity.dotGit)).toBe(true);
+    const gitDirResult = await runGit(
+      ["rev-parse", "--absolute-git-dir"],
+      worktree,
+    );
+    expect(identity.gitDir).toBe(await fs.realpath(gitDirResult.stdout));
     const commonDirectory = await fs.realpath(join(repository, ".git"));
     const pathSha1 = createHash("sha1").update(worktree).digest("hex");
     const markerPath = join(
@@ -324,6 +358,89 @@ describe("Codex worktree removal safety", () => {
     });
     expect(removed.exitCode).toBe(0);
     expect(await pathExists(worktree)).toBe(false);
+    expect(await pathExists(markerPath)).toBe(false);
+  });
+
+  test("rejects replacement between initial and final hook identity checks", async () => {
+    const value = await createCreateHookFixture("codex-worktree-identity-swap");
+    temporaryDirectories.push(value.root);
+    const branch = "harness-identity-swap-test";
+    const worktree = join(value.root, "linked-worktree");
+    const statCount = join(value.root, "stat-count");
+    const realStat = Bun.which("stat");
+    const realRm = Bun.which("rm");
+    if (realStat === null || realRm === null) {
+      throw new Error("stat and rm are required for this test");
+    }
+    await fs.writeFile(
+      join(value.binDirectory, "gwq"),
+      [
+        "#!/usr/bin/env bash",
+        'if [ "$1" = "add" ]; then',
+        '  exec "$REAL_GIT" -C "$GWQ_REPOSITORY" worktree add -q "$GWQ_WORKTREE" "$2"',
+        "fi",
+        String.raw`if [ "$1" = "get" ]; then printf "%s\n" "$GWQ_WORKTREE"; exit 0; fi`,
+        "exit 1",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    await fs.writeFile(
+      join(value.binDirectory, "stat"),
+      [
+        "#!/usr/bin/env bash",
+        "set -uo pipefail",
+        'output=$("$REAL_STAT" "$@" 2>/dev/null)',
+        "status=$?",
+        '[ "$status" -eq 0 ] || exit "$status"',
+        String.raw`printf '%s\n' "$output"`,
+        "last=$" + "{!#}",
+        'if [ "$last" = "$GWQ_WORKTREE" ] || [ "$last" = "$GWQ_WORKTREE/.git" ]; then',
+        '  count=$(cat "$STAT_COUNT" 2>/dev/null || printf 0)',
+        "  count=$((count + 1))",
+        String.raw`  printf "%s\n" "$count" > "$STAT_COUNT"`,
+        '  if [ "$count" -eq 2 ]; then',
+        '    dot_git=$(cat "$GWQ_WORKTREE/.git")',
+        '    "$REAL_RM" -rf -- "$GWQ_WORKTREE"',
+        '    "$REAL_MKDIR" -- "$GWQ_WORKTREE"',
+        String.raw`    printf "%s\n" "$dot_git" > "$GWQ_WORKTREE/.git"`,
+        "  fi",
+        "fi",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = await runCommand(["bash", CREATE_HOOK], {
+      cwd: value.repository,
+      env: {
+        PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+        REAL_GIT: value.realGit,
+        REAL_MKDIR: value.realMkdir,
+        REAL_RM: realRm,
+        REAL_STAT: realStat,
+        GWQ_REPOSITORY: value.repository,
+        GWQ_WORKTREE: worktree,
+        STAT_COUNT: statCount,
+      },
+      input: JSON.stringify({ name: branch }),
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(
+      "created worktree root identity changed before publication",
+    );
+    expect(parseCreateOutput(result.stdout).path).toBe(worktree);
+    expect(await pathExists(worktree)).toBe(true);
+    const branchLookup = await runCommand(
+      ["git", "show-ref", "--verify", `refs/heads/${branch}`],
+      { cwd: value.repository },
+    );
+    expect(branchLookup.exitCode).toBe(0);
+    const commonDirectory = await fs.realpath(join(value.repository, ".git"));
+    const markerPath = join(
+      commonDirectory,
+      "codex-harness-worktrees",
+      `${createHash("sha1").update(worktree).digest("hex")}.json`,
+    );
     expect(await pathExists(markerPath)).toBe(false);
   });
 
@@ -755,7 +872,7 @@ describe("Codex worktree removal safety", () => {
 
     expect(result.exitCode).toBe(130);
     expect(result.timedOut).toBe(false);
-    expect(result.stdout.trim()).toBe(worktree);
+    expect(parseCreateOutput(result.stdout).path).toBe(worktree);
     expect(await pathExists(signalSent)).toBe(true);
     expect(await pathExists(worktree)).toBe(true);
     expect(await pathExists(markerPath)).toBe(true);
@@ -846,7 +963,7 @@ describe("Codex worktree removal safety", () => {
 
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("could not release worktree create lock");
-    expect(result.stdout.trim()).toBe(worktree);
+    expect(parseCreateOutput(result.stdout).path).toBe(worktree);
     expect(await pathExists(markerPath)).toBe(true);
     expect(
       (await fs.readdir(lockParent)).filter((name) =>
@@ -918,7 +1035,7 @@ describe("Codex worktree removal safety", () => {
     ).toBe(head);
   });
 
-  test("cancellation publishes a removable worktree created mid-hook", async () => {
+  test("cancellation retains an unmarked worktree created mid-hook", async () => {
     const root = await fs.realpath(
       await setupTestDirectory("codex-worktree-cancel"),
     );
@@ -990,7 +1107,7 @@ describe("Codex worktree removal safety", () => {
     expect(createdBeforeAbort).toBe(true);
     expect(result.exitCode).not.toBe(0);
     expect(result.timedOut).toBe(false);
-    expect(result.stdout.trim()).toBe(worktree);
+    expect(parseCreateOutput(result.stdout).path).toBe(worktree);
     expect(await pathExists(worktree)).toBe(true);
     const branchLookup = await runCommand(
       ["git", "show-ref", "--verify", `refs/heads/${branch}`],
@@ -1004,18 +1121,7 @@ describe("Codex worktree removal safety", () => {
       "codex-harness-worktrees",
       `${pathSha1}.json`,
     );
-    expect(await pathExists(markerPath)).toBe(true);
-    expect(JSON.parse(await fs.readFile(markerPath, "utf8"))).toEqual({
-      path: worktree,
-      branch,
-    });
-
-    const removed = await runRemoveHook(
-      { root, repository, worktree, commonDirectory, markerPath },
-      { worktree_path: worktree, confirmed: true },
-    );
-    expect(removed.exitCode).toBe(0);
-    expect(await pathExists(worktree)).toBe(false);
     expect(await pathExists(markerPath)).toBe(false);
+    expect(await pathExists(worktree)).toBe(true);
   });
 });

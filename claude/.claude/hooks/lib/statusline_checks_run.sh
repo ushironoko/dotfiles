@@ -4,6 +4,8 @@
 #   $1 project cwd (any path within or at the project root)
 #   $2 (optional) canonical trusted-root boundary — the discovered project root
 #      must stay within it, else the run is refused (fail-closed).
+#   $3/$4 (optional, inseparable) expected decimal device/inode for a linked
+#      worktree root. When present, cwd is pinned before identity verification.
 # Behaviour: detect project, acquire lockdir, execute TTL-expired checks
 # sequentially, write JSON cache atomically. All stdout/stderr from checks
 # is discarded so that callers running this under `async: true` hooks
@@ -13,29 +15,54 @@ set -u
 
 PROJECT_ROOT_ARG=${1:-}
 TRUST_BOUNDARY=${2:-}
+EXPECTED_ROOT_DEV=${3:-}
+EXPECTED_ROOT_INO=${4:-}
 [ -z "$PROJECT_ROOT_ARG" ] && exit 0
 
 LIB_DIR=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=claude/.claude/hooks/lib/statusline_checks_lib.sh
 source "$LIB_DIR/statusline_checks_lib.sh"
 
-PROJECT_ROOT=$(find_project_root "$PROJECT_ROOT_ARG")
-[ -z "$PROJECT_ROOT" ] && exit 0
+PINNED_CWD=0
+if [ -z "$EXPECTED_ROOT_DEV" ] && [ -z "$EXPECTED_ROOT_INO" ]; then
+    PROJECT_ROOT=$(find_project_root "$PROJECT_ROOT_ARG")
+    [ -z "$PROJECT_ROOT" ] && exit 0
+    EXEC_ROOT=$PROJECT_ROOT
 
-# Trust boundary: this runner executes repository-defined commands, so a project
-# root discovered by walking up from the cwd must not escape the canonical
-# trusted root the caller verified. Without this, a missing in-trust marker lets
-# find_project_root ascend into an untrusted parent and run its scripts (TOCTOU).
-if [ -n "$TRUST_BOUNDARY" ]; then
-    canon_root=$(cd "$PROJECT_ROOT" 2>/dev/null && pwd -P) || exit 0
-    canon_boundary=$(cd "$TRUST_BOUNDARY" 2>/dev/null && pwd -P) || exit 0
-    case "$canon_root" in
-        "$canon_boundary" | "$canon_boundary"/*) : ;;
+    # Legacy/direct-trust mode: a discovered root must not escape the canonical
+    # boundary. Identity mode below instead pins the tool-created root itself.
+    if [ -n "$TRUST_BOUNDARY" ]; then
+        canon_root=$(cd "$PROJECT_ROOT" 2>/dev/null && pwd -P) || exit 0
+        canon_boundary=$(cd "$TRUST_BOUNDARY" 2>/dev/null && pwd -P) || exit 0
+        case "$canon_root" in
+            "$canon_boundary" | "$canon_boundary"/*) : ;;
+            *) exit 0 ;;
+        esac
+    fi
+else
+    # A partial or malformed identity must never fall back to legacy mode.
+    [ -n "$EXPECTED_ROOT_DEV" ] && [ -n "$EXPECTED_ROOT_INO" ] || exit 0
+    case "$EXPECTED_ROOT_DEV:$EXPECTED_ROOT_INO" in
+        *[!0-9:]* | :* | *: | *:*:*) exit 0 ;;
+    esac
+    [ -n "$TRUST_BOUNDARY" ] || exit 0
+    case "$PROJECT_ROOT_ARG" in
+        "$TRUST_BOUNDARY" | "$TRUST_BOUNDARY"/*) : ;;
         *) exit 0 ;;
     esac
+
+    # Pin cwd first. If the pathname was replaced before cd, the identity check
+    # rejects it; if it is renamed/replaced afterwards, relative `.` continues
+    # to address the opened original directory for command discovery/execution.
+    cd -P -- "$PROJECT_ROOT_ARG" 2>/dev/null || exit 0
+    observed_identity=$(file_identity .) || exit 0
+    [ "$observed_identity" = "$EXPECTED_ROOT_DEV:$EXPECTED_ROOT_INO" ] || exit 0
+    PINNED_CWD=1
+    PROJECT_ROOT=$PROJECT_ROOT_ARG
+    EXEC_ROOT=.
 fi
 
-LANG_TYPE=$(detect_project_type "$PROJECT_ROOT")
+LANG_TYPE=$(detect_project_type "$EXEC_ROOT")
 [ -z "$LANG_TYPE" ] && exit 0
 
 LABEL=$(project_label "$LANG_TYPE")
@@ -138,9 +165,9 @@ resolve_cmd() {
             ;;
         ts)
             local pm script
-            pm=$(detect_package_manager "$PROJECT_ROOT")
+            pm=$(detect_package_manager "$EXEC_ROOT")
             [ -z "$pm" ] && return 0
-            script=$(resolve_script_key "$slot" "$PROJECT_ROOT/package.json") || return 0
+            script=$(resolve_script_key "$slot" "$EXEC_ROOT/package.json") || return 0
             [ -z "$script" ] && return 0
             echo "$pm run $script"
             ;;
@@ -222,7 +249,11 @@ run_check() {
 
     tmo=$(statusline_check_timeout "$slot")
     result="ok"
-    (cd "$PROJECT_ROOT" && run_with_timeout "$tmo" bash -c "$cmd" > /dev/null 2>&1) || result="fail"
+    if [ "$PINNED_CWD" -eq 1 ]; then
+        (run_with_timeout "$tmo" bash -c "$cmd" > /dev/null 2>&1) || result="fail"
+    else
+        (cd "$EXEC_ROOT" && run_with_timeout "$tmo" bash -c "$cmd" > /dev/null 2>&1) || result="fail"
+    fi
 
     done_at=$(statusline_now)
     finish_slot "$slot" "$result" "$done_at"

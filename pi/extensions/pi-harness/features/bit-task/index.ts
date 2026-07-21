@@ -6,6 +6,12 @@ import { sanitizeChildEnv } from "../../lib/child-env";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import { runHook as defaultRunHook } from "../../lib/run-hook";
 import {
+  matchesFileIdentity,
+  parseWorktreeIdentity,
+  type WorktreeIdentityV1,
+  worktreeIdentityDetails,
+} from "../../lib/worktree-identity";
+import {
   PROCESS_FORCE_SETTLE_MS,
   WORKTREE_CREATE_TERM_GRACE_MS,
 } from "../../lib/termination";
@@ -231,9 +237,9 @@ const commandFailure = (description: string, result: CommandResult): Error =>
     `${description} exited with code ${result.exitCode}: ${outputTail(result.stderr)}`,
   );
 
-const textResult = (text: string) => ({
+const textResult = (text: string, details?: unknown) => ({
   content: [{ type: "text" as const, text }],
-  details: undefined,
+  details,
 });
 
 const verificationSkipped = (taskId: string, reason: string) =>
@@ -260,19 +266,11 @@ const throwIfAborted = (signal: AbortSignal | undefined): void => {
   }
 };
 
-const validateReturnedWorktreePath = async (
-  stdout: string,
-): Promise<string> => {
-  const outputLines = stdout.trim().split(/\r?\n/).filter(Boolean);
-  const returnedPath = outputLines[0] ?? "";
+const returnedWorktreePath = (stdout: string): string => {
+  const returnedPath = stdout.trim().split(/\r?\n/, 1)[0] ?? "";
   if (returnedPath === "") {
     throw new Error(
       "worktree_create postcondition failed: hook returned an empty path",
-    );
-  }
-  if (outputLines.some((line) => line !== returnedPath)) {
-    throw new Error(
-      "worktree_create postcondition failed: hook returned multiple paths",
     );
   }
   if (!isAbsolute(returnedPath)) {
@@ -280,11 +278,57 @@ const validateReturnedWorktreePath = async (
       `worktree_create postcondition failed: hook returned a non-absolute path: ${returnedPath}`,
     );
   }
+  return returnedPath;
+};
+
+const parsePublishedWorktreeIdentity = (
+  stdout: string,
+  returnedPath: string,
+): WorktreeIdentityV1 => {
+  const outputLines = stdout.trim().split(/\r?\n/).filter(Boolean);
+  let identity: WorktreeIdentityV1 | undefined;
+  for (const line of outputLines.slice(1)) {
+    if (line === returnedPath) continue;
+    if (identity !== undefined) {
+      throw new Error(
+        "worktree_create postcondition failed: hook returned multiple identity records",
+      );
+    }
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(line);
+    } catch {
+      throw new Error(
+        "worktree_create postcondition failed: hook returned an invalid identity record",
+      );
+    }
+    identity = parseWorktreeIdentity(decoded);
+    if (identity === undefined || identity.path !== returnedPath) {
+      throw new Error(
+        "worktree_create postcondition failed: hook returned a malformed or mismatched identity record",
+      );
+    }
+  }
+  if (identity === undefined) {
+    throw new Error(
+      "worktree_create postcondition failed: successful hook omitted its creation identity",
+    );
+  }
+  return identity;
+};
+
+const validateReturnedWorktreePath = async (
+  stdout: string,
+): Promise<string> => {
+  const returnedPath = returnedWorktreePath(stdout);
   try {
     const canonicalPath = await realpath(returnedPath);
     const pathStat = await stat(canonicalPath);
     if (!pathStat.isDirectory()) {
       throw new Error("returned path is not a directory");
+    }
+    if (canonicalPath !== returnedPath) {
+      throw new Error("returned path is not canonical");
     }
     return canonicalPath;
   } catch (error) {
@@ -329,6 +373,7 @@ export const createValidatedWorktree = async (
   name: string,
   signal?: AbortSignal,
   onCreated?: (path: string) => void,
+  onIdentity?: (identity: WorktreeIdentityV1) => void,
 ): Promise<string> => {
   throwIfAborted(signal);
   const result = await creator.invokeHook(
@@ -346,10 +391,11 @@ export const createValidatedWorktree = async (
   if (result.exitCode !== 0 || result.timedOut) {
     // The create hook prints only after atomically publishing its removal
     // marker. Cancellation and timeout both terminate it with SIGTERM, so
-    // retain any validated published identity even when the process is nonzero.
+    // retain any validated published path even when the process is nonzero.
     if (result.stdout.trim() !== "") {
       try {
-        onCreated?.(await validateReturnedWorktreePath(result.stdout));
+        const retained = await validateReturnedWorktreePath(result.stdout);
+        onCreated?.(retained);
       } catch {
         // An interrupted hook may also print immediately before rolling back.
         // Never publish a path that no longer validates locally.
@@ -360,11 +406,65 @@ export const createValidatedWorktree = async (
   }
 
   const canonicalPath = await validateReturnedWorktreePath(result.stdout);
-  // The hook may have created the worktree immediately before cancellation.
-  // Publish its canonical identity after local filesystem validation but
-  // before honoring that abort, so background persistence can report the
-  // resource left behind without accepting an unvalidated hook path.
+  // Path publication is cleanup-only: an interrupted or malformed identity
+  // must still report the retained resource without granting statusline trust.
   onCreated?.(canonicalPath);
+  throwIfAborted(signal);
+  const identity = parsePublishedWorktreeIdentity(result.stdout, canonicalPath);
+  const validateCreationIdentity = async (): Promise<void> => {
+    const [rootStats, dotGitStats] = await Promise.all([
+      lstat(canonicalPath, { bigint: true }),
+      lstat(join(canonicalPath, ".git"), { bigint: true }),
+    ]);
+    if (
+      !rootStats.isDirectory() ||
+      !dotGitStats.isFile() ||
+      !matchesFileIdentity(rootStats, identity.root) ||
+      !matchesFileIdentity(dotGitStats, identity.dotGit)
+    ) {
+      throw new Error(
+        "worktree_create postcondition failed: created filesystem identity changed after hook publication",
+      );
+    }
+    const gitDirResult = await creator.invokeCommand(
+      "git",
+      ["-C", canonicalPath, "rev-parse", "--absolute-git-dir"],
+      {
+        cwd,
+        env: creator.env(),
+        timeoutMs: COMMAND_TIMEOUT_MS,
+        signal,
+      },
+    );
+    throwIfAborted(signal);
+    const rawGitDir = gitDirResult.stdout.trim();
+    if (gitDirResult.exitCode !== 0 || rawGitDir === "") {
+      throw new Error(
+        `worktree_create postcondition failed: ${commandFailure("could not resolve created worktree Git directory", gitDirResult).message}`,
+      );
+    }
+    const canonicalGitDir = await realpath(rawGitDir);
+    if (canonicalGitDir !== identity.gitDir) {
+      throw new Error(
+        "worktree_create postcondition failed: created Git admin identity changed after hook publication",
+      );
+    }
+    const [finalRootStats, finalDotGitStats] = await Promise.all([
+      lstat(canonicalPath, { bigint: true }),
+      lstat(join(canonicalPath, ".git"), { bigint: true }),
+    ]);
+    if (
+      !finalRootStats.isDirectory() ||
+      !finalDotGitStats.isFile() ||
+      !matchesFileIdentity(finalRootStats, identity.root) ||
+      !matchesFileIdentity(finalDotGitStats, identity.dotGit)
+    ) {
+      throw new Error(
+        "worktree_create postcondition failed: created filesystem identity changed during parent validation",
+      );
+    }
+  };
+  await validateCreationIdentity();
   throwIfAborted(signal);
 
   let listResult: CommandResult;
@@ -432,6 +532,8 @@ export const createValidatedWorktree = async (
       `worktree_create postcondition failed: created path belongs to a different repository (common-dir ${createdCommonDir} != ${repoCommonDir})`,
     );
   }
+  await validateCreationIdentity();
+  onIdentity?.(identity);
   return canonicalPath;
 };
 
@@ -472,16 +574,30 @@ export default function setupBitTask(
       const cwd = deps.cwd ?? ctx.cwd ?? process.cwd();
       const name = requireString(params, "name", "worktree_create");
       let createdPath: string | undefined;
+      let identity: WorktreeIdentityV1 | undefined;
       try {
-        return textResult(
-          await createValidatedWorktree(creator, cwd, name, signal, (path) => {
-            createdPath = path;
-          }),
+        const path = await createValidatedWorktree(
+          creator,
+          cwd,
+          name,
+          signal,
+          (publishedPath) => {
+            createdPath = publishedPath;
+          },
+          (publishedIdentity) => {
+            identity = publishedIdentity;
+          },
         );
+        if (identity === undefined) {
+          throw new Error(
+            "worktree_create postcondition failed: validated identity was not published",
+          );
+        }
+        return textResult(path, worktreeIdentityDetails(identity));
       } catch (error) {
         if (createdPath === undefined) throw error;
         throw new Error(
-          `${errorMessage(error)}\n\nA worktree was left in place at: ${createdPath}\nIt can be removed with the user-approved worktree_remove tool.`,
+          `${errorMessage(error)}\n\nA path was left in place at: ${createdPath}\nInspect it before cleanup. The user-approved worktree_remove tool may be used only when its harness safe-removal marker is still valid; otherwise manual recovery is required.`,
         );
       }
     },

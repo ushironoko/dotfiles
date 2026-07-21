@@ -21,6 +21,26 @@ resolve_git_dir() {
   esac
 }
 
+file_identity() {
+  local path=$1
+  local identity=''
+
+  # GNU stat supports -c; BSD/macOS stat supports -f. Device and inode are
+  # emitted as decimal strings so the TypeScript caller can compare them as
+  # bigint values without JSON number rounding.
+  if identity=$(stat -c '%d:%i' -- "$path" 2>/dev/null); then
+    :
+  elif identity=$(stat -f '%d:%i' "$path" 2>/dev/null); then
+    :
+  else
+    return 1
+  fi
+  case "$identity" in
+    *[!0-9:]* | :* | *: | *:*:*) return 1 ;;
+  esac
+  printf '%s\n' "$identity"
+}
+
 sha1_text() {
   local value=$1
 
@@ -173,14 +193,6 @@ cleanup_create() {
   local status=$?
   local candidate_raw=''
   local candidate_path=''
-  local candidate_top_raw=''
-  local candidate_top=''
-  local candidate_git_raw=''
-  local candidate_git=''
-  local candidate_common_raw=''
-  local candidate_common=''
-  local candidate_branch=''
-  local candidate_valid=0
 
   trap - EXIT HUP INT TERM
   set +e
@@ -206,46 +218,27 @@ cleanup_create() {
     fi
 
     if [ -n "$candidate_path" ] && [ -d "$candidate_path" ]; then
-      candidate_top_raw=$(git -C "$candidate_path" rev-parse --show-toplevel 2>/dev/null)
-      candidate_top=$(canonical_dir "$candidate_top_raw" 2>/dev/null)
-      candidate_git_raw=$(git -C "$candidate_path" rev-parse --git-dir 2>/dev/null)
-      candidate_git=$(resolve_git_dir "$candidate_path" "$candidate_git_raw" 2>/dev/null)
-      candidate_common_raw=$(git -C "$candidate_path" rev-parse --git-common-dir 2>/dev/null)
-      candidate_common=$(resolve_git_dir "$candidate_path" "$candidate_common_raw" 2>/dev/null)
-      candidate_branch=$(git -C "$candidate_path" symbolic-ref --quiet --short HEAD 2>/dev/null)
-      if [ "$candidate_top" = "$candidate_path" ] && \
-        [ "$candidate_common" = "$SOURCE_COMMON" ] && \
-        [ "$candidate_branch" = "$NAME" ]; then
-        case "$candidate_git" in
-          "$SOURCE_COMMON"/worktrees/*) candidate_valid=1 ;;
-        esac
+      # Once a pathname may refer to a created worktree, abnormal cleanup never
+      # removes it. No path-based check can atomically bind `worktree remove`
+      # to the inode we created, so a concurrent replacement could otherwise
+      # turn rollback into recursive deletion of unrelated user data.
+      if [ -n "$MARKER_PATH" ] && [ -f "$MARKER_PATH" ] && [ ! -L "$MARKER_PATH" ] && \
+        jq -e --arg path "$candidate_path" --arg branch "$NAME" '
+          type == "object" and .path == $path and .branch == $branch
+        ' "$MARKER_PATH" >/dev/null 2>&1; then
+        rm -f "$MARKER_PATH"
       fi
-    fi
-
-    if [ "$CANCELLED" -eq 1 ] && [ "$candidate_valid" -eq 1 ] && \
-      install_marker "$candidate_path" "$NAME"; then
-      # The caller accepts one unique non-empty path line, so a duplicate write
-      # from a signal racing the normal printf remains unambiguous.
+      printf 'worktree create: retained path after abnormal exit; inspect manually: %s\n' \
+        "$candidate_path" >&2
       printf '%s\n' "$candidate_path"
       PUBLISHED=1
       ROLLBACK_ARMED=0
-    else
-      if [ "$candidate_valid" -eq 1 ]; then
-        if [ -n "$MARKER_PATH" ] && [ -f "$MARKER_PATH" ] && [ ! -L "$MARKER_PATH" ] && \
-          jq -e --arg path "$candidate_path" --arg branch "$NAME" '
-            type == "object" and .path == $path and .branch == $branch
-          ' "$MARKER_PATH" >/dev/null 2>&1; then
-          rm -f "$MARKER_PATH"
-        fi
-        git --git-dir="$SOURCE_COMMON" worktree remove --force "$candidate_path" >&2
-      fi
-
-      if [ "$BRANCH_OWNED" -eq 1 ] && \
-        ! git --git-dir="$SOURCE_COMMON" worktree list --porcelain 2>/dev/null | \
-          grep -Fqx "branch refs/heads/$NAME"; then
-        # Delete only the unchanged ref this invocation atomically reserved.
-        git -C "$SOURCE_TOP" update-ref -d "refs/heads/$NAME" "$SOURCE_HEAD"
-      fi
+    elif [ "$BRANCH_OWNED" -eq 1 ] && \
+      ! git --git-dir="$SOURCE_COMMON" worktree list --porcelain 2>/dev/null | \
+        grep -Fqx "branch refs/heads/$NAME"; then
+      # No path exists and no worktree uses the exact ref, so deleting only the
+      # unchanged ref this invocation reserved remains safe.
+      git -C "$SOURCE_TOP" update-ref -d "refs/heads/$NAME" "$SOURCE_HEAD"
     fi
   fi
 
@@ -329,6 +322,20 @@ fi
   || fail "gwq returned an empty worktree path for branch: $NAME"
 CREATED_PATH=$(canonical_dir "$CREATED_PATH_RAW") \
   || fail "created worktree path does not exist: $CREATED_PATH_RAW"
+if [ ! -d "$CREATED_PATH" ] || [ -L "$CREATED_PATH" ]; then
+  fail "created worktree root is not a plain directory: $CREATED_PATH"
+fi
+if [ ! -f "$CREATED_PATH/.git" ] || [ -L "$CREATED_PATH/.git" ]; then
+  fail "created linked worktree .git is not a plain file: $CREATED_PATH"
+fi
+ROOT_ID=$(file_identity "$CREATED_PATH") \
+  || fail "could not capture created worktree root identity: $CREATED_PATH"
+DOT_GIT_ID=$(file_identity "$CREATED_PATH/.git") \
+  || fail "could not capture created worktree .git identity: $CREATED_PATH"
+ROOT_DEV=${ROOT_ID%%:*}
+ROOT_INO=${ROOT_ID#*:}
+DOT_GIT_DEV=${DOT_GIT_ID%%:*}
+DOT_GIT_INO=${DOT_GIT_ID#*:}
 
 if ! TOP_RAW=$(git -C "$CREATED_PATH" rev-parse --show-toplevel 2>/dev/null); then
   fail "created path is not a Git worktree: $CREATED_PATH"
@@ -365,9 +372,65 @@ fi
 install_marker "$CREATED_PATH" "$BRANCH" \
   || fail "could not atomically install a safe-removal marker for: $CREATED_PATH"
 
+# Re-run the identity-bearing postconditions after marker publication. The
+# TypeScript caller compares this record once more before exposing it in hidden
+# tool-result details, closing the hook-exit/parent-validation replacement gap.
+if [ ! -d "$CREATED_PATH" ] || [ -L "$CREATED_PATH" ]; then
+  fail "created worktree root changed before publication: $CREATED_PATH"
+fi
+if [ ! -f "$CREATED_PATH/.git" ] || [ -L "$CREATED_PATH/.git" ]; then
+  fail "created worktree .git changed before publication: $CREATED_PATH"
+fi
+FINAL_ROOT_ID=$(file_identity "$CREATED_PATH") \
+  || fail "could not revalidate created worktree root identity: $CREATED_PATH"
+FINAL_DOT_GIT_ID=$(file_identity "$CREATED_PATH/.git") \
+  || fail "could not revalidate created worktree .git identity: $CREATED_PATH"
+[ "$FINAL_ROOT_ID" = "$ROOT_ID" ] \
+  || fail "created worktree root identity changed before publication: $CREATED_PATH"
+[ "$FINAL_DOT_GIT_ID" = "$DOT_GIT_ID" ] \
+  || fail "created worktree .git identity changed before publication: $CREATED_PATH"
+FINAL_TOP_RAW=$(git -C "$CREATED_PATH" rev-parse --show-toplevel 2>/dev/null) \
+  || fail "created worktree top-level changed before publication: $CREATED_PATH"
+FINAL_TOP=$(canonical_dir "$FINAL_TOP_RAW") \
+  || fail "could not revalidate the created worktree root: $CREATED_PATH"
+[ "$FINAL_TOP" = "$CREATED_PATH" ] \
+  || fail "created worktree root changed before publication: $CREATED_PATH"
+FINAL_GIT_DIR_RAW=$(git -C "$CREATED_PATH" rev-parse --git-dir 2>/dev/null) \
+  || fail "created worktree Git directory changed before publication: $CREATED_PATH"
+FINAL_GIT_DIR=$(resolve_git_dir "$CREATED_PATH" "$FINAL_GIT_DIR_RAW") \
+  || fail "could not revalidate the created worktree Git directory"
+[ "$FINAL_GIT_DIR" = "$GIT_DIR" ] \
+  || fail "created worktree Git directory identity changed before publication: $CREATED_PATH"
+FINAL_COMMON_DIR_RAW=$(git -C "$CREATED_PATH" rev-parse --git-common-dir 2>/dev/null) \
+  || fail "created worktree common directory changed before publication: $CREATED_PATH"
+FINAL_COMMON_DIR=$(resolve_git_dir "$CREATED_PATH" "$FINAL_COMMON_DIR_RAW") \
+  || fail "could not revalidate the created worktree common directory"
+[ "$FINAL_COMMON_DIR" = "$SOURCE_COMMON" ] \
+  || fail "created worktree repository identity changed before publication: $CREATED_PATH"
+FINAL_BRANCH=$(git -C "$CREATED_PATH" symbolic-ref --quiet --short HEAD 2>/dev/null) \
+  || fail "created worktree branch changed before publication: $CREATED_PATH"
+[ "$FINAL_BRANCH" = "$NAME" ] \
+  || fail "created worktree branch changed before publication: $CREATED_PATH"
+
+IDENTITY_JSON=$(jq -cn \
+  --arg path "$CREATED_PATH" \
+  --arg root_dev "$ROOT_DEV" \
+  --arg root_ino "$ROOT_INO" \
+  --arg dot_git_dev "$DOT_GIT_DEV" \
+  --arg dot_git_ino "$DOT_GIT_INO" \
+  --arg git_dir "$GIT_DIR" \
+  '{
+    version: 1,
+    path: $path,
+    root: {dev: $root_dev, ino: $root_ino},
+    dotGit: {dev: $dot_git_dev, ino: $dot_git_ino},
+    gitDir: $git_dir
+  }') || fail "could not encode created worktree identity: $CREATED_PATH"
+
 # stdout is the publication record consumed by the TypeScript caller. A signal
-# before this write publishes the same marker/path from cleanup_create.
-printf '%s\n' "$CREATED_PATH"
+# before this write publishes only the marker/path from cleanup_create; such an
+# interrupted result is retained for cleanup but never grants statusline trust.
+printf '%s\n%s\n' "$CREATED_PATH" "$IDENTITY_JSON"
 PUBLISHED=1
 ROLLBACK_ARMED=0
 LOCK_RELEASE_STATUS=0
