@@ -99,6 +99,7 @@ const assertSuccessful = (result: SpawnResult): void => {
   if (!result.failed) return;
 
   const reasons: string[] = [];
+  if (result.permissionBlocked === true) reasons.push("permission blocked");
   if (result.exitCode === null) {
     reasons.push(
       result.signal === undefined
@@ -344,12 +345,14 @@ const setupSubagent = (
       ): void => {
         if (runId === undefined || childRuns === undefined) return;
         let reason:
+          | "permission-blocked"
           | "length"
           | "model-error"
           | "model-aborted"
           | "spawn-error"
           | "completed" = "completed";
-        if (result.stopReason === "length") reason = "length";
+        if (result.permissionBlocked === true) reason = "permission-blocked";
+        else if (result.stopReason === "length") reason = "length";
         else if (result.stopReason === "aborted") reason = "model-aborted";
         else if (result.stopReason === "error") reason = "model-error";
         else if (result.failed) reason = "spawn-error";

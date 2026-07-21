@@ -54,6 +54,7 @@ const terminalReasons: ReadonlySet<string> = new Set([
   "completed",
   "model-error",
   "model-aborted",
+  "permission-blocked",
   "length",
   "spawn-error",
   "setup-error",

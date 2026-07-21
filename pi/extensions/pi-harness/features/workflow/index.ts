@@ -137,6 +137,7 @@ const worktreeBranchName = (stageIndex: number, taskIndex: number): string =>
   `pi-workflow-${randomUUID().slice(0, 8)}-s${stageIndex + 1}t${taskIndex + 1}`;
 
 const failureLabel = (result: SpawnResult): string => {
+  if (result.permissionBlocked === true) return "permission blocked";
   if (result.exitCode === null) {
     return result.signal === undefined
       ? "terminated by a signal"
@@ -512,12 +513,15 @@ const setupWorkflow = (
                 );
                 if (runId !== undefined) {
                   let reason:
+                    | "permission-blocked"
                     | "length"
                     | "model-error"
                     | "model-aborted"
                     | "spawn-error"
                     | "completed" = "completed";
-                  if (result.stopReason === "length") reason = "length";
+                  if (result.permissionBlocked === true) {
+                    reason = "permission-blocked";
+                  } else if (result.stopReason === "length") reason = "length";
                   else if (result.stopReason === "aborted") {
                     reason = "model-aborted";
                   } else if (result.stopReason === "error") {

@@ -13,6 +13,7 @@ import { join } from "node:path";
 import {
   type CwdBoundaryResult,
   validateCwdWithinRepo,
+  validateSameGitRepository,
 } from "../../pi/extensions/pi-harness/lib/repo-boundary";
 
 const temporaryDirectories: string[] = [];
@@ -41,6 +42,28 @@ const rejectionReason = (result: CwdBoundaryResult): string => {
     throw new Error(`Expected rejection for ${result.canonicalCwd}`);
   return result.reason;
 };
+
+describe("validateSameGitRepository (injected git identity)", () => {
+  test("accepts an external linked-worktree path with the same identity", async () => {
+    const root = await tempRoot("rb-root-");
+    const linked = await tempRoot("rb-linked-");
+    const sameRepo = async (): Promise<string> => "/common/.git";
+    expect(await validateSameGitRepository(linked, root, sameRepo)).toEqual({
+      ok: true,
+      canonicalCwd: linked,
+    });
+  });
+
+  test("rejects a resolvable path with a different identity", async () => {
+    const root = await tempRoot("rb-root-");
+    const unrelated = await tempRoot("rb-other-");
+    const perPath = async (cwd: string): Promise<string> =>
+      cwd === unrelated ? "/other/.git" : "/root/.git";
+    const result = await validateSameGitRepository(unrelated, root, perPath);
+    expect(result.ok).toBe(false);
+    expect(rejectionReason(result)).toContain("different git repository");
+  });
+});
 
 describe("validateCwdWithinRepo (injected git identity)", () => {
   const sameRepo = async (): Promise<string> => "/common/.git";
