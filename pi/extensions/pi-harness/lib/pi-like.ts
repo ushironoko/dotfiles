@@ -41,6 +41,14 @@ export interface ContextEvent {
   messages: unknown[];
 }
 
+export interface SessionBeforeTreeEvent {
+  type: "session_before_tree";
+  preparation: {
+    targetId: string;
+    oldLeafId: string | null;
+  };
+}
+
 export interface ToolCallEvent {
   type: "tool_call";
   toolName: string;
@@ -76,6 +84,7 @@ export interface PiEventMap {
   tool_call: ToolCallEvent;
   tool_result: ToolResultEvent;
   agent_settled: GenericEvent;
+  session_before_tree: SessionBeforeTreeEvent;
   session_compact: GenericEvent;
   session_shutdown: GenericEvent;
   // Provider hooks (V10): request payload before send, and status + headers
@@ -116,6 +125,7 @@ export interface PiEventResultMap {
   tool_call: ToolCallBlockResult | undefined | void;
   tool_result: ToolResultPatch | undefined | void;
   agent_settled: void;
+  session_before_tree: void;
   session_compact: void;
   session_shutdown: void;
   before_provider_request: void;

@@ -33,6 +33,7 @@ import type {
   TuiLike,
   PiEventName,
   PiLike,
+  SessionBeforeTreeEvent,
   SessionStartEvent,
   ToolCallBlockResult,
   ToolCallEvent,
@@ -72,6 +73,7 @@ interface HandlerStore {
   tool_call: PiEventHandler<"tool_call">[];
   tool_result: PiEventHandler<"tool_result">[];
   agent_settled: PiEventHandler<"agent_settled">[];
+  session_before_tree: PiEventHandler<"session_before_tree">[];
   session_compact: PiEventHandler<"session_compact">[];
   session_shutdown: PiEventHandler<"session_shutdown">[];
   before_provider_request: PiEventHandler<"before_provider_request">[];
@@ -92,6 +94,7 @@ export interface FakePi extends PiLike {
     payload: ToolResultEvent,
   ): Promise<ToolResultPatch | undefined>;
   emitAgentSettled(payload?: GenericEvent): Promise<void>;
+  emitSessionBeforeTree(payload: SessionBeforeTreeEvent): Promise<void>;
   emitSessionCompact(payload?: GenericEvent): Promise<void>;
   emitSessionShutdown(payload?: GenericEvent): Promise<void>;
   emitBeforeProviderRequest(payload: GenericEvent): Promise<void>;
@@ -153,6 +156,7 @@ export function createFakePi(
     tool_call: [],
     tool_result: [],
     agent_settled: [],
+    session_before_tree: [],
     session_compact: [],
     session_shutdown: [],
     before_provider_request: [],
@@ -241,6 +245,7 @@ export function createFakePi(
     tool_call: (handler) => store.tool_call.push(handler),
     tool_result: (handler) => store.tool_result.push(handler),
     agent_settled: (handler) => store.agent_settled.push(handler),
+    session_before_tree: (handler) => store.session_before_tree.push(handler),
     session_compact: (handler) => store.session_compact.push(handler),
     session_shutdown: (handler) => store.session_shutdown.push(handler),
     before_provider_request: (handler) =>
@@ -311,6 +316,11 @@ export function createFakePi(
     },
     async emitAgentSettled(payload = { type: "agent_settled" }) {
       for (const handler of store.agent_settled) await handler(payload, ctx);
+    },
+    async emitSessionBeforeTree(payload) {
+      for (const handler of store.session_before_tree) {
+        await handler(payload, ctx);
+      }
     },
     async emitSessionCompact(payload = { type: "session_compact" }) {
       for (const handler of store.session_compact) await handler(payload, ctx);

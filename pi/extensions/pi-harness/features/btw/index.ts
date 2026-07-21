@@ -367,9 +367,17 @@ const setupBtw = (
   let running = false;
   let activeAbort: BtwCancellationController | undefined;
   let sessionGeneration = 0;
+  let branchGeneration = 0;
 
   pi.on("session_start", () => {
     sessionGeneration += 1;
+  });
+  pi.on("session_before_tree", () => {
+    // Invalidate before navigation changes the active leaf. Cancelling even if
+    // a later handler vetoes navigation is the conservative outcome: a BTW
+    // answer must never move from its snapshotted branch to another branch.
+    branchGeneration += 1;
+    activeAbort?.abort();
   });
   pi.on("session_shutdown", () => {
     sessionGeneration += 1;
@@ -462,83 +470,121 @@ const setupBtw = (
       }
 
       running = true;
-      let statusSet = false;
-      const invocationGeneration = sessionGeneration;
-      const contextIsStale = (): boolean =>
-        invocationGeneration !== sessionGeneration;
+      const invocationSessionGeneration = sessionGeneration;
+      const invocationBranchGeneration = branchGeneration;
+      const sessionContextIsStale = (): boolean =>
+        invocationSessionGeneration !== sessionGeneration;
+      const invocationIsStale = (): boolean =>
+        sessionContextIsStale() ||
+        invocationBranchGeneration !== branchGeneration;
       const invocationAbort = new BtwCancellationController();
       activeAbort = invocationAbort;
+      const releaseInvocation = (): void => {
+        if (activeAbort === invocationAbort) activeAbort = undefined;
+        running = false;
+      };
+
+      let question: string;
       try {
         if (!hasUI) throw new Error("BTW requires TUI or RPC UI mode");
         const input = await readQuestion(args, ctx, invocationAbort.signal);
-        if (input === undefined) return;
-        const question = stripTerminalControls(input).trim();
+        if (input === undefined) {
+          releaseInvocation();
+          return;
+        }
+        question = stripTerminalControls(input).trim();
         assertQuestion(question);
-
         if (!ctx.model) throw new Error("No model selected for BTW");
-        if (!ctx.isIdle() && hasUI) {
-          ui.notify("Waiting for the parent session to settle...", "info");
-        }
-        do {
-          await ctx.waitForIdle();
-          if (invocationAbort.signal.aborted) return;
-        } while (!ctx.isIdle());
-        if (!ctx.model) throw new Error("No model selected for BTW");
-
-        ui.setStatus(STATUS_KEY, "btw: answering");
-        statusSet = true;
-        const resolved = buildSessionContext(
-          ctx.sessionManager.getEntries(),
-          ctx.sessionManager.getLeafId(),
-        );
-        const snapshot: BtwSnapshot = {
-          cwd: ctx.cwd,
-          parentSession: ctx.sessionManager.getSessionFile(),
-          systemPrompt: ctx.getSystemPrompt(),
-          messages: structuredClone(resolved.messages),
-          model: ctx.model,
-          modelRegistry: ctx.modelRegistry,
-          thinkingLevel: pi.getThinkingLevel(),
-          signal: invocationAbort.signal,
-        };
-        const rawAnswer = await answerQuestion(snapshot, question);
-        if (invocationAbort.signal.aborted || contextIsStale()) return;
-        const answer = stripTerminalControls(rawAnswer.trim()).trim();
-        if (answer === "") {
-          throw new Error("BTW child returned no displayable text answer");
-        }
-        const retained = truncateUtf8(answer, ANSWER_MAX_BYTES);
-        const record: BtwHistoryData = {
-          version: 1,
-          id: createId(),
-          question: stripTerminalControls(question),
-          answer: retained.text,
-          answerTruncated: retained.truncated,
-          model: stripTerminalControls(
-            `${snapshot.model.provider}/${snapshot.model.id}`,
-          ),
-          createdAt: now(),
-        };
-        pi.appendEntry<BtwHistoryData>(HISTORY_TYPE, record);
-        if (mode === "rpc") {
-          ui.notify(`BTW\nQ: ${record.question}\n\n${record.answer}`, "info");
-        }
       } catch (error) {
-        if (!contextIsStale() && !invocationAbort.signal.aborted) {
-          if (!hasUI) throw error;
+        releaseInvocation();
+        if (!hasUI) throw error;
+        if (!invocationIsStale() && !invocationAbort.signal.aborted) {
           ui.notify(`BTW failed: ${errorText(error)}`, "error");
         }
-      } finally {
-        if (statusSet && !contextIsStale()) {
-          try {
-            ui.setStatus(STATUS_KEY, undefined);
-          } catch {
-            // Pi can invalidate a command UI context during session replacement.
-          }
-        }
-        if (activeAbort === invocationAbort) activeAbort = undefined;
-        running = false;
+        return;
       }
+
+      // Return control to Pi after input validation so `/btw-cancel` can be
+      // dispatched while the side question is running. The generation and
+      // cancellation guards below own the detached operation's whole lifetime.
+      void (async () => {
+        let statusSet = false;
+        try {
+          if (!ctx.isIdle()) {
+            ui.notify("Waiting for the parent session to settle...", "info");
+          }
+          while (!ctx.isIdle()) {
+            await ctx.waitForIdle();
+            if (invocationAbort.signal.aborted || invocationIsStale()) return;
+          }
+          if (invocationAbort.signal.aborted || invocationIsStale()) return;
+          if (!ctx.model) throw new Error("No model selected for BTW");
+
+          const parentSession = ctx.sessionManager.getSessionFile();
+          const parentEntries = ctx.sessionManager.getEntries();
+          const hasAssistant = parentEntries.some(
+            (entry) =>
+              entry.type === "message" && entry.message.role === "assistant",
+          );
+          if (parentSession !== undefined && !hasAssistant) {
+            throw new Error(
+              "BTW history is not durable until the parent completes its first assistant response",
+            );
+          }
+
+          ui.setStatus(STATUS_KEY, "btw: answering");
+          statusSet = true;
+          const resolved = buildSessionContext(
+            parentEntries,
+            ctx.sessionManager.getLeafId(),
+          );
+          const snapshot: BtwSnapshot = {
+            cwd: ctx.cwd,
+            parentSession,
+            systemPrompt: ctx.getSystemPrompt(),
+            messages: structuredClone(resolved.messages),
+            model: ctx.model,
+            modelRegistry: ctx.modelRegistry,
+            thinkingLevel: pi.getThinkingLevel(),
+            signal: invocationAbort.signal,
+          };
+          const rawAnswer = await answerQuestion(snapshot, question);
+          if (invocationAbort.signal.aborted || invocationIsStale()) return;
+          const answer = stripTerminalControls(rawAnswer.trim()).trim();
+          if (answer === "") {
+            throw new Error("BTW child returned no displayable text answer");
+          }
+          const retained = truncateUtf8(answer, ANSWER_MAX_BYTES);
+          const record: BtwHistoryData = {
+            version: 1,
+            id: createId(),
+            question: stripTerminalControls(question),
+            answer: retained.text,
+            answerTruncated: retained.truncated,
+            model: stripTerminalControls(
+              `${snapshot.model.provider}/${snapshot.model.id}`,
+            ),
+            createdAt: now(),
+          };
+          pi.appendEntry<BtwHistoryData>(HISTORY_TYPE, record);
+          if (mode === "rpc") {
+            ui.notify(`BTW\nQ: ${record.question}\n\n${record.answer}`, "info");
+          }
+        } catch (error) {
+          if (!invocationIsStale() && !invocationAbort.signal.aborted) {
+            ui.notify(`BTW failed: ${errorText(error)}`, "error");
+          }
+        } finally {
+          if (statusSet && !sessionContextIsStale()) {
+            try {
+              ui.setStatus(STATUS_KEY, undefined);
+            } catch {
+              // Pi can invalidate a command UI context during session replacement.
+            }
+          }
+          releaseInvocation();
+        }
+      })();
     },
   });
 };

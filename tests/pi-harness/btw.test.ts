@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { UserMessage } from "@earendil-works/pi-ai/compat";
 import {
@@ -43,6 +46,17 @@ const userMessage = (text: string): UserMessage => ({
   content: [{ type: "text", text }],
   timestamp: 1,
 });
+
+const waitFor = async (
+  predicate: () => boolean,
+  timeoutMs = 1_000,
+): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("timed out waiting for BTW");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+};
 
 const assistantMessage = (
   text: string,
@@ -332,12 +346,15 @@ interface CommandHarness {
   shortcut: (name: string) => (ctx: ExtensionContext) => Promise<void> | void;
   renderer: () => EntryRenderer<BtwHistoryData>;
   entries: { customType: string; data: unknown }[];
+  emitSessionBeforeTree(): Promise<void>;
   emitSessionCompact(ctx: ExtensionCommandContext): Promise<void>;
   emitSessionStart(): Promise<void>;
   emitSessionShutdown(): Promise<void>;
 }
 
-const commandHarness = (): CommandHarness => {
+const commandHarness = (
+  onAppend?: (customType: string, data: unknown) => void,
+): CommandHarness => {
   const commands = new Map<string, RegisteredCommand>();
   const shortcuts = new Map<
     string,
@@ -350,6 +367,7 @@ const commandHarness = (): CommandHarness => {
         ctx: ExtensionCommandContext,
       ) => Promise<void> | void)
     | undefined;
+  let beforeTreeHandler: (() => Promise<void> | void) | undefined;
   let startHandler: (() => Promise<void> | void) | undefined;
   let shutdownHandler: (() => Promise<void> | void) | undefined;
   const entries: { customType: string; data: unknown }[] = [];
@@ -358,6 +376,7 @@ const commandHarness = (): CommandHarness => {
       if (event === "session_compact") {
         compactHandler = handler as unknown as typeof compactHandler;
       }
+      if (event === "session_before_tree") beforeTreeHandler = handler;
       if (event === "session_start") startHandler = handler;
       if (event === "session_shutdown") shutdownHandler = handler;
     },
@@ -388,6 +407,7 @@ const commandHarness = (): CommandHarness => {
     },
     appendEntry(customType: string, data: unknown) {
       entries.push({ customType, data });
+      onAppend?.(customType, data);
     },
     getThinkingLevel: () => "high" as const,
   } as unknown as PiLike;
@@ -408,6 +428,9 @@ const commandHarness = (): CommandHarness => {
       return renderer;
     },
     entries,
+    emitSessionBeforeTree: async () => {
+      await beforeTreeHandler?.();
+    },
     emitSessionCompact: async (ctx) => {
       await compactHandler?.({ type: "session_compact" }, ctx);
     },
@@ -484,6 +507,7 @@ describe("BTW parent command", () => {
     });
 
     await harness.command().handler("  side question  ", context.ctx);
+    await waitFor(() => harness.entries.length === 1);
 
     expect(context.order).toEqual(["wait", "answer"]);
     expect(received?.messages).toEqual([userMessage("main question")]);
@@ -595,6 +619,7 @@ describe("BTW parent command", () => {
     });
 
     await harness.command().handler("question", context.ctx);
+    await waitFor(() => context.order.includes("answer"));
     expect(context.order).toEqual(["wait", "wait", "answer"]);
   });
 
@@ -626,6 +651,7 @@ describe("BTW parent command", () => {
 
     release("done");
     await first;
+    await waitFor(() => harness.entries.length === 1);
     expect(harness.entries).toHaveLength(1);
   });
 
@@ -648,12 +674,15 @@ describe("BTW parent command", () => {
 
       const invocation = harness.command().handler("question", context.ctx);
       await hasStarted;
+      // The main command must return while its child is still running so the
+      // TUI can dispatch the cancellation slash command.
+      await invocation;
       if (cancel === "command") {
         await harness.command("btw-cancel").handler("", context.ctx);
       } else {
         await harness.shortcut("ctrl+alt+b")(context.ctx);
       }
-      await invocation;
+      await waitFor(() => context.statuses.at(-1)?.value === undefined);
 
       expect(harness.entries).toHaveLength(0);
       expect(context.statuses.at(-1)).toEqual({
@@ -665,6 +694,72 @@ describe("BTW parent command", () => {
           message.includes("cancellation requested"),
         ),
       ).toBe(true);
+    }
+  });
+
+  test("drops an answer when parent tree navigation changes the active branch", async () => {
+    const harness = commandHarness();
+    const context = commandContext({ idle: true });
+    let started!: () => void;
+    const hasStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let release!: (answer: string) => void;
+    setupBtw(harness.pi, {
+      answerQuestion: async () => {
+        started();
+        return new Promise<string>((resolve) => {
+          release = resolve;
+        });
+      },
+    });
+
+    const invocation = harness.command().handler("branch A", context.ctx);
+    await hasStarted;
+    await invocation;
+    await harness.emitSessionBeforeTree();
+    release("late branch A answer");
+    await waitFor(() => context.statuses.at(-1)?.value === undefined);
+
+    expect(harness.entries).toHaveLength(0);
+  });
+
+  test("requires a durable parent before retaining resumable history", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-btw-session-"));
+    try {
+      const sessionManager = SessionManager.create("/repo", directory);
+      sessionManager.appendMessage(userMessage("first parent prompt"));
+      const context = commandContext({ idle: true });
+      Object.assign(context.ctx, { sessionManager });
+      const harness = commandHarness((customType, data) => {
+        sessionManager.appendCustomEntry(customType, data);
+      });
+      let calls = 0;
+      setupBtw(harness.pi, {
+        answerQuestion: async () => {
+          calls += 1;
+          return "durable answer";
+        },
+      });
+
+      await harness.command().handler("too early", context.ctx);
+      await waitFor(() => context.notifications.length > 0);
+      expect(calls).toBe(0);
+      expect(context.notifications.at(-1)?.message).toContain(
+        "not durable until the parent completes",
+      );
+      expect(harness.entries).toHaveLength(0);
+
+      sessionManager.appendMessage(assistantMessage("parent answer"));
+      await harness.command().handler("now durable", context.ctx);
+      await waitFor(() => harness.entries.length === 1);
+
+      const sessionFile = sessionManager.getSessionFile();
+      if (sessionFile === undefined) throw new Error("missing session file");
+      const persisted = await readFile(sessionFile, "utf8");
+      expect(persisted).toContain(`"customType":"${HISTORY_TYPE}"`);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
     }
   });
 
@@ -744,12 +839,14 @@ describe("BTW parent command", () => {
     await harness.emitSessionStart();
     release("late answer");
     await invocation;
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(harness.entries).toHaveLength(0);
     expect(oldContext.notifications).toHaveLength(0);
 
     const newContext = commandContext({ idle: true, mode: "rpc" });
     await harness.command().handler("new question", newContext.ctx);
+    await waitFor(() => harness.entries.length === 1);
     expect(calls).toBe(2);
     expect(harness.entries).toHaveLength(1);
     expect(harness.entries[0].data).toMatchObject({ answer: "fresh answer" });
