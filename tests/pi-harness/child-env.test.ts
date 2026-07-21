@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { sanitizeChildEnv } from "../../pi/extensions/pi-harness/lib/child-env";
+import {
+  sanitizeChildEnv,
+  sanitizeChildEnvAsync,
+} from "../../pi/extensions/pi-harness/lib/child-env";
 
 describe("sanitizeChildEnv", () => {
   test("scrubs the entire GIT_* namespace from the inherited base", () => {
@@ -241,6 +244,28 @@ describe("sanitizeChildEnv", () => {
     expect("C" in out).toBe(false);
     expect(out.B).toBe("b");
     expect(out.D).toBe("d");
+  });
+
+  test("async sanitization preserves the synchronous security semantics", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-child-env-async-"));
+    try {
+      const cwd = join(root, "repository");
+      const alias = join(root, "repository-alias");
+      mkdirSync(cwd);
+      symlinkSync(cwd, alias, "dir");
+      const base = {
+        PATH: [join(alias, "bin"), "/usr/bin", "relative"].join(delimiter),
+        GIT_DIR: "/attacker/.git",
+        BASH_ENV: "/attacker/rc",
+        HOME: "/home/u",
+      };
+      const overrides = { GIT_OPTIONAL_LOCKS: "0" };
+      expect(await sanitizeChildEnvAsync(base, overrides, { cwd })).toEqual(
+        sanitizeChildEnv(base, overrides, { cwd }),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("does not mutate the base environment object", () => {

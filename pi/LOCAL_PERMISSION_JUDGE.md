@@ -72,29 +72,34 @@ operation (for example with Esc).
 1. Mandatory deny rule: block.
 2. Explicit allow rule: approve without Ollama.
 3. Built-in/dynamic/opaque ask rule: ask the user, or block without UI.
-4. For an otherwise unknown compound command, treat one leading top-level
-   `cd <absolute-literal-path> &&` segment as neutral only when the destination
-   exists and has the same canonical Git common directory as the tool cwd. This
-   includes linked worktrees. Every remaining executable segment must be
-   explicitly allowed; relative/dynamic paths, redirects, other connectors,
-   multiple `cd` segments, missing paths, and unrelated or nested repositories
-   do not receive this exception.
-5. For a command that still reaches the judge, bind the raw current input to
+4. ANSI-C `$'…'` syntax is never eligible for automatic approval. Its decoded
+   text remains available to the concrete deny floor, but byte/escape semantics
+   are conservatively fixed at `ASK` instead of being approximated as Bash argv.
+5. For an otherwise unknown compound command, treat one leading top-level
+   `cd <absolute-literal-path> &&` segment as neutral only when the canonical
+   destination is contained by the complete registered non-bare worktree set
+   and has the same canonical Git common directory as the tool cwd. Every
+   remaining executable segment must be explicitly allowed; relative/dynamic
+   paths, redirects, other connectors, multiple `cd` segments, missing paths,
+   forged `.git` pointers, and unrelated or nested repositories do not receive
+   this exception.
+6. For a command that still reaches the judge, bind the raw current input to
    its agent run and discover canonical cwd/project/worktree context locally.
-   The entire discovery phase—including cwd/worktree canonicalization and a
-   strict `git worktree list --porcelain -z` probe—is capped at 250 ms and
-   distinguishes verified Git, verified non-Git, and unavailable discovery.
-6. Derive conservative scope evidence for one literal leading `cd`: listed
-   worktree, outside the listed roots, or unverified.
-7. Reuse an unexpired completed `ALLOW` cache entry only when the command,
+   Async child-environment sanitization, Git probes, cwd/worktree/leading-target
+   canonicalization, and common-directory checks share one cumulative 250 ms
+   deadline and abort signal.
+7. Derive conservative scope evidence for one literal leading `cd`: registered
+   worktree, outside the registered roots, or unverified.
+8. Reuse an unexpired completed `ALLOW` cache entry only when the command,
    raw cwd, complete raw-task fingerprint, and complete verified-project
-   fingerprint match. Context discovery therefore precedes cache lookup.
-8. Before a cache-miss chat request, require `/api/status` to report
+   fingerprint match. A task-correlation failure disables both cache reads and
+   writes. Context discovery therefore precedes cache lookup.
+9. Before a cache-miss chat request, require `/api/status` to report
    `cloud.disabled === true`.
-9. Require `/api/tags` to contain exactly one exact-name model entry whose
-   `name`, `model`, and pinned digest match and which has no `remote_host` or
-   `remote_model` field.
-10. Query `/api/chat`, then require the exact configured response model, no
+10. Require `/api/tags` to contain exactly one exact-name model entry whose
+    `name`, `model`, and pinned digest match and which has no `remote_host` or
+    `remote_model` field.
+11. Query `/api/chat`, then require the exact configured response model, no
     remote metadata, a completed non-truncated response, and an entire verdict
     of `ALLOW`. Every other result asks the user or blocks without UI.
 
@@ -123,28 +128,34 @@ The command-bearing `/api/chat` request receives only:
 - the literal shell command;
 - up to 1 KiB of normalized raw input for the current agent run and its source;
 - canonical cwd plus a tagged Git/non-Git/unavailable project result;
-- for Git, bounded project name, active worktree, and known canonical,
-  non-bare worktree roots (up to 16 roots / 2 KiB total); bare Git database
-  paths may identify the project locally but are never navigation scope;
+- for Git, bounded project name, active worktree, and a display-only subset of
+  canonical non-bare worktree roots (up to 16 roots / 2 KiB total); boundary
+  checks use the complete canonical set locally, never this truncated subset;
+  bare Git database paths may identify the project locally but are never
+  navigation scope;
 - computed leading-`cd` scope (`listed-worktree`, outside, or unverified).
 
 Task context comes from pi's raw `input` event. Skill/template expansion,
 system prompts, prior conversation, context files, tool results, environment,
 repository file contents, Git remotes, and credentials are not sent. Pending
-input becomes active only for its matching agent run or observed queued-user
-message, remains stable across earlier tool turns/retries, and clears at
-`agent_settled` or session shutdown. Raw `/skill:name` and prompt-template
-invocations are retained only after their corresponding expanded turn is
-observably active.
+input becomes active only after an established append-only message baseline,
+a positive user-message delta, Pi's steering-before-follow-up delivery order,
+and a unique positional match prove correlation. Baseline loss, compaction with
+pending input, duplicate text/source ambiguity, stale/dequeued input, and queue
+overflow produce an explicit `uncorrelated` state. That state sends no task and
+cannot read or write the `ALLOW` cache. A valid active task remains stable across
+earlier tool turns/retries and clears at `agent_settled` or session shutdown.
+Raw `/skill:name` and prompt-template invocations are retained only after their
+corresponding expanded turn is observably active.
 The local Git discovery command sends nothing to Ollama and reads only Git
 worktree metadata. `/api/status` and `/api/tags` contain no command or context.
 Direct numeric-loopback TCP ignores ambient `HTTP_PROXY`/`HTTPS_PROXY`, and
 redirects are not followed.
 
-The complete Git context-discovery phase has a separate 250 ms cap; status,
-tags, and chat then share one `timeoutMs` budget. If preflight consumes that
-budget, chat is not
-started. Literal commands over 2 KiB, JSON-escaped commands over 2,800 bytes,
+The complete permission-discovery phase has a separate cumulative 250 ms cap,
+including async PATH sanitization, all Git processes, and every filesystem
+canonicalization; status, tags, and chat then share one `timeoutMs` budget. If
+preflight consumes that budget, chat is not started. Literal commands over 2 KiB, JSON-escaped commands over 2,800 bytes,
 complete classifier messages over 10 KiB, Git output over 64 KiB, and responses
 over 64 KiB are not auto-approved. The model context is 16,384 tokens: the
 10 KiB content cap fits even under byte-fallback tokenization, with room for
@@ -154,8 +165,8 @@ Successful decisions are cached for five minutes in a 128-entry per-session
 LRU. Cache keys hash the exact system prompt, model/digest, raw cwd, complete
 raw-task fingerprint, complete verified-project fingerprint, and bounded request
 envelope. Raw task, command, and omitted worktree text is not retained in cache
-entries. ASK, timeout, malformed, aborted, unverified, and unavailable outcomes
-are never cached.
+entries. ASK, timeout, malformed, aborted, unverified, unavailable, and
+uncorrelated outcomes are never cached.
 
 ## Security limitations
 
@@ -170,7 +181,9 @@ contexts are deliberately unsupported and blocked before the judge: partial
 reconstruction can otherwise hide executable substitutions or later commands.
 Balanced arithmetic expansions such as
 `$((1 << 2))` remain supported because their contents are consumed as one
-expansion.
+expansion. ANSI-C quoting is conservatively fixed at the deterministic ask floor:
+JavaScript Unicode strings cannot reproduce every unknown escape and raw-byte
+pathname that Bash can place in argv.
 
 The contextual path applies only to commands that reach the fallback judge.
 The broad explicit allow entries described above still bypass it by design, so

@@ -21,6 +21,7 @@
  * does not inherit `process.env` implicitly.
  */
 import { lstatSync, realpathSync } from "node:fs";
+import { lstat, realpath } from "node:fs/promises";
 import {
   basename,
   delimiter,
@@ -107,6 +108,30 @@ const canonicalizeWithMissingTail = (path: string): string | undefined => {
   }
 };
 
+const canonicalizeWithMissingTailAsync = async (
+  path: string,
+): Promise<string | undefined> => {
+  let cursor = resolve(path);
+  const missing: string[] = [];
+  while (true) {
+    try {
+      return resolve(await realpath(cursor), ...[...missing].reverse());
+    } catch {
+      try {
+        await lstat(cursor);
+        return undefined;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
+      }
+      const parent = dirname(cursor);
+      if (parent === cursor) return undefined;
+      missing.push(basename(cursor));
+      cursor = parent;
+    }
+  }
+};
+
 // Drop PATH entries that resolve against the child's cwd (empty / relative) or
 // live at/under it, so a repository-planted binary cannot shadow a real one.
 // Both sides resolve symlink prefixes before comparison. Absolute entries
@@ -142,32 +167,81 @@ const sanitizePath = (
   return kept.join(delimiter);
 };
 
+const sanitizePathAsync = async (
+  raw: string | undefined,
+  cwd: string | undefined,
+): Promise<string> => {
+  if (raw === undefined || raw === "") return "";
+  const cwdLexical = cwd === undefined ? undefined : resolve(cwd);
+  const cwdCanon =
+    cwd === undefined ? undefined : await canonicalizeWithMissingTailAsync(cwd);
+  const entries = raw.split(delimiter);
+  const keep = await Promise.all(
+    entries.map(async (entry) => {
+      if (entry === "" || !isAbsolute(entry)) return false;
+      if (cwdLexical === undefined) return true;
+      const lexical = resolve(entry);
+      if (lexical === cwdLexical || lexical.startsWith(`${cwdLexical}${sep}`)) {
+        return false;
+      }
+      const canon = await canonicalizeWithMissingTailAsync(entry);
+      return !(
+        cwdCanon === undefined ||
+        canon === undefined ||
+        canon === cwdCanon ||
+        canon.startsWith(`${cwdCanon}${sep}`)
+      );
+    }),
+  );
+  return entries.filter((_, index) => keep[index] === true).join(delimiter);
+};
+
 export interface SanitizeChildEnvOptions {
   /** The child's cwd; PATH entries at/under it are dropped. */
   readonly cwd?: string;
 }
+
+const scrubEnvironment = (base: NodeJS.ProcessEnv): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(base)) {
+    if (value === undefined || isDangerousKey(key, value)) continue;
+    out[key] = value;
+  }
+  return out;
+};
+
+const applyOverrides = (
+  out: Record<string, string>,
+  overrides: Record<string, string | undefined>,
+): Record<string, string> => {
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) continue;
+    out[key] = value;
+  }
+  return out;
+};
 
 export const sanitizeChildEnv = (
   base: NodeJS.ProcessEnv,
   overrides: Record<string, string | undefined> = {},
   options: SanitizeChildEnvOptions = {},
 ): Record<string, string> => {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(base)) {
-    if (value === undefined) continue;
-    if (isDangerousKey(key, value)) continue;
-    out[key] = value;
-  }
+  const out = scrubEnvironment(base);
   // The inherited PATH is untrusted (an attacker can seed process.env), so drop
   // its empty/relative/cwd-subtree entries. An override PATH (below) is
   // harness-owned and applied verbatim, so this must run BEFORE overrides.
   if (out.PATH !== undefined) out.PATH = sanitizePath(out.PATH, options.cwd);
-  // Harness-owned overrides are applied after scrubbing so an intentional value
-  // (e.g. a verified GIT_DIR, or a vetted PATH that includes a cwd-local tool)
-  // is not dropped. Never route repository-derived data through overrides.
-  for (const [key, value] of Object.entries(overrides)) {
-    if (value === undefined) continue;
-    out[key] = value;
+  return applyOverrides(out, overrides);
+};
+
+export const sanitizeChildEnvAsync = async (
+  base: NodeJS.ProcessEnv,
+  overrides: Record<string, string | undefined> = {},
+  options: SanitizeChildEnvOptions = {},
+): Promise<Record<string, string>> => {
+  const out = scrubEnvironment(base);
+  if (out.PATH !== undefined) {
+    out.PATH = await sanitizePathAsync(out.PATH, options.cwd);
   }
-  return out;
+  return applyOverrides(out, overrides);
 };

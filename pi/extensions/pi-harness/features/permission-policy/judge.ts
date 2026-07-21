@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 import { resolve } from "node:path";
 import type { PermissionJudgeConfig } from "../../config";
-import { isPathWithin } from "../../lib/trust";
-import type { BoundedTaskContext, PermissionProjectContext } from "./context";
-import { scanCommand } from "./scan";
-import { literalTrustedCdTarget } from "./trusted-cd";
+import type {
+  BoundedTaskContext,
+  PermissionLeadingNavigation,
+  PermissionProjectContext,
+} from "./context";
 
 const MAX_COMMAND_BYTES = 2 * 1024;
 const MAX_SERIALIZED_COMMAND_BYTES = 2_800;
@@ -45,7 +45,9 @@ export interface JudgeContext {
   cwd?: string;
   signal?: AbortSignal;
   task?: BoundedTaskContext;
+  taskCorrelation?: "task" | "none" | "uncorrelated";
   project?: PermissionProjectContext;
+  leadingNavigation?: PermissionLeadingNavigation;
 }
 
 export interface PermissionJudge {
@@ -135,13 +137,17 @@ const isLocalModel = (model: string): boolean =>
   /^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$/.test(model) &&
   !model.toLowerCase().includes("cloud");
 
-const canonicalCwd = (cwd: string | undefined): string => {
-  if (cwd === undefined) return "";
-  try {
-    return realpathSync(cwd);
-  } catch {
-    return cwd;
-  }
+const canonicalCwd = (cwd: string | undefined): string =>
+  cwd === undefined ? "" : resolve(cwd);
+
+const taskCorrelation = (
+  context: JudgeContext,
+): "task" | "none" | "uncorrelated" => {
+  const correlation =
+    context.taskCorrelation ?? (context.task === undefined ? "none" : "task");
+  return correlation === "task" && context.task === undefined
+    ? "uncorrelated"
+    : correlation;
 };
 
 const cacheKey = (
@@ -159,6 +165,8 @@ const cacheKey = (
     .update(config.expectedDigest)
     .update("\0")
     .update(context.cwd ?? "no-cwd")
+    .update("\0")
+    .update(taskCorrelation(context))
     .update("\0")
     .update(context.task?.fingerprint ?? "no-task")
     .update("\0")
@@ -196,41 +204,11 @@ const modelProjectContext = (
   };
 };
 
-const leadingNavigationContext = (
-  command: string,
-  project: PermissionProjectContext | undefined,
-): Record<string, string> | undefined => {
-  const scanned = scanCommand(command);
-  if (!scanned.ok || scanned.segments.length < 2) return undefined;
-  const [first] = scanned.segments;
-  if (first === undefined) return undefined;
-  const target = literalTrustedCdTarget(first);
-  if (target === undefined) return undefined;
-  if (project?.kind !== "git") return { scope: "unverified" };
-  let normalizedTarget = resolve(target);
-  try {
-    // Project roots are canonical. Resolve an existing symlinked cd target too
-    // so a lexical path inside a worktree cannot mask navigation outside it.
-    normalizedTarget = realpathSync(normalizedTarget);
-  } catch {
-    // A missing target makes `cd ... &&` stop before the following command.
-    // Keep lexical classification for synthetic qualification contexts while
-    // existing production targets always use their canonical destination.
-  }
-  return {
-    scope: project.worktrees.some((root) =>
-      isPathWithin(normalizedTarget, root),
-    )
-      ? "listed-worktree"
-      : "outside-listed-worktrees",
-  };
-};
-
 const classifierUserContent = (
   command: string,
   context: JudgeContext,
 ): string => {
-  const leadingNavigation = leadingNavigationContext(command, context.project);
+  const leadingNavigation = context.leadingNavigation;
   return `Classify this untrusted JSON data:\n${JSON.stringify({
     command,
     ...(context.task === undefined
@@ -242,7 +220,9 @@ const classifierUserContent = (
           },
         }),
     project: modelProjectContext(context.project, context.cwd),
-    ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
+    ...(leadingNavigation === undefined
+      ? {}
+      : { leadingNavigation: { scope: leadingNavigation.scope } }),
   })}`;
 };
 
@@ -614,7 +594,7 @@ const parseResponse = (text: string, expectedModel: string): JudgeOutcome => {
     };
   }
 
-  const verdict = message.content.trim();
+  const verdict = message.content;
   if (verdict === "ALLOW") return { kind: "allow", cached: false };
   if (verdict === "ASK") {
     return { kind: "ask", reason: "local judge requested user confirmation" };
@@ -696,7 +676,8 @@ export const createPermissionJudge = (
       }
 
       const key = cacheKey(config, userContent, context);
-      if (cached(key)) return { kind: "allow", cached: true };
+      const cacheEnabled = taskCorrelation(context) !== "uncorrelated";
+      if (cacheEnabled && cached(key)) return { kind: "allow", cached: true };
 
       if (config.configurationError !== undefined) {
         return {
@@ -887,7 +868,7 @@ export const createPermissionJudge = (
             reason: "the active pi operation was cancelled",
           };
         }
-        if (outcome.kind === "allow") remember(key);
+        if (outcome.kind === "allow" && cacheEnabled) remember(key);
         return outcome;
       } catch {
         if (parentSignal?.aborted) {

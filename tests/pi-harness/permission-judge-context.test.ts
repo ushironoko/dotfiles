@@ -66,6 +66,13 @@ const createTestAbortController = (): {
   };
 };
 
+const currentTask = (
+  tracker: ReturnType<typeof createPermissionTaskTracker>,
+) => {
+  const state = tracker.current();
+  return state.correlation === "task" ? state.task : undefined;
+};
+
 describe("current permission task context", () => {
   test("bounds model-visible text but fingerprints the complete raw input", () => {
     const prefix = "x".repeat(1_024);
@@ -85,33 +92,33 @@ describe("current permission task context", () => {
       source: "interactive",
     });
 
-    expect(tracker.current()).toBeUndefined();
+    expect(tracker.current()).toEqual({ correlation: "none" });
     tracker.activate("Run the focused tests");
     expect(tracker.current()).toMatchObject({
-      text: "Run the focused tests",
-      source: "interactive",
+      correlation: "task",
+      task: { text: "Run the focused tests", source: "interactive" },
     });
 
     tracker.activate("automatic retry after compaction");
-    expect(tracker.current()?.text).toBe("Run the focused tests");
+    expect(currentTask(tracker)?.text).toBe("Run the focused tests");
 
     tracker.capture({
       text: "Then lint",
       source: "interactive",
       streamingBehavior: "followUp",
     });
-    expect(tracker.current()?.text).toBe("Run the focused tests");
+    expect(currentTask(tracker)?.text).toBe("Run the focused tests");
     tracker.settle();
-    expect(tracker.current()).toBeUndefined();
+    expect(tracker.current()).toEqual({ correlation: "none" });
 
     tracker.activate("Then lint");
-    expect(tracker.current()).toBeUndefined();
+    expect(tracker.current()).toEqual({ correlation: "none" });
     tracker.capture({ text: "Fresh task", source: "interactive" });
     tracker.activate("Fresh task");
-    expect(tracker.current()?.text).toBe("Fresh task");
+    expect(currentTask(tracker)?.text).toBe("Fresh task");
   });
 
-  test("promotes queued steering input only when provider context delivers it", () => {
+  test("promotes queued steering input only on a positive append-only delta", () => {
     const tracker = createPermissionTaskTracker();
     tracker.capture({ text: "Initial task", source: "interactive" });
     tracker.activate("Initial task");
@@ -124,7 +131,7 @@ describe("current permission task context", () => {
     });
 
     tracker.activateFromMessages(previousMessages);
-    expect(tracker.current()?.text).toBe("Initial task");
+    expect(currentTask(tracker)?.text).toBe("Initial task");
 
     tracker.activateFromMessages([
       ...previousMessages,
@@ -134,7 +141,30 @@ describe("current permission task context", () => {
         content: [{ type: "text", text: "Now run lint" }],
       },
     ]);
-    expect(tracker.current()?.text).toBe("Now run lint");
+    expect(currentTask(tracker)?.text).toBe("Now run lint");
+  });
+
+  test("uses steering-before-followUp delivery order for a multi-message delta", () => {
+    const tracker = createPermissionTaskTracker();
+    const previousMessages = [{ role: "user", content: "Initial task" }];
+    tracker.activateFromMessages(previousMessages);
+    tracker.capture({
+      text: "Follow-up task",
+      source: "interactive",
+      streamingBehavior: "followUp",
+    });
+    tracker.capture({
+      text: "Steering task",
+      source: "interactive",
+      streamingBehavior: "steer",
+    });
+
+    tracker.activateFromMessages([
+      ...previousMessages,
+      { role: "user", content: "Steering task" },
+      { role: "user", content: "Follow-up task" },
+    ]);
+    expect(currentTask(tracker)?.text).toBe("Follow-up task");
   });
 
   test("waits to promote a queued expanded skill until its user message is delivered", () => {
@@ -150,56 +180,107 @@ describe("current permission task context", () => {
     });
 
     tracker.activateFromMessages(previousMessages);
-    expect(tracker.current()?.text).toBe("Initial task");
+    expect(currentTask(tracker)?.text).toBe("Initial task");
 
     tracker.activateFromMessages([
       ...previousMessages,
       { role: "assistant", content: [] },
       { role: "user", content: "<expanded SKILL.md contents from disk>" },
     ]);
-    expect(tracker.current()?.text).toBe(
+    expect(currentTask(tracker)?.text).toBe(
       "/skill:start-work implement the change",
     );
   });
 
-  test("keeps a raw skill invocation instead of its expanded file contents", () => {
+  test("keeps raw expandable invocations instead of expanded contents", () => {
     const tracker = createPermissionTaskTracker();
     tracker.capture({
       text: "/skill:start-work implement the change",
       source: "rpc",
     });
     tracker.activate("<expanded SKILL.md contents from disk>");
-
     expect(tracker.current()).toMatchObject({
-      text: "/skill:start-work implement the change",
-      source: "rpc",
+      correlation: "task",
+      task: {
+        text: "/skill:start-work implement the change",
+        source: "rpc",
+      },
     });
-  });
 
-  test("keeps a raw prompt-template invocation instead of expanded Markdown", () => {
-    const tracker = createPermissionTaskTracker();
+    tracker.settle();
     tracker.capture({
       text: "/review parser changes",
       source: "interactive",
     });
     tracker.activate("<expanded prompt template Markdown>");
-
-    expect(tracker.current()).toMatchObject({
-      text: "/review parser changes",
-      source: "interactive",
-    });
+    expect(currentTask(tracker)?.text).toBe("/review parser changes");
   });
 
-  test("drops stale unmatched inputs and never reuses the previous task", () => {
-    const tracker = createPermissionTaskTracker();
-    tracker.capture({ text: "handled elsewhere", source: "extension" });
-    tracker.capture({ text: "actual task", source: "interactive" });
-    tracker.activate("actual task");
-    expect(tracker.current()?.text).toBe("actual task");
+  test("marks stale, ambiguous, overflowed, and unbaselined queues uncorrelated", () => {
+    const stale = createPermissionTaskTracker();
+    stale.capture({ text: "handled elsewhere", source: "extension" });
+    stale.capture({ text: "actual task", source: "interactive" });
+    stale.activate("actual task");
+    expect(stale.current()).toEqual({ correlation: "uncorrelated" });
 
-    tracker.settle();
-    tracker.activate("an uncorrelated generated turn");
-    expect(tracker.current()).toBeUndefined();
+    const ambiguous = createPermissionTaskTracker();
+    const baseline = [{ role: "user", content: "Initial" }];
+    ambiguous.activateFromMessages(baseline);
+    ambiguous.capture({
+      text: "same",
+      source: "interactive",
+      streamingBehavior: "steer",
+    });
+    ambiguous.capture({
+      text: "same",
+      source: "rpc",
+      streamingBehavior: "steer",
+    });
+    ambiguous.activateFromMessages([
+      ...baseline,
+      { role: "user", content: "same" },
+    ]);
+    expect(ambiguous.current()).toEqual({ correlation: "uncorrelated" });
+
+    const unbaselined = createPermissionTaskTracker();
+    unbaselined.capture({
+      text: "queued",
+      source: "interactive",
+      streamingBehavior: "steer",
+    });
+    unbaselined.activateFromMessages([{ role: "user", content: "queued" }]);
+    expect(unbaselined.current()).toEqual({ correlation: "uncorrelated" });
+
+    const overflowed = createPermissionTaskTracker();
+    overflowed.activateFromMessages(baseline);
+    for (let index = 0; index < 9; index += 1) {
+      overflowed.capture({
+        text: `queued-${index}`,
+        source: "interactive",
+        streamingBehavior: "steer",
+      });
+    }
+    overflowed.activateFromMessages([
+      ...baseline,
+      { role: "user", content: "queued-0" },
+    ]);
+    expect(overflowed.current()).toEqual({ correlation: "uncorrelated" });
+  });
+
+  test("invalidates a pending queue when user history shrinks", () => {
+    const tracker = createPermissionTaskTracker();
+    const baseline = [
+      { role: "user", content: "first" },
+      { role: "user", content: "second" },
+    ];
+    tracker.activateFromMessages(baseline);
+    tracker.capture({
+      text: "queued",
+      source: "interactive",
+      streamingBehavior: "followUp",
+    });
+    tracker.activateFromMessages([{ role: "user", content: "second" }]);
+    expect(tracker.current()).toEqual({ correlation: "uncorrelated" });
   });
 });
 
@@ -212,6 +293,7 @@ describe("permission judge project context", () => {
     if (context.kind !== "git")
       throw new Error(`expected git: ${context.kind}`);
     expect(context.activeWorktree).toBe(repoRoot);
+    expect(context.navigableRoots).toContain(repoRoot);
     expect(context.worktrees).toContain(repoRoot);
   });
 
@@ -241,6 +323,7 @@ describe("permission judge project context", () => {
       name: "project",
       cwd: sub,
       activeWorktree: linked,
+      navigableRoots: [main, linked].sort(),
       worktrees: [linked, main],
     });
     if (context.kind !== "git") throw new Error("expected git context");
@@ -306,6 +389,27 @@ describe("permission judge project context", () => {
       "control character in path",
       worktreeOutput(["worktree /tmp/bad\npath", "HEAD a"]),
     ],
+    ["relative worktree path", worktreeOutput(["worktree relative", "HEAD a"])],
+    [
+      "duplicate worktree path",
+      worktreeOutput(
+        ["worktree /tmp/repo", "HEAD a"],
+        ["worktree /tmp/repo", "HEAD b", "detached"],
+      ),
+    ],
+    [
+      "unknown record field",
+      worktreeOutput(["worktree /tmp/repo", "HEAD a", "future-field x"]),
+    ],
+    [
+      "conflicting branch state",
+      worktreeOutput([
+        "worktree /tmp/repo",
+        "HEAD a",
+        "branch refs/heads/main",
+        "detached",
+      ]),
+    ],
     ["oversized output", Buffer.alloc(64 * 1_024 + 1, 0x61)],
   ])("marks malformed Git output unavailable: %s", async (_label, stdout) => {
     const cwd = await tempRoot("judge-malformed-");
@@ -322,7 +426,9 @@ describe("permission judge project context", () => {
     const parent = await tempRoot("judge-prunable-");
     const main = join(parent, "project");
     const missing = join(parent, "missing");
+    const recreated = join(parent, "recreated-prunable");
     await mkdir(main);
+    await mkdir(recreated);
 
     const context = await discoverProjectContext(main, {
       runGit: async () =>
@@ -334,14 +440,135 @@ describe("permission judge project context", () => {
               "HEAD b",
               "prunable gitdir file points to non-existent location",
             ],
+            [
+              `worktree ${recreated}`,
+              "HEAD c",
+              "prunable stale administrative record",
+            ],
           ),
         ),
     });
     expect(context).toMatchObject({
       kind: "git",
       activeWorktree: main,
+      navigableRoots: [main],
       worktrees: [main],
     });
+  });
+
+  test("precomputes registered-worktree, nested-repo, and symlink-escape navigation", async () => {
+    const parent = await tempRoot("judge-navigation-");
+    const main = join(parent, "project");
+    const nested = join(main, "vendor", "nested");
+    const outside = join(parent, "outside");
+    const escape = join(main, "escape");
+    await mkdir(nested, { recursive: true });
+    await mkdir(outside);
+    await symlink(outside, escape);
+    const runGit = async () =>
+      ok(
+        worktreeOutput([
+          `worktree ${main}`,
+          "HEAD a",
+          "branch refs/heads/main",
+        ]),
+      );
+    const runGitCommonDir = async (cwd: string) =>
+      cwd === nested ? "/different/.git" : "/common/.git";
+
+    const listed = await discoverProjectContext(main, {
+      runGit,
+      runGitCommonDir,
+      leadingCdTarget: main,
+    });
+    const nestedRepo = await discoverProjectContext(main, {
+      runGit,
+      runGitCommonDir,
+      leadingCdTarget: nested,
+    });
+    const symlinkEscape = await discoverProjectContext(main, {
+      runGit,
+      runGitCommonDir,
+      leadingCdTarget: escape,
+    });
+
+    expect(listed.leadingNavigation).toEqual({
+      scope: "listed-worktree",
+      sameRepository: true,
+    });
+    expect(nestedRepo.leadingNavigation).toEqual({
+      scope: "unverified",
+      sameRepository: false,
+    });
+    expect(symlinkEscape.leadingNavigation).toEqual({
+      scope: "outside-listed-worktrees",
+      sameRepository: false,
+    });
+  });
+
+  test("uses complete navigable roots beyond the display limit", async () => {
+    const parent = await tempRoot("judge-many-worktrees-");
+    const roots = Array.from({ length: 18 }, (_, index) =>
+      join(parent, `project-${String(index).padStart(2, "0")}`),
+    );
+    await Promise.all(roots.map((root) => mkdir(root)));
+    const active = roots[0];
+    const target = roots[17];
+    if (active === undefined || target === undefined) {
+      throw new Error("missing test roots");
+    }
+    const context = await discoverProjectContext(active, {
+      runGit: async () =>
+        ok(
+          worktreeOutput(
+            ...roots.map((root, index) => [
+              `worktree ${root}`,
+              `HEAD ${index}`,
+              `branch refs/heads/worktree-${index}`,
+            ]),
+          ),
+        ),
+      runGitCommonDir: async () => "/common/.git",
+      leadingCdTarget: target,
+    });
+
+    expect(context.kind).toBe("git");
+    if (context.kind !== "git") throw new Error("expected git context");
+    expect(context.worktrees).toHaveLength(16);
+    expect(context.worktrees).not.toContain(target);
+    expect(context.navigableRoots).toContain(target);
+    expect(context.leadingNavigation).toEqual({
+      scope: "listed-worktree",
+      sameRepository: true,
+    });
+  });
+
+  test("bounds all discovery phases by one cumulative deadline", async () => {
+    const cwd = await tempRoot("judge-cumulative-deadline-");
+    const startedAt = performance.now();
+    const context = await discoverProjectContext(cwd, {
+      timeoutMs: 50,
+      canonicalizeDirectory: async (path) => {
+        await Bun.sleep(20);
+        return path;
+      },
+      runGit: async () => {
+        await Bun.sleep(20);
+        return ok(
+          worktreeOutput([
+            `worktree ${cwd}`,
+            "HEAD a",
+            "branch refs/heads/main",
+          ]),
+        );
+      },
+    });
+
+    expect(context).toMatchObject({
+      kind: "unavailable",
+      reason: "project discovery timed out",
+    });
+    expect(performance.now() - startedAt).toBeLessThan(250);
   });
 
   test("bounds canonicalization inside the whole discovery deadline", async () => {
@@ -408,6 +635,25 @@ describe("permission judge project context", () => {
       kind: "unavailable",
       reason: "project discovery was cancelled",
     });
+  });
+
+  test("the Git runner includes async environment building in its timeout", async () => {
+    const cwd = await tempRoot("judge-env-timeout-");
+    const marker = join(cwd, "spawned");
+    const fakeGit = join(cwd, "fake-git");
+    await writeFile(fakeGit, `#!/bin/sh\ntouch ${marker}\n`, "utf8");
+    await chmod(fakeGit, 0o755);
+
+    const result = await runGitWorktreeList(cwd, undefined, {
+      gitExecutable: fakeGit,
+      timeoutMs: 20,
+      buildEnv: async () => new Promise<Record<string, string>>(() => {}),
+    });
+    expect(result).toEqual({
+      kind: "unavailable",
+      reason: "git worktree discovery timed out",
+    });
+    expect(await Bun.file(marker).exists()).toBe(false);
   });
 
   test("the real Git runner distinguishes timeout and parent abort", async () => {

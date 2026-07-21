@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   DEFAULT_PERMISSION_JUDGE_CONFIG,
@@ -158,6 +156,7 @@ const gitProject = (fingerprint = "project:a"): PermissionProjectContext => ({
   name: "project",
   cwd: "/private/project-worktree/packages/app",
   activeWorktree: "/private/project-worktree",
+  navigableRoots: ["/private/project-worktree", "/private/project"],
   worktrees: ["/private/project-worktree", "/private/project"],
   fingerprint,
 });
@@ -248,45 +247,24 @@ describe("local Ollama permission judge", () => {
     expect(request?.body).not.toContain("process.env");
   });
 
-  test("annotates conservative leading-cd scope without exposing fingerprints", async () => {
+  test("copies only precomputed leading-cd scope into the model envelope", async () => {
     const upstream = await start(() => validResponse());
     const judge = createPermissionJudge(configFor(upstream));
     const project = gitProject();
 
-    await judge.judge("cd /private/project-worktree && make test", {
-      cwd: project.cwd,
-      project,
-    });
-    await judge.judge("cd /private/project-worktree-copy && make test", {
-      cwd: project.cwd,
-      project,
-    });
-    await judge.judge("cd /private/project-worktree && make test", {
-      cwd: project.cwd,
-    });
-
-    const parent = await realpath(
-      await mkdtemp(join(tmpdir(), "judge-navigation-")),
-    );
-    try {
-      const root = join(parent, "project");
-      const outside = join(parent, "outside");
-      const escape = join(root, "escape");
-      await mkdir(root);
-      await mkdir(outside);
-      await symlink(outside, escape);
-      await judge.judge(`cd ${escape} && make test`, {
-        cwd: root,
-        project: {
-          kind: "git",
-          cwd: root,
-          activeWorktree: root,
-          worktrees: [root],
-          fingerprint: "project:symlink-escape",
+    for (const scope of [
+      "listed-worktree",
+      "outside-listed-worktrees",
+      "unverified",
+    ] as const) {
+      await judge.judge("cd /private/project-worktree && make test", {
+        cwd: project.cwd,
+        project,
+        leadingNavigation: {
+          scope,
+          sameRepository: scope === "listed-worktree",
         },
       });
-    } finally {
-      await rm(parent, { recursive: true, force: true });
     }
 
     const bodies = chatRequests(upstream).map((request) => request.body);
@@ -307,9 +285,9 @@ describe("local Ollama permission judge", () => {
       "listed-worktree",
       "outside-listed-worktrees",
       "unverified",
-      "outside-listed-worktrees",
     ]);
     expect(bodies.join("\n")).not.toContain("project:a");
+    expect(bodies.join("\n")).not.toContain("sameRepository");
   });
 
   test("fails closed before chat when Ollama cloud is not disabled", async () => {
@@ -459,6 +437,14 @@ describe("local Ollama permission judge", () => {
       label: "prose verdict",
       payload: {
         message: { role: "assistant", content: "ALLOW because it is safe" },
+        done: true,
+        done_reason: "stop",
+      },
+    },
+    {
+      label: "whitespace-padded verdict",
+      payload: {
+        message: { role: "assistant", content: " ALLOW\n" },
         done: true,
         done_reason: "stop",
       },
@@ -833,6 +819,32 @@ describe("local Ollama permission judge", () => {
       project: gitProject("complete-project-b"),
     });
 
+    expect(chatRequests(upstream)).toHaveLength(3);
+  });
+
+  test("never reads or writes ALLOW cache while task correlation is unknown", async () => {
+    const upstream = await start(() => validResponse());
+    const judge = createPermissionJudge(configFor(upstream));
+    const context = {
+      cwd: "/private/project",
+      taskCorrelation: "uncorrelated" as const,
+      project: gitProject("complete-project-a"),
+    };
+
+    expect((await judge.judge("make check", context)).kind).toBe("allow");
+    expect((await judge.judge("make check", context)).kind).toBe("allow");
+    expect(chatRequests(upstream)).toHaveLength(2);
+
+    const noTaskContext = {
+      cwd: "/private/project",
+      taskCorrelation: "none" as const,
+      project: gitProject("complete-project-a"),
+    };
+    expect((await judge.judge("make check", noTaskContext)).kind).toBe("allow");
+    expect(await judge.judge("make check", noTaskContext)).toEqual({
+      kind: "allow",
+      cached: true,
+    });
     expect(chatRequests(upstream)).toHaveLength(3);
   });
 

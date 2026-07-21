@@ -94,6 +94,7 @@ const verifiedProject = (cwd: string): PermissionProjectContext => ({
   name: "dotfiles",
   cwd,
   activeWorktree: cwd,
+  navigableRoots: [cwd],
   worktrees: [cwd],
   fingerprint: `project:${cwd}`,
 });
@@ -213,6 +214,47 @@ describe("permission policy local judge routing", () => {
     const afterDelivery = chatRequests(upstream)[1]?.body ?? "";
     expect(afterDelivery).toContain("/skill:start-work implement follow-up");
     expect(afterDelivery).not.toContain("PRIVATE EXPANDED SKILL CONTENT");
+  });
+
+  test("does not reuse ALLOW cache after queued-task correlation fails", async () => {
+    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const cwd = resolve(import.meta.dir, "../..");
+    const pi = createFakePi({ cwd });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => verifiedProject(cwd),
+    });
+
+    const baseline = [{ role: "user", content: "Initial task" }];
+    await pi.emitContext(baseline);
+    await pi.emitInput({
+      type: "input",
+      text: "same queued task",
+      source: "interactive",
+      streamingBehavior: "steer",
+    });
+    await pi.emitInput({
+      type: "input",
+      text: "same queued task",
+      source: "rpc",
+      streamingBehavior: "steer",
+    });
+    await pi.emitContext([
+      ...baseline,
+      { role: "user", content: "same queued task" },
+    ]);
+
+    expect(
+      await pi.emitToolCall(bashCall("git status --short", "uncorrelated-1")),
+    ).toBeUndefined();
+    expect(
+      await pi.emitToolCall(bashCall("git status --short", "uncorrelated-2")),
+    ).toBeUndefined();
+    expect(chatRequests(upstream)).toHaveLength(2);
+    expect(
+      chatRequests(upstream)
+        .map((request) => request.body)
+        .join("\n"),
+    ).not.toContain("same queued task");
   });
 
   test("routes unavailable project context conservatively without exposing its reason", async () => {
@@ -391,6 +433,60 @@ describe("permission policy local judge routing", () => {
       block: true,
       reason: "local judge requested user confirmation",
     });
+    expect(chatRequests(upstream)).toHaveLength(1);
+  });
+
+  test("never discovers context or calls the judge for ANSI-C command words", async () => {
+    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const pi = createFakePi({ cwd: "/private/project", hasUI: false });
+    let discoveries = 0;
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => {
+        discoveries += 1;
+        return verifiedProject("/private/project");
+      },
+    });
+
+    expect(
+      await pi.emitToolCall(
+        bashCall(String.raw`cd $'/private/project\q' && bun run tsc`, "ansi-c"),
+      ),
+    ).toEqual({
+      block: true,
+      reason: expect.stringContaining("動的展開"),
+    });
+    expect(discoveries).toBe(0);
+    expect(upstream.received).toHaveLength(0);
+  });
+
+  test("does not trust a leading cd outside registered worktree roots", async () => {
+    const upstream = await start(() => ollamaResponse("ASK"));
+    const cwd = "/private/project";
+    const target = "/private/forged-worktree";
+    const pi = createFakePi({ cwd, hasUI: false });
+    let discoveredTarget: string | undefined;
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async (_cwd, _signal, leadingCdTarget) => {
+        discoveredTarget = leadingCdTarget;
+        return {
+          ...verifiedProject(cwd),
+          leadingNavigation: {
+            scope: "outside-listed-worktrees",
+            sameRepository: false,
+          },
+        };
+      },
+    });
+
+    expect(
+      await pi.emitToolCall(
+        bashCall(`cd ${target} && bun run tsc`, "forged-worktree"),
+      ),
+    ).toEqual({
+      block: true,
+      reason: "local judge requested user confirmation",
+    });
+    expect(discoveredTarget).toBe(target);
     expect(chatRequests(upstream)).toHaveLength(1);
   });
 

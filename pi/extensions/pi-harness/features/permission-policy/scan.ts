@@ -78,6 +78,10 @@ export interface Segment {
   readonly words: readonly string[];
   readonly opaque: ReadonlySet<number>;
   readonly opaqueUnquoted: ReadonlySet<number>;
+  /** Word indices containing Bash ANSI-C `$'…'` syntax. */
+  readonly ansiC: ReadonlySet<number>;
+  /** ANSI-C syntax appeared anywhere in this executable segment. */
+  readonly hasAnsiC: boolean;
   /** True only when this segment is outside a parenthesized shell group. */
   readonly topLevel: boolean;
   /** True only when the shell connector immediately after this segment is &&. */
@@ -286,6 +290,7 @@ interface DollarResult {
   readonly subs: readonly string[];
   readonly boundary: boolean; // unquoted $IFS / ${IFS} → word boundary
   readonly opaque: boolean; // statically-unknown value
+  readonly ansiC?: true; // contained an ANSI-C quoted fragment
   readonly end: number;
 }
 
@@ -308,6 +313,7 @@ const readDollar = (
       subs: nestedSubs,
       boundary: false,
       opaque: true,
+      ...(bal.inner.includes("$'") ? { ansiC: true as const } : {}),
       end: bal.end,
     };
   }
@@ -324,7 +330,9 @@ const readDollar = (
       };
     }
     // ${x:-$(cmd)} etc. — a substitution inside a parameter expansion still
-    // executes; recurse into any command substitutions found within.
+    // executes; recurse into any command substitutions found within. ANSI-C
+    // syntax in the expansion word is conservatively provenance-marked even
+    // when another shell condition might skip that branch.
     const nestedSubs = extractSubs(bal.inner, inDoubleQuotes);
     if (nestedSubs === undefined) return undefined;
     return {
@@ -332,6 +340,7 @@ const readDollar = (
       subs: nestedSubs,
       boundary: false,
       opaque: true,
+      ...(bal.inner.includes("$'") ? { ansiC: true as const } : {}),
       end: bal.end,
     };
   }
@@ -356,6 +365,7 @@ const readDollar = (
       subs: [],
       boundary: false,
       opaque: false,
+      ansiC: true,
       end: ansi.end,
     };
   }
@@ -401,6 +411,7 @@ interface DoubleQuoteResult {
   readonly literal: string;
   readonly subs: readonly string[];
   readonly opaque: boolean; // contained an expansion (quoted → single word)
+  readonly ansiC: boolean;
   readonly end: number;
 }
 
@@ -412,9 +423,10 @@ const readDoubleQuote = (
   let literal = "";
   const subs: string[] = [];
   let opaque = false;
+  let ansiC = false;
   while (j < text.length) {
     const c = text[j];
-    if (c === '"') return { literal, subs, opaque, end: j + 1 };
+    if (c === '"') return { literal, subs, opaque, ansiC, end: j + 1 };
     if (c === "\\") {
       const escaped = text[j + 1];
       if (escaped === undefined) return undefined;
@@ -439,6 +451,7 @@ const readDoubleQuote = (
       literal += dollar.boundary ? " " : dollar.append;
       subs.push(...dollar.subs);
       if (dollar.opaque) opaque = true;
+      if (dollar.ansiC === true) ansiC = true;
       j = dollar.end;
       continue;
     }
@@ -546,10 +559,13 @@ export const scanCommand = (command: string): ScanResult => {
   let words: string[] = [];
   let opaque = new Set<number>();
   let opaqueUnquoted = new Set<number>();
+  let ansiC = new Set<number>();
+  let segmentHasAnsiC = false;
   let word = "";
   let wordStarted = false;
   let wordOpaque = false;
   let wordOpaqueUnquoted = false;
+  let wordAnsiC = false;
   let atWordStart = true;
   let pendingRedirectTarget = false;
   let allowEligible = true;
@@ -561,6 +577,7 @@ export const scanCommand = (command: string): ScanResult => {
     wordStarted = false;
     wordOpaque = false;
     wordOpaqueUnquoted = false;
+    wordAnsiC = false;
   };
   const flushWord = (): void => {
     if (!wordStarted && word === "") return;
@@ -574,6 +591,7 @@ export const scanCommand = (command: string): ScanResult => {
     words.push(word);
     if (wordOpaque) opaque.add(index);
     if (wordOpaqueUnquoted) opaqueUnquoted.add(index);
+    if (wordAnsiC) ansiC.add(index);
     resetWord();
   };
   const flushSegment = (followedByAnd = false): void => {
@@ -594,6 +612,8 @@ export const scanCommand = (command: string): ScanResult => {
         words,
         opaque,
         opaqueUnquoted,
+        ansiC,
+        hasAnsiC: segmentHasAnsiC,
         topLevel: groupDepth === 0,
         followedByAnd,
         ...(allowCandidate === undefined ? {} : { allowCandidate }),
@@ -602,6 +622,8 @@ export const scanCommand = (command: string): ScanResult => {
     words = [];
     opaque = new Set<number>();
     opaqueUnquoted = new Set<number>();
+    ansiC = new Set<number>();
+    segmentHasAnsiC = false;
     allowEligible = true;
   };
   const fail = (): ScanResult => ({ segments, subs, ok: false });
@@ -658,6 +680,11 @@ export const scanCommand = (command: string): ScanResult => {
       wordStarted = true;
       subs.push(...dq.subs);
       if (dq.opaque) wordOpaque = true; // quoted: not word-splitting
+      if (dq.ansiC) {
+        wordAnsiC = true;
+        segmentHasAnsiC = true;
+        allowEligible = false;
+      }
       atWordStart = false;
       i = dq.end;
       continue;
@@ -680,6 +707,14 @@ export const scanCommand = (command: string): ScanResult => {
       }
       word += dollar.append;
       wordStarted = true;
+      if (dollar.ansiC === true) {
+        // JavaScript strings cannot preserve every byte-level ANSI-C result
+        // exactly as Bash argv. Keep decoded text for the deterministic deny
+        // floor, but never derive an automatic allow from this segment.
+        wordAnsiC = true;
+        segmentHasAnsiC = true;
+        allowEligible = false;
+      }
       if (dollar.opaque) markOpaque(true);
       atWordStart = false;
       i = dollar.end;
@@ -839,6 +874,8 @@ export interface NormalizedSegment {
   readonly words: readonly string[];
   readonly opaque: ReadonlySet<number>;
   readonly opaqueUnquoted: ReadonlySet<number>;
+  readonly ansiC: ReadonlySet<number>;
+  readonly hasAnsiC: boolean;
   readonly headOpaque: boolean;
 }
 
@@ -870,7 +907,13 @@ const normalizeBitWords = (
   words: readonly string[],
   opaque: ReadonlySet<number>,
   opaqueUnquoted: ReadonlySet<number>,
-): { words: string[]; opaque: Set<number>; opaqueUnquoted: Set<number> } => {
+  ansiC: ReadonlySet<number>,
+): {
+  words: string[];
+  opaque: Set<number>;
+  opaqueUnquoted: Set<number>;
+  ansiC: Set<number>;
+} => {
   const kept: KeptWord[] = [{ from: 0 }]; // "bit"
   const n = words.length;
   let i = 1;
@@ -920,6 +963,7 @@ const normalizeBitWords = (
   const outWords: string[] = [];
   const outOpaque = new Set<number>();
   const outOpaqueUnquoted = new Set<number>();
+  const outAnsiC = new Set<number>();
   kept.forEach((k, idx) => {
     if ("literal" in k) {
       outWords.push(k.literal);
@@ -928,11 +972,13 @@ const normalizeBitWords = (
     outWords.push(words[k.from]);
     if (opaque.has(k.from)) outOpaque.add(idx);
     if (opaqueUnquoted.has(k.from)) outOpaqueUnquoted.add(idx);
+    if (ansiC.has(k.from)) outAnsiC.add(idx);
   });
   return {
     words: outWords,
     opaque: outOpaque,
     opaqueUnquoted: outOpaqueUnquoted,
+    ansiC: outAnsiC,
   };
 };
 
@@ -966,6 +1012,7 @@ export const normalizeSegment = (segment: Segment): NormalizedSegment => {
   let words: readonly string[] = segment.words.slice(shift);
   let opaque: ReadonlySet<number> = remap(segment.opaque);
   let opaqueUnquoted: ReadonlySet<number> = remap(segment.opaqueUnquoted);
+  let ansiC: ReadonlySet<number> = remap(segment.ansiC);
 
   // Basename-normalize a concrete path-form head (opaque heads are left for
   // speculativeFloor). Length is unchanged, so opaque indices stay valid.
@@ -977,17 +1024,25 @@ export const normalizeSegment = (segment: Segment): NormalizedSegment => {
   // Fold bit global options / repo / hub so the deny floor sees the real
   // subcommand (this rewrites indices, so remap the opaque sets too).
   if (words[0] === "bit") {
-    const folded = normalizeBitWords(words, opaque, opaqueUnquoted);
+    const folded = normalizeBitWords(words, opaque, opaqueUnquoted, ansiC);
     words = folded.words;
     opaque = folded.opaque;
     opaqueUnquoted = folded.opaqueUnquoted;
+    ansiC = folded.ansiC;
   }
 
   const head = words[0];
   const headOpaque =
     words.length > 0 &&
     (opaque.has(0) || (head !== undefined && head.startsWith("-")));
-  return { words, opaque, opaqueUnquoted, headOpaque };
+  return {
+    words,
+    opaque,
+    opaqueUnquoted,
+    ansiC,
+    hasAnsiC: segment.hasAnsiC,
+    headOpaque,
+  };
 };
 
 // ---------------------------------------------------------------------------
@@ -1110,6 +1165,7 @@ export const speculativeFloor = (
   // headOpaque can hold with no expansions (a dangling `-option` left by a
   // wrapper we cannot fully parse), so check it before the opaque short-circuit.
   if (seg.headOpaque) return "deny"; // unknown head could be any floor command
+  if (seg.hasAnsiC) return "ask";
   if (seg.opaque.size === 0) return null;
   const head = seg.words[0];
   if (head === undefined || !SENSITIVE_HEADS.has(head)) return null;

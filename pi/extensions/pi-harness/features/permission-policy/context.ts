@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
-import { basename } from "node:path";
-import { sanitizeChildEnv } from "../../lib/child-env";
+import { basename, isAbsolute, resolve as resolvePath } from "node:path";
+import { sanitizeChildEnvAsync } from "../../lib/child-env";
 import { isPathWithin } from "../../lib/trust";
 
 const MAX_TASK_TEXT_BYTES = 1_024;
@@ -77,6 +77,11 @@ export const boundTaskContext = (
 
 export type PermissionStreamingBehavior = "steer" | "followUp";
 
+export type PermissionTaskCorrelation =
+  | { readonly correlation: "task"; readonly task: BoundedTaskContext }
+  | { readonly correlation: "none" }
+  | { readonly correlation: "uncorrelated" };
+
 export interface PermissionTaskTracker {
   capture(input: {
     text: string;
@@ -85,7 +90,7 @@ export interface PermissionTaskTracker {
   }): void;
   activate(agentPrompt: string): void;
   activateFromMessages(messages: readonly unknown[]): void;
-  current(): BoundedTaskContext | undefined;
+  current(): PermissionTaskCorrelation;
   settle(): void;
   clear(): void;
 }
@@ -115,113 +120,168 @@ const userMessageText = (message: unknown): string | undefined => {
 
 interface PendingTaskContext {
   readonly task: BoundedTaskContext;
-  readonly queued: boolean;
+  readonly rawText: string;
+  readonly behavior?: PermissionStreamingBehavior;
 }
 
 interface UserContextObservation {
   readonly count: number;
+  readonly chainFingerprint: string;
 }
+
+const userContextFingerprint = (
+  texts: readonly string[],
+  count = texts.length,
+): string => fingerprint("user-context-v1", ...texts.slice(0, count));
 
 export const createPermissionTaskTracker = (): PermissionTaskTracker => {
   const pending: PendingTaskContext[] = [];
-  let active: BoundedTaskContext | undefined;
+  let current: PermissionTaskCorrelation = { correlation: "none" };
   let lastUserContext: UserContextObservation | undefined;
+  let overflowed = false;
+  let correlationHealthy = true;
 
-  const exactMatchIndex = (text: string): number => {
-    const fingerprintBySource = new Map<PermissionTaskSource, string>([
-      ["interactive", fingerprint("task-v1", "interactive", text)],
-      ["rpc", fingerprint("task-v1", "rpc", text)],
-      ["extension", fingerprint("task-v1", "extension", text)],
-    ]);
-    return pending.findIndex(
-      ({ task }) => fingerprintBySource.get(task.source) === task.fingerprint,
-    );
+  const invalidate = (): void => {
+    current = { correlation: "uncorrelated" };
+    pending.length = 0;
+    overflowed = false;
+    correlationHealthy = false;
   };
-  const promote = (index: number): void => {
-    active = pending[index]?.task;
-    pending.splice(0, index + 1);
+  const promote = (entry: PendingTaskContext): void => {
+    current = { correlation: "task", task: entry.task };
+  };
+  const removeEntries = (entries: readonly PendingTaskContext[]): void => {
+    const delivered = new Set(entries);
+    for (let index = pending.length - 1; index >= 0; index -= 1) {
+      const entry = pending[index];
+      if (entry !== undefined && delivered.has(entry)) pending.splice(index, 1);
+    }
   };
 
   return {
     capture(input) {
+      if (!correlationHealthy) return;
       const task = boundTaskContext(input.text, input.source);
       if (task === undefined) return;
       pending.push({
         task,
-        queued: input.streamingBehavior !== undefined,
+        rawText: input.text,
+        ...(input.streamingBehavior === undefined
+          ? {}
+          : { behavior: input.streamingBehavior }),
       });
-      if (pending.length > MAX_PENDING_TASKS) pending.shift();
+      if (pending.length > MAX_PENDING_TASKS) {
+        pending.shift();
+        overflowed = true;
+      }
     },
     activate(agentPrompt) {
       // Automatic retries/compaction can begin another agent run without a
-      // new input event. Preserve the current task until agent_settled; only a
-      // pending new input is allowed to replace or invalidate it.
-      if (pending.length === 0) return;
-      active = undefined;
-      const matchIndex = exactMatchIndex(agentPrompt);
-      if (matchIndex !== -1) {
-        promote(matchIndex);
+      // new input event. Preserve the current task until agent_settled.
+      if (!correlationHealthy || pending.length === 0) return;
+      const idle = pending.filter((entry) => entry.behavior === undefined);
+      if (idle.length === 0) return; // queued inputs require provider evidence
+      if (overflowed || idle.length !== 1 || idle.length !== pending.length) {
+        invalidate();
         return;
       }
-      const [firstPending] = pending;
+      const [entry] = idle;
       if (
-        firstPending !== undefined &&
-        isExpandableInvocation(firstPending.task)
+        entry === undefined ||
+        (entry.rawText !== agentPrompt && !isExpandableInvocation(entry.task))
       ) {
-        // Pi expands both `/skill:name` and prompt-template `/name`
-        // invocations after the raw input event. before_agent_start proves the
-        // corresponding run has begun, so retain the raw invocation only.
-        promote(0);
+        invalidate();
         return;
       }
-      pending.length = 0;
+      removeEntries([entry]);
+      promote(entry);
     },
     activateFromMessages(messages) {
-      let latestUserText: string | undefined;
-      let userMessageCount = 0;
+      const texts: string[] = [];
       for (const message of messages) {
         const text = userMessageText(message);
-        if (text !== undefined) {
-          latestUserText = text;
-          userMessageCount += 1;
-        }
+        if (text !== undefined) texts.push(text);
       }
-      const previousContext = lastUserContext;
-      lastUserContext = { count: userMessageCount };
-      if (pending.length === 0 || latestUserText === undefined) return;
+      const observation: UserContextObservation = {
+        count: texts.length,
+        chainFingerprint: userContextFingerprint(texts),
+      };
+      const previous = lastUserContext;
+      lastUserContext = observation;
+      if (!correlationHealthy) return;
 
-      const matchIndex = exactMatchIndex(latestUserText);
-      if (matchIndex !== -1) {
-        promote(matchIndex);
+      if (previous === undefined) {
+        if (pending.some((entry) => entry.behavior !== undefined)) invalidate();
+        return;
+      }
+      const appendOnly =
+        texts.length >= previous.count &&
+        userContextFingerprint(texts, previous.count) ===
+          previous.chainFingerprint;
+      if (!appendOnly) {
+        // Retry/compaction without a pending delivery preserves the active
+        // task. A pending input cannot be correlated across the rewrite.
+        if (pending.length > 0) invalidate();
+        return;
+      }
+      const delta = texts.length - previous.count;
+      if (pending.length === 0 || delta === 0) return;
+      if (overflowed || pending.some((entry) => entry.behavior === undefined)) {
+        invalidate();
         return;
       }
 
-      const deliveredNewUserMessage =
-        previousContext !== undefined &&
-        userMessageCount > previousContext.count;
-      const [firstPending] = pending;
-      if (
-        deliveredNewUserMessage &&
-        firstPending?.queued === true &&
-        isExpandableInvocation(firstPending.task)
-      ) {
-        // A queued skill/template reaches context already expanded. Promote it
-        // only after a new user message is observable, never on an earlier tool
-        // loop that still ends with the previous task.
-        promote(0);
+      // Pi delivers every steering message before queued follow-ups, with FIFO
+      // order inside each behavior queue.
+      const expected = [
+        ...pending.filter((entry) => entry.behavior === "steer"),
+        ...pending.filter((entry) => entry.behavior === "followUp"),
+      ];
+      if (delta > expected.length) {
+        invalidate();
+        return;
       }
+      const delivered = expected.slice(0, delta);
+      const deliveredTexts = texts.slice(previous.count);
+      const valid = delivered.every((entry, index) => {
+        if (
+          expected.filter((candidate) => candidate.rawText === entry.rawText)
+            .length !== 1
+        ) {
+          return false;
+        }
+        return (
+          isExpandableInvocation(entry.task) ||
+          deliveredTexts[index] === entry.rawText
+        );
+      });
+      if (!valid) {
+        invalidate();
+        return;
+      }
+      const latest = delivered[delivered.length - 1];
+      if (latest === undefined) {
+        invalidate();
+        return;
+      }
+      removeEntries(delivered);
+      promote(latest);
     },
     current() {
-      return active;
+      return current;
     },
     settle() {
-      active = undefined;
+      current = { correlation: "none" };
       pending.length = 0;
+      overflowed = false;
+      correlationHealthy = true;
     },
     clear() {
-      active = undefined;
+      current = { correlation: "none" };
       pending.length = 0;
       lastUserContext = undefined;
+      overflowed = false;
+      correlationHealthy = true;
     },
   };
 };
@@ -231,9 +291,10 @@ export type GitWorktreeListResult =
   | { readonly kind: "non-git" }
   | { readonly kind: "unavailable"; readonly reason: string };
 
-interface GitRunnerOptions {
+export interface GitRunnerOptions {
   readonly gitExecutable?: string;
   readonly timeoutMs?: number;
+  readonly buildEnv?: (cwd: string) => Promise<Record<string, string>>;
 }
 
 const decoder = new TextDecoder(undefined, {
@@ -325,73 +386,173 @@ export const runGitWorktreeList = (
       });
     }, options.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS);
 
-    try {
-      child = execFile(
-        options.gitExecutable ?? "git",
-        ["worktree", "list", "--porcelain", "-z"],
-        {
-          cwd,
-          encoding: "buffer",
-          maxBuffer: MAX_GIT_OUTPUT_BYTES,
-          env: sanitizeChildEnv(
-            process.env,
+    activeSignal?.addEventListener("abort", onAbort, { once: true });
+    const buildEnv =
+      options.buildEnv ??
+      ((directory: string) =>
+        sanitizeChildEnvAsync(
+          process.env,
+          {
+            GIT_OPTIONAL_LOCKS: "0",
+            LANG: "C",
+            LC_ALL: "C",
+          },
+          { cwd: directory },
+        ));
+    void buildEnv(cwd).then(
+      (env) => {
+        if (settled || activeSignal?.aborted === true) return;
+        try {
+          child = execFile(
+            options.gitExecutable ?? "git",
+            ["worktree", "list", "--porcelain", "-z"],
             {
-              GIT_OPTIONAL_LOCKS: "0",
-              LANG: "C",
-              LC_ALL: "C",
+              cwd,
+              encoding: "buffer",
+              maxBuffer: MAX_GIT_OUTPUT_BYTES,
+              env,
             },
-            { cwd },
-          ),
-        },
-        (error, stdout, stderr) => {
-          if (settled) return;
-          if (activeSignal?.aborted === true) {
-            finish({
-              kind: "unavailable",
-              reason: "project discovery was cancelled",
-            });
-            return;
-          }
-          const stdoutBytes = Buffer.isBuffer(stdout)
-            ? stdout
-            : Buffer.from(stdout);
-          const stderrBytes = Buffer.isBuffer(stderr)
-            ? stderr
-            : Buffer.from(stderr);
-          if (error !== null) {
-            const stderrText = stderrBytes.toString("utf8");
-            if (stderrText.includes("not a git repository")) {
-              finish({ kind: "non-git" });
-              return;
-            }
-            finish({
-              kind: "unavailable",
-              reason:
-                stdoutBytes.byteLength >= MAX_GIT_OUTPUT_BYTES ||
-                stderrBytes.byteLength >= MAX_GIT_OUTPUT_BYTES
-                  ? "git worktree discovery exceeded the output limit"
-                  : "git worktree discovery failed",
-            });
-            return;
-          }
-          if (stdoutBytes.byteLength > MAX_GIT_OUTPUT_BYTES) {
-            finish({
-              kind: "unavailable",
-              reason: "git worktree discovery exceeded the output limit",
-            });
-            return;
-          }
-          finish({ kind: "ok", stdout: stdoutBytes });
-        },
-      );
-      activeSignal?.addEventListener("abort", onAbort, { once: true });
-      if (activeSignal?.aborted === true) onAbort();
-    } catch {
-      finish({
-        kind: "unavailable",
-        reason: "git worktree discovery failed",
-      });
-    }
+            (error, stdout, stderr) => {
+              if (settled) return;
+              if (activeSignal?.aborted === true) {
+                finish({
+                  kind: "unavailable",
+                  reason: "project discovery was cancelled",
+                });
+                return;
+              }
+              const stdoutBytes = Buffer.isBuffer(stdout)
+                ? stdout
+                : Buffer.from(stdout);
+              const stderrBytes = Buffer.isBuffer(stderr)
+                ? stderr
+                : Buffer.from(stderr);
+              if (error !== null) {
+                const stderrText = stderrBytes.toString("utf8");
+                if (stderrText.includes("not a git repository")) {
+                  finish({ kind: "non-git" });
+                  return;
+                }
+                finish({
+                  kind: "unavailable",
+                  reason:
+                    stdoutBytes.byteLength >= MAX_GIT_OUTPUT_BYTES ||
+                    stderrBytes.byteLength >= MAX_GIT_OUTPUT_BYTES
+                      ? "git worktree discovery exceeded the output limit"
+                      : "git worktree discovery failed",
+                });
+                return;
+              }
+              if (stdoutBytes.byteLength > MAX_GIT_OUTPUT_BYTES) {
+                finish({
+                  kind: "unavailable",
+                  reason: "git worktree discovery exceeded the output limit",
+                });
+                return;
+              }
+              finish({ kind: "ok", stdout: stdoutBytes });
+            },
+          );
+        } catch {
+          finish({
+            kind: "unavailable",
+            reason: "git worktree discovery failed",
+          });
+        }
+      },
+      () =>
+        finish({
+          kind: "unavailable",
+          reason: "git worktree discovery failed",
+        }),
+    );
+    if (activeSignal?.aborted === true) onAbort();
+  });
+};
+
+export interface PermissionLeadingNavigation {
+  readonly scope: "listed-worktree" | "outside-listed-worktrees" | "unverified";
+  /** Internal fast-path evidence; never included in the model envelope. */
+  readonly sameRepository: boolean;
+}
+
+export const runGitCommonDir = (
+  cwd: string,
+  signal?: AbortSignal,
+  options: GitRunnerOptions = {},
+): Promise<string | undefined> => {
+  const activeSignal = isAbortSignal(signal) ? signal : undefined;
+  if (activeSignal?.aborted === true) return Promise.resolve(undefined);
+  return new Promise((resolve) => {
+    let settled = false;
+    let child: ReturnType<typeof execFile> | undefined;
+    const finish = (value: string | undefined): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      activeSignal?.removeEventListener("abort", onAbort);
+      resolve(value);
+    };
+    const onAbort = (): void => {
+      child?.kill("SIGKILL");
+      finish(undefined);
+    };
+    const timer = setTimeout(
+      onAbort,
+      options.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
+    );
+    activeSignal?.addEventListener("abort", onAbort, { once: true });
+    const buildEnv =
+      options.buildEnv ??
+      ((directory: string) =>
+        sanitizeChildEnvAsync(
+          process.env,
+          { GIT_OPTIONAL_LOCKS: "0", LANG: "C", LC_ALL: "C" },
+          { cwd: directory },
+        ));
+    void buildEnv(cwd).then(
+      (env) => {
+        if (settled || activeSignal?.aborted === true) return;
+        try {
+          child = execFile(
+            options.gitExecutable ?? "git",
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            { cwd, encoding: "buffer", maxBuffer: 4_096, env },
+            (error, stdout) => {
+              if (settled || error !== null || activeSignal?.aborted === true) {
+                finish(undefined);
+                return;
+              }
+              const bytes = Buffer.isBuffer(stdout)
+                ? stdout
+                : Buffer.from(stdout);
+              let text: string;
+              try {
+                text = decoder.decode(bytes);
+              } catch {
+                finish(undefined);
+                return;
+              }
+              if (text.endsWith("\n")) text = text.slice(0, -1);
+              if (text.endsWith("\r")) text = text.slice(0, -1);
+              if (
+                text === "" ||
+                !isAbsolute(text) ||
+                hasControlCharacter(text)
+              ) {
+                finish(undefined);
+                return;
+              }
+              void realpath(text).then(finish, () => finish(undefined));
+            },
+          );
+        } catch {
+          finish(undefined);
+        }
+      },
+      () => finish(undefined),
+    );
+    if (activeSignal?.aborted === true) onAbort();
   });
 };
 
@@ -401,18 +562,24 @@ export type PermissionProjectContext =
       readonly name?: string;
       readonly cwd: string;
       readonly activeWorktree: string;
+      /** Complete canonical non-bare roots used for security decisions. */
+      readonly navigableRoots: readonly string[];
+      /** Bounded display-only subset sent to the local model. */
       readonly worktrees: readonly string[];
+      readonly leadingNavigation?: PermissionLeadingNavigation;
       readonly fingerprint: string;
     }
   | {
       readonly kind: "non-git";
       readonly cwd: string;
+      readonly leadingNavigation?: PermissionLeadingNavigation;
       readonly fingerprint: string;
     }
   | {
       readonly kind: "unavailable";
       readonly cwd?: string;
       readonly reason: string;
+      readonly leadingNavigation?: PermissionLeadingNavigation;
       readonly fingerprint: string;
     };
 
@@ -424,6 +591,11 @@ interface ProjectContextOptions {
   readonly canonicalizeDirectory?: (
     path: string,
   ) => Promise<string | undefined>;
+  readonly runGitCommonDir?: (
+    cwd: string,
+    signal?: AbortSignal,
+  ) => Promise<string | undefined>;
+  readonly leadingCdTarget?: string;
   readonly timeoutMs?: number;
 }
 
@@ -448,6 +620,7 @@ const parseWorktreeRecords = (
   if (!text.endsWith("\0\0")) return undefined;
 
   const records: ParsedWorktreeRecord[] = [];
+  const seenPaths = new Set<string>();
   let fields: string[] = [];
   const consume = (): boolean => {
     if (fields.length === 0) return true;
@@ -466,17 +639,33 @@ const parseWorktreeRecords = (
     const path = worktreeField.slice("worktree ".length);
     if (
       path === "" ||
+      !isAbsolute(path) ||
       Buffer.byteLength(path, "utf8") > MAX_DISCOVERED_PATH_BYTES ||
       hasControlCharacter(path)
     ) {
       return false;
     }
+    if (seenPaths.has(path)) return false;
+    seenPaths.add(path);
+    const seenKinds = new Set<string>();
+    for (const field of fields.slice(1)) {
+      const kind = field.split(" ", 1)[0];
+      if (
+        kind === undefined ||
+        !["HEAD", "branch", "detached", "bare", "locked", "prunable"].includes(
+          kind,
+        ) ||
+        seenKinds.has(kind)
+      ) {
+        return false;
+      }
+      seenKinds.add(kind);
+    }
+    if (seenKinds.has("branch") && seenKinds.has("detached")) return false;
     records.push({
       path,
-      prunable: fields.some(
-        (field) => field === "prunable" || field.startsWith("prunable "),
-      ),
-      bare: fields.includes("bare"),
+      prunable: seenKinds.has("prunable"),
+      bare: seenKinds.has("bare"),
     });
     return records.length <= MAX_DISCOVERED_WORKTREES;
   };
@@ -496,10 +685,19 @@ const parseWorktreeRecords = (
 const unavailableProject = (
   cwd: string | undefined,
   reason: string,
+  leadingCdTarget?: string,
 ): PermissionProjectContext => ({
   kind: "unavailable",
   ...(cwd === undefined ? {} : { cwd }),
   reason,
+  ...(leadingCdTarget === undefined
+    ? {}
+    : {
+        leadingNavigation: {
+          scope: "unverified" as const,
+          sameRepository: false,
+        },
+      }),
   fingerprint: fingerprint("project-v1", "unavailable", cwd ?? "", reason),
 });
 
@@ -548,16 +746,15 @@ const discoverProjectContextUnbounded = async (
   options: ProjectContextOptions,
   signal: AbortSignal & ActiveAbortSignal,
 ): Promise<PermissionProjectContext> => {
+  const unavailable = (resolvedCwd: string | undefined, reason: string) =>
+    unavailableProject(resolvedCwd, reason, options.leadingCdTarget);
   const canonicalize = options.canonicalizeDirectory ?? safeCanonicalDirectory;
   const canonicalCwd = await canonicalize(cwd);
   if (canonicalCwd === undefined) {
-    return unavailableProject(
-      undefined,
-      "current working directory did not resolve",
-    );
+    return unavailable(undefined, "current working directory did not resolve");
   }
   if (signal.aborted) {
-    return unavailableProject(canonicalCwd, "project discovery was cancelled");
+    return unavailable(canonicalCwd, "project discovery was cancelled");
   }
 
   const result = await (options.runGit ?? runGitWorktreeList)(
@@ -565,52 +762,51 @@ const discoverProjectContextUnbounded = async (
     signal,
   );
   if (signal.aborted) {
-    return unavailableProject(canonicalCwd, "project discovery was cancelled");
+    return unavailable(canonicalCwd, "project discovery was cancelled");
   }
   if (result.kind === "non-git") {
     return {
       kind: "non-git",
       cwd: canonicalCwd,
+      ...(options.leadingCdTarget === undefined
+        ? {}
+        : {
+            leadingNavigation: {
+              scope: "unverified" as const,
+              sameRepository: false,
+            },
+          }),
       fingerprint: fingerprint("project-v1", "non-git", canonicalCwd),
     };
   }
   if (result.kind === "unavailable") {
-    return unavailableProject(canonicalCwd, result.reason);
+    return unavailable(canonicalCwd, result.reason);
   }
 
   const records = parseWorktreeRecords(result.stdout);
   if (records === undefined) {
-    return unavailableProject(
-      canonicalCwd,
-      "git returned malformed worktree data",
-    );
+    return unavailable(canonicalCwd, "git returned malformed worktree data");
   }
 
   const canonicalRecords: { path: string; bare: boolean }[] = [];
   const canonicalWorktrees: string[] = [];
   let canonicalProjectRoot: string | undefined;
-  for (const [index, record] of records.entries()) {
+  for (const record of records) {
+    if (record.prunable) continue;
     const canonical = await canonicalize(record.path);
     if (signal.aborted) {
-      return unavailableProject(
-        canonicalCwd,
-        "project discovery was cancelled",
-      );
+      return unavailable(canonicalCwd, "project discovery was cancelled");
     }
     if (canonical === undefined) {
-      if (record.prunable) continue;
-      return unavailableProject(
+      return unavailable(
         canonicalCwd,
         "git returned an unresolved worktree path",
       );
     }
     if (hasControlCharacter(canonical)) {
-      return unavailableProject(
-        canonicalCwd,
-        "git returned an unsafe worktree path",
-      );
+      return unavailable(canonicalCwd, "git returned an unsafe worktree path");
     }
-    if (index === 0) canonicalProjectRoot = canonical;
+    if (canonicalProjectRoot === undefined) canonicalProjectRoot = canonical;
     if (
       !canonicalRecords.some(
         (item) => item.path === canonical && item.bare === record.bare,
@@ -623,27 +819,21 @@ const discoverProjectContextUnbounded = async (
     }
   }
   if (canonicalProjectRoot === undefined || canonicalWorktrees.length === 0) {
-    return unavailableProject(
-      canonicalCwd,
-      "git returned no navigable worktrees",
-    );
+    return unavailable(canonicalCwd, "git returned no navigable worktrees");
   }
 
   const activeWorktree = [...canonicalWorktrees]
     .sort((left, right) => right.length - left.length)
     .find((root) => isPathWithin(canonicalCwd, root));
   if (activeWorktree === undefined) {
-    return unavailableProject(
+    return unavailable(
       canonicalCwd,
       "current working directory was not inside a listed worktree",
     );
   }
   const [primaryWorktree] = canonicalWorktrees;
   if (primaryWorktree === undefined) {
-    return unavailableProject(
-      canonicalCwd,
-      "git returned no navigable worktrees",
-    );
+    return unavailable(canonicalCwd, "git returned no navigable worktrees");
   }
   const worktrees = visibleWorktrees(
     activeWorktree,
@@ -651,7 +841,7 @@ const discoverProjectContextUnbounded = async (
     canonicalWorktrees,
   );
   if (worktrees === undefined) {
-    return unavailableProject(
+    return unavailable(
       canonicalCwd,
       "project paths exceeded the context limit",
     );
@@ -662,13 +852,60 @@ const discoverProjectContextUnbounded = async (
       ? Number(left.bare) - Number(right.bare)
       : left.path.localeCompare(right.path),
   );
+  const navigableRoots = [...canonicalWorktrees].sort();
+  let leadingNavigation: PermissionLeadingNavigation | undefined;
+  if (options.leadingCdTarget !== undefined) {
+    const canonicalTarget = await canonicalize(options.leadingCdTarget);
+    if (signal.aborted) {
+      return unavailableProject(
+        canonicalCwd,
+        "project discovery was cancelled",
+        options.leadingCdTarget,
+      );
+    }
+    const targetForContainment =
+      canonicalTarget ?? resolvePath(options.leadingCdTarget);
+    const insideRegisteredRoot = navigableRoots.some((root) =>
+      isPathWithin(targetForContainment, root),
+    );
+    let sameRepository = false;
+    if (insideRegisteredRoot && canonicalTarget !== undefined) {
+      const commonDir = options.runGitCommonDir ?? runGitCommonDir;
+      const [targetCommon, cwdCommon] = await Promise.all([
+        commonDir(canonicalTarget, signal),
+        commonDir(canonicalCwd, signal),
+      ]);
+      if (signal.aborted) {
+        return unavailableProject(
+          canonicalCwd,
+          "project discovery was cancelled",
+          options.leadingCdTarget,
+        );
+      }
+      sameRepository =
+        targetCommon !== undefined &&
+        cwdCommon !== undefined &&
+        targetCommon === cwdCommon;
+    }
+    leadingNavigation = {
+      scope: !insideRegisteredRoot
+        ? "outside-listed-worktrees"
+        : sameRepository
+          ? "listed-worktree"
+          : "unverified",
+      sameRepository,
+    };
+  }
+
   const projectName = truncateUtf8(basename(canonicalProjectRoot), 128);
   return {
     kind: "git",
     ...(projectName === "" ? {} : { name: projectName }),
     cwd: canonicalCwd,
     activeWorktree,
+    navigableRoots,
     worktrees,
+    ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
     fingerprint: fingerprint(
       "project-v2",
       canonicalCwd,
@@ -688,7 +925,11 @@ export const discoverProjectContext = async (
 ): Promise<PermissionProjectContext> => {
   const parentSignal = isAbortSignal(signal) ? signal : undefined;
   if (parentSignal?.aborted === true) {
-    return unavailableProject(undefined, "project discovery was cancelled");
+    return unavailableProject(
+      undefined,
+      "project discovery was cancelled",
+      options.leadingCdTarget,
+    );
   }
 
   const controller = createAbortController();
@@ -703,12 +944,24 @@ export const discoverProjectContext = async (
     };
     const onParentAbort = (): void => {
       controller.abort();
-      finish(unavailableProject(undefined, "project discovery was cancelled"));
+      finish(
+        unavailableProject(
+          undefined,
+          "project discovery was cancelled",
+          options.leadingCdTarget,
+        ),
+      );
     };
     const timer = setTimeout(
       () => {
         controller.abort();
-        finish(unavailableProject(undefined, "project discovery timed out"));
+        finish(
+          unavailableProject(
+            undefined,
+            "project discovery timed out",
+            options.leadingCdTarget,
+          ),
+        );
       },
       Math.max(1, options.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS),
     );
@@ -720,7 +973,14 @@ export const discoverProjectContext = async (
     }
     void discoverProjectContextUnbounded(cwd, options, controller.signal).then(
       finish,
-      () => finish(unavailableProject(undefined, "project discovery failed")),
+      () =>
+        finish(
+          unavailableProject(
+            undefined,
+            "project discovery failed",
+            options.leadingCdTarget,
+          ),
+        ),
     );
   });
 };

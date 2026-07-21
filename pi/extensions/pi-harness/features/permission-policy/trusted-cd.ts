@@ -19,7 +19,8 @@ export const literalTrustedCdTarget = (
     segment.allowCandidate === undefined ||
     segment.words.length !== 2 ||
     segment.words[0] !== "cd" ||
-    segment.opaque.size !== 0
+    segment.opaque.size !== 0 ||
+    segment.ansiC.size !== 0
   ) {
     return undefined;
   }
@@ -28,28 +29,30 @@ export const literalTrustedCdTarget = (
   return target !== undefined && isAbsolute(target) ? target : undefined;
 };
 
+export const leadingTrustedCdTarget = (command: string): string | undefined => {
+  const scanned = scanCommand(command);
+  if (!scanned.ok || scanned.segments.length < 2) return undefined;
+  const cdSegments = scanned.segments.filter(
+    (segment) => normalizeSegment(segment).words[0] === "cd",
+  );
+  if (cdSegments.length !== 1 || cdSegments[0] !== scanned.segments[0]) {
+    return undefined;
+  }
+  return literalTrustedCdTarget(cdSegments[0]);
+};
+
 /**
- * Find a single leading literal cd and verify that it belongs to the same Git
- * common directory as the Bash tool cwd. Equal common-dir identity admits both
- * ordinary subdirectories and linked worktrees without admitting unrelated or
- * nested repositories.
+ * Find a single leading literal cd and verify that it is inside a registered
+ * non-bare worktree with the same Git common directory as the Bash tool cwd.
+ * This admits ordinary subdirectories and linked worktrees without admitting
+ * forged `.git` pointers, unrelated paths, or nested repositories.
  */
 export const resolveTrustedLeadingCd = async (
   command: string,
   cwd: string,
 ): Promise<string | undefined> => {
   try {
-    const scanned = scanCommand(command);
-    if (!scanned.ok || scanned.segments.length < 2) return undefined;
-
-    const cdSegments = scanned.segments.filter(
-      (segment) => normalizeSegment(segment).words[0] === "cd",
-    );
-    if (cdSegments.length !== 1 || cdSegments[0] !== scanned.segments[0]) {
-      return undefined;
-    }
-
-    const target = literalTrustedCdTarget(cdSegments[0]);
+    const target = leadingTrustedCdTarget(command);
     if (target === undefined) return undefined;
 
     const boundary = await validateCwdInSameRepo(target, cwd);

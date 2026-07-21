@@ -264,6 +264,22 @@ describe("explicit allow matching", () => {
     ).toBe("default-continue");
   });
 
+  test.each([
+    String.raw`bun $'run' tsc`,
+    String.raw`bun $'$(bit issue claim)'`,
+    String.raw`codex $'login status' --foo`,
+    "bun ${x:-$'run'} tsc",
+    String.raw`bun test > $'/tmp/result\q'`,
+    String.raw`cd $'/repo/worktree\q' && bun run tsc`,
+    String.raw`cd $'/repo/\xC3\xA9' && bun run tsc`,
+  ])("ANSI-C words never inherit an automatic allow: %s", (command) => {
+    expect(
+      evaluateCommand(command, rules, {
+        trustedLeadingCdTarget: "/repo/worktreeq",
+      }).verdict,
+    ).toBe("ask");
+  });
+
   test("trusted cd does not suppress trailing default, ask, or deny", () => {
     const options = { trustedLeadingCdTarget: "/repo/worktree" };
     expect(
@@ -353,7 +369,6 @@ describe("explicit allow matching", () => {
     "codex 'login status' --foo",
     "bit issue 'create --foo'",
     String.raw`codex login\ status --foo`,
-    String.raw`codex $'login status' --foo`,
   ])("preserves an embedded-whitespace argv boundary: %s", (command) => {
     expect(evaluateCommand(command, productionRules).verdict).toBe(
       "default-continue",
@@ -817,11 +832,7 @@ describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", ()
     });
   });
 
-  test.each([
-    "bun '$(bit issue claim)'",
-    "bun $'$(bit issue claim)'",
-    "bun '$\\\n(bit issue claim)'",
-  ])(
+  test.each(["bun '$(bit issue claim)'", "bun '$\\\n(bit issue claim)'"])(
     "keeps substitutions inside genuine literal quotes inert: %s",
     (command) => {
       expect(verdictOf(command)).toBe("default-continue");

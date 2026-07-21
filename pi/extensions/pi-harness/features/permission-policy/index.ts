@@ -2,7 +2,6 @@ import { readFileSync, writeSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { InputEvent, PiLike } from "../../lib/pi-like";
-import { validateSameGitRepository } from "../../lib/repo-boundary";
 import type { HarnessConfig } from "../../config";
 import {
   CHILD_PERMISSION_SIGNAL_ENV,
@@ -23,7 +22,7 @@ import {
   type ActiveSkillBashAllowResolver,
   type SkillInvocation,
 } from "./skill-allow";
-import { resolveTrustedLeadingCd } from "./trusted-cd";
+import { leadingTrustedCdTarget } from "./trusted-cd";
 
 const readPermissionRules = (): string | undefined => {
   try {
@@ -113,6 +112,7 @@ interface SetupPermissionPolicyOptions {
   discoverProject?: (
     cwd: string,
     signal?: AbortSignal,
+    leadingCdTarget?: string,
   ) => Promise<PermissionProjectContext>;
 }
 
@@ -130,8 +130,12 @@ const setupPermissionPolicy = (
   const taskTracker = createPermissionTaskTracker();
   const discoverProject =
     options.discoverProject ??
-    ((cwd: string, signal?: AbortSignal) =>
-      discoverProjectContext(cwd, {}, signal));
+    ((cwd: string, signal?: AbortSignal, leadingCdTarget?: string) =>
+      discoverProjectContext(
+        cwd,
+        leadingCdTarget === undefined ? {} : { leadingCdTarget },
+        signal,
+      ));
   let judgeWarningShown = false;
   let activeSkillBashAllows: readonly AllowRule[] = [];
   let resolveActiveSkillBashAllows: ActiveSkillBashAllowResolver = () => [];
@@ -160,10 +164,7 @@ const setupPermissionPolicy = (
     inputSequence = 0;
     queueHealthy = true;
   };
-  const enqueueInput = (
-    queue: PendingInput[],
-    input: PendingInput,
-  ): void => {
+  const enqueueInput = (queue: PendingInput[], input: PendingInput): void => {
     if (!queueHealthy) return;
     if (steeringInputs.length + followUpInputs.length >= 128) {
       clearQueuedInputs();
@@ -178,10 +179,7 @@ const setupPermissionPolicy = (
       ...followUpInputs.map((input) => input.sequence),
     );
     const input = steeringInputs.shift() ?? followUpInputs.shift();
-    if (
-      input?.invocation !== undefined &&
-      input.sequence !== newestSequence
-    ) {
+    if (input?.invocation !== undefined && input.sequence !== newestSequence) {
       // A later queued input may have replaced this message through Pi's
       // dequeue/edit flow. Only the newest queued capability can activate;
       // older records fail closed instead of authenticating replayed text.
@@ -341,26 +339,6 @@ const setupPermissionPolicy = (
         return blocked(MALFORMED_REASON);
       }
 
-      let result = evaluateCommandWithSkillAllows(
-        command,
-        rules,
-        activeSkillBashAllows,
-      );
-      if (result.verdict === "allow" && result.grantedBySkill === true) {
-        const gitCwd = skillGrantedGitCwd(command);
-        if (gitCwd === undefined || (gitCwd !== null && ctx.cwd === undefined)) {
-          result = { verdict: "default-continue" };
-        } else if (gitCwd !== null && ctx.cwd !== undefined) {
-          const boundary = await validateSameGitRepository(
-            resolve(ctx.cwd, gitCwd),
-            ctx.cwd,
-          );
-          if (!boundary.ok) result = { verdict: "default-continue" };
-        }
-      }
-      if (result.verdict === "deny") {
-        return blocked(result.reason);
-      }
       const signal = (
         ctx as typeof ctx & {
           signal?: AbortSignal;
@@ -368,6 +346,35 @@ const setupPermissionPolicy = (
       ).signal;
       const isAborted = (): boolean =>
         signal !== undefined && "aborted" in signal && signal.aborted === true;
+
+      let projectDiscovery: PermissionProjectContext | undefined;
+      let result = evaluateCommandWithSkillAllows(
+        command,
+        rules,
+        activeSkillBashAllows,
+      );
+      if (result.verdict === "allow" && result.grantedBySkill === true) {
+        const gitCwd = skillGrantedGitCwd(command);
+        if (
+          gitCwd === undefined ||
+          (gitCwd !== null && ctx.cwd === undefined)
+        ) {
+          result = { verdict: "default-continue" };
+        } else if (gitCwd !== null && ctx.cwd !== undefined) {
+          const candidate = resolve(ctx.cwd, gitCwd);
+          projectDiscovery = await discoverProject(ctx.cwd, signal, candidate);
+          if (
+            isAborted() ||
+            projectDiscovery.leadingNavigation?.scope !== "listed-worktree" ||
+            !projectDiscovery.leadingNavigation.sameRepository
+          ) {
+            result = { verdict: "default-continue" };
+          }
+        }
+      }
+      if (result.verdict === "deny") {
+        return blocked(result.reason);
+      }
       const confirm = async (
         title: string,
         reason: string,
@@ -386,13 +393,24 @@ const setupPermissionPolicy = (
       }
       if (result.verdict === "allow" || judge === undefined) return undefined;
 
-      const trustedCdTarget =
+      const leadingCdTarget = leadingTrustedCdTarget(command);
+      const project =
         ctx.cwd === undefined
           ? undefined
-          : await resolveTrustedLeadingCd(command, ctx.cwd);
-      if (trustedCdTarget !== undefined) {
+          : (projectDiscovery ??
+            (await discoverProject(ctx.cwd, signal, leadingCdTarget)));
+      if (isAborted()) {
+        return blocked("the active pi operation was cancelled");
+      }
+      const leadingNavigation =
+        leadingCdTarget === undefined ? undefined : project?.leadingNavigation;
+      if (
+        leadingCdTarget !== undefined &&
+        leadingNavigation?.scope === "listed-worktree" &&
+        leadingNavigation.sameRepository
+      ) {
         result = evaluateCommand(command, rules, {
-          trustedLeadingCdTarget: trustedCdTarget,
+          trustedLeadingCdTarget: leadingCdTarget,
         });
         if (result.verdict === "deny") return blocked(result.reason);
         if (result.verdict === "ask") {
@@ -401,18 +419,16 @@ const setupPermissionPolicy = (
         if (result.verdict === "allow") return undefined;
       }
 
-      const project =
-        ctx.cwd === undefined
-          ? undefined
-          : await discoverProject(ctx.cwd, signal);
-      if (isAborted()) {
-        return blocked("the active pi operation was cancelled");
-      }
+      const trackedTask = taskTracker.current();
       const outcome = await judge.judge(command, {
         cwd: ctx.cwd,
         signal,
-        task: taskTracker.current(),
+        ...(trackedTask.correlation === "task"
+          ? { task: trackedTask.task }
+          : {}),
+        taskCorrelation: trackedTask.correlation,
         project,
+        ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
       });
       if (outcome.kind === "allow") {
         if (!outcome.cached) judgeWarningShown = false;

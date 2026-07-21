@@ -79,10 +79,12 @@ that match no deterministic deny/allow/ask rule. It classifies a bounded JSON
 envelope containing the command, raw current-turn task text, and locally
 verified cwd/project/worktree context; it never receives expanded skills,
 conversation history, repository contents, remotes, environment, or tool
-results. A strict 250 ms local discovery deadline covers Git probing and path
-canonicalization before each fallback/cache lookup. An unavailable judge asks
-in interactive sessions and
-blocks in child/non-UI sessions; set `permissionJudge.enabled` to `false` for
+results. One cumulative 250 ms local discovery deadline covers async child-env
+sanitization, Git probing, registered-worktree/common-dir validation, and path
+canonicalization before each fallback/cache lookup. Ambiguous task correlation
+cannot reuse or populate the `ALLOW` cache, and ANSI-C shell words are fixed at
+the deterministic ask floor. An unavailable judge asks in interactive sessions
+and blocks in child/non-UI sessions; set `permissionJudge.enabled` to `false` for
 the previous rule-only behavior. Existing broad explicit grants still bypass
 the fallback by design. See
 [`LOCAL_PERMISSION_JUDGE.md`](./LOCAL_PERMISSION_JUDGE.md) for setup,
@@ -96,10 +98,10 @@ arguments. The run snapshots both the skill body and grants, so later
 frontmatter edits cannot widen it. Pasted expansions and extension-generated
 messages grant nothing. It recalculates grants at every provider context,
 including queued prompts, and clears them when the run settles. Deterministic
-deny/ask and shell-structure
-rules still take precedence; child profiles never inherit grants. A skill's
-`git -C` grant is additionally limited to worktrees sharing the active cwd's
-canonical Git common directory.
+deny/ask and shell-structure rules still take precedence; child profiles never
+inherit grants. A skill's
+`git -C` grant is additionally limited to a canonical registered non-bare
+worktree that shares the active cwd's canonical Git common directory.
 
 ## Codex web tools
 
