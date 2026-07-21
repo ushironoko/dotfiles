@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { delimiter } from "node:path";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { sanitizeChildEnv } from "../../pi/extensions/pi-harness/lib/child-env";
 
 describe("sanitizeChildEnv", () => {
@@ -112,6 +114,85 @@ describe("sanitizeChildEnv", () => {
     ].join(delimiter);
     const out = sanitizeChildEnv({ PATH: path }, {}, { cwd: "/repo" });
     expect(out.PATH).toBe(["/usr/bin", "/opt/bin"].join(delimiter));
+  });
+
+  test("PATH drops a cwd-local directory spelled through a symlink alias", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-child-env-alias-"));
+    try {
+      const canonicalCwd = join(root, "repository");
+      const alias = join(root, "repository-alias");
+      mkdirSync(canonicalCwd);
+      symlinkSync(canonicalCwd, alias, "dir");
+      // The bin leaf intentionally does not exist yet. Filtering must resolve
+      // the existing symlink prefix so creating it after sanitization cannot
+      // turn this retained entry into a repository-local executable source.
+      const aliasBin = join(alias, "bin");
+      const out = sanitizeChildEnv(
+        { PATH: [aliasBin, "/usr/bin"].join(delimiter) },
+        {},
+        { cwd: canonicalCwd },
+      );
+      expect(out.PATH).toBe("/usr/bin");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("PATH drops a canonical local directory when cwd uses a symlink alias", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-child-env-cwd-alias-"));
+    try {
+      const canonicalCwd = join(root, "repository");
+      const cwdAlias = join(root, "repository-alias");
+      const canonicalBin = join(canonicalCwd, "bin");
+      mkdirSync(canonicalBin, { recursive: true });
+      symlinkSync(canonicalCwd, cwdAlias, "dir");
+      const out = sanitizeChildEnv(
+        { PATH: [canonicalBin, "/usr/bin"].join(delimiter) },
+        {},
+        { cwd: cwdAlias },
+      );
+      expect(out.PATH).toBe("/usr/bin");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("PATH still drops a lexical cwd-local symlink targeting outside", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-child-env-local-link-"));
+    try {
+      const cwd = join(root, "repository");
+      const outside = join(root, "outside-bin");
+      const localLink = join(cwd, "tool-bin");
+      mkdirSync(cwd);
+      mkdirSync(outside);
+      symlinkSync(outside, localLink, "dir");
+      const out = sanitizeChildEnv(
+        { PATH: [localLink, "/usr/bin"].join(delimiter) },
+        {},
+        { cwd },
+      );
+      expect(out.PATH).toBe("/usr/bin");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("PATH drops a dangling symlink that could later target the cwd", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-child-env-dangling-"));
+    try {
+      const cwd = join(root, "repository");
+      const danglingAlias = join(root, "future-tools");
+      mkdirSync(cwd);
+      symlinkSync(join(cwd, "future-bin"), danglingAlias, "dir");
+      const out = sanitizeChildEnv(
+        { PATH: [danglingAlias, "/usr/bin"].join(delimiter) },
+        {},
+        { cwd },
+      );
+      expect(out.PATH).toBe("/usr/bin");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("PATH without a cwd still drops empty and relative entries", () => {

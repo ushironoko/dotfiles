@@ -1,5 +1,10 @@
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import {
+  CHILD_RUN_COMPLETION_ENTRY,
+  BackgroundInvocationManager,
+  type BackgroundHost,
+} from "./background";
+import {
   attachChildRunsDetails,
   extractPersistedChildRuns,
 } from "./persistence";
@@ -10,6 +15,7 @@ interface RuntimeContextLike extends BrowserContextLike {
   sessionManager?: {
     getBranch(): unknown[];
   };
+  isIdle?: () => boolean;
 }
 
 interface RuntimeToolResultEvent {
@@ -39,10 +45,42 @@ interface RuntimePiLike {
       handler: (ctx: RuntimeContextLike) => Promise<void> | void;
     },
   ): void;
+  appendEntry?: BackgroundHost["appendEntry"];
+  sendMessage?: BackgroundHost["sendMessage"];
 }
+
+interface RuntimeMessageEvent {
+  type: "message_start" | "message_end";
+  message?: {
+    role?: string;
+    toolCallId?: string;
+    customType?: string;
+    details?: unknown;
+  };
+}
+
+interface RuntimeSessionBeforeTreeEvent {
+  type: "session_before_tree";
+  signal?: AbortSignal;
+}
+
+interface PendingTreeTransition {
+  token: number;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+  aborted: boolean;
+  released: boolean;
+}
+
+const completionInvocationId = (details: unknown): string | undefined => {
+  if (typeof details !== "object" || details === null) return undefined;
+  const invocationId = (details as { invocationId?: unknown }).invocationId;
+  return typeof invocationId === "string" ? invocationId : undefined;
+};
 
 export interface ChildRunsIntegration {
   registry: ChildRunRegistry;
+  background?: BackgroundInvocationManager;
   ensureVisible(ctx: CtxLike): void;
 }
 
@@ -59,6 +97,38 @@ const setupChildRuns = (pi: PiLike): ChildRunsIntegration => {
   const runtime = pi as unknown as RuntimePiLike;
   const registry = new ChildRunRegistry();
   const panel = new ChildRunsPanelController(registry);
+  const background =
+    typeof runtime.appendEntry === "function" &&
+    typeof runtime.sendMessage === "function"
+      ? new BackgroundInvocationManager(registry, {
+          appendEntry: runtime.appendEntry.bind(runtime),
+          sendMessage: runtime.sendMessage.bind(runtime),
+        })
+      : undefined;
+  const pendingTreeTransitions: PendingTreeTransition[] = [];
+  const releaseTreeTransition = (entry: PendingTreeTransition): void => {
+    if (entry.released) return;
+    entry.released = true;
+    if (
+      entry.signal !== undefined &&
+      entry.onAbort !== undefined &&
+      "removeEventListener" in entry.signal &&
+      typeof entry.signal.removeEventListener === "function"
+    ) {
+      entry.signal.removeEventListener("abort", entry.onAbort);
+    }
+    const index = pendingTreeTransitions.indexOf(entry);
+    if (index !== -1) pendingTreeTransitions.splice(index, 1);
+    background?.completeBranchTransition(entry.token);
+  };
+  const clearTreeTransitions = (): void => {
+    while (pendingTreeTransitions.length > 0) {
+      const entry = pendingTreeTransitions.at(-1);
+      if (entry === undefined) break;
+      releaseTreeTransition(entry);
+    }
+    background?.resetBranchTransitions();
+  };
 
   runtime.registerCommand("subagents", {
     description: "Show and focus the live child-session browser",
@@ -93,6 +163,9 @@ const setupChildRuns = (pi: PiLike): ChildRunsIntegration => {
     }
     const invocationId = registry.getInvocationIdForToolCall(event.toolCallId);
     if (invocationId === undefined) return undefined;
+    // A background tool result means "accepted", not "completed". The
+    // manager archives it only after both child settlement and message_end.
+    if (background?.ownsToolCall(event.toolCallId)) return undefined;
     registry.terminalizeInvocation(
       invocationId,
       { status: "skipped", reason: "dependency-failed" },
@@ -105,15 +178,112 @@ const setupChildRuns = (pi: PiLike): ChildRunsIntegration => {
     };
   });
 
-  runtime.on("session_start", (_event, ctx) => replayBranch(registry, ctx));
-  runtime.on("session_tree", (_event, ctx) => replayBranch(registry, ctx));
-  runtime.on("session_shutdown", () => {
+  runtime.on("message_start", (rawEvent) => {
+    const event = rawEvent as RuntimeMessageEvent;
+    if (
+      event.message?.role === "custom" &&
+      event.message.customType === CHILD_RUN_COMPLETION_ENTRY
+    ) {
+      const invocationId = completionInvocationId(event.message.details);
+      if (invocationId !== undefined) {
+        background?.acknowledgeNotificationDelivery(invocationId);
+      }
+    }
+  });
+  runtime.on("message_end", (rawEvent) => {
+    const event = rawEvent as RuntimeMessageEvent;
+    if (
+      event.message?.role === "toolResult" &&
+      typeof event.message.toolCallId === "string"
+    ) {
+      background?.acknowledgeToolResult(event.message.toolCallId);
+    }
+  });
+  runtime.on("before_agent_start", () => {
+    background?.markAgentPreflightStarted();
+  });
+  runtime.on("agent_start", () => background?.markAgentStarted());
+  runtime.on("agent_settled", (_event, ctx) => {
+    const idle = typeof ctx.isIdle !== "function" || ctx.isIdle();
+    background?.markAgentSettled(idle);
+  });
+  runtime.on("session_start", (_event, ctx) => {
+    clearTreeTransitions();
+    replayBranch(registry, ctx);
+  });
+  runtime.on("session_before_tree", async (rawEvent) => {
+    // Serialize navigation boundaries. Pi does not correlate session_tree with
+    // its originating pre-tree event, so admitting an overlapping transition
+    // would make exact guard release impossible.
+    if (pendingTreeTransitions.length > 0) return { cancel: true };
+
+    // This is the last lifecycle point still bound to the old branch, so the
+    // abort must happen here to persist there. Unsent completions are dropped.
+    // Pi has no extension API for retracting an already handed-off message, so
+    // keep the branch fixed until that notification-triggered turn settles.
+    const event = rawEvent as RuntimeSessionBeforeTreeEvent;
+    const token = background?.beginBranchTransition();
+    const pending: PendingTreeTransition | undefined =
+      token === undefined
+        ? undefined
+        : {
+            token,
+            signal: event.signal,
+            aborted: false,
+            released: false,
+          };
+    if (
+      pending !== undefined &&
+      pending.signal !== undefined &&
+      "addEventListener" in pending.signal &&
+      typeof pending.signal.addEventListener === "function"
+    ) {
+      // Signal abort is only a request while later pre-tree handlers may still
+      // provide a custom summary and commit navigation. Keep the token until
+      // this handler can return cancel or session_tree confirms the outcome.
+      pending.onAbort = () => {
+        pending.aborted = true;
+      };
+      pending.signal.addEventListener("abort", pending.onAbort, { once: true });
+      if ("aborted" in pending.signal && pending.signal.aborted === true) {
+        pending.onAbort();
+      }
+    }
+    if (pending !== undefined && !pending.released) {
+      pendingTreeTransitions.push(pending);
+    }
+
+    await background?.abortAndDrain("branch-change", {
+      suppressNotification: true,
+      branchTransitionToken: token,
+    });
+    if (pending?.aborted) {
+      releaseTreeTransition(pending);
+      return { cancel: true };
+    }
+    if (pending?.released) return { cancel: true };
+    if (background?.shouldCancelBranchNavigation()) {
+      if (pending !== undefined) releaseTreeTransition(pending);
+      return { cancel: true };
+    }
+    return undefined;
+  });
+  runtime.on("session_tree", (_event, ctx) => {
+    replayBranch(registry, ctx);
+    const [pending] = pendingTreeTransitions;
+    if (pending !== undefined) releaseTreeTransition(pending);
+    else background?.completeBranchTransition();
+  });
+  runtime.on("session_shutdown", async () => {
+    clearTreeTransitions();
+    await background?.shutdown();
     panel.dispose();
     registry.dispose();
   });
 
   return {
     registry,
+    background,
     ensureVisible(ctx) {
       panel.ensureVisible(ctx as RuntimeContextLike);
     },

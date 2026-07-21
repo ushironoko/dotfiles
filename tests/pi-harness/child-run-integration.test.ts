@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import setupChildRuns from "../../pi/extensions/pi-harness/features/child-runs/index";
 import setupSubagent from "../../pi/extensions/pi-harness/features/subagent/index";
+import setupWorkflow from "../../pi/extensions/pi-harness/features/workflow/index";
 import type {
   SpawnFunction,
   SpawnedProcess,
@@ -44,7 +45,7 @@ interface RuntimeComponent {
   dispose?(): void;
 }
 
-const createRuntime = (cwd: string) => {
+const createRuntime = (cwd: string, options: { background?: boolean } = {}) => {
   const tools: ToolDefLike[] = [];
   const handlers = new Map<
     string,
@@ -117,13 +118,17 @@ const createRuntime = (cwd: string) => {
     | ((data: string) => { consume?: boolean; data?: string } | undefined)
     | undefined;
   let branch: unknown[] = [];
+  let idle = true;
   const notifications: string[] = [];
+  const appendedEntries: { customType: string; data: unknown }[] = [];
+  const sentMessages: { message: unknown; options: unknown }[] = [];
 
   const ctx = {
     cwd,
     mode: "tui",
     hasUI: true,
     sessionManager: { getBranch: () => branch },
+    isIdle: () => idle,
     ui: {
       select: async () => undefined,
       confirm: async () => false,
@@ -208,10 +213,23 @@ const createRuntime = (cwd: string) => {
     },
     registerShortcut(
       key: string,
-      options: typeof shortcuts extends Map<string, infer V> ? V : never,
+      shortcutOptions: typeof shortcuts extends Map<string, infer V>
+        ? V
+        : never,
     ) {
-      shortcuts.set(key, options);
+      shortcuts.set(key, shortcutOptions);
     },
+    ...(options.background
+      ? {
+          appendEntry(customType: string, data: unknown) {
+            appendedEntries.push({ customType, data });
+            branch.push({ type: "custom", customType, data });
+          },
+          sendMessage(message: unknown, sendOptions: unknown) {
+            sentMessages.push({ message, options: sendOptions });
+          },
+        }
+      : {}),
   } as unknown as PiLike;
 
   return {
@@ -228,6 +246,8 @@ const createRuntime = (cwd: string) => {
     getCustomCalls: () => customCalls,
     getCustomComponent: () => customComponent,
     getCustomOptions: () => customOptions,
+    getAppendedEntries: () => appendedEntries,
+    getSentMessages: () => sentMessages,
     getNotifications: () => [...notifications],
     hasTerminalInputHandler: () => terminalInputHandler !== undefined,
     setEditorState(lines: string[], line: number, col: number) {
@@ -241,6 +261,9 @@ const createRuntime = (cwd: string) => {
     },
     setBranch(entries: unknown[]) {
       branch = entries;
+    },
+    setIdle(next: boolean) {
+      idle = next;
     },
     async emit(event: string, payload: unknown) {
       let patch: unknown;
@@ -332,6 +355,132 @@ const scriptedSpawn =
     return proc;
   };
 
+const controlledSpawn = () => {
+  const stdout: ((chunk: string | Uint8Array) => void)[] = [];
+  const stderr: ((chunk: string | Uint8Array) => void)[] = [];
+  const close: ((
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ) => void)[] = [];
+  let startedResolve!: () => void;
+  const started = new Promise<void>((resolve) => {
+    startedResolve = resolve;
+  });
+  let finished = false;
+  const spawnFn: SpawnFunction = () => {
+    startedResolve();
+    return {
+      stdout: {
+        on(_event, listener) {
+          stdout.push(listener);
+          return this;
+        },
+      },
+      stderr: {
+        on(_event, listener) {
+          stderr.push(listener);
+          return this;
+        },
+      },
+      on(event, listener) {
+        if (event === "close") close.push(listener as never);
+        return this;
+      },
+      kill: () => true,
+      killed: false,
+    };
+  };
+  return {
+    spawnFn,
+    started,
+    isFinished: () => finished,
+    finish(text: string) {
+      finished = true;
+      const line = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          model: "test-model",
+          stopReason: "stop",
+          content: [{ type: "text", text }],
+        },
+      });
+      for (const listener of stdout) listener(`${line}\n`);
+      for (const listener of close) listener(0, null);
+    },
+  };
+};
+
+const pooledSpawn = () => {
+  const pending: {
+    stdout: ((chunk: string | Uint8Array) => void)[];
+    close: ((code: number | null, signal: NodeJS.Signals | null) => void)[];
+    ordinal: number;
+  }[] = [];
+  let active = 0;
+  let maximumActive = 0;
+  let startedCount = 0;
+  const spawnFn: SpawnFunction = () => {
+    const entry = {
+      stdout: [] as ((chunk: string | Uint8Array) => void)[],
+      close: [] as ((
+        code: number | null,
+        signal: NodeJS.Signals | null,
+      ) => void)[],
+      ordinal: ++startedCount,
+    };
+    pending.push(entry);
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    return {
+      stdout: {
+        on(_event, listener) {
+          entry.stdout.push(listener);
+          return this;
+        },
+      },
+      stderr: {
+        on() {
+          return this;
+        },
+      },
+      on(event, listener) {
+        if (event === "close") entry.close.push(listener as never);
+        return this;
+      },
+      kill: () => true,
+      killed: false,
+    };
+  };
+  return {
+    spawnFn,
+    getStartedCount: () => startedCount,
+    getMaximumActive: () => maximumActive,
+    async waitForStarted(expected: number) {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (startedCount >= expected) return;
+        await Bun.sleep(1);
+      }
+      throw new Error(`only ${startedCount}/${expected} children started`);
+    },
+    finishOne() {
+      const entry = pending.shift();
+      if (entry === undefined) throw new Error("no child process to finish");
+      const line = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: `child-${entry.ordinal}` }],
+        },
+      });
+      for (const listener of entry.stdout) listener(`${line}\n`);
+      active -= 1;
+      for (const listener of entry.close) listener(0, null);
+    },
+  };
+};
+
 const writeAgent = async (home: string): Promise<void> => {
   const dir = resolvePaths(home).claudeAgentsDir;
   await fs.mkdir(dir, { recursive: true });
@@ -414,6 +563,731 @@ describe("child-run subagent integration", () => {
     expect(rendered.join("\n")).toContain("/subagents");
     expect(rendered.join("\n")).toContain("/tmp/review-tree");
     expect(rendered.every((line) => line.length <= 36)).toBe(true);
+  });
+
+  test("reserves async prompt preflight before a child completion can trigger", async () => {
+    const home = await setupTestDirectory("pi-child-background-preflight");
+    tempDirectories.push(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    let releasePreflight!: () => void;
+    const preflightGate = new Promise<void>((resolve) => {
+      releasePreflight = resolve;
+    });
+    let laterHandlerStartedResolve!: () => void;
+    const laterHandlerStarted = new Promise<void>((resolve) => {
+      laterHandlerStartedResolve = resolve;
+    });
+    runtime.pi.on("before_agent_start", async () => {
+      laterHandlerStartedResolve();
+      await preflightGate;
+      return undefined;
+    });
+
+    const preflight = runtime.emit("before_agent_start", {
+      type: "before_agent_start",
+    });
+    await laterHandlerStarted;
+    const started = childRuns.registry.beginInvocation({
+      toolCallId: "preflight-parent",
+      source: "subagent",
+      mode: "single",
+      label: "preflight child",
+      runs: [{ agent: "worker", task: "finish in preflight", taskIndex: 0 }],
+    });
+    childRuns.background!.schedule({
+      invocationId: started.invocationId,
+      toolCallId: "preflight-parent",
+      source: "subagent",
+      async run() {
+        const [runId] = started.runIds;
+        if (runId === undefined) throw new Error("missing run id");
+        childRuns.registry.observe(runId, { type: "process_started", at: 1 });
+        childRuns.registry.finishRun(runId, {
+          status: "succeeded",
+          reason: "completed",
+        });
+        return { text: "completed during preflight" };
+      },
+    });
+    childRuns.background!.acknowledgeToolResult("preflight-parent");
+    await childRuns.background!.drain(started.invocationId);
+    expect(runtime.getSentMessages()).toEqual([]);
+
+    releasePreflight();
+    await preflight;
+    await runtime.emit("agent_start", { type: "agent_start" });
+    expect(runtime.getSentMessages()).toEqual([]);
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+    expect(runtime.getSentMessages()).toHaveLength(1);
+  });
+
+  test("accepts a production subagent immediately and delivers completion after message_end", async () => {
+    const home = await setupTestDirectory("pi-child-background-subagent");
+    tempDirectories.push(home);
+    await writeAgent(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    const controlled = controlledSpawn();
+    setupSubagent(runtime.pi, makeConfig(home), {
+      childRuns,
+      spawnFn: controlled.spawnFn,
+    });
+    const tool = runtime.tools.find((item) => item.name === "subagent")!;
+    const updates: unknown[] = [];
+    await runtime.emit("agent_start", { type: "agent_start" });
+
+    const execution = Reflect.apply(tool.execute, undefined, [
+      "background-parent",
+      { agent: "worker", task: "inspect asynchronously" },
+      undefined,
+      (update: unknown) => updates.push(update),
+      runtime.ctx,
+    ]) as Promise<{
+      content: { text: string }[];
+      details: {
+        background: { invocationId: string; status: string };
+        childRuns: { runs: { status: string }[] };
+      };
+    }>;
+    const accepted = await Promise.race([
+      execution,
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(
+          () => reject(new Error("acceptance waited for child completion")),
+          100,
+        ),
+      ),
+    ]);
+    const { invocationId } = accepted.details.background;
+    const updateCountAtReturn = updates.length;
+    expect(accepted.content[0]?.text).toContain("accepted");
+    expect(accepted.content[0]?.text).toContain(invocationId);
+    expect(accepted.details.background.status).toBe("accepted");
+    expect(controlled.isFinished()).toBe(false);
+    await controlled.started;
+    controlled.finish("background answer 界");
+
+    await childRuns.background!.drain(invocationId);
+    expect(updates).toHaveLength(updateCountAtReturn);
+    expect(runtime.getAppendedEntries()).toEqual([]);
+    expect(runtime.getSentMessages()).toEqual([]);
+
+    expect(
+      await runtime.emit("tool_result", {
+        type: "tool_result",
+        toolName: "subagent",
+        toolCallId: "background-parent",
+        details: accepted.details,
+        isError: false,
+      }),
+    ).toBeUndefined();
+    expect(runtime.getAppendedEntries()).toEqual([]);
+    await runtime.emit("message_end", {
+      type: "message_end",
+      message: { role: "toolResult", toolCallId: "background-parent" },
+    });
+    expect(runtime.getAppendedEntries()).toHaveLength(1);
+    expect(JSON.stringify(runtime.getAppendedEntries())).toContain(
+      "background answer 界",
+    );
+    expect(runtime.getSentMessages()).toEqual([]);
+
+    runtime.setIdle(false);
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+    expect(runtime.getSentMessages()).toEqual([]);
+    runtime.setIdle(true);
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+    expect(runtime.getSentMessages()).toHaveLength(1);
+    expect(runtime.getSentMessages()[0]?.options).toEqual({
+      triggerTurn: true,
+      deliverAs: "followUp",
+    });
+    const notification = JSON.stringify(runtime.getSentMessages()[0]?.message);
+    expect(notification).toContain(invocationId);
+    expect(notification).toContain("background answer 界");
+    expect(notification).toContain("untrusted child output");
+  });
+
+  test("cancels tree navigation while a handed-off completion turn is active", async () => {
+    const home = await setupTestDirectory("pi-child-background-tree-handoff");
+    tempDirectories.push(home);
+    await writeAgent(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    setupSubagent(runtime.pi, makeConfig(home), {
+      childRuns,
+      spawnFn: scriptedSpawn("old branch completion"),
+    });
+    const tool = runtime.tools.find((item) => item.name === "subagent")!;
+    await runtime.emit("agent_start", { type: "agent_start" });
+    const accepted = (await Reflect.apply(tool.execute, undefined, [
+      "tree-handoff-parent",
+      { agent: "worker", task: "finish before tree" },
+      undefined,
+      undefined,
+      runtime.ctx,
+    ])) as { details: { background: { invocationId: string } } };
+    const { invocationId } = accepted.details.background;
+    await runtime.emit("message_end", {
+      type: "message_end",
+      message: { role: "toolResult", toolCallId: "tree-handoff-parent" },
+    });
+    await childRuns.background!.drain(invocationId);
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+    expect(runtime.getSentMessages()).toHaveLength(1);
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toEqual({ cancel: true });
+
+    await runtime.emit("agent_start", { type: "agent_start" });
+    await runtime.emit("message_start", {
+      type: "message_start",
+      message: {
+        role: "custom",
+        customType: "pi-harness/child-run-completion",
+        details: { invocationId },
+      },
+    });
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toBeUndefined();
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    // Simulate a later extension cancelling navigation: no session_tree event
+    // arrives. Even another parent prompt cannot reopen the branch boundary.
+    await runtime.emit("before_agent_start", {
+      type: "before_agent_start",
+    });
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+
+    // Pi exposes no completion event for another extension's cancellation, so
+    // only an explicit session lifecycle reset may clear that conservative
+    // stale guard without risking cross-branch work.
+    runtime.setBranch([]);
+    await runtime.emit("session_start", { type: "session_start" });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+    expect(runtime.getSentMessages()).toHaveLength(1);
+  });
+
+  test("rejects an overlapping pre-tree transition until the first commits", async () => {
+    const home = await setupTestDirectory("pi-child-background-tree-overlap");
+    tempDirectories.push(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toBeUndefined();
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toEqual({ cancel: true });
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    await runtime.emit("session_tree", { type: "session_tree" });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+  });
+
+  test("an aborted rejected overlap does not release the first guard", async () => {
+    const home = await setupTestDirectory(
+      "pi-child-background-tree-token-abort",
+    );
+    tempDirectories.push(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    const first = new AbortController() as unknown as {
+      signal: AbortSignal;
+      abort(): void;
+    };
+    const second = new AbortController() as unknown as {
+      signal: AbortSignal;
+      abort(): void;
+    };
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+        signal: first.signal,
+      }),
+    ).toBeUndefined();
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+        signal: second.signal,
+      }),
+    ).toEqual({ cancel: true });
+    second.abort();
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    await runtime.emit("session_tree", { type: "session_tree" });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+  });
+
+  test("retains a post-handler abort guard until navigation outcome", async () => {
+    const home = await setupTestDirectory("pi-child-background-tree-abort");
+    tempDirectories.push(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    const controller = new AbortController() as unknown as {
+      signal: AbortSignal;
+      abort(): void;
+    };
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+        signal: controller.signal,
+      }),
+    ).toBeUndefined();
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    controller.abort();
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    // A second navigation cannot overlap while a later custom-summary handler
+    // may still commit the first navigation despite its aborted signal.
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toEqual({ cancel: true });
+    await runtime.emit("session_tree", { type: "session_tree" });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+  });
+
+  test("aborted pre-tree signals release guards only after active drain cleanup", async () => {
+    const home = await setupTestDirectory(
+      "pi-child-background-tree-abort-during-drain",
+    );
+    tempDirectories.push(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    const started = childRuns.registry.beginInvocation({
+      toolCallId: "tree-abort-drain-parent",
+      source: "workflow",
+      label: "tree abort drain",
+      runs: [{ agent: "worker", task: "cleanup", taskIndex: 0 }],
+    });
+    let cleanupStartedResolve!: () => void;
+    const cleanupStarted = new Promise<void>((resolve) => {
+      cleanupStartedResolve = resolve;
+    });
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    childRuns.background!.schedule({
+      invocationId: started.invocationId,
+      toolCallId: "tree-abort-drain-parent",
+      source: "workflow",
+      run(signal) {
+        return new Promise((_resolve, reject) => {
+          if (
+            !("addEventListener" in signal) ||
+            typeof signal.addEventListener !== "function"
+          ) {
+            reject(new Error("AbortSignal listener API unavailable"));
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => {
+              cleanupStartedResolve();
+              void cleanupGate.then(() => reject(new Error("cleanup done")));
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+    childRuns.background!.acknowledgeToolResult("tree-abort-drain-parent");
+    await Promise.resolve();
+    const controller = new AbortController() as unknown as {
+      signal: AbortSignal;
+      abort(): void;
+    };
+    const navigating = runtime.emit("session_before_tree", {
+      type: "session_before_tree",
+      signal: controller.signal,
+    });
+    await cleanupStarted;
+    controller.abort();
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+    releaseCleanup();
+    expect(await navigating).toEqual({ cancel: true });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+
+    const alreadyAborted = new AbortController() as unknown as {
+      signal: AbortSignal;
+      abort(): void;
+    };
+    alreadyAborted.abort();
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+        signal: alreadyAborted.signal,
+      }),
+    ).toEqual({ cancel: true });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+  });
+
+  test("session_before_tree aborts and persists production work without cross-branch delivery", async () => {
+    const home = await setupTestDirectory("pi-child-background-tree");
+    tempDirectories.push(home);
+    await writeAgent(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    const controlled = controlledSpawn();
+    setupSubagent(runtime.pi, makeConfig(home), {
+      childRuns,
+      spawnFn: controlled.spawnFn,
+      termGraceMs: 0,
+    });
+    const tool = runtime.tools.find((item) => item.name === "subagent")!;
+    await runtime.emit("agent_start", { type: "agent_start" });
+    const accepted = (await Reflect.apply(tool.execute, undefined, [
+      "tree-parent",
+      { agent: "worker", task: "long review" },
+      undefined,
+      undefined,
+      runtime.ctx,
+    ])) as { details: { background: { invocationId: string } } };
+    await controlled.started;
+    expect(controlled.isFinished()).toBe(false);
+    await runtime.emit("message_end", {
+      type: "message_end",
+      message: { role: "toolResult", toolCallId: "tree-parent" },
+    });
+
+    await runtime.emit("session_before_tree", {
+      type: "session_before_tree",
+    });
+    expect(runtime.getAppendedEntries()).toHaveLength(1);
+    expect(JSON.stringify(runtime.getAppendedEntries())).toContain(
+      "branch-change",
+    );
+    expect(runtime.getSentMessages()).toEqual([]);
+    expect(childRuns.background?.hasActiveInvocations()).toBe(false);
+    expect(() => childRuns.background?.assertCanAccept()).toThrow(
+      "draining for a lifecycle transition",
+    );
+
+    runtime.setBranch([]);
+    await runtime.emit("session_tree", { type: "session_tree" });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+    expect(runtime.getSentMessages()).toEqual([]);
+    expect(accepted.details.background.invocationId).toBeDefined();
+  });
+
+  test("rejects workflow admission released between pre-tree drain and tree commit", async () => {
+    const home = await setupTestDirectory("pi-child-background-tree-admission");
+    tempDirectories.push(home);
+    await writeAgent(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    let releaseValidation!: () => void;
+    const validationGate = new Promise<void>((resolve) => {
+      releaseValidation = resolve;
+    });
+    let validationStartedResolve!: () => void;
+    const validationStarted = new Promise<void>((resolve) => {
+      validationStartedResolve = resolve;
+    });
+    setupWorkflow(runtime.pi, makeConfig(home), {
+      childRuns,
+      spawnFn: scriptedSpawn("must not spawn"),
+      validateCwd: async (candidate) => {
+        validationStartedResolve();
+        await validationGate;
+        return { ok: true, canonicalCwd: candidate };
+      },
+    });
+    const tool = runtime.tools.find((item) => item.name === "workflow")!;
+    await runtime.emit("agent_start", { type: "agent_start" });
+    const execution = Reflect.apply(tool.execute, undefined, [
+      "tree-admission-parent",
+      {
+        stages: [
+          {
+            mode: "single",
+            tasks: [{ agentType: "worker", task: "review", cwd: home }],
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      runtime.ctx,
+    ]) as Promise<unknown>;
+    await validationStarted;
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toBeUndefined();
+    releaseValidation();
+    await expect(execution).rejects.toThrow(
+      "draining for a lifecycle transition",
+    );
+
+    runtime.setBranch([]);
+    await runtime.emit("session_tree", { type: "session_tree" });
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+  });
+
+  test("accepts a production workflow immediately and later sends its aggregate digest", async () => {
+    const home = await setupTestDirectory("pi-child-background-workflow");
+    tempDirectories.push(home);
+    await writeAgent(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    setupWorkflow(runtime.pi, makeConfig(home), {
+      childRuns,
+      spawnFn: scriptedSpawn("workflow background answer"),
+      validateCwd: async (candidate) => ({
+        ok: true,
+        canonicalCwd: candidate,
+      }),
+    });
+    const tool = runtime.tools.find((item) => item.name === "workflow")!;
+    await runtime.emit("agent_start", { type: "agent_start" });
+
+    const accepted = (await Reflect.apply(tool.execute, undefined, [
+      "workflow-parent",
+      {
+        stages: [
+          {
+            mode: "single",
+            tasks: [{ agentType: "worker", task: "review" }],
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      runtime.ctx,
+    ])) as {
+      content: { text: string }[];
+      details: { background: { invocationId: string } };
+    };
+    const invocationId = accepted.details.background.invocationId;
+    expect(accepted.content[0]?.text).toContain("Background workflow accepted");
+
+    await childRuns.background!.drain(invocationId);
+    expect(runtime.getAppendedEntries()).toEqual([]);
+    await runtime.emit("message_end", {
+      type: "message_end",
+      message: { role: "toolResult", toolCallId: "workflow-parent" },
+    });
+    expect(runtime.getAppendedEntries()).toHaveLength(1);
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+    const notification = JSON.stringify(runtime.getSentMessages()[0]?.message);
+    expect(notification).toContain("Workflow completed: 1/1");
+    expect(notification).toContain("workflow background answer");
+  });
+
+  test("shares the four-child process limit across background subagent and workflow", async () => {
+    const home = await setupTestDirectory("pi-child-background-mixed-limit");
+    tempDirectories.push(home);
+    await writeAgent(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    const pool = pooledSpawn();
+    setupSubagent(runtime.pi, makeConfig(home), {
+      childRuns,
+      spawnFn: pool.spawnFn,
+    });
+    setupWorkflow(runtime.pi, makeConfig(home), {
+      childRuns,
+      spawnFn: pool.spawnFn,
+      validateCwd: async (candidate) => ({
+        ok: true,
+        canonicalCwd: candidate,
+      }),
+    });
+    const subagent = runtime.tools.find((item) => item.name === "subagent")!;
+    const workflow = runtime.tools.find((item) => item.name === "workflow")!;
+    await runtime.emit("agent_start", { type: "agent_start" });
+
+    const subagentAccepted = (await Reflect.apply(subagent.execute, undefined, [
+      "mixed-subagent",
+      {
+        tasks: Array.from({ length: 4 }, (_, index) => ({
+          agent: "worker",
+          task: `subagent-${index}`,
+        })),
+      },
+      undefined,
+      undefined,
+      runtime.ctx,
+    ])) as { details: { background: { invocationId: string } } };
+    const workflowAccepted = (await Reflect.apply(workflow.execute, undefined, [
+      "mixed-workflow",
+      {
+        stages: [
+          {
+            mode: "fanout",
+            codexSkip: true,
+            tasks: Array.from({ length: 2 }, (_, index) => ({
+              agentType: "worker",
+              task: `workflow-${index}`,
+            })),
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      runtime.ctx,
+    ])) as { details: { background: { invocationId: string } } };
+    await runtime.emit("message_end", {
+      type: "message_end",
+      message: { role: "toolResult", toolCallId: "mixed-subagent" },
+    });
+    await runtime.emit("message_end", {
+      type: "message_end",
+      message: { role: "toolResult", toolCallId: "mixed-workflow" },
+    });
+
+    await pool.waitForStarted(4);
+    expect(pool.getMaximumActive()).toBe(4);
+    while (pool.getStartedCount() < 6) {
+      const previous = pool.getStartedCount();
+      pool.finishOne();
+      await pool.waitForStarted(previous + 1);
+      expect(pool.getMaximumActive()).toBe(4);
+    }
+    for (let remaining = 0; remaining < 4; remaining++) pool.finishOne();
+    await childRuns.background!.drain();
+    expect(pool.getMaximumActive()).toBe(4);
+    expect(runtime.getAppendedEntries()).toHaveLength(2);
+    expect(subagentAccepted.details.background.invocationId).not.toBe(
+      workflowAccepted.details.background.invocationId,
+    );
+  });
+
+  test("reports a provisioned worktree when later background setup fails", async () => {
+    const home = await setupTestDirectory("pi-child-background-worktree");
+    tempDirectories.push(home);
+    await writeAgent(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    let createCalls = 0;
+    let spawnCalls = 0;
+    setupWorkflow(runtime.pi, makeConfig(home), {
+      childRuns,
+      createWorktree: async (_cwd, _name, signal) => {
+        expect(signal).toBeDefined();
+        createCalls += 1;
+        if (createCalls === 1) return "/tmp/kept-worktree";
+        throw new Error("second worktree failed");
+      },
+      spawnFn: (...args) => {
+        spawnCalls += 1;
+        return scriptedSpawn("never")(...args);
+      },
+      validateCwd: async (candidate) => ({
+        ok: true,
+        canonicalCwd: candidate,
+      }),
+    });
+    const tool = runtime.tools.find((item) => item.name === "workflow")!;
+    await runtime.emit("agent_start", { type: "agent_start" });
+    const accepted = (await Reflect.apply(tool.execute, undefined, [
+      "worktree-parent",
+      {
+        stages: [
+          {
+            mode: "fanout",
+            codexSkip: true,
+            tasks: [
+              {
+                agentType: "worker",
+                task: "first",
+                isolation: "worktree",
+              },
+              {
+                agentType: "worker",
+                task: "second",
+                isolation: "worktree",
+              },
+            ],
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      runtime.ctx,
+    ])) as { details: { background: { invocationId: string } } };
+    await runtime.emit("message_end", {
+      type: "message_end",
+      message: { role: "toolResult", toolCallId: "worktree-parent" },
+    });
+    await childRuns.background!.drain(accepted.details.background.invocationId);
+    expect(spawnCalls).toBe(0);
+    expect(JSON.stringify(runtime.getAppendedEntries())).toContain(
+      "/tmp/kept-worktree",
+    );
+
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+    const notificationMessage = runtime.getSentMessages()[0]?.message;
+    const notification = JSON.stringify(notificationMessage);
+    expect(notification).toContain("second worktree failed");
+    expect(notification).toContain("/tmp/kept-worktree");
+    expect(notificationMessage).toMatchObject({
+      details: { failed: true, source: "workflow" },
+    });
+    expect(JSON.stringify(runtime.getAppendedEntries())).toContain(
+      '"status":"failed"',
+    );
+  });
+
+  test("rejects background tools in one-shot modes before spawning", async () => {
+    const home = await setupTestDirectory("pi-child-background-print");
+    tempDirectories.push(home);
+    await writeAgent(home);
+    const runtime = createRuntime(home, { background: true });
+    runtime.ctx.mode = "print";
+    const childRuns = setupChildRuns(runtime.pi);
+    let spawned = 0;
+    setupSubagent(runtime.pi, makeConfig(home), {
+      childRuns,
+      spawnFn: (...args) => {
+        spawned += 1;
+        return scriptedSpawn("never")(...args);
+      },
+    });
+    const tool = runtime.tools.find((item) => item.name === "subagent")!;
+    await expect(
+      Reflect.apply(tool.execute, undefined, [
+        "print-parent",
+        { agent: "worker", task: "inspect" },
+        undefined,
+        undefined,
+        runtime.ctx,
+      ]),
+    ).rejects.toThrow("persistent TUI or RPC mode");
+    expect(spawned).toBe(0);
+    expect(childRuns.registry.getSnapshots()).toEqual([]);
   });
 
   test("attaches failed child details without changing thrown semantics", async () => {
@@ -551,6 +1425,39 @@ describe("child-run subagent integration", () => {
     await runtime.emit("session_start", { type: "session_start" });
     expect(childRuns.registry.getSnapshots()[0]?.invocationId).toBe(
       "persisted-invocation",
+    );
+
+    runtime.setBranch([
+      {
+        type: "custom",
+        customType: "pi-harness/child-run-completion",
+        data: {
+          childRuns: {
+            schema: "pi-harness/child-runs",
+            version: 1,
+            kind: "transcript",
+            invocationId: "background-invocation",
+            source: "workflow",
+            label: "background workflow",
+            createdAt: 2,
+            runs: [
+              {
+                runId: "background-run",
+                agent: "worker",
+                task: "background task",
+                taskIndex: 0,
+                status: "failed",
+                terminalReason: "setup-error",
+                transcript: [],
+              },
+            ],
+          },
+        },
+      },
+    ]);
+    await runtime.emit("session_tree", { type: "session_tree" });
+    expect(childRuns.registry.getSnapshots()[0]?.invocationId).toBe(
+      "background-invocation",
     );
 
     runtime.setBranch([]);

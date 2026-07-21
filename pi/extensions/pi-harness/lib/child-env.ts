@@ -20,7 +20,15 @@
  * returned object is a COMPLETE env: pass it as the child's `env` so the child
  * does not inherit `process.env` implicitly.
  */
-import { delimiter, isAbsolute, resolve, sep } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import {
+  basename,
+  delimiter,
+  dirname,
+  isAbsolute,
+  resolve,
+  sep,
+} from "node:path";
 
 // Exact-match keys that are pure injection vectors (no legitimate need in the
 // controlled commands the harness runs).
@@ -70,22 +78,63 @@ const isDangerousKey = (key: string, value: string): boolean => {
   return false;
 };
 
+// Resolve every existing prefix, preserving a missing tail. A repository may
+// expose `<cwd>/bin` through a symlink alias before that bin directory exists;
+// plain realpath would fail and lexical comparison against a canonical cwd
+// would accidentally retain the future executable source.
+const canonicalizeWithMissingTail = (path: string): string | undefined => {
+  let cursor = resolve(path);
+  const missing: string[] = [];
+  while (true) {
+    try {
+      return resolve(realpathSync(cursor), ...[...missing].reverse());
+    } catch {
+      try {
+        // realpath failing for an existing prefix (especially a dangling
+        // symlink) is not equivalent to a plain missing tail. Retaining it
+        // would let the target become cwd-local after sanitization.
+        lstatSync(cursor);
+        return undefined;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
+      }
+      const parent = dirname(cursor);
+      if (parent === cursor) return undefined;
+      missing.push(basename(cursor));
+      cursor = parent;
+    }
+  }
+};
+
 // Drop PATH entries that resolve against the child's cwd (empty / relative) or
 // live at/under it, so a repository-planted binary cannot shadow a real one.
-// Absolute entries outside the cwd subtree (system dirs, user bin dirs) survive.
+// Both sides resolve symlink prefixes before comparison. Absolute entries
+// outside the cwd subtree (system dirs, user bin dirs) survive.
 const sanitizePath = (
   raw: string | undefined,
   cwd: string | undefined,
 ): string => {
   if (raw === undefined || raw === "") return "";
-  const cwdCanon = cwd === undefined ? undefined : resolve(cwd);
+  const cwdLexical = cwd === undefined ? undefined : resolve(cwd);
+  const cwdCanon =
+    cwd === undefined ? undefined : canonicalizeWithMissingTail(cwd);
   const kept = raw.split(delimiter).filter((entry) => {
     if (entry === "") return false; // empty entry == current directory
     if (!isAbsolute(entry)) return false; // relative == resolved against cwd
-    if (cwdCanon !== undefined) {
-      const canon = resolve(entry);
-      if (canon === cwdCanon || canon.startsWith(`${cwdCanon}${sep}`)) {
-        return false; // at/under the child's cwd
+    if (cwdLexical !== undefined) {
+      const lexical = resolve(entry);
+      if (lexical === cwdLexical || lexical.startsWith(`${cwdLexical}${sep}`)) {
+        return false;
+      }
+      const canon = canonicalizeWithMissingTail(entry);
+      if (
+        cwdCanon === undefined ||
+        canon === undefined ||
+        canon === cwdCanon ||
+        canon.startsWith(`${cwdCanon}${sep}`)
+      ) {
+        return false; // canonically at/under cwd, or not safely resolvable
       }
     }
     return true;

@@ -28,6 +28,19 @@ export interface BeforeAgentStartEvent {
   systemPromptOptions?: Record<string, unknown>;
 }
 
+export interface InputEvent {
+  type: "input";
+  text: string;
+  images?: unknown[];
+  source: "interactive" | "rpc" | "extension";
+  streamingBehavior?: "steer" | "followUp";
+}
+
+export interface ContextEvent {
+  type: "context";
+  messages: unknown[];
+}
+
 export interface ToolCallEvent {
   type: "tool_call";
   toolName: string;
@@ -57,7 +70,9 @@ export interface GenericEvent {
 
 export interface PiEventMap {
   session_start: SessionStartEvent;
+  input: InputEvent;
   before_agent_start: BeforeAgentStartEvent;
+  context: ContextEvent;
   tool_call: ToolCallEvent;
   tool_result: ToolResultEvent;
   agent_settled: GenericEvent;
@@ -95,7 +110,9 @@ export interface AgentStartInjection {
 
 export interface PiEventResultMap {
   session_start: void;
+  input: void;
   before_agent_start: AgentStartInjection | undefined | void;
+  context: void;
   tool_call: ToolCallBlockResult | undefined | void;
   tool_result: ToolResultPatch | undefined | void;
   agent_settled: void;

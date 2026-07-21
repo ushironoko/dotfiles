@@ -173,6 +173,50 @@ describe("child-run registry", () => {
     ]);
   });
 
+  test("refuses to archive active runs and persists worktree identity once terminal", () => {
+    const store = registry();
+    const started = begin(store, 1);
+    store.setRunWorktree(started.runIds[0]!, "/tmp/review-tree");
+    expect(store.isInvocationTerminal(started.invocationId)).toBe(false);
+    expect(store.completeToolCall("parent-tool-call")).toBeUndefined();
+
+    store.finishRun(started.runIds[0]!, {
+      status: "aborted",
+      reason: "parent-abort",
+    });
+    store.retagAbortedRuns(started.runIds, "branch-change");
+    expect(store.isInvocationTerminal(started.invocationId)).toBe(true);
+    const persisted = store.completeToolCall("parent-tool-call")!;
+    expect(persisted.runs[0]).toMatchObject({
+      worktree: "/tmp/review-tree",
+      status: "aborted",
+      terminalReason: "branch-change",
+    });
+  });
+
+  test("retags only runs that were nonterminal when lifecycle cancellation began", () => {
+    const store = registry();
+    const started = begin(store, 2);
+    store.finishRun(started.runIds[0]!, {
+      status: "aborted",
+      reason: "model-aborted",
+    });
+    store.observe(started.runIds[1]!, { type: "process_started", at: 1 });
+    const affected = store.getNonTerminalRunIds(started.invocationId);
+    store.terminalizeInvocation(
+      started.invocationId,
+      { status: "aborted", reason: "parent-abort" },
+      { status: "aborted", reason: "parent-abort" },
+    );
+    store.retagAbortedRuns(affected, "branch-change");
+
+    expect(
+      store
+        .getInvocation(started.invocationId)
+        ?.runs.map((run) => run.terminalReason),
+    ).toEqual(["model-aborted", "branch-change"]);
+  });
+
   test("isolates subscriber errors", () => {
     const store = registry();
     let calls = 0;

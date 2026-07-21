@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join, resolve } from "node:path";
+import { runHook } from "../../../pi/extensions/pi-harness/lib/run-hook";
 import { cleanupTestDirectory, setupTestDirectory } from "../../test-helpers";
 
 const ROOT = resolve(import.meta.dir, "../../..");
@@ -21,6 +22,14 @@ interface WorktreeFixture {
   worktree: string;
   commonDirectory: string;
   markerPath: string;
+}
+
+interface CreateHookFixture {
+  root: string;
+  repository: string;
+  binDirectory: string;
+  realGit: string;
+  realMkdir: string;
 }
 
 const runCommand = async (
@@ -95,6 +104,35 @@ const createFixture = async (): Promise<WorktreeFixture> => {
   );
 
   return { root, repository, worktree, commonDirectory, markerPath };
+};
+
+const createCreateHookFixture = async (
+  prefix: string,
+): Promise<CreateHookFixture> => {
+  const root = await fs.realpath(await setupTestDirectory(prefix));
+  const repository = join(root, "repository");
+  const binDirectory = join(root, "bin");
+  const realGit = Bun.which("git");
+  const realMkdir = Bun.which("mkdir");
+  if (realGit === null || realMkdir === null) {
+    throw new Error("git and mkdir are required for this test");
+  }
+  await fs.mkdir(repository);
+  await fs.mkdir(binDirectory);
+  await runGit(["init", "-q", "-b", "main", repository]);
+  await runGit(["config", "user.email", "codex-test@example.com"], repository);
+  await runGit(["config", "user.name", "Codex Test"], repository);
+  await runGit(["commit", "-q", "--allow-empty", "-m", "initial"], repository);
+  await fs.writeFile(
+    join(binDirectory, "gwq"),
+    [
+      "#!/usr/bin/env bash",
+      String.raw`printf '%s\n' "$*" >> "$GWQ_CALLS"`,
+      "exit 1",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return { root, repository, binDirectory, realGit, realMkdir };
 };
 
 const runRemoveHook = async (
@@ -236,8 +274,8 @@ describe("Codex worktree removal safety", () => {
       join(binDirectory, "gwq"),
       [
         "#!/usr/bin/env bash",
-        'if [ "$1" = "add" ] && [ "$2" = "-b" ]; then',
-        '  exec "$REAL_GIT" -C "$GWQ_REPOSITORY" worktree add -q -b "$3" "$GWQ_WORKTREE"',
+        'if [ "$1" = "add" ]; then',
+        '  exec "$REAL_GIT" -C "$GWQ_REPOSITORY" worktree add -q "$GWQ_WORKTREE" "$2"',
         "fi",
         String.raw`if [ "$1" = "get" ]; then printf "%s\n" "$GWQ_WORKTREE"; exit 0; fi`,
         "exit 1",
@@ -284,6 +322,698 @@ describe("Codex worktree removal safety", () => {
       worktree_path: worktree,
       confirmed: true,
     });
+    expect(removed.exitCode).toBe(0);
+    expect(await pathExists(worktree)).toBe(false);
+    expect(await pathExists(markerPath)).toBe(false);
+  });
+
+  test("TERM immediately after create-lock mkdir leaves no stale ownership", async () => {
+    const value = await createCreateHookFixture("codex-worktree-lock-term");
+    temporaryDirectories.push(value.root);
+    const branch = "harness-lock-term-test";
+    const signalSent = join(value.root, "lock-signal-sent");
+    const gwqCalls = join(value.root, "gwq-calls.log");
+    const commonDirectory = await fs.realpath(join(value.repository, ".git"));
+    const lockPath = join(
+      commonDirectory,
+      "codex-harness-worktree-create-locks",
+      `${createHash("sha1").update(branch).digest("hex")}.lock`,
+    );
+    await fs.writeFile(
+      join(value.binDirectory, "mkdir"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "last=${!#}",
+        'if [[ "$last" == *.lock ]] && [ ! -e "$SIGNAL_SENT" ]; then',
+        '  "$REAL_MKDIR" "$@"',
+        '  : > "$SIGNAL_SENT"',
+        "  kill -TERM 0",
+        "  exit 0",
+        "fi",
+        'exec "$REAL_MKDIR" "$@"',
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = await runHook(
+      CREATE_HOOK,
+      JSON.stringify({ name: branch }),
+      {
+        cwd: value.repository,
+        env: {
+          PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+          REAL_MKDIR: value.realMkdir,
+          GWQ_CALLS: gwqCalls,
+          SIGNAL_SENT: signalSent,
+        },
+        timeoutMs: 5_000,
+        termGraceMs: 1_000,
+      },
+    );
+
+    expect(result.exitCode).toBe(130);
+    expect(result.timedOut).toBe(false);
+    expect(await pathExists(signalSent)).toBe(true);
+    expect(await pathExists(lockPath)).toBe(false);
+    expect(await pathExists(gwqCalls)).toBe(false);
+    expect(
+      (
+        await runCommand(
+          ["git", "show-ref", "--verify", `refs/heads/${branch}`],
+          { cwd: value.repository },
+        )
+      ).exitCode,
+    ).not.toBe(0);
+
+    const retry = await runHook(CREATE_HOOK, JSON.stringify({ name: branch }), {
+      cwd: value.repository,
+      env: {
+        PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+        REAL_MKDIR: value.realMkdir,
+        GWQ_CALLS: gwqCalls,
+        SIGNAL_SENT: signalSent,
+      },
+      timeoutMs: 5_000,
+    });
+    expect(retry.stderr).toContain("gwq could not create worktree");
+    expect(retry.stderr).not.toContain("another worktree create");
+    expect(await pathExists(lockPath)).toBe(false);
+  });
+
+  test("owner-file setup failure rolls back the new lock", async () => {
+    const value = await createCreateHookFixture("codex-worktree-owner-failure");
+    temporaryDirectories.push(value.root);
+    const branch = "harness-owner-failure-test";
+    const failOnce = join(value.root, "chmod-failed-once");
+    const gwqCalls = join(value.root, "gwq-calls.log");
+    const realChmod = Bun.which("chmod");
+    if (realChmod === null) throw new Error("chmod is required for this test");
+    await fs.writeFile(
+      join(value.binDirectory, "chmod"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'if [[ "${!#}" == *.lock/owner.* ]] && [ ! -e "$FAIL_ONCE" ]; then',
+        '  : > "$FAIL_ONCE"',
+        "  exit 1",
+        "fi",
+        'exec "$REAL_CHMOD" "$@"',
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const commonDirectory = await fs.realpath(join(value.repository, ".git"));
+    const lockPath = join(
+      commonDirectory,
+      "codex-harness-worktree-create-locks",
+      `${createHash("sha1").update(branch).digest("hex")}.lock`,
+    );
+
+    const failed = await runHook(
+      CREATE_HOOK,
+      JSON.stringify({ name: branch }),
+      {
+        cwd: value.repository,
+        env: {
+          PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+          REAL_CHMOD: realChmod,
+          FAIL_ONCE: failOnce,
+          GWQ_CALLS: gwqCalls,
+        },
+        timeoutMs: 5_000,
+      },
+    );
+    expect(failed.exitCode).not.toBe(0);
+    expect(await pathExists(failOnce)).toBe(true);
+    expect(await pathExists(lockPath)).toBe(false);
+
+    const retry = await runHook(CREATE_HOOK, JSON.stringify({ name: branch }), {
+      cwd: value.repository,
+      env: {
+        PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+        REAL_CHMOD: realChmod,
+        FAIL_ONCE: failOnce,
+        GWQ_CALLS: gwqCalls,
+      },
+      timeoutMs: 5_000,
+    });
+    expect(retry.stderr).toContain("gwq could not create worktree");
+    expect(retry.stderr).not.toContain("another worktree create");
+  });
+
+  test("owner publication and rollback failures cannot strand the lock", async () => {
+    const value = await createCreateHookFixture("codex-worktree-owner-publish");
+    temporaryDirectories.push(value.root);
+    const branch = "harness-owner-publish-test";
+    const sabotaged = join(value.root, "owner-publication-sabotaged");
+    const rmdirFailed = join(value.root, "rollback-rmdir-failed");
+    const gwqCalls = join(value.root, "gwq-calls.log");
+    const realChmod = Bun.which("chmod");
+    const realRmdir = Bun.which("rmdir");
+    if (realChmod === null || realRmdir === null) {
+      throw new Error("chmod and rmdir are required for this test");
+    }
+    await fs.writeFile(
+      join(value.binDirectory, "mkdir"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "last=${!#}",
+        'if [[ "$last" == *.lock ]] && [ ! -e "$SABOTAGED" ]; then',
+        '  "$REAL_MKDIR" "$@"',
+        '  "$REAL_CHMOD" 500 "$last"',
+        '  : > "$SABOTAGED"',
+        "  exit 0",
+        "fi",
+        'exec "$REAL_MKDIR" "$@"',
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    await fs.writeFile(
+      join(value.binDirectory, "rmdir"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "last=${!#}",
+        'if [[ "$last" == *.lock.releasing.owner.* ]] && [ ! -e "$RMDIR_FAILED" ]; then',
+        '  : > "$RMDIR_FAILED"',
+        "  exit 1",
+        "fi",
+        'exec "$REAL_RMDIR" "$@"',
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const commonDirectory = await fs.realpath(join(value.repository, ".git"));
+    const lockName = `${createHash("sha1").update(branch).digest("hex")}.lock`;
+    const lockParent = join(
+      commonDirectory,
+      "codex-harness-worktree-create-locks",
+    );
+
+    const failed = await runHook(
+      CREATE_HOOK,
+      JSON.stringify({ name: branch }),
+      {
+        cwd: value.repository,
+        env: {
+          PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+          REAL_CHMOD: realChmod,
+          REAL_MKDIR: value.realMkdir,
+          REAL_RMDIR: realRmdir,
+          SABOTAGED: sabotaged,
+          RMDIR_FAILED: rmdirFailed,
+          GWQ_CALLS: gwqCalls,
+        },
+        timeoutMs: 5_000,
+      },
+    );
+    expect(failed.stderr).toContain(
+      "could not initialize worktree create lock",
+    );
+    expect(await pathExists(rmdirFailed)).toBe(true);
+    expect(
+      (await fs.readdir(lockParent)).filter((name) =>
+        name.startsWith(lockName),
+      ),
+    ).toEqual([]);
+
+    const retry = await runHook(CREATE_HOOK, JSON.stringify({ name: branch }), {
+      cwd: value.repository,
+      env: {
+        PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+        REAL_CHMOD: realChmod,
+        REAL_MKDIR: value.realMkdir,
+        REAL_RMDIR: realRmdir,
+        SABOTAGED: sabotaged,
+        RMDIR_FAILED: rmdirFailed,
+        GWQ_CALLS: gwqCalls,
+      },
+      timeoutMs: 5_000,
+    });
+    expect(retry.stderr).toContain("gwq could not create worktree");
+    expect(retry.stderr).not.toContain("another worktree create");
+  });
+
+  test("TERM immediately after update-ref leaves no orphan branch", async () => {
+    const value = await createCreateHookFixture("codex-worktree-ref-term");
+    temporaryDirectories.push(value.root);
+    const branch = "harness-ref-term-test";
+    const signalSent = join(value.root, "ref-signal-sent");
+    const gwqCalls = join(value.root, "gwq-calls.log");
+    await fs.writeFile(
+      join(value.binDirectory, "git"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'if [[ " $* " == *" update-ref refs/heads/$TARGET_BRANCH "* ]] && [ ! -e "$SIGNAL_SENT" ]; then',
+        '  "$REAL_GIT" "$@"',
+        '  : > "$SIGNAL_SENT"',
+        "  kill -TERM 0",
+        "  exit 0",
+        "fi",
+        'exec "$REAL_GIT" "$@"',
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = await runHook(
+      CREATE_HOOK,
+      JSON.stringify({ name: branch }),
+      {
+        cwd: value.repository,
+        env: {
+          PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+          REAL_GIT: value.realGit,
+          GWQ_CALLS: gwqCalls,
+          SIGNAL_SENT: signalSent,
+          TARGET_BRANCH: branch,
+        },
+        timeoutMs: 5_000,
+        termGraceMs: 1_000,
+      },
+    );
+
+    expect(result.exitCode).toBe(130);
+    expect(result.timedOut).toBe(false);
+    expect(await pathExists(signalSent)).toBe(true);
+    const gwqCallLog = (await pathExists(gwqCalls))
+      ? await fs.readFile(gwqCalls, "utf8")
+      : "";
+    expect(gwqCallLog).not.toContain("add");
+    expect(
+      (
+        await runCommand(
+          [value.realGit, "show-ref", "--verify", `refs/heads/${branch}`],
+          { cwd: value.repository },
+        )
+      ).exitCode,
+    ).not.toBe(0);
+    const lockPath = join(
+      await fs.realpath(join(value.repository, ".git")),
+      "codex-harness-worktree-create-locks",
+      `${createHash("sha1").update(branch).digest("hex")}.lock`,
+    );
+    expect(await pathExists(lockPath)).toBe(false);
+
+    const retry = await runHook(CREATE_HOOK, JSON.stringify({ name: branch }), {
+      cwd: value.repository,
+      env: {
+        PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+        REAL_GIT: value.realGit,
+        GWQ_CALLS: gwqCalls,
+        SIGNAL_SENT: signalSent,
+        TARGET_BRANCH: branch,
+      },
+      timeoutMs: 5_000,
+    });
+    expect(retry.stderr).toContain("gwq could not create worktree");
+    expect(retry.stderr).not.toContain("branch already exists");
+  });
+
+  test("cancellation never deletes a reserved branch moved by another actor", async () => {
+    const value = await createCreateHookFixture("codex-worktree-moved-ref");
+    temporaryDirectories.push(value.root);
+    const branch = "harness-moved-ref-test";
+    const otherCommit = (
+      await runGit(
+        ["commit-tree", "HEAD^{tree}", "-m", "other"],
+        value.repository,
+      )
+    ).stdout;
+    await fs.writeFile(
+      join(value.binDirectory, "gwq"),
+      [
+        "#!/usr/bin/env bash",
+        'if [ "$1" = "add" ]; then',
+        '  "$REAL_GIT" -C "$GWQ_REPOSITORY" update-ref "refs/heads/$2" "$OTHER_COMMIT"',
+        "  kill -TERM 0",
+        "  exit 1",
+        "fi",
+        "exit 1",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = await runHook(
+      CREATE_HOOK,
+      JSON.stringify({ name: branch }),
+      {
+        cwd: value.repository,
+        env: {
+          PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+          REAL_GIT: value.realGit,
+          GWQ_REPOSITORY: value.repository,
+          OTHER_COMMIT: otherCommit,
+        },
+        timeoutMs: 5_000,
+        termGraceMs: 1_000,
+      },
+    );
+
+    expect(result.exitCode).toBe(130);
+    expect(result.timedOut).toBe(false);
+    expect(
+      (await runGit(["rev-parse", `refs/heads/${branch}`], value.repository))
+        .stdout,
+    ).toBe(otherCommit);
+    const lockPath = join(
+      await fs.realpath(join(value.repository, ".git")),
+      "codex-harness-worktree-create-locks",
+      `${createHash("sha1").update(branch).digest("hex")}.lock`,
+    );
+    expect(await pathExists(lockPath)).toBe(false);
+  });
+
+  test("TERM immediately after normal lock release keeps the published worktree removable", async () => {
+    const value = await createCreateHookFixture("codex-worktree-release-term");
+    temporaryDirectories.push(value.root);
+    const branch = "harness-release-term-test";
+    const worktree = join(value.root, "linked-worktree");
+    const signalSent = join(value.root, "release-signal-sent");
+    const realRmdir = Bun.which("rmdir");
+    if (realRmdir === null) throw new Error("rmdir is required for this test");
+    await fs.writeFile(
+      join(value.binDirectory, "gwq"),
+      [
+        "#!/usr/bin/env bash",
+        'if [ "$1" = "add" ]; then',
+        '  exec "$REAL_GIT" -C "$GWQ_REPOSITORY" worktree add -q "$GWQ_WORKTREE" "$2"',
+        "fi",
+        String.raw`if [ "$1" = "get" ]; then printf "%s\n" "$GWQ_WORKTREE"; exit 0; fi`,
+        "exit 1",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    await fs.writeFile(
+      join(value.binDirectory, "rmdir"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "last=${!#}",
+        'if [[ "$last" == *.lock.releasing.owner.* ]] && [ ! -e "$SIGNAL_SENT" ]; then',
+        '  "$REAL_RMDIR" "$@"',
+        '  "$REAL_MKDIR" "$SUCCESSOR_LOCK"',
+        '  : > "$SIGNAL_SENT"',
+        "  kill -TERM 0",
+        "  exit 0",
+        "fi",
+        'exec "$REAL_RMDIR" "$@"',
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const commonDirectory = await fs.realpath(join(value.repository, ".git"));
+    const markerPath = join(
+      commonDirectory,
+      "codex-harness-worktrees",
+      `${createHash("sha1").update(worktree).digest("hex")}.json`,
+    );
+    const lockPath = join(
+      commonDirectory,
+      "codex-harness-worktree-create-locks",
+      `${createHash("sha1").update(branch).digest("hex")}.lock`,
+    );
+
+    const result = await runHook(
+      CREATE_HOOK,
+      JSON.stringify({ name: branch }),
+      {
+        cwd: value.repository,
+        env: {
+          PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+          REAL_GIT: value.realGit,
+          REAL_MKDIR: value.realMkdir,
+          REAL_RMDIR: realRmdir,
+          GWQ_REPOSITORY: value.repository,
+          GWQ_WORKTREE: worktree,
+          SIGNAL_SENT: signalSent,
+          SUCCESSOR_LOCK: lockPath,
+        },
+        timeoutMs: 10_000,
+        termGraceMs: 2_000,
+      },
+    );
+
+    expect(result.exitCode).toBe(130);
+    expect(result.timedOut).toBe(false);
+    expect(result.stdout.trim()).toBe(worktree);
+    expect(await pathExists(signalSent)).toBe(true);
+    expect(await pathExists(worktree)).toBe(true);
+    expect(await pathExists(markerPath)).toBe(true);
+    // Simulates a successor acquiring the same branch lock immediately after
+    // rmdir but before this process commits CREATE_LOCK_HELD=0. Deferred
+    // cancellation must not let EXIT cleanup remove the successor's directory.
+    expect(await pathExists(lockPath)).toBe(true);
+    await fs.rmdir(lockPath);
+
+    const removed = await runRemoveHook(
+      {
+        root: value.root,
+        repository: value.repository,
+        worktree,
+        commonDirectory,
+        markerPath,
+      },
+      { worktree_path: worktree, confirmed: true },
+    );
+    expect(removed.exitCode).toBe(0);
+  });
+
+  test("a transient tombstone rmdir failure is retried without blocking the branch lock", async () => {
+    const value = await createCreateHookFixture("codex-worktree-release-retry");
+    temporaryDirectories.push(value.root);
+    const branch = "harness-release-retry-test";
+    const worktree = join(value.root, "linked-worktree");
+    const failOnce = join(value.root, "rmdir-failed-once");
+    const realRmdir = Bun.which("rmdir");
+    if (realRmdir === null) throw new Error("rmdir is required for this test");
+    await fs.writeFile(
+      join(value.binDirectory, "gwq"),
+      [
+        "#!/usr/bin/env bash",
+        'if [ "$1" = "add" ]; then',
+        '  exec "$REAL_GIT" -C "$GWQ_REPOSITORY" worktree add -q "$GWQ_WORKTREE" "$2"',
+        "fi",
+        String.raw`if [ "$1" = "get" ]; then printf "%s\n" "$GWQ_WORKTREE"; exit 0; fi`,
+        "exit 1",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    await fs.writeFile(
+      join(value.binDirectory, "rmdir"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "last=${!#}",
+        'if [[ "$last" == *.lock.releasing.owner.* ]]; then',
+        '  failures=$(cat "$FAIL_ONCE" 2>/dev/null || printf 0)',
+        '  if [ "$failures" -lt 2 ]; then',
+        '    printf "%s\n" "$((failures + 1))" > "$FAIL_ONCE"',
+        "    exit 1",
+        "  fi",
+        "fi",
+        'exec "$REAL_RMDIR" "$@"',
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const commonDirectory = await fs.realpath(join(value.repository, ".git"));
+    const markerPath = join(
+      commonDirectory,
+      "codex-harness-worktrees",
+      `${createHash("sha1").update(worktree).digest("hex")}.json`,
+    );
+    const lockName = `${createHash("sha1").update(branch).digest("hex")}.lock`;
+    const lockParent = join(
+      commonDirectory,
+      "codex-harness-worktree-create-locks",
+    );
+
+    const result = await runHook(
+      CREATE_HOOK,
+      JSON.stringify({ name: branch }),
+      {
+        cwd: value.repository,
+        env: {
+          PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+          REAL_GIT: value.realGit,
+          REAL_RMDIR: realRmdir,
+          GWQ_REPOSITORY: value.repository,
+          GWQ_WORKTREE: worktree,
+          FAIL_ONCE: failOnce,
+        },
+        timeoutMs: 10_000,
+      },
+    );
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("could not release worktree create lock");
+    expect(result.stdout.trim()).toBe(worktree);
+    expect(await pathExists(markerPath)).toBe(true);
+    expect(
+      (await fs.readdir(lockParent)).filter((name) =>
+        name.startsWith(lockName),
+      ),
+    ).toEqual([]);
+
+    const removed = await runRemoveHook(
+      {
+        root: value.root,
+        repository: value.repository,
+        worktree,
+        commonDirectory,
+        markerPath,
+      },
+      { worktree_path: worktree, confirmed: true },
+    );
+    expect(removed.exitCode).toBe(0);
+  });
+
+  test("never removes another invocation's existing lock or branch", async () => {
+    const value = await createCreateHookFixture("codex-worktree-foreign-owner");
+    temporaryDirectories.push(value.root);
+    const branch = "harness-foreign-owner-test";
+    const commonDirectory = await fs.realpath(join(value.repository, ".git"));
+    const lockPath = join(
+      commonDirectory,
+      "codex-harness-worktree-create-locks",
+      `${createHash("sha1").update(branch).digest("hex")}.lock`,
+    );
+    const foreignOwner = join(lockPath, "owner.foreign");
+    await fs.mkdir(lockPath, { recursive: true });
+    await fs.writeFile(foreignOwner, "foreign\n");
+
+    const locked = await runHook(
+      CREATE_HOOK,
+      JSON.stringify({ name: branch }),
+      {
+        cwd: value.repository,
+        env: {
+          PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+          GWQ_CALLS: join(value.root, "gwq-calls.log"),
+        },
+        timeoutMs: 5_000,
+      },
+    );
+    expect(locked.stderr).toContain("another worktree create");
+    expect(await fs.readFile(foreignOwner, "utf8")).toBe("foreign\n");
+
+    await fs.rm(lockPath, { recursive: true });
+    const head = (await runGit(["rev-parse", "HEAD"], value.repository)).stdout;
+    await runGit(["branch", branch, head], value.repository);
+    const branchExists = await runHook(
+      CREATE_HOOK,
+      JSON.stringify({ name: branch }),
+      {
+        cwd: value.repository,
+        env: {
+          PATH: `${value.binDirectory}:${process.env.PATH ?? ""}`,
+          GWQ_CALLS: join(value.root, "gwq-calls.log"),
+        },
+        timeoutMs: 5_000,
+      },
+    );
+    expect(branchExists.stderr).toContain("branch already exists");
+    expect(
+      (await runGit(["rev-parse", `refs/heads/${branch}`], value.repository))
+        .stdout,
+    ).toBe(head);
+  });
+
+  test("cancellation publishes a removable worktree created mid-hook", async () => {
+    const root = await fs.realpath(
+      await setupTestDirectory("codex-worktree-cancel"),
+    );
+    temporaryDirectories.push(root);
+    const repository = join(root, "repository");
+    const worktree = join(root, "linked-worktree");
+    const readyPath = join(root, "gwq-created");
+    const binDirectory = join(root, "bin");
+    const branch = "harness-cancel-test";
+    const realGit = Bun.which("git");
+    if (realGit === null) throw new Error("git is required for this test");
+    await fs.mkdir(repository);
+    await fs.mkdir(binDirectory);
+    await runGit(["init", "-q", "-b", "main", repository]);
+    await runGit(
+      ["config", "user.email", "codex-test@example.com"],
+      repository,
+    );
+    await runGit(["config", "user.name", "Codex Test"], repository);
+    await runGit(
+      ["commit", "-q", "--allow-empty", "-m", "initial"],
+      repository,
+    );
+    await fs.writeFile(
+      join(binDirectory, "gwq"),
+      [
+        "#!/usr/bin/env bash",
+        'if [ "$1" = "add" ]; then',
+        '  "$REAL_GIT" -C "$GWQ_REPOSITORY" worktree add -q "$GWQ_WORKTREE" "$2" || exit 1',
+        '  : > "$GWQ_READY"',
+        "  sleep 30",
+        "  exit 0",
+        "fi",
+        String.raw`if [ "$1" = "get" ]; then printf "%s\n" "$GWQ_WORKTREE"; exit 0; fi`,
+        "exit 1",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const controller = new AbortController() as unknown as {
+      signal: AbortSignal;
+      abort(): void;
+    };
+    const running = runHook(CREATE_HOOK, JSON.stringify({ name: branch }), {
+      cwd: repository,
+      env: {
+        PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+        REAL_GIT: realGit,
+        GWQ_REPOSITORY: repository,
+        GWQ_WORKTREE: worktree,
+        GWQ_READY: readyPath,
+      },
+      timeoutMs: 10_000,
+      termGraceMs: 3_000,
+      signal: controller.signal,
+    });
+
+    let createdBeforeAbort = false;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      if (await pathExists(readyPath)) {
+        createdBeforeAbort = true;
+        break;
+      }
+      await Bun.sleep(10);
+    }
+    controller.abort();
+    const result = await running;
+
+    expect(createdBeforeAbort).toBe(true);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.timedOut).toBe(false);
+    expect(result.stdout.trim()).toBe(worktree);
+    expect(await pathExists(worktree)).toBe(true);
+    const branchLookup = await runCommand(
+      ["git", "show-ref", "--verify", `refs/heads/${branch}`],
+      { cwd: repository },
+    );
+    expect(branchLookup.exitCode).toBe(0);
+    const commonDirectory = await fs.realpath(join(repository, ".git"));
+    const pathSha1 = createHash("sha1").update(worktree).digest("hex");
+    const markerPath = join(
+      commonDirectory,
+      "codex-harness-worktrees",
+      `${pathSha1}.json`,
+    );
+    expect(await pathExists(markerPath)).toBe(true);
+    expect(JSON.parse(await fs.readFile(markerPath, "utf8"))).toEqual({
+      path: worktree,
+      branch,
+    });
+
+    const removed = await runRemoveHook(
+      { root, repository, worktree, commonDirectory, markerPath },
+      { worktree_path: worktree, confirmed: true },
+    );
     expect(removed.exitCode).toBe(0);
     expect(await pathExists(worktree)).toBe(false);
     expect(await pathExists(markerPath)).toBe(false);

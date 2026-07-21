@@ -329,7 +329,10 @@ The tool refuses dirty trees and verifies the removal afterwards.
 
 For multi-agent fan-out on the work started here, use the pi-harness
 `workflow` tool. It takes a declarative plan and the engine enforces the
-cross-model ground rules in code:
+cross-model ground rules in code. The call returns an acceptance/invocation ID
+immediately; do not synthesize that acceptance text. Continue only when the
+automatic background-completion message delivers the staged results to the
+parent:
 
 - Fan-out stages default to codex agents; a stage whose roster has no
   codex-family task is rejected unless the USER explicitly opted out

@@ -92,27 +92,45 @@ const line = (value: string, width: number): string =>
 const taskOneLine = (task: string): string =>
   stripTerminalControls(task, " ").replace(/\s+/g, " ").trim();
 
+const wrapDetailLine = (value: string, width: number): string[] =>
+  wrapPlainText(stripTerminalControls(value), Math.max(1, width));
+
+const wrapDetailText = (
+  prefix: string,
+  value: string,
+  width: number,
+): string[] => {
+  const safeWidth = Math.max(1, width);
+  const safePrefix = stripTerminalControls(prefix, " ");
+  const safeValue = stripTerminalControls(value);
+  const prefixWidth = visibleWidth(safePrefix);
+  if (prefixWidth >= safeWidth) {
+    return wrapDetailLine(`${safePrefix}${safeValue}`, safeWidth);
+  }
+  const continuation = " ".repeat(prefixWidth);
+  return wrapPlainText(safeValue, safeWidth - prefixWidth).map(
+    (part, index) => `${index === 0 ? safePrefix : continuation}${part}`,
+  );
+};
+
 const transcriptLines = (item: TranscriptItem, width: number): string[] => {
   if (item.type === "assistant") {
-    return [
-      "assistant:",
-      ...wrapPlainText(item.text, Math.max(1, width - 2)).map(
-        (part) => `  ${part}`,
-      ),
-    ];
+    return ["assistant:", ...wrapDetailText("  ", item.text, width)];
   }
   if (item.type === "tool") {
     let runStatus: ChildRunStatus = "succeeded";
     if (item.status === "running") runStatus = "running";
     else if (item.status === "failed") runStatus = "failed";
     else if (item.status === "interrupted") runStatus = "aborted";
-    return [
+    return wrapDetailLine(
       `${statusIcon(runStatus)} tool-${item.localId} ${item.name} (${item.status})`,
-    ];
+      width,
+    );
   }
-  return [
+  return wrapDetailLine(
     `… transcript truncated (${item.omittedItems} items, ${item.omittedBytes} bytes omitted)`,
-  ];
+    width,
+  );
 };
 
 export class ChildRunsBrowserComponent implements ComponentLike {
@@ -267,9 +285,12 @@ export class ChildRunsBrowserComponent implements ComponentLike {
 const detailContentLines = (selected: FlatRun, width: number): string[] => {
   const { invocation, run } = selected;
   const lines: string[] = [
-    `${run.agent} · ${statusLabel(run.status)}`,
-    `${invocation.label}${run.stageName ? ` · ${run.stageName}` : ""}`,
-    `task: ${taskOneLine(run.task)}`,
+    ...wrapDetailLine(`${run.agent} · ${statusLabel(run.status)}`, width),
+    ...wrapDetailLine(
+      `${invocation.label}${run.stageName ? ` · ${run.stageName}` : ""}`,
+      width,
+    ),
+    ...wrapDetailText("task: ", taskOneLine(run.task), width),
     "",
   ];
   for (const item of run.transcript) {
@@ -277,19 +298,23 @@ const detailContentLines = (selected: FlatRun, width: number): string[] => {
   }
   if (run.liveDraft) {
     lines.push("assistant [live]:");
-    lines.push(
-      ...wrapPlainText(run.liveDraft, Math.max(1, width - 2)).map(
-        (part) => `  ${part}`,
-      ),
-    );
+    lines.push(...wrapDetailText("  ", run.liveDraft, width));
   }
   if (run.transcript.length === 0 && !run.liveDraft) {
     lines.push(
-      run.status === "queued" ? "(not launched)" : "(no assistant text yet)",
+      ...wrapDetailLine(
+        run.status === "queued" ? "(not launched)" : "(no assistant text yet)",
+        width,
+      ),
     );
   }
   if (run.protocolWarnings > 0) {
-    lines.push(`(${run.protocolWarnings} child stream warning(s))`);
+    lines.push(
+      ...wrapDetailLine(
+        `(${run.protocolWarnings} child stream warning(s))`,
+        width,
+      ),
+    );
   }
   return lines;
 };
@@ -330,7 +355,10 @@ export class ChildRunDetailComponent implements ComponentLike {
     const selected = findRun(this.registry.getSnapshots(), this.runId);
     const allLines =
       selected === undefined
-        ? ["Selected child run is no longer available."]
+        ? wrapDetailLine(
+            "Selected child run is no longer available.",
+            safeWidth,
+          )
         : detailContentLines(selected, safeWidth);
 
     this.lastMaxOffset = Math.max(0, allLines.length - viewport);

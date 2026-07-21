@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,10 @@ import type { AgentDefinition } from "../../lib/agent-md";
 import { sanitizeChildEnv } from "../../lib/child-env";
 import type { ChildObservation } from "../child-runs/model";
 import { createChildProtocolParser } from "../child-runs/protocol";
+import {
+  CHILD_PERMISSION_SIGNAL_ENV,
+  formatChildPermissionSignal,
+} from "../permission-policy/block";
 
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 // Parser-protection ceiling: lines beyond this are dropped unparsed. Kept
@@ -97,6 +102,7 @@ interface SpawnResult {
   model?: string;
   stopReason?: string;
   errorMessage?: string;
+  permissionBlocked?: true;
   signal?: string;
   failed: boolean;
 }
@@ -144,6 +150,14 @@ const createCappedAccumulator = () => {
   };
 };
 
+const longestPatternPrefixAtEnd = (value: string, pattern: string): number => {
+  const maximum = Math.min(value.length, pattern.length - 1);
+  for (let length = maximum; length > 0; length -= 1) {
+    if (value.endsWith(pattern.slice(0, length))) return length;
+  }
+  return 0;
+};
+
 const writePromptToTempFile = async (
   agentName: string,
   prompt: string,
@@ -183,6 +197,7 @@ const spawnAgent = async (
   task: string,
   options: SpawnAgentOptions,
 ): Promise<SpawnResult> => {
+  if (isAborted(options.signal)) throw new Error("Subagent was aborted");
   const args = ["--mode", "json", "-p", "--no-session"];
   if (agent.model !== undefined) args.push("--model", agent.model);
   if (agent.tools !== undefined && agent.tools.length > 0) {
@@ -199,14 +214,23 @@ const spawnAgent = async (
       promptDirectory = promptFile.directory;
       args.push("--append-system-prompt", promptFile.filePath);
     }
+    if (isAborted(options.signal)) throw new Error("Subagent was aborted");
     args.push(`Task: ${task}`);
 
     const spawnFn = options.spawnFn ?? defaultSpawn;
+    const permissionSignalToken = randomUUID();
+    const permissionSignal = formatChildPermissionSignal(permissionSignalToken);
+    if (permissionSignal === undefined) {
+      throw new Error("Failed to create a child permission signal");
+    }
+    const permissionSignalFrame = `${permissionSignal}\n`;
     const stderrAccumulator = createCappedAccumulator();
     let output = "";
     let buffer = "";
+    let stderrControlBuffer = "";
     let skippingOversizedLine = false;
     const decoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     const observe = (observation: ChildObservation): void => {
       try {
         options.observe?.(observation);
@@ -219,6 +243,7 @@ const spawnAgent = async (
     let abortHandler: (() => void) | undefined;
     let stopReason: string | undefined;
     let errorMessage: string | undefined;
+    let permissionBlocked = false;
 
     let outcome: ProcessOutcome;
     try {
@@ -246,7 +271,10 @@ const spawnAgent = async (
             cwd: options.cwd,
             env: sanitizeChildEnv(
               process.env,
-              { PI_HARNESS_CHILD: "1" },
+              {
+                PI_HARNESS_CHILD: "1",
+                [CHILD_PERMISSION_SIGNAL_ENV]: permissionSignalToken,
+              },
               { cwd: options.cwd },
             ),
             shell: false,
@@ -312,6 +340,50 @@ const spawnAgent = async (
           }
         };
 
+        const processStderrDecodedChunk = (decoded: string) => {
+          const combined = `${stderrControlBuffer}${decoded}`;
+          let cursor = 0;
+          let signalIndex = combined.indexOf(permissionSignalFrame, cursor);
+          while (signalIndex !== -1) {
+            stderrAccumulator.append(combined.slice(cursor, signalIndex));
+            permissionBlocked = true;
+            cursor = signalIndex + permissionSignalFrame.length;
+            signalIndex = combined.indexOf(permissionSignalFrame, cursor);
+          }
+
+          const remaining = combined.slice(cursor);
+          const retainedLength = longestPatternPrefixAtEnd(
+            remaining,
+            permissionSignalFrame,
+          );
+          const retainedStart = remaining.length - retainedLength;
+          stderrAccumulator.append(remaining.slice(0, retainedStart));
+          // Retain only a possible control-frame prefix. This bounds parser
+          // memory while recognizing a frame split across arbitrary chunks.
+          stderrControlBuffer = remaining.slice(retainedStart);
+        };
+
+        const finishStderr = () => {
+          // writeSync emits a newline-terminated frame atomically, but also
+          // redact an authenticated final partial frame if the pipe closes at
+          // exactly the wrong moment. Never retain the per-spawn token.
+          let cursor = 0;
+          let signalIndex = stderrControlBuffer.indexOf(
+            permissionSignal,
+            cursor,
+          );
+          while (signalIndex !== -1) {
+            stderrAccumulator.append(
+              stderrControlBuffer.slice(cursor, signalIndex),
+            );
+            permissionBlocked = true;
+            cursor = signalIndex + permissionSignal.length;
+            signalIndex = stderrControlBuffer.indexOf(permissionSignal, cursor);
+          }
+          stderrAccumulator.append(stderrControlBuffer.slice(cursor));
+          stderrControlBuffer = "";
+        };
+
         const forceKill = () => {
           if (settled || sigkillSent) return;
           sigkillSent = true;
@@ -320,7 +392,16 @@ const spawnAgent = async (
               "Failed to terminate subagent with SIGKILL.",
             );
             settle({ exitCode: null, signal: "SIGKILL" });
+            return;
           }
+          // A broken child-process adapter may never emit close even after the
+          // process group is gone. Bound abort draining so session shutdown and
+          // tree navigation cannot hang forever.
+          const settleTimer = setTimeout(
+            () => settle({ exitCode: null, signal: "SIGKILL" }),
+            100,
+          );
+          unrefTimer(settleTimer);
         };
 
         abortHandler = () => {
@@ -344,7 +425,11 @@ const spawnAgent = async (
           );
         });
         child.stderr.on("data", (chunk) => {
-          stderrAccumulator.append(chunk.toString());
+          processStderrDecodedChunk(
+            typeof chunk === "string"
+              ? chunk
+              : stderrDecoder.write(Buffer.from(chunk)),
+          );
         });
         child.on("close", (code, signal) => {
           closed = true;
@@ -353,6 +438,11 @@ const spawnAgent = async (
           if (!skippingOversizedLine && buffer.trim() !== "") {
             processLine(buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer);
           }
+          const finalStderrDecoded = stderrDecoder.end();
+          if (finalStderrDecoded !== "") {
+            processStderrDecodedChunk(finalStderrDecoded);
+          }
+          finishStderr();
           observe({
             type: "process_exit",
             at: Date.now(),
@@ -406,7 +496,10 @@ const spawnAgent = async (
     const failedStopReason =
       stopReason !== undefined && FAILED_STOP_REASONS.has(stopReason);
     const failed =
-      outcome.exitCode === null || outcome.exitCode !== 0 || failedStopReason;
+      outcome.exitCode === null ||
+      outcome.exitCode !== 0 ||
+      failedStopReason ||
+      permissionBlocked;
     return {
       agent: capText(agent.name),
       task: capText(task),
@@ -416,6 +509,7 @@ const spawnAgent = async (
       model: agent.model === undefined ? undefined : capText(agent.model),
       stopReason,
       errorMessage,
+      ...(permissionBlocked ? { permissionBlocked: true as const } : {}),
       signal: outcome.signal,
       failed,
     };

@@ -5,6 +5,9 @@ resident full-width TUI browser between the chat editor and statusline.
 
 ## Behavior
 
+- `subagent` and `workflow` validate and return an invocation ID immediately;
+  their child pi processes continue asynchronously while the parent is free to
+  do other work.
 - The first child invocation mounts the browser in pi's `belowEditor` widget
   slot without stealing focus from the main editor.
 - The browser receives the full terminal content width and remains in normal
@@ -41,26 +44,57 @@ resident full-width TUI browser between the chat editor and statusline.
 
 Closing, hiding, or unfocusing the browser never cancels child execution.
 
+When an invocation completes, pi-harness persists its bounded transcript,
+adds one explicitly untrusted aggregate result to the parent context, and
+requests an automatic follow-up parent turn. Completion delivery is serialized:
+only one result is handed to pi at a time, while later results remain in the
+manager-local queue until the preceding notification turn settles.
+
+A permission-policy block in a no-UI child emits a diagnostic signal bound to a
+random per-spawn token and makes that child run fail even if the model responds
+with a normal final message and pi exits zero. The signal is filtered from child
+stderr, transcripts, and persistence; marker-like text in ordinary tool output
+is ignored. Only the `permission-blocked` classification is retained, and
+parent-session permission messages keep their existing text.
+
+Background child runs require persistent TUI or RPC mode. Print (`-p`) and JSON
+modes reject `subagent` and `workflow` before side effects because the parent
+process would exit before completion delivery. A `/tree` request aborts and
+persists active invocations on the old branch before navigation, without
+sending their result to the destination branch. If a completion-triggered
+parent turn has already been handed to pi, that navigation attempt is cancelled
+because pi exposes no queue-retraction API; retry `/tree` after the turn settles.
+Unsent manager-local completions are discarded at the first request. If a
+later extension cancels navigation after pi-harness has prepared the boundary,
+background admission stays conservatively paused until session reload/resume
+because pi exposes no post-cancellation event. Session replacement and shutdown
+likewise abort active process groups.
+
 ## Retention and privacy
 
 Children still run with `--no-session`; browser entries are view-only and
 cannot be resumed or forked as native pi sessions.
 
-The parent tool-result details persist a versioned, bounded transcript so
-completed runs remain inspectable after resuming the parent session. The
+A dedicated parent custom entry persists a versioned, bounded transcript so
+completed background runs remain inspectable after resuming the parent
+session. Legacy synchronous tool-result transcript entries remain readable. The
 persisted browser payload contains only:
 
 - child identity, task/stage metadata, status, and timestamps;
+- engine-created worktree paths that are intentionally left in place;
 - finalized assistant text;
 - local tool ordinals, tool names, and success/failure status;
 - synthetic truncation markers.
 
 It does **not** retain live drafts, thinking blocks, tool arguments,
 tool-result bodies, stderr, images, signatures, provider/response IDs, raw
-tool-call IDs, working directories, or `{previous}`-expanded prompts.
+tool-call IDs, arbitrary task working directories, or `{previous}`-expanded
+prompts.
 
 Limits:
 
+- four child pi processes across all concurrent `subagent` and `workflow` invocations;
+- eight retained background invocations, including manager-local completions and the single active notification turn;
 - 16 KiB per finalized assistant item;
 - 256 items and 64 KiB per run;
 - 512 KiB per invocation, divided fairly across runs;

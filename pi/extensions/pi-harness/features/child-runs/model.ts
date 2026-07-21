@@ -25,11 +25,13 @@ export type ChildRunTerminalReason =
   | "completed"
   | "model-error"
   | "model-aborted"
+  | "permission-blocked"
   | "length"
   | "spawn-error"
   | "setup-error"
   | "fail-fast"
   | "parent-abort"
+  | "branch-change"
   | "shutdown"
   | "dependency-failed";
 
@@ -163,6 +165,7 @@ export interface PersistedChildRunV1 {
   taskIndex: number;
   stageIndex?: number;
   stageName?: string;
+  worktree?: string;
   status: Exclude<ChildRunStatus, "queued" | "running">;
   terminalReason?: ChildRunTerminalReason;
   startedAt?: number;

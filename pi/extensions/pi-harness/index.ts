@@ -32,11 +32,13 @@ const setupHarness = (pi: PiLike, config: HarnessConfig): void => {
   // Safety floor first — never toggleable, present in child profiles too.
   setupPermissionPolicy(pi, config);
 
-  if (config.features["hook-bridge"]) setupHookBridge(pi, config);
+  // Reserve parent preflight before hook-bridge's async before_agent_start
+  // work so a child completion cannot start a competing automatic turn.
   const childRuns =
     config.features.subagent || config.features.workflow
       ? setupChildRuns(pi)
       : undefined;
+  if (config.features["hook-bridge"]) setupHookBridge(pi, config);
   if (config.features.subagent) setupSubagent(pi, config, { childRuns });
   if (config.features.workflow) setupWorkflow(pi, config, { childRuns });
   if (config.features["bit-task"]) setupBitTask(pi, config);

@@ -5,6 +5,7 @@
       "Bash(bun:*)",
       "Bash(cargo:*)",
       "Bash(find:*)",
+      "Bash(printf:*)",
       "Bash(gh:*)",
       "Bash(mise:*)",
       "Bash(codex login status:*)",

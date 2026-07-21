@@ -2,6 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
+import { BackgroundInvocationManager } from "../../pi/extensions/pi-harness/features/child-runs/background";
+import {
+  CHILD_PERMISSION_SIGNAL_ENV,
+  formatChildPermissionSignal,
+} from "../../pi/extensions/pi-harness/features/permission-policy/block";
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
 import setupWorkflow from "../../pi/extensions/pi-harness/features/workflow/index";
 import type {
@@ -79,6 +84,8 @@ interface ScriptedResponse {
   stderr?: string;
   code?: number;
   stopReason?: string;
+  permissionBlocked?: boolean;
+  permissionSignalPrefix?: string;
 }
 
 interface RecordedSpawn {
@@ -88,7 +95,10 @@ interface RecordedSpawn {
   taskArg: string;
 }
 
-const createScriptedProcess = (script: ScriptedResponse): SpawnedProcess => {
+const createScriptedProcess = (
+  script: ScriptedResponse,
+  permissionSignalToken?: string,
+): SpawnedProcess => {
   const stdoutListeners: ((chunk: string) => void)[] = [];
   const stderrListeners: ((chunk: string) => void)[] = [];
   const closeListeners: ((
@@ -97,6 +107,13 @@ const createScriptedProcess = (script: ScriptedResponse): SpawnedProcess => {
   ) => void)[] = [];
 
   setTimeout(() => {
+    if (script.permissionBlocked === true) {
+      const signal = formatChildPermissionSignal(permissionSignalToken);
+      if (signal === undefined) throw new Error("missing permission signal");
+      for (const listener of stderrListeners) {
+        listener(`${script.permissionSignalPrefix ?? ""}${signal}\n`);
+      }
+    }
     if (script.text !== undefined) {
       for (const listener of stdoutListeners) {
         listener(
@@ -148,7 +165,10 @@ const makeSpawnFn = (
   const spawnFn: SpawnFunction = (command, args, options) => {
     const taskArg = args[args.length - 1] ?? "";
     records.push({ command, args, options, taskArg });
-    return createScriptedProcess(respond(taskArg));
+    return createScriptedProcess(
+      respond(taskArg),
+      options.env[CHILD_PERMISSION_SIGNAL_ENV],
+    );
   };
   return { records, spawnFn };
 };
@@ -214,6 +234,24 @@ const findWorkflowTool = (tools: ToolDefLike[]): ToolDefLike => {
   return tool;
 };
 
+const withTimeout = async <Value>(
+  promise: Promise<Value>,
+  timeoutMs: number,
+  message: string,
+): Promise<Value> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+};
+
 const executeTool = (
   tool: ToolDefLike,
   params: Record<string, unknown>,
@@ -259,11 +297,12 @@ describe("pi-harness workflow", () => {
     );
 
     const { text, details } = getResult(result);
+    const canonicalHome = await fs.realpath(home);
     expect(records).toHaveLength(2);
     for (const record of records) {
       expect(record.command).toBe("pi");
       expect(record.options.env.PI_HARNESS_CHILD).toBe("1");
-      expect(record.options.cwd).toBe(home);
+      expect(record.options.cwd).toBe(canonicalHome);
     }
     expect(text).toContain("2/2");
     expect(text).toContain("finding-one");
@@ -460,13 +499,73 @@ describe("pi-harness workflow", () => {
     expect(details.succeeded).toBe(1);
   });
 
+  test("degrades a permission-blocked task even when pi exits zero", async () => {
+    const home = await makeTempDirectory("pi-workflow-permission-block");
+    await writeAgents(home, ["codex-reviewer"]);
+    const { spawnFn } = makeSpawnFn((taskArg) =>
+      taskArg.includes("blocked")
+        ? {
+            text: "Please approve the required wrapper invocation",
+            permissionBlocked: true,
+            permissionSignalPrefix: "stderr prelude:",
+          }
+        : { text: "survivor" },
+    );
+    const registry = new ChildRunRegistry({
+      idFactory: (() => {
+        let nextId = 0;
+        return () => `permission-block-${++nextId}`;
+      })(),
+      now: () => 100,
+    });
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      childRuns: { registry, ensureVisible: () => undefined },
+    });
+
+    const result = await executeTool(
+      findWorkflowTool(pi.tools),
+      {
+        stages: [
+          {
+            mode: "fanout",
+            tasks: [
+              { agentType: "codex-reviewer", task: "healthy lens" },
+              { agentType: "codex-reviewer", task: "blocked lens" },
+            ],
+          },
+        ],
+      },
+      pi.ctx,
+    );
+
+    const { text, details } = getResult(result);
+    expect(text).toContain("1/2");
+    expect(text).toContain("FAILED (permission blocked)");
+    expect(details.succeeded).toBe(1);
+    const reports = getStageTaskReports(details, 0);
+    expect(reports[1]?.result).toMatchObject({
+      permissionBlocked: true,
+      stderr: "stderr prelude:",
+    });
+    expect(registry.getSnapshots()[0]?.runs[1]).toMatchObject({
+      status: "failed",
+      terminalReason: "permission-blocked",
+    });
+  });
+
   test("provisions an isolated worktree for codex-poc and leaves it in place", async () => {
     const home = await makeTempDirectory("pi-workflow-poc");
     await writeAgents(home, ["codex-poc"]);
     const created: { cwd: string; name: string }[] = [];
+    const workflowRoot = join(home, "repository");
+    const rootAlias = join(home, "repository-alias");
+    await fs.mkdir(workflowRoot);
+    await fs.symlink(workflowRoot, rootAlias);
     const worktreePath = join(home, "worktrees", "poc-one");
     const { records, spawnFn } = makeSpawnFn(() => ({ text: "poc done" }));
-    const pi = createFakePi({ cwd: home });
+    const pi = createFakePi({ cwd: rootAlias });
     setupWorkflow(pi, makeConfig(home), {
       spawnFn,
       createWorktree: async (cwd, name) => {
@@ -496,7 +595,7 @@ describe("pi-harness workflow", () => {
 
     const { text, details } = getResult(result);
     expect(created).toHaveLength(1);
-    expect(created[0]?.cwd).toBe(home);
+    expect(created[0]?.cwd).toBe(await fs.realpath(workflowRoot));
     expect(created[0]?.name).not.toBe("");
     expect(records).toHaveLength(1);
     expect(records[0]?.options.cwd).toBe(worktreePath);
@@ -1025,14 +1124,321 @@ describe("pi-harness workflow cwd boundary (#7:3)", () => {
       spawnFn,
       validateCwd: async (candidate, root) => {
         seen.push([candidate, root]);
-        return { ok: true };
+        return { ok: true, canonicalCwd: `${candidate}-canonical` };
       },
     });
 
-    await executeTool(findWorkflowTool(pi.tools), cwdPlan(sub), pi.ctx);
+    const result = getResult(
+      await executeTool(findWorkflowTool(pi.tools), cwdPlan(sub), pi.ctx),
+    );
+    const canonicalHome = await fs.realpath(home);
     expect(records).toHaveLength(1);
-    expect(records[0]?.options.cwd).toBe(sub);
-    expect(seen).toEqual([[sub, home]]);
+    expect(records[0]?.options.cwd).toBe(`${sub}-canonical`);
+    expect(getStageTaskReports(result.details, 0)[0]?.cwd).toBe(
+      `${sub}-canonical`,
+    );
+    expect(seen).toEqual([
+      [sub, canonicalHome],
+      [sub, canonicalHome],
+    ]);
+  });
+
+  test("revalidates after a saturated child slot and rejects a swapped symlink", async () => {
+    const home = await makeTempDirectory("pi-workflow-cwd-slot-race");
+    const outside = await makeTempDirectory("pi-workflow-cwd-slot-outside");
+    await writeAgents(home, ["codex-reviewer"]);
+    const safe = join(home, "packages", "safe");
+    const alias = join(home, "task-cwd");
+    await fs.mkdir(safe, { recursive: true });
+    await fs.symlink(safe, alias);
+    const { records, spawnFn } = makeSpawnFn(() => ({ text: "escaped" }));
+    const registry = new ChildRunRegistry();
+    const background = new BackgroundInvocationManager(registry, {
+      appendEntry() {},
+      sendMessage() {},
+    });
+    const heldReleases = await Promise.all(
+      Array.from({ length: 4 }, () => background.acquireChildSlot()),
+    );
+    let acquireStartedResolve!: () => void;
+    const acquireStarted = new Promise<void>((resolve) => {
+      acquireStartedResolve = resolve;
+    });
+    const originalAcquire = background.acquireChildSlot.bind(background);
+    background.acquireChildSlot = (signal) => {
+      acquireStartedResolve();
+      return originalAcquire(signal);
+    };
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      childRuns: {
+        registry,
+        background,
+        ensureVisible() {},
+      },
+    });
+
+    let probeRelease: (() => void) | undefined;
+    try {
+      const acceptance = getResult(
+        await executeTool(findWorkflowTool(pi.tools), cwdPlan(alias), {
+          ...pi.ctx,
+          mode: "rpc",
+        }),
+      );
+      const backgroundDetails = acceptance.details.background;
+      if (!isRecord(backgroundDetails)) {
+        throw new Error("Expected background acceptance details");
+      }
+      const invocationId = backgroundDetails.invocationId;
+      if (typeof invocationId !== "string") {
+        throw new Error("Expected background invocation id");
+      }
+      background.acknowledgeToolResult("workflow-test");
+      await acquireStarted;
+      await fs.unlink(alias);
+      await fs.symlink(outside, alias);
+      heldReleases.pop()?.();
+      await background.drain(invocationId);
+
+      expect(records).toHaveLength(0);
+      expect(registry.getSnapshots()[0]?.runs[0]?.status).toBe("failed");
+      probeRelease = await withTimeout(
+        background.acquireChildSlot(),
+        1_000,
+        "child slot leaked after cwd validation failure",
+      );
+    } finally {
+      probeRelease?.();
+      for (const release of heldReleases) release();
+      await background.shutdown();
+    }
+  });
+
+  test("uses the final in-root canonical target after waiting for a child slot", async () => {
+    const home = await makeTempDirectory("pi-workflow-cwd-slot-retarget");
+    await writeAgents(home, ["codex-reviewer"]);
+    const first = join(home, "packages", "first");
+    const second = join(home, "packages", "second");
+    const alias = join(home, "task-cwd");
+    await fs.mkdir(first, { recursive: true });
+    await fs.mkdir(second, { recursive: true });
+    await fs.symlink(first, alias);
+    const { records, spawnFn } = makeSpawnFn(() => ({ text: "ok" }));
+    const registry = new ChildRunRegistry();
+    const background = new BackgroundInvocationManager(registry, {
+      appendEntry() {},
+      sendMessage() {},
+    });
+    const heldReleases = await Promise.all(
+      Array.from({ length: 4 }, () => background.acquireChildSlot()),
+    );
+    let acquireStartedResolve!: () => void;
+    const acquireStarted = new Promise<void>((resolve) => {
+      acquireStartedResolve = resolve;
+    });
+    const originalAcquire = background.acquireChildSlot.bind(background);
+    background.acquireChildSlot = (signal) => {
+      acquireStartedResolve();
+      return originalAcquire(signal);
+    };
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      childRuns: { registry, background, ensureVisible() {} },
+    });
+
+    try {
+      const acceptance = getResult(
+        await executeTool(findWorkflowTool(pi.tools), cwdPlan(alias), {
+          ...pi.ctx,
+          mode: "rpc",
+        }),
+      );
+      const backgroundDetails = acceptance.details.background;
+      if (!isRecord(backgroundDetails)) {
+        throw new Error("Expected background acceptance details");
+      }
+      const { invocationId } = backgroundDetails;
+      if (typeof invocationId !== "string") {
+        throw new Error("Expected background invocation id");
+      }
+      background.acknowledgeToolResult("workflow-test");
+      await acquireStarted;
+      await fs.unlink(alias);
+      await fs.symlink(second, alias);
+      heldReleases.pop()?.();
+      await background.drain(invocationId);
+
+      expect(records).toHaveLength(1);
+      expect(records[0]?.options.cwd).toBe(await fs.realpath(second));
+      expect(registry.getSnapshots()[0]?.runs[0]?.status).toBe("succeeded");
+    } finally {
+      for (const release of heldReleases) release();
+      await background.shutdown();
+    }
+  });
+
+  test("freezes a symlinked workflow root before waiting for a child slot", async () => {
+    const home = await makeTempDirectory("pi-workflow-root-alias");
+    await writeAgents(home, ["codex-reviewer"]);
+    const originalRoot = join(home, "roots", "original");
+    const replacementRoot = join(home, "roots", "replacement");
+    const rootAlias = join(home, "workflow-root");
+    await fs.mkdir(originalRoot, { recursive: true });
+    await fs.mkdir(replacementRoot, { recursive: true });
+    await fs.symlink(originalRoot, rootAlias);
+    const { records, spawnFn } = makeSpawnFn(() => ({ text: "ok" }));
+    const registry = new ChildRunRegistry();
+    const background = new BackgroundInvocationManager(registry, {
+      appendEntry() {},
+      sendMessage() {},
+    });
+    const heldReleases = await Promise.all(
+      Array.from({ length: 4 }, () => background.acquireChildSlot()),
+    );
+    let acquireStartedResolve!: () => void;
+    const acquireStarted = new Promise<void>((resolve) => {
+      acquireStartedResolve = resolve;
+    });
+    const originalAcquire = background.acquireChildSlot.bind(background);
+    background.acquireChildSlot = (signal) => {
+      acquireStartedResolve();
+      return originalAcquire(signal);
+    };
+    const pi = createFakePi({ cwd: rootAlias });
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      childRuns: { registry, background, ensureVisible() {} },
+    });
+
+    try {
+      const acceptance = getResult(
+        await executeTool(
+          findWorkflowTool(pi.tools),
+          {
+            stages: [
+              {
+                mode: "single",
+                tasks: [{ agentType: "codex-reviewer", task: "inherited" }],
+              },
+            ],
+          },
+          { ...pi.ctx, mode: "rpc" },
+        ),
+      );
+      const backgroundDetails = acceptance.details.background;
+      if (!isRecord(backgroundDetails)) {
+        throw new Error("Expected background acceptance details");
+      }
+      const { invocationId } = backgroundDetails;
+      if (typeof invocationId !== "string") {
+        throw new Error("Expected background invocation id");
+      }
+      background.acknowledgeToolResult("workflow-test");
+      await acquireStarted;
+      await fs.unlink(rootAlias);
+      await fs.symlink(replacementRoot, rootAlias);
+      heldReleases.pop()?.();
+      await background.drain(invocationId);
+
+      expect(records).toHaveLength(1);
+      expect(records[0]?.options.cwd).toBe(await fs.realpath(originalRoot));
+    } finally {
+      for (const release of heldReleases) release();
+      await background.shutdown();
+    }
+  });
+
+  test("rejects an explicit cwd when its frozen root alias is retargeted", async () => {
+    const home = await makeTempDirectory("pi-workflow-root-explicit-race");
+    await writeAgents(home, ["codex-reviewer"]);
+    const originalRoot = join(home, "roots", "original");
+    const replacementRoot = join(home, "roots", "replacement");
+    const rootAlias = join(home, "workflow-root");
+    await fs.mkdir(join(originalRoot, "task"), { recursive: true });
+    await fs.mkdir(join(replacementRoot, "task"), { recursive: true });
+    await fs.symlink(originalRoot, rootAlias);
+    const explicitCwd = join(rootAlias, "task");
+    const { records, spawnFn } = makeSpawnFn(() => ({ text: "escaped" }));
+    const registry = new ChildRunRegistry();
+    const background = new BackgroundInvocationManager(registry, {
+      appendEntry() {},
+      sendMessage() {},
+    });
+    const heldReleases = await Promise.all(
+      Array.from({ length: 4 }, () => background.acquireChildSlot()),
+    );
+    let acquireStartedResolve!: () => void;
+    const acquireStarted = new Promise<void>((resolve) => {
+      acquireStartedResolve = resolve;
+    });
+    const originalAcquire = background.acquireChildSlot.bind(background);
+    background.acquireChildSlot = (signal) => {
+      acquireStartedResolve();
+      return originalAcquire(signal);
+    };
+    const pi = createFakePi({ cwd: rootAlias });
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      childRuns: { registry, background, ensureVisible() {} },
+    });
+
+    try {
+      const acceptance = getResult(
+        await executeTool(findWorkflowTool(pi.tools), cwdPlan(explicitCwd), {
+          ...pi.ctx,
+          mode: "rpc",
+        }),
+      );
+      const backgroundDetails = acceptance.details.background;
+      if (!isRecord(backgroundDetails)) {
+        throw new Error("Expected background acceptance details");
+      }
+      const { invocationId } = backgroundDetails;
+      if (typeof invocationId !== "string") {
+        throw new Error("Expected background invocation id");
+      }
+      background.acknowledgeToolResult("workflow-test");
+      await acquireStarted;
+      await fs.unlink(rootAlias);
+      await fs.symlink(replacementRoot, rootAlias);
+      heldReleases.pop()?.();
+      await background.drain(invocationId);
+
+      expect(records).toHaveLength(0);
+      expect(registry.getSnapshots()[0]?.runs[0]?.status).toBe("failed");
+    } finally {
+      for (const release of heldReleases) release();
+      await background.shutdown();
+    }
+  });
+
+  test("rejects a workflow root that is a regular file before spawning", async () => {
+    const home = await makeTempDirectory("pi-workflow-root-file");
+    await writeAgents(home, ["codex-reviewer"]);
+    const rootFile = join(home, "root-file");
+    await fs.writeFile(rootFile, "not a directory\n");
+    const { records, spawnFn } = makeSpawnFn(() => ({ text: "never" }));
+    const pi = createFakePi({ cwd: rootFile });
+    setupWorkflow(pi, makeConfig(home), { spawnFn });
+
+    await expect(
+      executeTool(
+        findWorkflowTool(pi.tools),
+        {
+          stages: [
+            {
+              mode: "single",
+              tasks: [{ agentType: "codex-reviewer", task: "never" }],
+            },
+          ],
+        },
+        pi.ctx,
+      ),
+    ).rejects.toThrow("workflow root does not resolve to a directory");
+    expect(records).toHaveLength(0);
   });
 
   test("a bad cwd in a later stage aborts before any earlier stage spawns", async () => {
