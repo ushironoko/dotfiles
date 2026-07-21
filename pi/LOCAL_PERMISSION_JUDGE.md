@@ -130,9 +130,10 @@ The command-bearing `/api/chat` request receives only:
 - canonical cwd plus a tagged Git/non-Git/unavailable project result;
 - for Git, bounded project name, active worktree, and a display-only subset of
   canonical non-bare worktree roots (up to 16 roots / 2 KiB total); boundary
-  checks use the complete canonical set locally, never this truncated subset;
-  bare Git database paths may identify the project locally but are never
-  navigation scope;
+  checks use the complete canonical set locally, never this truncated subset,
+  and require every navigable root to resolve to the active Git common
+  directory; bare Git database paths may identify the project locally but are
+  never navigation scope;
 - computed leading-`cd` scope (`listed-worktree`, outside, or unverified).
 
 Task context comes from pi's raw `input` event. Skill/template expansion,
@@ -140,13 +141,16 @@ system prompts, prior conversation, context files, tool results, environment,
 repository file contents, Git remotes, and credentials are not sent. Pending
 input becomes active only after an established append-only message baseline,
 a positive user-message delta, Pi's steering-before-follow-up delivery order,
-and a unique positional match prove correlation. Baseline loss, compaction with
-pending input, duplicate text/source ambiguity, stale/dequeued input, and queue
-overflow produce an explicit `uncorrelated` state. That state sends no task and
-cannot read or write the `ALLOW` cache. A valid active task remains stable across
-earlier tool turns/retries and clears at `agent_settled` or session shutdown.
-Raw `/skill:name` and prompt-template invocations are retained only after their
-corresponding expanded turn is observably active.
+and a unique exact positional match prove correlation. Baseline loss,
+compaction with pending input, duplicate text/source ambiguity, stale/dequeued
+input, expanded queued input without an exact raw-text delivery match, and queue
+overflow produce an explicit `uncorrelated` state. Pi emits no dequeue/edit event
+that could safely bind an arbitrary expansion to its original queued input. The
+uncorrelated state sends no task and cannot read or write the `ALLOW` cache. A
+valid active task remains stable across earlier tool turns/retries and clears at
+`agent_settled` or session shutdown. Raw `/skill:name` and prompt-template
+invocations are retained for serialized idle runs only after
+`before_agent_start` makes the corresponding expansion observably active.
 The local Git discovery command sends nothing to Ollama and reads only Git
 worktree metadata. `/api/status` and `/api/tags` contain no command or context.
 Direct numeric-loopback TCP ignores ambient `HTTP_PROXY`/`HTTPS_PROXY`, and

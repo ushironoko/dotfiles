@@ -80,9 +80,10 @@ envelope containing the command, raw current-turn task text, and locally
 verified cwd/project/worktree context; it never receives expanded skills,
 conversation history, repository contents, remotes, environment, or tool
 results. One cumulative 250 ms local discovery deadline covers async child-env
-sanitization, Git probing, registered-worktree/common-dir validation, and path
-canonicalization before each fallback/cache lookup. Ambiguous task correlation
-cannot reuse or populate the `ALLOW` cache, and ANSI-C shell words are fixed at
+sanitization, Git probing, per-root registered-worktree/common-dir validation,
+and path canonicalization before each fallback/cache lookup. Queued expanded
+inputs without an exact delivery match become uncorrelated and cannot reuse or
+populate the `ALLOW` cache; ANSI-C shell words are fixed at
 the deterministic ask floor. An unavailable judge asks in interactive sessions
 and blocks in child/non-UI sessions; set `permissionJudge.enabled` to `false` for
 the previous rule-only behavior. Existing broad explicit grants still bypass

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFile } from "node:child_process";
 import {
   chmod,
   mkdir,
@@ -10,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { promisify } from "node:util";
 import {
   boundTaskContext,
   createPermissionTaskTracker,
@@ -18,6 +20,7 @@ import {
   type GitWorktreeListResult,
 } from "../../pi/extensions/pi-harness/features/permission-policy/context";
 
+const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
 
 const tempRoot = async (prefix: string): Promise<string> => {
@@ -167,7 +170,7 @@ describe("current permission task context", () => {
     expect(currentTask(tracker)?.text).toBe("Follow-up task");
   });
 
-  test("waits to promote a queued expanded skill until its user message is delivered", () => {
+  test("fails closed when a queued expandable input cannot be matched exactly", () => {
     const tracker = createPermissionTaskTracker();
     tracker.capture({ text: "Initial task", source: "interactive" });
     tracker.activate("Initial task");
@@ -187,9 +190,7 @@ describe("current permission task context", () => {
       { role: "assistant", content: [] },
       { role: "user", content: "<expanded SKILL.md contents from disk>" },
     ]);
-    expect(currentTask(tracker)?.text).toBe(
-      "/skill:start-work implement the change",
-    );
+    expect(tracker.current()).toEqual({ correlation: "uncorrelated" });
   });
 
   test("keeps raw expandable invocations instead of expanded contents", () => {
@@ -316,6 +317,7 @@ describe("permission judge project context", () => {
             [`worktree ${alias}`, "HEAD a", "branch refs/heads/main"],
           ),
         ),
+      runGitCommonDir: async () => "/common/.git",
     });
 
     expect(context).toMatchObject({
@@ -346,6 +348,7 @@ describe("permission judge project context", () => {
             [`worktree ${linked}`, "HEAD b", "branch refs/heads/feature"],
           ),
         ),
+      runGitCommonDir: async () => "/common/.git",
     });
 
     expect(context).toMatchObject({
@@ -447,12 +450,80 @@ describe("permission judge project context", () => {
             ],
           ),
         ),
+      runGitCommonDir: async () => "/common/.git",
     });
     expect(context).toMatchObject({
       kind: "git",
       activeWorktree: main,
       navigableRoots: [main],
       worktrees: [main],
+    });
+  });
+
+  test("rejects a non-prunable worktree path owned by another repository", async () => {
+    const parent = await tempRoot("judge-stale-worktree-");
+    const main = join(parent, "project");
+    const stale = join(parent, "stale-linked-worktree");
+    await Promise.all([mkdir(main), mkdir(stale)]);
+
+    const context = await discoverProjectContext(main, {
+      runGit: async () =>
+        ok(
+          worktreeOutput(
+            [`worktree ${main}`, "HEAD a", "branch refs/heads/main"],
+            [`worktree ${stale}`, "HEAD b", "branch refs/heads/stale"],
+          ),
+        ),
+      runGitCommonDir: async (cwd) =>
+        cwd === stale ? "/unrelated/.git" : "/common/.git",
+    });
+
+    expect(context).toMatchObject({
+      kind: "unavailable",
+      reason: "git returned a worktree from a different repository",
+    });
+  });
+
+  test("rejects a real stale worktree path replaced by another repository", async () => {
+    const parent = await tempRoot("judge-real-stale-worktree-");
+    const main = join(parent, "project");
+    const stale = join(parent, "stale-linked-worktree");
+    await mkdir(main);
+    await execFileAsync("git", ["init", "-q"], { cwd: main });
+    await writeFile(join(main, "tracked.txt"), "tracked\n", "utf8");
+    await execFileAsync("git", ["add", "tracked.txt"], { cwd: main });
+    await execFileAsync(
+      "git",
+      [
+        "-c",
+        "user.name=Pi Test",
+        "-c",
+        "user.email=pi@example.invalid",
+        "commit",
+        "-qm",
+        "initial",
+      ],
+      { cwd: main },
+    );
+    await execFileAsync(
+      "git",
+      ["worktree", "add", "-qb", "stale-review", stale],
+      { cwd: main },
+    );
+    await rm(stale, { recursive: true, force: true });
+    await mkdir(stale);
+    await execFileAsync("git", ["init", "-q"], { cwd: stale });
+
+    const { stdout } = await execFileAsync(
+      "git",
+      ["worktree", "list", "--porcelain"],
+      { cwd: main },
+    );
+    expect(stdout).toContain(`worktree ${stale}`);
+    const context = await discoverProjectContext(main, { timeoutMs: 1_000 });
+    expect(context).toMatchObject({
+      kind: "unavailable",
+      reason: "git returned a worktree from a different repository",
     });
   });
 

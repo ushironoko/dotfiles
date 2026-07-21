@@ -250,10 +250,11 @@ export const createPermissionTaskTracker = (): PermissionTaskTracker => {
         ) {
           return false;
         }
-        return (
-          isExpandableInvocation(entry.task) ||
-          deliveredTexts[index] === entry.rawText
-        );
+        // Queued skill/template invocations expand before provider delivery,
+        // but Pi exposes no dequeue/edit event to this tracker. Accepting an
+        // arbitrary expanded message would let a removed invocation bind to a
+        // later task. Only exact delivery text is therefore correlatable.
+        return deliveredTexts[index] === entry.rawText;
       });
       if (!valid) {
         invalidate();
@@ -831,6 +832,38 @@ const discoverProjectContextUnbounded = async (
       "current working directory was not inside a listed worktree",
     );
   }
+
+  const commonDir = options.runGitCommonDir ?? runGitCommonDir;
+  const activeCommonDir = await commonDir(canonicalCwd, signal);
+  if (signal.aborted) {
+    return unavailable(canonicalCwd, "project discovery was cancelled");
+  }
+  if (activeCommonDir === undefined) {
+    return unavailable(
+      canonicalCwd,
+      "current Git common directory did not resolve",
+    );
+  }
+  const listedCommonDirs = await Promise.all(
+    canonicalWorktrees.map((root) =>
+      root === activeWorktree
+        ? Promise.resolve(activeCommonDir)
+        : commonDir(root, signal),
+    ),
+  );
+  if (signal.aborted) {
+    return unavailable(canonicalCwd, "project discovery was cancelled");
+  }
+  if (listedCommonDirs.some((candidate) => candidate === undefined)) {
+    return unavailable(canonicalCwd, "git returned an unverifiable worktree");
+  }
+  if (listedCommonDirs.some((candidate) => candidate !== activeCommonDir)) {
+    return unavailable(
+      canonicalCwd,
+      "git returned a worktree from a different repository",
+    );
+  }
+
   const [primaryWorktree] = canonicalWorktrees;
   if (primaryWorktree === undefined) {
     return unavailable(canonicalCwd, "git returned no navigable worktrees");
@@ -907,8 +940,9 @@ const discoverProjectContextUnbounded = async (
     worktrees,
     ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
     fingerprint: fingerprint(
-      "project-v2",
+      "project-v3",
       canonicalCwd,
+      activeCommonDir,
       canonicalProjectRoot,
       ...completeRoots.flatMap(({ path, bare }) => [
         bare ? "bare" : "worktree",

@@ -173,7 +173,7 @@ describe("permission policy local judge routing", () => {
     expect(chatRequests(upstream)).toHaveLength(2);
   });
 
-  test("does not bind a queued expanded skill before provider delivery", async () => {
+  test("fails closed when queued expanded input lacks an exact delivery match", async () => {
     const upstream = await start(() => ollamaResponse("ALLOW"));
     const cwd = resolve(import.meta.dir, "../..");
     const pi = createFakePi({ cwd });
@@ -212,8 +212,57 @@ describe("permission policy local judge routing", () => {
     ]);
     await pi.emitToolCall(bashCall("git log -1", "after-delivery"));
     const afterDelivery = chatRequests(upstream)[1]?.body ?? "";
-    expect(afterDelivery).toContain("/skill:start-work implement follow-up");
+    expect(afterDelivery).not.toContain("/skill:start-work");
     expect(afterDelivery).not.toContain("PRIVATE EXPANDED SKILL CONTENT");
+  });
+
+  test("does not reuse an expandable task cache entry after its queued input is dequeued", async () => {
+    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const cwd = resolve(import.meta.dir, "../..");
+    const pi = createFakePi({ cwd });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => verifiedProject(cwd),
+    });
+
+    const taskA = "/skill:start-work allow task A";
+    const expandedA = "PRIVATE EXPANDED TASK A";
+    await pi.emitInput({
+      type: "input",
+      text: taskA,
+      source: "interactive",
+    });
+    await pi.emitBeforeAgentStart({
+      type: "before_agent_start",
+      prompt: expandedA,
+    });
+    const baseline = [{ role: "user", content: expandedA }];
+    await pi.emitContext(baseline);
+    await pi.emitToolCall(bashCall("git status --short", "cache-seed"));
+    expect(chatRequests(upstream)).toHaveLength(1);
+    await pi.emitAgentSettled();
+
+    await pi.emitInput({
+      type: "input",
+      text: taskA,
+      source: "interactive",
+      streamingBehavior: "steer",
+    });
+    await pi.emitInput({
+      type: "input",
+      text: "Task B: inspect only and do not mutate",
+      source: "interactive",
+      streamingBehavior: "steer",
+    });
+    await pi.emitContext([
+      ...baseline,
+      { role: "user", content: "Task B: inspect only and do not mutate" },
+    ]);
+
+    await pi.emitToolCall(bashCall("git status --short", "after-dequeue"));
+    expect(chatRequests(upstream)).toHaveLength(2);
+    const afterDequeue = chatRequests(upstream)[1]?.body ?? "";
+    expect(afterDequeue).not.toContain(taskA);
+    expect(afterDequeue).not.toContain("Task B: inspect only");
   });
 
   test("does not reuse ALLOW cache after queued-task correlation fails", async () => {
