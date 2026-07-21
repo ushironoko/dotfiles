@@ -145,18 +145,40 @@ install_marker() {
 
   if [ -e "$MARKER_PATH" ] || [ -L "$MARKER_PATH" ]; then
     [ -f "$MARKER_PATH" ] && [ ! -L "$MARKER_PATH" ] && \
-      jq -e --arg path "$worktree_path" --arg branch "$branch" '
+      jq -e \
+        --arg path "$worktree_path" \
+        --arg branch "$branch" \
+        --arg root_dev "$ROOT_DEV" \
+        --arg root_ino "$ROOT_INO" \
+        --arg dot_git_dev "$DOT_GIT_DEV" \
+        --arg dot_git_ino "$DOT_GIT_INO" '
         type == "object"
+        and .version == 1
         and .path == $path
         and .branch == $branch
-        and (keys | sort) == ["branch", "path"]
+        and .root == {dev: $root_dev, ino: $root_ino}
+        and .dotGit == {dev: $dot_git_dev, ino: $dot_git_ino}
+        and (keys | sort) == ["branch", "dotGit", "path", "root", "version"]
       ' "$MARKER_PATH" >/dev/null 2>&1
     return
   fi
 
   MARKER_TMP=$(mktemp "$marker_dir/.${path_sha1}.XXXXXX") || return 1
-  jq -n --arg path "$worktree_path" --arg branch "$branch" \
-    '{path: $path, branch: $branch}' >"$MARKER_TMP" || return 1
+  jq -n \
+    --arg path "$worktree_path" \
+    --arg branch "$branch" \
+    --arg root_dev "$ROOT_DEV" \
+    --arg root_ino "$ROOT_INO" \
+    --arg dot_git_dev "$DOT_GIT_DEV" \
+    --arg dot_git_ino "$DOT_GIT_INO" '
+      {
+        version: 1,
+        path: $path,
+        branch: $branch,
+        root: {dev: $root_dev, ino: $root_ino},
+        dotGit: {dev: $dot_git_dev, ino: $dot_git_ino}
+      }
+    ' >"$MARKER_TMP" || return 1
   chmod 600 "$MARKER_TMP" || return 1
   ln "$MARKER_TMP" "$MARKER_PATH" || return 1
   rm "$MARKER_TMP" || return 1

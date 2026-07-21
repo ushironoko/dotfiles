@@ -717,6 +717,155 @@ describe("pi-harness statusline lifecycle", () => {
     expect(checkLaunches).toHaveLength(1);
   });
 
+  test("managed worktrees cannot fall back to a retargeted direct-trust root", async () => {
+    const home = await tempDirectory("pi-statusline-worktree-direct-bypass");
+    const project = join(home, "repo");
+    const sourceAlias = join(home, "source-alias");
+    const worktree = join(home, "topic-worktree");
+    await fs.mkdir(project, { recursive: true });
+    await markAsProject(project);
+    await runGit(project, ["init", "-b", "main"]);
+    await runGit(project, ["config", "user.email", "test@example.com"]);
+    await runGit(project, ["config", "user.name", "Status Test"]);
+    await runGit(project, ["add", "."]);
+    await runGit(project, ["commit", "-m", "initial"]);
+    await runGit(project, ["worktree", "add", "-b", "topic", worktree]);
+    await fs.symlink(project, sourceAlias, "dir");
+    const canonicalWorktree = await fs.realpath(worktree);
+    const originalDotGit = await fs.readFile(join(worktree, ".git"));
+    const details = await createdWorktreeDetails(canonicalWorktree);
+    const runner = join(
+      resolvePaths(home).claudeHooksDir,
+      "lib/statusline_checks_run.sh",
+    );
+    await fs.mkdir(dirname(runner), { recursive: true });
+    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+
+    const checkLaunches: string[][] = [];
+    const pi = createFakePi({ cwd: sourceAlias, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home, [sourceAlias]), {
+      getGitStatus: async () => gitStatus({ repository: undefined }),
+      getBranch: async (cwd) =>
+        cwd === canonicalWorktree ? "topic" : "main",
+      spawnDetached: (_command, args) => {
+        checkLaunches.push(args);
+      },
+    });
+
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    await pi.emitToolResult({
+      type: "tool_result",
+      toolName: "worktree_create",
+      input: { name: "topic" },
+      content: [{ type: "text", text: canonicalWorktree }],
+      details,
+      isError: false,
+    });
+    await pi.emitAgentSettled();
+    expect(checkLaunches).toHaveLength(1);
+
+    await fs.rm(sourceAlias);
+    await fs.symlink(canonicalWorktree, sourceAlias, "dir");
+    await fs.rm(worktree, { recursive: true, force: true });
+    await fs.mkdir(worktree);
+    await markAsProject(worktree);
+    await fs.writeFile(join(worktree, ".git"), originalDotGit);
+    await pi.emitAgentSettled();
+
+    expect(await fs.realpath(sourceAlias)).toBe(canonicalWorktree);
+    expect(checkLaunches).toHaveLength(1);
+  });
+
+  test("rejects a FIFO swapped in for the admin backlink without blocking", async () => {
+    const mkfifo = Bun.which("mkfifo");
+    if (mkfifo === null) throw new Error("mkfifo is required for this test");
+    const home = await tempDirectory("pi-statusline-worktree-backlink-fifo");
+    const project = join(home, "repo");
+    const worktree = join(home, "topic-worktree");
+    await fs.mkdir(project, { recursive: true });
+    await markAsProject(project);
+    await runGit(project, ["init", "-b", "main"]);
+    await runGit(project, ["config", "user.email", "test@example.com"]);
+    await runGit(project, ["config", "user.name", "Status Test"]);
+    await runGit(project, ["add", "."]);
+    await runGit(project, ["commit", "-m", "initial"]);
+    await runGit(project, ["worktree", "add", "-b", "topic", worktree]);
+    const canonicalProject = await fs.realpath(project);
+    const canonicalWorktree = await fs.realpath(worktree);
+    const details = await createdWorktreeDetails(canonicalWorktree);
+    const backlinkFile = join(details.worktreeIdentity.gitDir, "gitdir");
+    const runner = join(
+      resolvePaths(home).claudeHooksDir,
+      "lib/statusline_checks_run.sh",
+    );
+    await fs.mkdir(dirname(runner), { recursive: true });
+    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+
+    let raceEnabled = false;
+    let arrivals = 0;
+    let releaseBarrier: (() => void) | undefined;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const readGit = async (
+      cwd: string,
+      args: string[],
+    ): Promise<string | undefined> => {
+      let output: string | undefined;
+      try {
+        output = await gitText(cwd, args);
+      } catch {
+        output = undefined;
+      }
+      if (raceEnabled) {
+        arrivals += 1;
+        if (arrivals === 5) {
+          await fs.rm(backlinkFile, { force: true });
+          const process = Bun.spawn([mkfifo, backlinkFile], {
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          const [exitCode, stderr] = await Promise.all([
+            process.exited,
+            new Response(process.stderr).text(),
+          ]);
+          if (exitCode !== 0) throw new Error(`mkfifo failed: ${stderr}`);
+          releaseBarrier?.();
+        }
+        await barrier;
+      }
+      return output;
+    };
+
+    const checkLaunches: string[][] = [];
+    const pi = createFakePi({ cwd: canonicalProject, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home, [canonicalProject]), {
+      gitOutput: readGit,
+      getGitStatus: async () => gitStatus({ repository: undefined }),
+      getBranch: async () => "topic",
+      spawnDetached: (_command, args) => {
+        checkLaunches.push(args);
+      },
+    });
+
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    await pi.emitToolResult({
+      type: "tool_result",
+      toolName: "worktree_create",
+      input: { name: "topic" },
+      content: [{ type: "text", text: canonicalWorktree }],
+      details,
+      isError: false,
+    });
+    await pi.emitAgentSettled();
+    expect(checkLaunches).toHaveLength(1);
+
+    raceEnabled = true;
+    await pi.emitAgentSettled();
+    expect(arrivals).toBe(5);
+    expect(checkLaunches).toHaveLength(1);
+  });
+
   test("accepts a valid relative admin gitdir backlink", async () => {
     const home = await tempDirectory("pi-statusline-worktree-relative");
     const project = join(home, "repo");

@@ -116,9 +116,25 @@ const createFixture = async (): Promise<WorktreeFixture> => {
   const pathSha1 = createHash("sha1").update(worktree).digest("hex");
   const markerPath = join(markerDirectory, `${pathSha1}.json`);
   await fs.mkdir(markerDirectory, { mode: 0o700 });
+  const [rootStats, dotGitStats] = await Promise.all([
+    fs.lstat(worktree, { bigint: true }),
+    fs.lstat(join(worktree, ".git"), { bigint: true }),
+  ]);
   await fs.writeFile(
     markerPath,
-    JSON.stringify({ path: worktree, branch: BRANCH }),
+    JSON.stringify({
+      version: 1,
+      path: worktree,
+      branch: BRANCH,
+      root: {
+        dev: rootStats.dev.toString(10),
+        ino: rootStats.ino.toString(10),
+      },
+      dotGit: {
+        dev: dotGitStats.dev.toString(10),
+        ino: dotGitStats.ino.toString(10),
+      },
+    }),
     { mode: 0o600 },
   );
 
@@ -219,6 +235,24 @@ describe("Codex worktree removal safety", () => {
 
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("marker does not exactly match");
+    expect(await pathExists(value.worktree)).toBe(true);
+    expect(await pathExists(value.markerPath)).toBe(true);
+  });
+
+  test("rejects a clean replacement that only restores the original .git contents", async () => {
+    const value = await fixture();
+    const originalDotGit = await fs.readFile(join(value.worktree, ".git"));
+    await fs.rm(value.worktree, { recursive: true, force: true });
+    await fs.mkdir(value.worktree);
+    await fs.writeFile(join(value.worktree, ".git"), originalDotGit);
+
+    const result = await runRemoveHook(value, {
+      worktree_path: value.worktree,
+      confirmed: true,
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("identity no longer matches");
     expect(await pathExists(value.worktree)).toBe(true);
     expect(await pathExists(value.markerPath)).toBe(true);
   });
@@ -337,11 +371,14 @@ describe("Codex worktree removal safety", () => {
       "codex-harness-worktrees",
       `${pathSha1}.json`,
     );
-    const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as {
-      branch: string;
-      path: string;
-    };
-    expect(marker).toEqual({ path: worktree, branch: BRANCH });
+    const marker = JSON.parse(await fs.readFile(markerPath, "utf8"));
+    expect(marker).toEqual({
+      version: 1,
+      path: worktree,
+      branch: BRANCH,
+      root: identity.root,
+      dotGit: identity.dotGit,
+    });
     const markerStats = await fs.stat(markerPath);
     expect(markerStats.mode & 0o777).toBe(0o600);
 

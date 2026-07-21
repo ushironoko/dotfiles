@@ -277,6 +277,11 @@ describe("pi-harness bit-task integration", () => {
     const fixture = await setupRepo("feature/pi-bit-task-race");
     const hooks = join(fixture.directory, "race-hooks");
     await fs.mkdir(join(hooks, "worktree"), { recursive: true });
+    await fs.copyFile(
+      join(CODEX_HOOKS, "worktree/remove.sh"),
+      join(hooks, "worktree/remove.sh"),
+    );
+    await fs.chmod(join(hooks, "worktree/remove.sh"), 0o755);
     await fs.writeFile(
       join(hooks, "worktree/create.sh"),
       [
@@ -312,10 +317,16 @@ describe("pi-harness bit-task integration", () => {
         pi.ctx,
       ),
     ).rejects.toThrow(/filesystem identity changed after hook publication/i);
-    const replacementStats = await fs.stat(
-      join(fixture.worktrees, "pi-worktree-race"),
-    );
+    const replacementPath = join(fixture.worktrees, "pi-worktree-race");
+    const replacementStats = await fs.stat(replacementPath);
     expect(replacementStats.isDirectory()).toBe(true);
+    await expect(
+      executeTool(
+        getTool(pi.tools, "worktree_remove"),
+        { path: await fs.realpath(replacementPath), confirmed: true },
+        pi.ctx,
+      ),
+    ).rejects.toThrow(/identity no longer matches/i);
   });
 
   test("removes a clean worktree created through the tool", async () => {

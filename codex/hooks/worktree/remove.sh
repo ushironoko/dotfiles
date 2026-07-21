@@ -21,6 +21,22 @@ resolve_git_dir() {
   esac
 }
 
+file_identity() {
+  local path=$1
+  local identity=''
+  if identity=$(stat -c '%d:%i' -- "$path" 2>/dev/null); then
+    :
+  elif identity=$(stat -f '%d:%i' "$path" 2>/dev/null); then
+    :
+  else
+    return 1
+  fi
+  case "$identity" in
+    *[!0-9:]* | :* | *: | *:*:*) return 1 ;;
+  esac
+  printf '%s\n' "$identity"
+}
+
 sha1_text() {
   local value=$1
 
@@ -101,18 +117,45 @@ if [ ! -f "$MARKER_PATH" ] || [ -L "$MARKER_PATH" ]; then
 fi
 if ! jq -e --arg path "$CANONICAL_PATH" --arg branch "$BRANCH" '
   type == "object"
+  and .version == 1
   and .path == $path
   and .branch == $branch
-  and (keys | sort) == ["branch", "path"]
+  and (.root | type == "object" and (keys | sort) == ["dev", "ino"])
+  and (.dotGit | type == "object" and (keys | sort) == ["dev", "ino"])
+  and (.root.dev | type == "string" and test("^(0|[1-9][0-9]*)$"))
+  and (.root.ino | type == "string" and test("^(0|[1-9][0-9]*)$"))
+  and (.dotGit.dev | type == "string" and test("^(0|[1-9][0-9]*)$"))
+  and (.dotGit.ino | type == "string" and test("^(0|[1-9][0-9]*)$"))
+  and (keys | sort) == ["branch", "dotGit", "path", "root", "version"]
 ' "$MARKER_PATH" >/dev/null 2>&1; then
-  fail "worktree marker does not exactly match path and branch: $MARKER_PATH"
+  fail "worktree marker does not exactly match path, branch, and identity: $MARKER_PATH"
 fi
+MARKER_ROOT_DEV=$(jq -r '.root.dev' "$MARKER_PATH")
+MARKER_ROOT_INO=$(jq -r '.root.ino' "$MARKER_PATH")
+MARKER_DOT_GIT_DEV=$(jq -r '.dotGit.dev' "$MARKER_PATH")
+MARKER_DOT_GIT_INO=$(jq -r '.dotGit.ino' "$MARKER_PATH")
+
+marker_identity_matches() {
+  local root_identity=''
+  local dot_git_identity=''
+  [ -d "$CANONICAL_PATH" ] && [ ! -L "$CANONICAL_PATH" ] || return 1
+  [ -f "$CANONICAL_PATH/.git" ] && [ ! -L "$CANONICAL_PATH/.git" ] || return 1
+  root_identity=$(file_identity "$CANONICAL_PATH") || return 1
+  dot_git_identity=$(file_identity "$CANONICAL_PATH/.git") || return 1
+  [ "$root_identity" = "$MARKER_ROOT_DEV:$MARKER_ROOT_INO" ] &&
+    [ "$dot_git_identity" = "$MARKER_DOT_GIT_DEV:$MARKER_DOT_GIT_INO" ]
+}
+
+marker_identity_matches \
+  || fail "worktree identity no longer matches its safe-removal marker: $CANONICAL_PATH"
 
 if ! STATUS=$(git -C "$CANONICAL_PATH" status --porcelain=v1 --untracked-files=normal 2>/dev/null); then
   fail "could not inspect worktree status: $CANONICAL_PATH"
 fi
 [ -z "$STATUS" ] \
   || fail "refusing to remove a dirty worktree: $CANONICAL_PATH"
+marker_identity_matches \
+  || fail "worktree identity changed during removal validation: $CANONICAL_PATH"
 
 if ! git --git-dir="$COMMON_DIR" worktree remove "$CANONICAL_PATH" >&2; then
   fail "Git refused to remove the worktree without force: $CANONICAL_PATH"

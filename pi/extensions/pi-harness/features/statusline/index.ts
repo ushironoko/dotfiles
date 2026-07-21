@@ -12,8 +12,8 @@
  */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { constants, existsSync, statSync } from "node:fs";
+import { lstat, open, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { HarnessConfig } from "../../config";
@@ -274,12 +274,29 @@ const validateInheritedWorktree = async (
     // This prevents an attacker-controlled replacement path from making us
     // read an arbitrary path (or FIFO) before the containment checks run.
     const backlinkFile = join(gitDir, "gitdir");
-    const backlinkStats = await lstat(backlinkFile);
-    if (!backlinkStats.isFile() || backlinkStats.size > 4_096) {
-      return false;
+    const backlinkHandle = await open(
+      backlinkFile,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    let backlinkContents: string;
+    try {
+      const backlinkStats = await backlinkHandle.stat();
+      if (!backlinkStats.isFile() || backlinkStats.size > 4_096) {
+        return false;
+      }
+      const buffer = Buffer.alloc(4_097);
+      const { bytesRead } = await backlinkHandle.read(
+        buffer,
+        0,
+        buffer.length,
+        0,
+      );
+      if (bytesRead > 4_096) return false;
+      backlinkContents = buffer.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      await backlinkHandle.close();
     }
 
-    const backlinkContents = await readFile(backlinkFile, "utf8");
     const backlink = backlinkContents.trim();
     if (
       backlink === "" ||
@@ -480,29 +497,33 @@ export default function setupStatusline(
     // its source checkout even though gwq places it outside that root. Keep
     // re-checking the source path so a vanished or retargeted trust root fails
     // closed. The worktree itself is the shell runner boundary.
-    const directlyTrustedRoot = matchedTrustedRoot(cwd, config.trust);
-    let trustedRoot = directlyTrustedRoot;
+    let trustedRoot: string | undefined;
     let trustedWorktreeIdentity: WorktreeIdentityV1 | undefined;
-    if (
-      trustedRoot === undefined &&
-      activeWorktree?.path === cwd &&
-      matchedTrustedRoot(activeWorktree.sourceCwd, config.trust) !== undefined
-    ) {
-      try {
-        if (
-          activeWorktree.identity !== undefined &&
-          (await validateWorktree(
-            activeWorktree.sourceCwd,
-            cwd,
-            activeWorktree.identity,
-          ))
-        ) {
-          trustedRoot = cwd;
-          trustedWorktreeIdentity = activeWorktree.identity;
+    if (activeWorktree?.path === cwd) {
+      // A managed worktree never falls back to dynamic direct trust. Otherwise
+      // retargeting a configured trusted-root symlink to this path would bypass
+      // the creation identity on every later refresh.
+      if (
+        matchedTrustedRoot(activeWorktree.sourceCwd, config.trust) !== undefined
+      ) {
+        try {
+          if (
+            activeWorktree.identity !== undefined &&
+            (await validateWorktree(
+              activeWorktree.sourceCwd,
+              cwd,
+              activeWorktree.identity,
+            ))
+          ) {
+            trustedRoot = cwd;
+            trustedWorktreeIdentity = activeWorktree.identity;
+          }
+        } catch {
+          trustedRoot = undefined;
         }
-      } catch {
-        trustedRoot = undefined;
       }
+    } else {
+      trustedRoot = matchedTrustedRoot(cwd, config.trust);
     }
     if (launchChecks && trustedRoot !== undefined && existsSync(runner)) {
       spawnDetached(
