@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type CwdBoundaryResult,
+  validateCwdInSameRepo,
   validateCwdWithinRepo,
   validateSameGitRepository,
 } from "../../pi/extensions/pi-harness/lib/repo-boundary";
@@ -37,6 +38,116 @@ const gitInit = (cwd: string): void => {
   execFileSync("git", ["init", "-q"], { cwd, stdio: "ignore" });
 };
 
+describe("validateCwdInSameRepo", () => {
+  test("accepts an outside linked-worktree shape with the same common dir", async () => {
+    const root = await tempRoot("same-repo-root-");
+    const linked = await tempRoot("same-repo-linked-");
+    const sameRepo = async (): Promise<string> => "/common/.git";
+    const registeredWorktrees = async (): Promise<readonly string[]> => [
+      root,
+      linked,
+    ];
+
+    expect(
+      await validateCwdInSameRepo(linked, root, sameRepo, registeredWorktrees),
+    ).toEqual({
+      ok: true,
+      canonicalCwd: linked,
+    });
+  });
+
+  test("rejects different or missing repository identities", async () => {
+    const root = await tempRoot("same-repo-root-");
+    const candidate = await tempRoot("same-repo-other-");
+    const different = async (cwd: string): Promise<string | undefined> =>
+      cwd === root ? "/root/.git" : "/other/.git";
+    const registeredWorktrees = async (): Promise<readonly string[]> => [
+      root,
+      candidate,
+    ];
+    const differentResult = await validateCwdInSameRepo(
+      candidate,
+      root,
+      different,
+      registeredWorktrees,
+    );
+    expect(differentResult.ok).toBe(false);
+
+    const noRootRepo = async (): Promise<undefined> => undefined;
+    const noRepoResult = await validateCwdInSameRepo(
+      candidate,
+      root,
+      noRootRepo,
+      registeredWorktrees,
+    );
+    expect(noRepoResult.ok).toBe(false);
+
+    const missingResult = await validateCwdInSameRepo(
+      join(root, "missing"),
+      root,
+      async () => "/root/.git",
+      registeredWorktrees,
+    );
+    expect(missingResult.ok).toBe(false);
+  });
+
+  test("accepts a real linked worktree and rejects a distinct repository", async () => {
+    const parent = await tempRoot("same-repo-real-");
+    const root = join(parent, "root");
+    const linked = join(parent, "linked");
+    const other = join(parent, "other");
+    const fake = join(parent, "fake");
+    const nested = join(root, "vendor", "nested");
+    await mkdir(root);
+    await mkdir(other);
+    await mkdir(fake);
+    await mkdir(nested, { recursive: true });
+    gitInit(root);
+    gitInit(other);
+    gitInit(nested);
+    await writeFile(join(root, "README.md"), "test\n");
+    execFileSync("git", ["add", "README.md"], {
+      cwd: root,
+      stdio: "ignore",
+    });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=pi-harness",
+        "-c",
+        "user.email=pi-harness@example.test",
+        "commit",
+        "-qm",
+        "initial",
+      ],
+      { cwd: root, stdio: "ignore" },
+    );
+    execFileSync("git", ["worktree", "add", "-q", "-b", "linked", linked], {
+      cwd: root,
+      stdio: "ignore",
+    });
+    const escape = join(root, "escape");
+    await symlink(other, escape);
+    await writeFile(join(fake, ".git"), `gitdir: ${join(root, ".git")}\n`);
+
+    try {
+      const linkedResult = await validateCwdInSameRepo(linked, root);
+      const otherResult = await validateCwdInSameRepo(other, root);
+      const escapeResult = await validateCwdInSameRepo(escape, root);
+      const forgedGitFileResult = await validateCwdInSameRepo(fake, root);
+      const nestedResult = await validateCwdInSameRepo(nested, root);
+      expect(linkedResult.ok).toBe(true);
+      expect(otherResult.ok).toBe(false);
+      expect(escapeResult.ok).toBe(false);
+      expect(forgedGitFileResult.ok).toBe(false);
+      expect(nestedResult.ok).toBe(false);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+});
+
 const rejectionReason = (result: CwdBoundaryResult): string => {
   if (result.ok)
     throw new Error(`Expected rejection for ${result.canonicalCwd}`);
@@ -48,7 +159,18 @@ describe("validateSameGitRepository (injected git identity)", () => {
     const root = await tempRoot("rb-root-");
     const linked = await tempRoot("rb-linked-");
     const sameRepo = async (): Promise<string> => "/common/.git";
-    expect(await validateSameGitRepository(linked, root, sameRepo)).toEqual({
+    const registeredWorktrees = async (): Promise<readonly string[]> => [
+      root,
+      linked,
+    ];
+    expect(
+      await validateSameGitRepository(
+        linked,
+        root,
+        sameRepo,
+        registeredWorktrees,
+      ),
+    ).toEqual({
       ok: true,
       canonicalCwd: linked,
     });
@@ -59,7 +181,16 @@ describe("validateSameGitRepository (injected git identity)", () => {
     const unrelated = await tempRoot("rb-other-");
     const perPath = async (cwd: string): Promise<string> =>
       cwd === unrelated ? "/other/.git" : "/root/.git";
-    const result = await validateSameGitRepository(unrelated, root, perPath);
+    const registeredWorktrees = async (): Promise<readonly string[]> => [
+      root,
+      unrelated,
+    ];
+    const result = await validateSameGitRepository(
+      unrelated,
+      root,
+      perPath,
+      registeredWorktrees,
+    );
     expect(result.ok).toBe(false);
     expect(rejectionReason(result)).toContain("different git repository");
   });

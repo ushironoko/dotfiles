@@ -233,6 +233,69 @@ describe("explicit allow matching", () => {
     },
   );
 
+  test("neutralizes only a prevalidated leading absolute cd for allow aggregation", () => {
+    const target = "/repo/worktree";
+    expect(
+      evaluateCommand(`cd ${target} && bun run tsc`, rules, {
+        trustedLeadingCdTarget: target,
+      }).verdict,
+    ).toBe("allow");
+    expect(
+      evaluateCommand(`cd '${target} with space' && bun test`, rules, {
+        trustedLeadingCdTarget: `${target} with space`,
+      }).verdict,
+    ).toBe("allow");
+  });
+
+  test.each([
+    "cd relative/path && bun test",
+    "cd /repo/worktree; bun test",
+    "cd /repo/worktree || bun test",
+    "cd /repo/worktree | bun test",
+    "(cd /repo/worktree && bun test)",
+    "cd /repo/worktree > /tmp/out && bun test",
+    "cd /repo/worktree && cd /repo/worktree/sub && bun test",
+    'cd "$target" && bun test',
+  ])("does not widen trusted cd through another shell shape: %s", (command) => {
+    expect(
+      evaluateCommand(command, rules, {
+        trustedLeadingCdTarget: "/repo/worktree",
+      }).verdict,
+    ).toBe("default-continue");
+  });
+
+  test.each([
+    String.raw`bun $'run' tsc`,
+    String.raw`bun $'$(bit issue claim)'`,
+    String.raw`codex $'login status' --foo`,
+    "bun ${x:-$'run'} tsc",
+    String.raw`bun test > $'/tmp/result\q'`,
+    String.raw`cd $'/repo/worktree\q' && bun run tsc`,
+    String.raw`cd $'/repo/\xC3\xA9' && bun run tsc`,
+  ])("ANSI-C words never inherit an automatic allow: %s", (command) => {
+    expect(
+      evaluateCommand(command, rules, {
+        trustedLeadingCdTarget: "/repo/worktreeq",
+      }).verdict,
+    ).toBe("ask");
+  });
+
+  test("trusted cd does not suppress trailing default, ask, or deny", () => {
+    const options = { trustedLeadingCdTarget: "/repo/worktree" };
+    expect(
+      evaluateCommand("cd /repo/worktree && git status", rules, options)
+        .verdict,
+    ).toBe("default-continue");
+    expect(
+      evaluateCommand("cd /repo/worktree && rm -rf /tmp/x", rules, options)
+        .verdict,
+    ).toBe("ask");
+    expect(
+      evaluateCommand("cd /repo/worktree && bit relay sync", rules, options)
+        .verdict,
+    ).toBe("deny");
+  });
+
   test("preserves a path-specific allow without basename widening", () => {
     expect(
       evaluateCommand("~/.claude/hooks/lib/codex-stage.sh review", rules)
@@ -332,7 +395,6 @@ describe("explicit allow matching", () => {
     "codex 'login status' --foo",
     "bit issue 'create --foo'",
     String.raw`codex login\ status --foo`,
-    String.raw`codex $'login status' --foo`,
   ])("preserves an embedded-whitespace argv boundary: %s", (command) => {
     expect(evaluateCommand(command, productionRules).verdict).toBe(
       "default-continue",
@@ -348,7 +410,7 @@ describe("permission judge config", () => {
     );
   });
 
-  test("loads valid overrides and gives child profiles the same judge", async () => {
+  test("loads overrides, ignores the retired confirm timeout, and matches child profiles", async () => {
     const home = await mkdtemp(join(tmpdir(), "pi-judge-config-"));
     const paths = resolvePaths(home);
     await mkdir(join(home, ".pi", "agent"), { recursive: true });
@@ -381,7 +443,6 @@ describe("permission judge config", () => {
         expectedDigest:
           "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         timeoutMs: 750,
-        confirmTimeoutMs: 5_000,
         keepAlive: "2h",
       });
       expect(child).toEqual({
@@ -391,7 +452,6 @@ describe("permission judge config", () => {
         expectedDigest:
           "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         timeoutMs: 750,
-        confirmTimeoutMs: 5_000,
         keepAlive: "2h",
       });
     } finally {
@@ -411,7 +471,6 @@ describe("permission judge config", () => {
           model: "qwen2.5",
           expectedDigest: "sha256:not-a-digest",
           timeoutMs: 10,
-          confirmTimeoutMs: 500,
           keepAlive: "0m",
         },
       }),
@@ -419,7 +478,7 @@ describe("permission judge config", () => {
 
     try {
       expect(loadConfig({}, paths).permissionJudge?.configurationError).toBe(
-        "invalid permissionJudge fields: url, model, expectedDigest, timeoutMs, confirmTimeoutMs, keepAlive",
+        "invalid permissionJudge fields: url, model, expectedDigest, timeoutMs, keepAlive",
       );
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -439,7 +498,6 @@ describe("permission judge config", () => {
           model: null,
           expectedDigest: null,
           timeoutMs: null,
-          confirmTimeoutMs: null,
           keepAlive: null,
         },
       }),
@@ -447,7 +505,7 @@ describe("permission judge config", () => {
 
     try {
       expect(loadConfig({}, paths).permissionJudge?.configurationError).toBe(
-        "invalid permissionJudge fields: enabled, url, model, expectedDigest, timeoutMs, confirmTimeoutMs, keepAlive",
+        "invalid permissionJudge fields: enabled, url, model, expectedDigest, timeoutMs, keepAlive",
       );
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -800,11 +858,7 @@ describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", ()
     });
   });
 
-  test.each([
-    "bun '$(bit issue claim)'",
-    "bun $'$(bit issue claim)'",
-    "bun '$\\\n(bit issue claim)'",
-  ])(
+  test.each(["bun '$(bit issue claim)'", "bun '$\\\n(bit issue claim)'"])(
     "keeps substitutions inside genuine literal quotes inert: %s",
     (command) => {
       expect(verdictOf(command)).toBe("default-continue");

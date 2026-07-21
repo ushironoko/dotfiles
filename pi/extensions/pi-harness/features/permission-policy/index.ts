@@ -2,17 +2,18 @@ import { readFileSync, writeSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { InputEvent, PiLike } from "../../lib/pi-like";
-import { validateSameGitRepository } from "../../lib/repo-boundary";
-import {
-  DEFAULT_PERMISSION_JUDGE_CONFIG,
-  type HarnessConfig,
-} from "../../config";
+import type { HarnessConfig } from "../../config";
 import {
   CHILD_PERMISSION_SIGNAL_ENV,
   formatChildPermissionSignal,
 } from "./block";
+import {
+  createPermissionTaskTracker,
+  discoverProjectContext,
+  type PermissionProjectContext,
+} from "./context";
 import { createPermissionJudge, type JudgeOutcome } from "./judge";
-import { loadRules, type AllowRule } from "./rules";
+import { evaluateCommand, loadRules, type AllowRule } from "./rules";
 import {
   createActiveSkillBashAllowResolver,
   evaluateCommandWithSkillAllows,
@@ -21,6 +22,7 @@ import {
   type ActiveSkillBashAllowResolver,
   type SkillInvocation,
 } from "./skill-allow";
+import { leadingTrustedCdTarget } from "./trusted-cd";
 
 const readPermissionRules = (): string | undefined => {
   try {
@@ -107,6 +109,11 @@ const JUDGE_WARNING_KINDS: ReadonlySet<JudgeOutcome["kind"]> = new Set([
 interface SetupPermissionPolicyOptions {
   permissionSignalToken?: string;
   writePermissionSignal?: (text: string) => void;
+  discoverProject?: (
+    cwd: string,
+    signal?: AbortSignal,
+    leadingCdTarget?: string,
+  ) => Promise<PermissionProjectContext>;
 }
 
 const setupPermissionPolicy = (
@@ -120,6 +127,15 @@ const setupPermissionPolicy = (
     judgeConfig?.enabled === true
       ? createPermissionJudge(judgeConfig)
       : undefined;
+  const taskTracker = createPermissionTaskTracker();
+  const discoverProject =
+    options.discoverProject ??
+    ((cwd: string, signal?: AbortSignal, leadingCdTarget?: string) =>
+      discoverProjectContext(
+        cwd,
+        leadingCdTarget === undefined ? {} : { leadingCdTarget },
+        signal,
+      ));
   let judgeWarningShown = false;
   let activeSkillBashAllows: readonly AllowRule[] = [];
   let resolveActiveSkillBashAllows: ActiveSkillBashAllowResolver = () => [];
@@ -148,10 +164,7 @@ const setupPermissionPolicy = (
     inputSequence = 0;
     queueHealthy = true;
   };
-  const enqueueInput = (
-    queue: PendingInput[],
-    input: PendingInput,
-  ): void => {
+  const enqueueInput = (queue: PendingInput[], input: PendingInput): void => {
     if (!queueHealthy) return;
     if (steeringInputs.length + followUpInputs.length >= 128) {
       clearQueuedInputs();
@@ -166,10 +179,7 @@ const setupPermissionPolicy = (
       ...followUpInputs.map((input) => input.sequence),
     );
     const input = steeringInputs.shift() ?? followUpInputs.shift();
-    if (
-      input?.invocation !== undefined &&
-      input.sequence !== newestSequence
-    ) {
+    if (input?.invocation !== undefined && input.sequence !== newestSequence) {
       // A later queued input may have replaced this message through Pi's
       // dequeue/edit flow. Only the newest queued capability can activate;
       // older records fail closed instead of authenticating replayed text.
@@ -180,6 +190,13 @@ const setupPermissionPolicy = (
 
   try {
     pi.on("input", (event) => {
+      taskTracker.capture({
+        text: event.text,
+        source: event.source,
+        ...(event.streamingBehavior === undefined
+          ? {}
+          : { streamingBehavior: event.streamingBehavior }),
+      });
       if (config.isChild) return;
       const input = trustedPendingInput(event, ++inputSequence);
       if (event.streamingBehavior === "steer") {
@@ -193,6 +210,7 @@ const setupPermissionPolicy = (
       }
     });
     pi.on("context", (event) => {
+      taskTracker.activateFromMessages(event.messages);
       const entries = userMessageEntries(event.messages);
       if (
         config.isChild ||
@@ -254,6 +272,7 @@ const setupPermissionPolicy = (
   } catch {
     // Older/test adapters without both lifecycle events fail closed.
   }
+
   const permissionSignalToken =
     options.permissionSignalToken ?? process.env[CHILD_PERMISSION_SIGNAL_ENV];
   if (config.isChild && options.permissionSignalToken === undefined) {
@@ -278,6 +297,7 @@ const setupPermissionPolicy = (
   };
 
   pi.on("before_agent_start", (event) => {
+    taskTracker.activate(event.prompt);
     activeSkillBashAllows = [];
     clearQueuedInputs();
     queueHealthy = true;
@@ -297,10 +317,12 @@ const setupPermissionPolicy = (
   });
 
   pi.on("agent_settled", () => {
+    taskTracker.settle();
     clearSkillLifecycle();
   });
 
   pi.on("session_shutdown", () => {
+    taskTracker.clear();
     clearSkillLifecycle();
     judge?.clear();
   });
@@ -317,26 +339,6 @@ const setupPermissionPolicy = (
         return blocked(MALFORMED_REASON);
       }
 
-      let result = evaluateCommandWithSkillAllows(
-        command,
-        rules,
-        activeSkillBashAllows,
-      );
-      if (result.verdict === "allow" && result.grantedBySkill === true) {
-        const gitCwd = skillGrantedGitCwd(command);
-        if (gitCwd === undefined || (gitCwd !== null && ctx.cwd === undefined)) {
-          result = { verdict: "default-continue" };
-        } else if (gitCwd !== null && ctx.cwd !== undefined) {
-          const boundary = await validateSameGitRepository(
-            resolve(ctx.cwd, gitCwd),
-            ctx.cwd,
-          );
-          if (!boundary.ok) result = { verdict: "default-continue" };
-        }
-      }
-      if (result.verdict === "deny") {
-        return blocked(result.reason);
-      }
       const signal = (
         ctx as typeof ctx & {
           signal?: AbortSignal;
@@ -344,6 +346,35 @@ const setupPermissionPolicy = (
       ).signal;
       const isAborted = (): boolean =>
         signal !== undefined && "aborted" in signal && signal.aborted === true;
+
+      let projectDiscovery: PermissionProjectContext | undefined;
+      let result = evaluateCommandWithSkillAllows(
+        command,
+        rules,
+        activeSkillBashAllows,
+      );
+      if (result.verdict === "allow" && result.grantedBySkill === true) {
+        const gitCwd = skillGrantedGitCwd(command);
+        if (
+          gitCwd === undefined ||
+          (gitCwd !== null && ctx.cwd === undefined)
+        ) {
+          result = { verdict: "default-continue" };
+        } else if (gitCwd !== null && ctx.cwd !== undefined) {
+          const candidate = resolve(ctx.cwd, gitCwd);
+          projectDiscovery = await discoverProject(ctx.cwd, signal, candidate);
+          if (
+            isAborted() ||
+            projectDiscovery.leadingNavigation?.scope !== "listed-worktree" ||
+            !projectDiscovery.leadingNavigation.sameRepository
+          ) {
+            result = { verdict: "default-continue" };
+          }
+        }
+      }
+      if (result.verdict === "deny") {
+        return blocked(result.reason);
+      }
       const confirm = async (
         title: string,
         reason: string,
@@ -352,12 +383,7 @@ const setupPermissionPolicy = (
         const confirmed = await ctx.ui.confirm(
           title,
           `${reason}\n\n${command}`,
-          {
-            signal,
-            timeout:
-              judgeConfig?.confirmTimeoutMs ??
-              DEFAULT_PERMISSION_JUDGE_CONFIG.confirmTimeoutMs,
-          },
+          { signal },
         );
         return confirmed && !isAborted() ? undefined : blocked(reason);
       };
@@ -367,9 +393,42 @@ const setupPermissionPolicy = (
       }
       if (result.verdict === "allow" || judge === undefined) return undefined;
 
+      const leadingCdTarget = leadingTrustedCdTarget(command);
+      const project =
+        ctx.cwd === undefined
+          ? undefined
+          : (projectDiscovery ??
+            (await discoverProject(ctx.cwd, signal, leadingCdTarget)));
+      if (isAborted()) {
+        return blocked("the active pi operation was cancelled");
+      }
+      const leadingNavigation =
+        leadingCdTarget === undefined ? undefined : project?.leadingNavigation;
+      if (
+        leadingCdTarget !== undefined &&
+        leadingNavigation?.scope === "listed-worktree" &&
+        leadingNavigation.sameRepository
+      ) {
+        result = evaluateCommand(command, rules, {
+          trustedLeadingCdTarget: leadingCdTarget,
+        });
+        if (result.verdict === "deny") return blocked(result.reason);
+        if (result.verdict === "ask") {
+          return confirm("危険なコマンドを実行しますか？", result.reason);
+        }
+        if (result.verdict === "allow") return undefined;
+      }
+
+      const trackedTask = taskTracker.current();
       const outcome = await judge.judge(command, {
         cwd: ctx.cwd,
         signal,
+        ...(trackedTask.correlation === "task"
+          ? { task: trackedTask.task }
+          : {}),
+        taskCorrelation: trackedTask.correlation,
+        project,
+        ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
       });
       if (outcome.kind === "allow") {
         if (!outcome.cached) judgeWarningShown = false;
