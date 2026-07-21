@@ -258,30 +258,56 @@ describe("explicit allow matching", () => {
     ),
   );
 
-  test("allows the documented printf-to-codex-stage prompt pipeline", () => {
+  test("allows the documented codex-reviewer staging, prompt, and cleanup commands", () => {
+    const instruction =
+      "printf '%s' 'Read /tmp/codex-reviewer-a1B2C3/prompt.md completely and follow it exactly.'";
+    for (const wrapper of [
+      "~/.claude/hooks/lib/codex-stage.sh prompt --timeout 600",
+      "~/.claude/hooks/lib/codex-stage.sh prompt --dir '/tmp/My Repo' --timeout 600",
+    ]) {
+      expect(
+        evaluateCommand(`${instruction} |\n  ${wrapper}`, productionRules)
+          .verdict,
+      ).toBe("allow");
+    }
+
+    const staging =
+      'bun -e \'const { mkdtemp } = await import("node:fs/promises"); console.log(await mkdtemp("/tmp/codex-reviewer-"));\'';
+    const cleanup =
+      'bun -e \'const { rm } = await import("node:fs/promises"); await rm("/tmp/codex-reviewer-a1B2C3", { recursive: true, force: true });\'';
+    expect(evaluateCommand(staging, productionRules).verdict).toBe("allow");
+    expect(evaluateCommand(cleanup, productionRules).verdict).toBe("allow");
+  });
+
+  test("does not widen the codex-stage allow to unsafe prompt forms", () => {
     const wrapper = "~/.claude/hooks/lib/codex-stage.sh prompt --dir /tmp";
-    expect(
-      evaluateCommand(`printf '%s' 'review this' | ${wrapper}`, productionRules)
-        .verdict,
-    ).toBe("allow");
     expect(
       evaluateCommand(
         `printf '%s' "$(bit relay sync)" | ${wrapper}`,
         productionRules,
       ).verdict,
     ).toBe("deny");
+    for (const command of [
+      `printf '%s' "$(cat ~/.ssh/id_ed25519)" | ${wrapper}`,
+      "printf '%s' 'review this' | /tmp/codex-stage.sh prompt",
+      `printf '%s' 'review this' | ~/.claude/hooks/lib/codex-stage.sh prompt --dir "$PWD"`,
+      "~/.claude/hooks/lib/codex-stage.sh prompt <<< 'review this'",
+      "~/.claude/hooks/lib/codex-stage.sh prompt < /tmp/review-prompt.md",
+    ]) {
+      expect(evaluateCommand(command, productionRules).verdict).toBe(
+        "default-continue",
+      );
+    }
     expect(
       evaluateCommand(
-        `printf '%s' "$(cat ~/.ssh/id_ed25519)" | ${wrapper}`,
+        [
+          "~/.claude/hooks/lib/codex-stage.sh prompt << 'PROMPT_EOF'",
+          "review this",
+          "PROMPT_EOF",
+        ].join("\n"),
         productionRules,
       ).verdict,
-    ).toBe("default-continue");
-    expect(
-      evaluateCommand(
-        "printf '%s' 'review this' | /tmp/codex-stage.sh prompt",
-        productionRules,
-      ).verdict,
-    ).toBe("default-continue");
+    ).toBe("deny");
   });
 
   test.each([
