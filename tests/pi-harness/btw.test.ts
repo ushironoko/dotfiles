@@ -25,6 +25,7 @@ import setupBtw, {
   type BtwHistoryData,
   type BtwSnapshot,
   BTW_READ_ONLY_TOOLS,
+  ERROR_MAX_BYTES,
   HISTORY_TYPE,
   QUESTION_MAX_BYTES,
   truncateUtf8,
@@ -235,6 +236,8 @@ describe("BTW read-only fork runner", () => {
       ...BTW_DENIED_TOOLS,
     ]);
     expect(harness.createOptions[0].model).toBe(parentModel);
+    expect(harness.createOptions[0].authStorage).toBeDefined();
+    expect(harness.createOptions[0].authStorage?.list()).toEqual([]);
     expect(harness.createOptions[0].thinkingLevel).toBe("low");
     expect(harness.loaderOptions[0].settingsManager).toBe(
       harness.createOptions[0].settingsManager,
@@ -546,6 +549,7 @@ describe("BTW parent command", () => {
       answerQuestion: async () => "kept answer",
     });
     await harness.command().handler("kept question", context.ctx);
+    await waitFor(() => harness.entries.length === 1);
     const [{ data }] = harness.entries;
 
     context.sessionManager.appendCustomEntry(HISTORY_TYPE, data);
@@ -575,6 +579,7 @@ describe("BTW parent command", () => {
       },
     });
     await harness.command().handler("", context.ctx);
+    await waitFor(() => questions.length === 1);
     expect(questions).toEqual(["from dialog"]);
 
     const noModelHarness = commandHarness();
@@ -621,6 +626,47 @@ describe("BTW parent command", () => {
     await harness.command().handler("question", context.ctx);
     await waitFor(() => context.order.includes("answer"));
     expect(context.order).toEqual(["wait", "wait", "answer"]);
+  });
+
+  test("cancellation releases a permanently pending idle wait", async () => {
+    for (const trigger of ["command", "shutdown"] as const) {
+      const harness = commandHarness();
+      const context = commandContext({ idle: false });
+      let waiting!: () => void;
+      const waitStarted = new Promise<void>((resolve) => {
+        waiting = resolve;
+      });
+      context.ctx.waitForIdle = () => {
+        waiting();
+        return new Promise<void>(() => {});
+      };
+      let answerCalls = 0;
+      setupBtw(harness.pi, {
+        answerQuestion: async () => {
+          answerCalls += 1;
+          return "never";
+        },
+      });
+
+      await harness.command().handler("question", context.ctx);
+      await waitStarted;
+      const completion =
+        trigger === "command"
+          ? (async () => {
+              await harness.command("btw-cancel").handler("", context.ctx);
+              await harness.emitSessionShutdown();
+            })()
+          : harness.emitSessionShutdown();
+      await Promise.race([
+        completion,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("BTW cancellation hung")), 250);
+        }),
+      ]);
+
+      expect(answerCalls).toBe(0);
+      expect(harness.entries).toHaveLength(0);
+    }
   });
 
   test("rejects overlapping invocations and releases the guard after completion", async () => {
@@ -695,6 +741,48 @@ describe("BTW parent command", () => {
         ),
       ).toBe(true);
     }
+  });
+
+  test("waits for detached cleanup during parent shutdown", async () => {
+    const harness = commandHarness();
+    const context = commandContext({ idle: true });
+    let started!: () => void;
+    const hasStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    let cleanupFinished = false;
+    setupBtw(harness.pi, {
+      answerQuestion: async (value) => {
+        started();
+        return new Promise<string>((_resolve, reject) => {
+          value.signal?.onAbort(() => {
+            void cleanupGate.then(() => {
+              cleanupFinished = true;
+              reject(new Error("cancelled after cleanup"));
+            });
+          });
+        });
+      },
+    });
+
+    const invocation = harness.command().handler("question", context.ctx);
+    await hasStarted;
+    await invocation;
+    let shutdownSettled = false;
+    const shutdown = harness.emitSessionShutdown().then(() => {
+      shutdownSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(shutdownSettled).toBe(false);
+
+    releaseCleanup();
+    await shutdown;
+    expect(cleanupFinished).toBe(true);
+    expect(harness.entries).toHaveLength(0);
   });
 
   test("drops an answer when parent tree navigation changes the active branch", async () => {
@@ -835,9 +923,10 @@ describe("BTW parent command", () => {
       .command()
       .handler("old question", oldContext.ctx);
     await hasStarted;
-    await harness.emitSessionShutdown();
-    await harness.emitSessionStart();
+    const shutdown = harness.emitSessionShutdown();
     release("late answer");
+    await shutdown;
+    await harness.emitSessionStart();
     await invocation;
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -871,6 +960,7 @@ describe("BTW parent command", () => {
     expect(context.notifications[0]?.message).toContain("exceeds");
 
     await harness.command().handler("bounded", context.ctx);
+    await waitFor(() => harness.entries.length === 1);
     const data = harness.entries[0].data as BtwHistoryData;
     expect(data.answerTruncated).toBe(true);
     expect(Buffer.byteLength(data.answer, "utf8")).toBeLessThanOrEqual(
@@ -892,6 +982,7 @@ describe("BTW parent command", () => {
     });
 
     await harness.command().handler("rpc question", context.ctx);
+    await waitFor(() => harness.entries.length === 1);
     expect(harness.entries).toHaveLength(1);
     expect(
       context.notifications.some(({ message }) =>
@@ -908,6 +999,7 @@ describe("BTW parent command", () => {
       answerQuestion: async () => "answer\u001b]2;owned\u0007safe",
     });
     await harness.command().handler("question\u001b[31mred", context.ctx);
+    await waitFor(() => harness.entries.length === 1);
     const data = harness.entries[0].data as BtwHistoryData;
     expect(JSON.stringify(data)).not.toContain("\u001b");
 
@@ -938,9 +1030,45 @@ describe("BTW parent command", () => {
     });
     await emptyHarness.command().handler("\u001b[31m", emptyContext.ctx);
     expect(calls).toBe(0);
+    const notificationCount = emptyContext.notifications.length;
     await emptyHarness.command().handler("visible", emptyContext.ctx);
+    await waitFor(() => emptyContext.notifications.length > notificationCount);
+    expect(emptyContext.notifications.at(-1)?.message).toContain(
+      "no displayable text answer",
+    );
     expect(calls).toBe(1);
     expect(emptyHarness.entries).toHaveLength(0);
+  });
+
+  test("sanitizes and bounds failures from input and child execution", async () => {
+    const rawError = `bad\u001b]2;owned\u0007${"x".repeat(
+      ERROR_MAX_BYTES * 2,
+    )}`;
+    for (const source of ["input", "child"] as const) {
+      const harness = commandHarness();
+      const context = commandContext({ idle: true });
+      if (source === "input") {
+        context.ctx.ui.input = async () => {
+          throw new Error(rawError);
+        };
+      }
+      setupBtw(harness.pi, {
+        answerQuestion: async () => {
+          throw new Error(rawError);
+        },
+      });
+
+      await harness
+        .command()
+        .handler(source === "input" ? "" : "question", context.ctx);
+      await waitFor(() => context.notifications.length > 0);
+      const message = context.notifications.at(-1)?.message ?? "";
+      expect(message).not.toContain("\u001b");
+      expect(Buffer.byteLength(message, "utf8")).toBeLessThanOrEqual(
+        ERROR_MAX_BYTES + Buffer.byteLength("BTW failed: ", "utf8"),
+      );
+      expect(message).toEndWith("…");
+    }
   });
 
   test("renders malformed resumed history defensively", () => {

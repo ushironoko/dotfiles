@@ -4,6 +4,7 @@ import type {
   ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import {
+  AuthStorage,
   buildSessionContext,
   createAgentSession,
   DefaultResourceLoader,
@@ -25,7 +26,9 @@ const HISTORY_TYPE = "pi-harness:btw";
 const STATUS_KEY = "pi-harness-btw";
 const QUESTION_MAX_BYTES = 16 * 1024;
 const ANSWER_MAX_BYTES = 64 * 1024;
+const ERROR_MAX_BYTES = 4 * 1024;
 const TRUNCATION_MARKER = "\n\n[BTW answer truncated in parent history.]";
+const ERROR_TRUNCATION_MARKER = "…";
 
 // pi's grep/find wrappers auto-install missing rg/fd binaries. Keep the BTW
 // capability set to built-ins that never perform package or binary installs.
@@ -137,12 +140,14 @@ const byteLength = (value: string): number => Buffer.byteLength(value, "utf8");
 const truncateUtf8 = (
   value: string,
   maxBytes: number,
+  marker = TRUNCATION_MARKER,
 ): { text: string; truncated: boolean } => {
   if (byteLength(value) <= maxBytes) {
     return { text: value, truncated: false };
   }
 
-  const contentLimit = Math.max(0, maxBytes - byteLength(TRUNCATION_MARKER));
+  const retainedMarker = byteLength(marker) <= maxBytes ? marker : "";
+  const contentLimit = Math.max(0, maxBytes - byteLength(retainedMarker));
   let low = 0;
   let high = value.length;
   while (low < high) {
@@ -155,7 +160,7 @@ const truncateUtf8 = (
   const last = value.charCodeAt(end - 1);
   if (last >= 0xd800 && last <= 0xdbff) end -= 1;
   return {
-    text: `${value.slice(0, Math.max(0, end))}${TRUNCATION_MARKER}`,
+    text: `${value.slice(0, Math.max(0, end))}${retainedMarker}`,
     truncated: true,
   };
 };
@@ -240,6 +245,7 @@ const answerFromReadOnlyFork = async (
     agentDir,
     model: snapshot.model,
     modelRegistry: snapshot.modelRegistry,
+    authStorage: AuthStorage.inMemory(),
     thinkingLevel: snapshot.thinkingLevel,
     tools: [...BTW_READ_ONLY_TOOLS],
     excludeTools: [...BTW_DENIED_TOOLS],
@@ -315,8 +321,14 @@ const isHistoryData = (value: unknown): value is BtwHistoryData => {
   );
 };
 
-const errorText = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+const errorText = (error: unknown): string => {
+  const raw = error instanceof Error ? error.message : String(error);
+  return truncateUtf8(
+    stripTerminalControls(raw),
+    ERROR_MAX_BYTES,
+    ERROR_TRUNCATION_MARKER,
+  ).text;
+};
 
 interface BtwFeatureDependencies {
   answerQuestion?: typeof answerFromReadOnlyFork;
@@ -331,6 +343,25 @@ interface NativeAbortControllerLike {
 
 const createNativeAbortController = (): NativeAbortControllerLike =>
   new AbortController() as unknown as NativeAbortControllerLike;
+
+const waitForIdleOrAbort = async (
+  ctx: ExtensionCommandContext,
+  cancellation: BtwCancellationSignal,
+): Promise<boolean> => {
+  if (cancellation.aborted) return true;
+  let unsubscribe = (): void => {};
+  const aborted = new Promise<true>((resolve) => {
+    unsubscribe = cancellation.onAbort(() => resolve(true));
+  });
+  const idle = Promise.resolve()
+    .then(() => ctx.waitForIdle())
+    .then(() => false as const);
+  try {
+    return await Promise.race([idle, aborted]);
+  } finally {
+    unsubscribe();
+  }
+};
 
 const readQuestion = async (
   args: string,
@@ -366,6 +397,7 @@ const setupBtw = (
   const runtime = pi as unknown as ExtensionAPI;
   let running = false;
   let activeAbort: BtwCancellationController | undefined;
+  let activeOperation: Promise<void> | undefined;
   let sessionGeneration = 0;
   let branchGeneration = 0;
 
@@ -379,9 +411,11 @@ const setupBtw = (
     branchGeneration += 1;
     activeAbort?.abort();
   });
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
     sessionGeneration += 1;
     activeAbort?.abort();
+    const operation = activeOperation;
+    await operation;
   });
   runtime.on("session_compact", (_event, ctx) => {
     const visibleIds = new Set<string>();
@@ -507,15 +541,18 @@ const setupBtw = (
       // Return control to Pi after input validation so `/btw-cancel` can be
       // dispatched while the side question is running. The generation and
       // cancellation guards below own the detached operation's whole lifetime.
-      void (async () => {
+      const operation = Promise.resolve().then(async () => {
         let statusSet = false;
         try {
           if (!ctx.isIdle()) {
             ui.notify("Waiting for the parent session to settle...", "info");
           }
           while (!ctx.isIdle()) {
-            await ctx.waitForIdle();
-            if (invocationAbort.signal.aborted || invocationIsStale()) return;
+            const aborted = await waitForIdleOrAbort(
+              ctx,
+              invocationAbort.signal,
+            );
+            if (aborted || invocationIsStale()) return;
           }
           if (invocationAbort.signal.aborted || invocationIsStale()) return;
           if (!ctx.model) throw new Error("No model selected for BTW");
@@ -583,8 +620,11 @@ const setupBtw = (
             }
           }
           releaseInvocation();
+          if (activeOperation === operation) activeOperation = undefined;
         }
-      })();
+      });
+      activeOperation = operation;
+      void operation;
     },
   });
 };
@@ -599,6 +639,7 @@ export {
   type BtwHistoryData,
   type BtwSnapshot,
   BTW_READ_ONLY_TOOLS,
+  ERROR_MAX_BYTES,
   HISTORY_TYPE,
   QUESTION_MAX_BYTES,
   setupBtw as default,
