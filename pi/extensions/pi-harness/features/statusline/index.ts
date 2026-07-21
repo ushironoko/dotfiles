@@ -13,9 +13,9 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
-import { readFile, realpath } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { HarnessConfig } from "../../config";
 import { sanitizeChildEnv } from "../../lib/child-env";
 import { launchDetached, type DetachedSpawnFunction } from "../../lib/detached";
@@ -226,15 +226,55 @@ const validateInheritedWorktree = async (
       realpath(worktreeGitDir?.trim() ?? ""),
     ]);
     const linkedGitDirRoot = join(canonicalSourceCommon, "worktrees");
-    return (
-      canonicalSourceCommon === canonicalWorktreeCommon &&
-      canonicalTop === worktreePath &&
-      gitDir !== linkedGitDirRoot &&
-      isPathWithin(gitDir, linkedGitDirRoot) &&
-      (list ?? "")
-        .split("\n")
-        .some((line) => line === `worktree ${worktreePath}`)
-    );
+    const registered = (list ?? "")
+      .split("\n")
+      .some((line) => line === `worktree ${worktreePath}`);
+    if (
+      canonicalSourceCommon !== canonicalWorktreeCommon ||
+      canonicalTop !== worktreePath ||
+      gitDir === linkedGitDirRoot ||
+      !isPathWithin(gitDir, linkedGitDirRoot) ||
+      !registered
+    ) {
+      return false;
+    }
+
+    // Only inspect admin metadata after Git has proved that `gitDir` is a
+    // registered linked-worktree directory inside the trusted common dir.
+    // This prevents an attacker-controlled replacement path from making us
+    // read an arbitrary path (or FIFO) before the containment checks run.
+    const worktreeDotGit = join(worktreePath, ".git");
+    const backlinkFile = join(gitDir, "gitdir");
+    const [dotGitStats, backlinkStats] = await Promise.all([
+      lstat(worktreeDotGit),
+      lstat(backlinkFile),
+    ]);
+    if (
+      !dotGitStats.isFile() ||
+      !backlinkStats.isFile() ||
+      backlinkStats.size > 4_096
+    ) {
+      return false;
+    }
+
+    const backlinkContents = await readFile(backlinkFile, "utf8");
+    const backlink = backlinkContents.trim();
+    if (
+      backlink === "" ||
+      backlink.includes("\0") ||
+      backlink.includes("\r") ||
+      backlink.includes("\n")
+    ) {
+      return false;
+    }
+    const backlinkTarget = isAbsolute(backlink)
+      ? backlink
+      : resolve(gitDir, backlink);
+    const [canonicalDotGit, canonicalBacklink] = await Promise.all([
+      realpath(worktreeDotGit),
+      realpath(backlinkTarget),
+    ]);
+    return canonicalDotGit === canonicalBacklink;
   } catch {
     return false;
   }

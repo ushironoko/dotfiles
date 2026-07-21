@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { visibleWidth as piVisibleWidth } from "@earendil-works/pi-tui";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import setupStatusline, {
   parseNumstat,
@@ -133,6 +133,21 @@ const runGit = async (cwd: string, args: string[]): Promise<void> => {
     new Response(process.stderr).text(),
   ]);
   if (exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${stderr}`);
+};
+
+const gitText = async (cwd: string, args: string[]): Promise<string> => {
+  const process = Bun.spawn(["git", ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    process.exited,
+    new Response(process.stdout).text(),
+    new Response(process.stderr).text(),
+  ]);
+  if (exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${stderr}`);
+  return stdout.trim();
 };
 
 describe("Claude-compatible statusline rendering", () => {
@@ -375,6 +390,173 @@ describe("pi-harness statusline lifecycle", () => {
     await fs.symlink(replacement, worktree, "dir");
     await pi.emitAgentSettled();
 
+    expect(gitReads).toEqual([
+      canonicalProject,
+      canonicalWorktree,
+      canonicalWorktree,
+    ]);
+    expect(checkLaunches).toEqual([
+      [runner, canonicalWorktree, canonicalWorktree],
+    ]);
+  });
+
+  test("rejects a copied foreign linked-worktree identity", async () => {
+    const home = await tempDirectory("pi-statusline-worktree-foreign");
+    const project = join(home, "repo");
+    const worktreeA = join(home, "worktree-a");
+    const worktreeB = join(home, "worktree-b");
+    await fs.mkdir(project, { recursive: true });
+    await markAsProject(project);
+    await runGit(project, ["init", "-b", "main"]);
+    await runGit(project, ["config", "user.email", "test@example.com"]);
+    await runGit(project, ["config", "user.name", "Status Test"]);
+    await runGit(project, ["add", "."]);
+    await runGit(project, ["commit", "-m", "initial"]);
+    await runGit(project, ["worktree", "add", "-b", "topic-a", worktreeA]);
+    await runGit(project, ["worktree", "add", "-b", "topic-b", worktreeB]);
+    const canonicalProject = await fs.realpath(project);
+    const canonicalWorktreeA = await fs.realpath(worktreeA);
+    const canonicalWorktreeB = await fs.realpath(worktreeB);
+    const runner = join(
+      resolvePaths(home).claudeHooksDir,
+      "lib/statusline_checks_run.sh",
+    );
+    await fs.mkdir(dirname(runner), { recursive: true });
+    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+
+    const gitReads: string[] = [];
+    const checkLaunches: string[][] = [];
+    const pi = createFakePi({ cwd: canonicalProject, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home, [canonicalProject]), {
+      cacheDir: join(home, "cache"),
+      getGitStatus: async (cwd) => {
+        gitReads.push(cwd);
+        return gitStatus({ repository: undefined });
+      },
+      getBranch: async (cwd) =>
+        cwd === canonicalWorktreeA ? "topic-a" : "main",
+      spawnDetached: (_command, args) => {
+        checkLaunches.push(args);
+      },
+    });
+
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    await pi.emitToolResult({
+      type: "tool_result",
+      toolName: "worktree_create",
+      input: { name: "topic-a" },
+      content: [{ type: "text", text: canonicalWorktreeA }],
+      isError: false,
+    });
+    await pi.emitAgentSettled();
+    expect(checkLaunches).toHaveLength(1);
+
+    const foreignGitDir = await gitText(canonicalWorktreeB, [
+      "rev-parse",
+      "--absolute-git-dir",
+    ]);
+    await fs.rm(worktreeA, { recursive: true, force: true });
+    await fs.mkdir(worktreeA);
+    await fs.copyFile(
+      join(canonicalWorktreeB, ".git"),
+      join(canonicalWorktreeA, ".git"),
+    );
+
+    // Every pre-existing check still passes: the copied identity reports A as
+    // its top-level, uses the same common dir, points inside common/worktrees,
+    // and stale registration still lists A. Only B's backlink exposes the
+    // mismatch between the registered path and the detected admin identity.
+    const [sourceCommon, replacedCommon, replacedTop, replacedGitDir, list] =
+      await Promise.all([
+        gitText(canonicalProject, [
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-common-dir",
+        ]),
+        gitText(canonicalWorktreeA, [
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-common-dir",
+        ]),
+        gitText(canonicalWorktreeA, [
+          "rev-parse",
+          "--path-format=absolute",
+          "--show-toplevel",
+        ]),
+        gitText(canonicalWorktreeA, ["rev-parse", "--absolute-git-dir"]),
+        gitText(canonicalProject, ["worktree", "list", "--porcelain"]),
+      ]);
+    expect(await fs.realpath(replacedCommon)).toBe(
+      await fs.realpath(sourceCommon),
+    );
+    expect(await fs.realpath(replacedTop)).toBe(canonicalWorktreeA);
+    expect(await fs.realpath(replacedGitDir)).toBe(foreignGitDir);
+    expect(list).toContain(`worktree ${canonicalWorktreeA}`);
+    expect(list).toContain(`worktree ${canonicalWorktreeB}`);
+
+    await pi.emitAgentSettled();
+    expect(gitReads).toEqual([
+      canonicalProject,
+      canonicalWorktreeA,
+      canonicalWorktreeA,
+    ]);
+    expect(checkLaunches).toHaveLength(1);
+  });
+
+  test("accepts a valid relative admin gitdir backlink", async () => {
+    const home = await tempDirectory("pi-statusline-worktree-relative");
+    const project = join(home, "repo");
+    const worktree = join(home, "topic-worktree");
+    await fs.mkdir(project, { recursive: true });
+    await markAsProject(project);
+    await runGit(project, ["init", "-b", "main"]);
+    await runGit(project, ["config", "user.email", "test@example.com"]);
+    await runGit(project, ["config", "user.name", "Status Test"]);
+    await runGit(project, ["add", "."]);
+    await runGit(project, ["commit", "-m", "initial"]);
+    await runGit(project, ["worktree", "add", "-b", "topic", worktree]);
+    const canonicalProject = await fs.realpath(project);
+    const canonicalWorktree = await fs.realpath(worktree);
+    const gitDir = await gitText(canonicalWorktree, [
+      "rev-parse",
+      "--absolute-git-dir",
+    ]);
+    const backlinkFile = join(gitDir, "gitdir");
+    const relativeBacklink = relative(gitDir, join(canonicalWorktree, ".git"));
+    expect(isAbsolute(relativeBacklink)).toBe(false);
+    await fs.writeFile(backlinkFile, `${relativeBacklink}\n`);
+    const backlinkContents = await fs.readFile(backlinkFile, "utf8");
+    expect(backlinkContents.trim()).toBe(relativeBacklink);
+
+    const gitReads: string[] = [];
+    const checkLaunches: string[][] = [];
+    const runner = join(
+      resolvePaths(home).claudeHooksDir,
+      "lib/statusline_checks_run.sh",
+    );
+    await fs.mkdir(dirname(runner), { recursive: true });
+    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+    const pi = createFakePi({ cwd: canonicalProject, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home, [canonicalProject]), {
+      getGitStatus: async (cwd) => {
+        gitReads.push(cwd);
+        return gitStatus({ repository: undefined });
+      },
+      getBranch: async (cwd) => (cwd === canonicalWorktree ? "topic" : "main"),
+      spawnDetached: (_command, args) => {
+        checkLaunches.push(args);
+      },
+    });
+
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    await pi.emitToolResult({
+      type: "tool_result",
+      toolName: "worktree_create",
+      input: { name: "topic" },
+      content: [{ type: "text", text: canonicalWorktree }],
+      isError: false,
+    });
+    await pi.emitAgentSettled();
     expect(gitReads).toEqual([
       canonicalProject,
       canonicalWorktree,
