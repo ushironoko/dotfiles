@@ -67,7 +67,7 @@ interface CacheEntry {
   expiresAt: number;
 }
 
-interface ActiveAbortSignal {
+type ActiveAbortSignal = {
   readonly aborted: boolean;
   addEventListener(
     type: "abort",
@@ -75,7 +75,7 @@ interface ActiveAbortSignal {
     options?: { once?: boolean },
   ): void;
   removeEventListener(type: "abort", listener: () => void): void;
-}
+};
 
 interface AbortControllerLike {
   readonly signal: ActiveAbortSignal;

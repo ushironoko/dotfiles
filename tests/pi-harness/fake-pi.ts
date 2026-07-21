@@ -33,6 +33,7 @@ import type {
   TuiLike,
   PiEventName,
   PiLike,
+  SessionBeforeTreeEvent,
   SessionStartEvent,
   ToolCallBlockResult,
   ToolCallEvent,
@@ -72,6 +73,8 @@ interface HandlerStore {
   tool_call: PiEventHandler<"tool_call">[];
   tool_result: PiEventHandler<"tool_result">[];
   agent_settled: PiEventHandler<"agent_settled">[];
+  session_before_tree: PiEventHandler<"session_before_tree">[];
+  session_compact: PiEventHandler<"session_compact">[];
   session_shutdown: PiEventHandler<"session_shutdown">[];
   before_provider_request: PiEventHandler<"before_provider_request">[];
   after_provider_response: PiEventHandler<"after_provider_response">[];
@@ -91,11 +94,24 @@ export interface FakePi extends PiLike {
     payload: ToolResultEvent,
   ): Promise<ToolResultPatch | undefined>;
   emitAgentSettled(payload?: GenericEvent): Promise<void>;
+  emitSessionBeforeTree(payload: SessionBeforeTreeEvent): Promise<void>;
+  emitSessionCompact(payload?: GenericEvent): Promise<void>;
   emitSessionShutdown(payload?: GenericEvent): Promise<void>;
   emitBeforeProviderRequest(payload: GenericEvent): Promise<void>;
   emitAfterProviderResponse(payload: GenericEvent): Promise<void>;
   /** Tools registered via registerTool, in order. */
   readonly tools: ToolDefLike[];
+  /** Extension command names registered through the public API. */
+  readonly commands: ReadonlySet<string>;
+  /** Extension shortcuts registered through the public API. */
+  readonly shortcuts: ReadonlySet<string>;
+  /** Custom-entry renderer names registered through the public API. */
+  readonly entryRenderers: ReadonlySet<string>;
+  /** Entries appended through the public extension API. */
+  readonly appendedEntries: readonly {
+    customType: string;
+    data: unknown;
+  }[];
   /** Notifications captured from ctx.ui.notify. */
   readonly notifications: Notification[];
   /** Widget lines captured from ctx.ui.setWidget, keyed by widget id. */
@@ -140,11 +156,17 @@ export function createFakePi(
     tool_call: [],
     tool_result: [],
     agent_settled: [],
+    session_before_tree: [],
+    session_compact: [],
     session_shutdown: [],
     before_provider_request: [],
     after_provider_response: [],
   };
   const tools: ToolDefLike[] = [];
+  const commands = new Set<string>();
+  const shortcuts = new Set<string>();
+  const entryRenderers = new Set<string>();
+  const appendedEntries: { customType: string; data: unknown }[] = [];
   const notifications: Notification[] = [];
   const widgets = new Map<string, string[] | undefined>();
   const confirmQueue: boolean[] = [];
@@ -223,6 +245,8 @@ export function createFakePi(
     tool_call: (handler) => store.tool_call.push(handler),
     tool_result: (handler) => store.tool_result.push(handler),
     agent_settled: (handler) => store.agent_settled.push(handler),
+    session_before_tree: (handler) => store.session_before_tree.push(handler),
+    session_compact: (handler) => store.session_compact.push(handler),
     session_shutdown: (handler) => store.session_shutdown.push(handler),
     before_provider_request: (handler) =>
       store.before_provider_request.push(handler),
@@ -236,6 +260,21 @@ export function createFakePi(
     },
     registerTool(tool) {
       tools.push(tool);
+    },
+    registerCommand(name, _options) {
+      commands.add(name);
+    },
+    registerShortcut(shortcut, _options) {
+      shortcuts.add(shortcut);
+    },
+    registerEntryRenderer(customType, _renderer) {
+      entryRenderers.add(customType);
+    },
+    appendEntry(customType, data) {
+      appendedEntries.push({ customType, data });
+    },
+    getThinkingLevel() {
+      return "off";
     },
     async emitSessionStart(payload) {
       for (const handler of store.session_start) await handler(payload, ctx);
@@ -278,6 +317,14 @@ export function createFakePi(
     async emitAgentSettled(payload = { type: "agent_settled" }) {
       for (const handler of store.agent_settled) await handler(payload, ctx);
     },
+    async emitSessionBeforeTree(payload) {
+      for (const handler of store.session_before_tree) {
+        await handler(payload, ctx);
+      }
+    },
+    async emitSessionCompact(payload = { type: "session_compact" }) {
+      for (const handler of store.session_compact) await handler(payload, ctx);
+    },
     async emitSessionShutdown(payload = { type: "session_shutdown" }) {
       for (const handler of store.session_shutdown) await handler(payload, ctx);
     },
@@ -292,6 +339,10 @@ export function createFakePi(
       }
     },
     tools,
+    commands,
+    shortcuts,
+    entryRenderers,
+    appendedEntries,
     notifications,
     widgets,
     renderFooter(width) {
