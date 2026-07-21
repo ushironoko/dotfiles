@@ -481,15 +481,20 @@ const pooledSpawn = () => {
   };
 };
 
-const writeAgent = async (home: string): Promise<void> => {
+const writeAgent = async (
+  home: string,
+  names: readonly string[] = ["worker"],
+): Promise<void> => {
   const dir = resolvePaths(home).claudeAgentsDir;
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    join(dir, "worker.md"),
-    ["---", "name: worker", "description: worker", "---", "Work safely."].join(
-      "\n",
-    ),
-  );
+  for (const name of names) {
+    await fs.writeFile(
+      join(dir, `${name}.md`),
+      ["---", `name: ${name}`, `description: ${name}`, "---", "Work safely."].join(
+        "\n",
+      ),
+    );
+  }
 };
 
 describe("child-run subagent integration", () => {
@@ -1104,6 +1109,90 @@ describe("child-run subagent integration", () => {
     const notification = JSON.stringify(runtime.getSentMessages()[0]?.message);
     expect(notification).toContain("Workflow completed: 1/1");
     expect(notification).toContain("workflow background answer");
+  });
+
+  test("retains every reviewer identity in an oversized four-task background result", async () => {
+    const home = await setupTestDirectory("pi-child-background-workflow-budget");
+    tempDirectories.push(home);
+    const reviewers = [
+      "codex-reviewer",
+      "reviewer-b",
+      "reviewer-c",
+      "reviewer-d",
+    ];
+    await writeAgent(home, reviewers);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    const spawnFn: SpawnFunction = (...args) => {
+      const task = args[1].at(-1) ?? "";
+      const reviewer = task.replace(/^Task: lens /, "");
+      // Every byte after the lens expands to two bytes in JSON. This catches a
+      // second prefix truncation at the notification framing boundary.
+      return scriptedSpawn(
+        `LENS-${reviewer}-${'"\\\n'.repeat(20_000)}`,
+      )(...args);
+    };
+    setupWorkflow(runtime.pi, makeConfig(home), {
+      childRuns,
+      spawnFn,
+      validateCwd: async (candidate) => ({
+        ok: true,
+        canonicalCwd: candidate,
+      }),
+    });
+    const tool = runtime.tools.find((item) => item.name === "workflow")!;
+    await runtime.emit("agent_start", { type: "agent_start" });
+
+    const accepted = (await Reflect.apply(tool.execute, undefined, [
+      "workflow-budget-parent",
+      {
+        stages: [
+          {
+            mode: "fanout",
+            tasks: reviewers.map((agentType) => ({
+              agentType,
+              task: `lens ${agentType}`,
+            })),
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      runtime.ctx,
+    ])) as { details: { background: { invocationId: string } } };
+    await childRuns.background!.drain(accepted.details.background.invocationId);
+    await runtime.emit("message_end", {
+      type: "message_end",
+      message: { role: "toolResult", toolCallId: "workflow-budget-parent" },
+    });
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+
+    const message = runtime.getSentMessages()[0]?.message;
+    const messageContent =
+      typeof message === "object" &&
+      message !== null &&
+      "content" in message &&
+      typeof message.content === "string"
+        ? message.content
+        : "";
+    expect(Buffer.byteLength(messageContent, "utf8")).toBeLessThanOrEqual(
+      50 * 1024,
+    );
+    const encodedResult = messageContent
+      .split("BEGIN_UNTRUSTED_CHILD_RESULT_JSON\n")[1]
+      ?.split("\nEND_UNTRUSTED_CHILD_RESULT_JSON")[0];
+    expect(encodedResult).toBeDefined();
+    const report = (JSON.parse(encodedResult ?? "{}") as { result?: unknown })
+      .result;
+    expect(typeof report).toBe("string");
+    for (const [index, reviewer] of reviewers.entries()) {
+      const next = reviewers[index + 1];
+      const section = String(report).split(`### [${reviewer}]`)[1]?.split(
+        next === undefined ? "\u0000" : `### [${next}]`,
+      )[0];
+      expect(section).toContain(`LENS-${reviewer}-`);
+    }
+    expect(report).toContain("Workflow completed: 4/4");
   });
 
   test("shares the four-child process limit across background subagent and workflow", async () => {

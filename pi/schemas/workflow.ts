@@ -53,6 +53,14 @@ const WorkflowTaskParameters = object(
         ),
       ),
     ),
+    readOnly: optional(
+      pipe(
+        boolean(),
+        description(
+          "Restrict the child to the read tool; the task must carry a validated transport-safe snapshot path",
+        ),
+      ),
+    ),
     writeScope: optional(
       pipe(
         array(string()),

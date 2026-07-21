@@ -77,6 +77,8 @@ const expectCompleteReviewPrompt = (stage: Record<string, unknown>): void => {
       String(task.task).match(/^Plan Review Transport: path-base64-v1$/gm),
     ).toHaveLength(1);
     expect(task.task).toContain("Plan Path Encoding: base64 (UTF-8)");
+    expect(task.task).toContain("Plan Safe Path Transport: restricted-ascii-v1");
+    expect(task.task).toContain("<validated-plan-path>");
     expect(task.task).toContain("<base64-plan-path>");
     expect(task.task).toContain("read the exact file from disk");
     expect(task.task).not.toContain("Plan File: <path>");
@@ -97,12 +99,15 @@ describe("pi plan-review skill workflow contract", () => {
     expect(automaticTasks.map((task) => task.agentType)).toEqual([
       "rust-reviewer",
       "codex-reviewer",
-      "similarity",
       "tdd-reviewer",
     ]);
     expect(
-      automaticTasks.find((task) => task.agentType === "similarity")?.isolation,
-    ).toBe("worktree");
+      automaticTasks.map((task) => [task.agentType, task.readOnly]),
+    ).toEqual([
+      ["rust-reviewer", true],
+      ["codex-reviewer", undefined],
+      ["tdd-reviewer", true],
+    ]);
     expectCompleteReviewPrompt(automatic);
 
     const optOut = firstStage(
@@ -121,9 +126,10 @@ describe("pi plan-review skill workflow contract", () => {
     expect(skill).toMatch(
       /\|\s*codex CLI available\s*\|\s*`codex-reviewer`\s*\|/,
     );
-    expect(skill).toMatch(
+    expect(skill).not.toMatch(
       /\|\s*Refactoring-type keywords present\s*\|\s*`similarity`\s*\|/,
     );
+    expect(skill).toContain("Never add `similarity` to a read-only roster");
     expect(skill).toMatch(
       /\|\s*Test infrastructure exists\s*\|\s*`tdd-reviewer`\s*\|/,
     );
@@ -149,16 +155,12 @@ describe("pi plan-review skill workflow contract", () => {
     const optOutAgentTypes = (optOut.tasks as Record<string, unknown>[]).map(
       (task) => task.agentType,
     );
-    expect(optOutAgentTypes).toEqual([
-      "rust-reviewer",
-      "similarity",
-      "tdd-reviewer",
-    ]);
+    expect(optOutAgentTypes).toEqual(["rust-reviewer", "tdd-reviewer"]);
     expect(
-      (optOut.tasks as Record<string, unknown>[]).find(
-        (task) => task.agentType === "similarity",
-      )?.isolation,
-    ).toBe("worktree");
+      (optOut.tasks as Record<string, unknown>[]).every(
+        (task) => task.readOnly === true,
+      ),
+    ).toBeTrue();
     for (const codexAgentType of CODEX_AGENT_TYPES) {
       expect(optOutAgentTypes).not.toContain(codexAgentType);
     }
@@ -175,41 +177,22 @@ describe("pi plan-review skill workflow contract", () => {
     expect(skill).toContain("Do not silently fall back to `subagent`");
   });
 
-  test("preserves arbitrary manual agents and isolates write-capable roles", () => {
+  test("rejects implementation roles and restricts direct manual review", () => {
     expect(skill).toContain(
-      "Any agent whose definition exists may be selected manually",
+      "Any defined review agent except `similarity`, `codex-poc`, and `codex-runner`",
     );
-    expect(skill).toContain("preserves the previous manual interface");
+    for (const unsupported of ["similarity", "codex-poc", "codex-runner"]) {
+      expect(skill).not.toContain(
+        `"name": "plan-review-manual-${unsupported}"`,
+      );
+    }
 
-    const poc = firstStage(
-      expectValidWorkflowExample("plan-review-manual-codex-poc"),
+    const manual = firstStage(expectValidWorkflowExample("plan-review-manual"));
+    const [manualTask] = manual.tasks as Record<string, unknown>[];
+    expect(manualTask?.readOnly).toBe(true);
+    expect(skill).toContain(
+      "For `codex-reviewer` only, omit `readOnly`",
     );
-    expect(poc.mode).toBe("single");
-    expect(poc.tasks).toHaveLength(1);
-    const [pocTask] = poc.tasks as Record<string, unknown>[];
-    expect(pocTask?.agentType).toBe("codex-poc");
-    expect(pocTask?.isolation).toBe("worktree");
-    expectCompleteReviewPrompt(poc);
-
-    const similarity = firstStage(
-      expectValidWorkflowExample("plan-review-manual-similarity"),
-    );
-    expect(similarity.mode).toBe("single");
-    expect(similarity.tasks).toHaveLength(1);
-    const [similarityTask] = similarity.tasks as Record<string, unknown>[];
-    expect(similarityTask?.agentType).toBe("similarity");
-    expect(similarityTask?.isolation).toBe("worktree");
-    expectCompleteReviewPrompt(similarity);
-
-    const runner = firstStage(
-      expectValidWorkflowExample("plan-review-manual-codex-runner"),
-    );
-    expect(runner.mode).toBe("single");
-    expect(runner.tasks).toHaveLength(1);
-    const [runnerTask] = runner.tasks as Record<string, unknown>[];
-    expect(runnerTask?.agentType).toBe("codex-runner");
-    expect(runnerTask?.isolation).toBe("worktree");
-    expectCompleteReviewPrompt(runner);
   });
 
   test("keeps synthesis with the parent and classifies incomplete coverage", () => {
@@ -233,9 +216,12 @@ describe("pi plan-review skill workflow contract", () => {
   test("uses one collision-safe untrusted artifact transport", () => {
     const normalized = artifactTransportSection.replace(/\s+/g, " ");
     expect(skill).toContain("encode-plan-path.ts` with no arguments");
-    expect(normalized).toContain("exact UTF-8 read-only snapshot path");
+    expect(skill).toContain("global snapshot lock");
+    expect(skill).toContain("must not read the Plan body");
+    expect(skill).toContain("no authority to change reviewer selection");
+    expect(normalized).toContain("transport-safe ASCII path characters");
     expect(normalized).toContain("Base64 cannot contain braces");
-    expect(normalized).toContain("never embed the raw plan content");
+    expect(normalized).toContain("Never embed Plan content");
 
     for (const fragment of [
       "Read-only plan review",
@@ -245,6 +231,10 @@ describe("pi plan-review skill workflow contract", () => {
       "Potential problems and risks",
       "Improvement suggestions",
       "Overlooked considerations",
+      "Plan Safe Path Transport: restricted-ascii-v1",
+      "<validated-plan-path>",
+      "has no Bash, write, or edit tool",
+      "at most 6 KiB of UTF-8 text",
       "Plan Review Transport: path-base64-v1",
       "Plan Path Encoding: base64 (UTF-8)",
       "<base64-plan-path>",

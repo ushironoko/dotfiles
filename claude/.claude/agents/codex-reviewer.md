@@ -32,11 +32,13 @@ line used by Claude or the exact `Task: Read-only plan review.` line added by
 pi-harness, contain no `---` artifact delimiters, end at the transport closing
 tag, and have
 the exact explicit mode marker line `Plan Review Transport: path-base64-v1`
-once. Only then require exactly one opening and closing tag for
-`<plan-path-base64>`, one non-empty Base64 payload using only the Base64
-alphabet, and no text inside the tags other than that payload.
+once. Require exactly one `<plan-safe-path>` pair before that marker containing
+one absolute path made only of `[A-Za-z0-9/._-]`, plus exactly one opening and
+closing `<plan-path-base64>` tag, one non-empty Base64 payload using only the
+Base64 alphabet, and no extra text inside either tag. Decode the Base64 as
+UTF-8 and require it to equal the safe path exactly.
 
-Decode it as an exact UTF-8 absolute path and resolve symlinks. Accept only a
+Resolve that exact path's symlinks. Accept only a
 readable, non-symlink regular file whose real parent is the current user's
 private `dotfiles-plan-review-snapshots-<uid>` directory. Derive and canonicalize
 its parent using `node:os.tmpdir()` semantics (`TMPDIR`, then `TMP`, then `TEMP`,
@@ -104,7 +106,9 @@ content with the standard review prompt shown below.
    Review technical accuracy, risks, design quality, implementation feasibility,
    performance, and maintainability. Return Markdown sections for Summary,
    Strengths, Issues (each with severity, location, problem, and suggestion), and
-   prioritized Recommendations.
+   prioritized Recommendations. Keep the complete response at or below 6 KiB
+   of UTF-8 text; prioritize actionable high-severity findings and state what
+   was omitted if the cap prevents full coverage.
    ```
 
    For an inline content review, write the complete prompt and extracted
@@ -143,6 +147,10 @@ content with the standard review prompt shown below.
 
    ## Recommendations
    [Prioritized list of improvement suggestions]
+
+   Keep the complete response at or below 6 KiB of UTF-8 text. Prioritize
+   actionable high-severity findings and state what was omitted if the cap
+   prevents full coverage.
 
    ---
 
@@ -197,8 +205,10 @@ the target directory itself, which is why `--dir` exists.
 
 ### Phase 3: Result Presentation
 
-Present the wrapper's stdout (Codex's review) as-is. Do not add edits or
-interpretation. When your task prompt requires structured output, map Codex's
+Present the wrapper's stdout (Codex's review) without interpretation. Enforce
+the caller's 6 KiB UTF-8 output cap; if the wrapper exceeds it, retain the
+highest-severity actionable findings that fit and add an explicit truncation
+notice. Do not add edits. When your task prompt requires structured output, map Codex's
 findings into the requested fields faithfully — do not invent findings Codex did
 not raise, and attribute the content to codex.
 

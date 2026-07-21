@@ -311,6 +311,38 @@ describe("pi-harness workflow", () => {
     expect(details.total).toBe(2);
   });
 
+  test("enforces a read-only child tool profile", async () => {
+    const home = await makeTempDirectory("pi-workflow-read-only");
+    await writeAgents(home, ["rust-reviewer"]);
+    const { records, spawnFn } = makeSpawnFn(() => ({ text: "reviewed" }));
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), { spawnFn });
+
+    await executeTool(
+      findWorkflowTool(pi.tools),
+      {
+        stages: [
+          {
+            mode: "single",
+            tasks: [
+              {
+                agentType: "rust-reviewer",
+                task: "review",
+                readOnly: true,
+              },
+            ],
+          },
+        ],
+      },
+      pi.ctx,
+    );
+
+    expect(records).toHaveLength(1);
+    const toolsIndex = records[0]?.args.indexOf("--tools") ?? -1;
+    expect(toolsIndex).toBeGreaterThanOrEqual(0);
+    expect(records[0]?.args[toolsIndex + 1]).toBe("read");
+  });
+
   test("publishes one live child run per stage task while preserving degradation", async () => {
     const home = await makeTempDirectory("pi-workflow-child-runs");
     await writeAgents(home, ["codex-reviewer"]);
@@ -422,6 +454,38 @@ describe("pi-harness workflow", () => {
     expect(text).toContain("BRAVO-");
     expect(text.match(/### \[codex-reviewer\]/g)).toHaveLength(2);
     expect(text).toContain("2/2");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(24 * 1024);
+  });
+
+  test("retains structural records for the maximum 64-task workflow", async () => {
+    const home = await makeTempDirectory("pi-workflow-maximum-budget");
+    await writeAgents(home, ["codex-reviewer"]);
+    const { spawnFn } = makeSpawnFn((taskArg) => ({
+      text: `${taskArg}-${"x".repeat(60_000)}`,
+    }));
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), { spawnFn });
+
+    const result = await executeTool(
+      findWorkflowTool(pi.tools),
+      {
+        stages: Array.from({ length: 8 }, (_, stageIndex) => ({
+          name: `stage-${stageIndex + 1}`,
+          mode: "fanout",
+          tasks: Array.from({ length: 8 }, (_, taskIndex) => ({
+            agentType: "codex-reviewer",
+            task: `s${stageIndex + 1}t${taskIndex + 1}`,
+          })),
+        })),
+      },
+      pi.ctx,
+    );
+
+    const { text } = getResult(result);
+    expect(text.match(/### \[codex-reviewer\]/g)).toHaveLength(64);
+    expect(text).toContain("## stage-8 (fanout)");
+    expect(text).toContain("64/64");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(24 * 1024);
   });
 
   test("continues on individual task failure and reports the degradation", async () => {

@@ -39,6 +39,11 @@ export const WorkflowParameters = {
                   description:
                     "Provision an isolated linked worktree as the task cwd (required for codex-poc)",
                 },
+                readOnly: {
+                  type: "boolean",
+                  description:
+                    "Restrict the child to the read tool; the task must carry a validated transport-safe snapshot path",
+                },
                 writeScope: {
                   type: "array",
                   items: { type: "string" },
