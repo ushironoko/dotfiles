@@ -103,6 +103,23 @@ validator:
 - All codex invocations go through `~/.claude/hooks/lib/codex-stage.sh`
   (auth preflight, portable timeout, `--ephemeral` for parallel safety, never
   `-m` — `~/.codex/config.toml` owns model selection).
+- Reviewer `prompt` commands in non-interactive children must match the
+  deterministic permission contract:
+  - For a short literal prompt, use
+    `printf '%s' '<instruction>' | ~/.claude/hooks/lib/codex-stage.sh prompt --timeout 600`
+    from the desired cwd, or add one properly shell-quoted literal
+    `--dir '/literal/absolute path'` argument.
+  - For a large prompt or artifact, first use the explicitly allowed
+    `bun -e`/`node:fs/promises` `mkdtemp` command from `codex-reviewer.md` to
+    allocate an exclusive mode-`0700` `/tmp/codex-reviewer-*` directory. Paste
+    the printed path literally (never through shell expansion), use the `write`
+    tool to create its `prompt.md`, and pipe only the short literal instruction
+    `Read /tmp/.../prompt.md completely and follow it exactly.` through the same
+    command. Clean up the private directory afterward with the documented
+    literal-path `bun -e` removal command.
+  - Never use a heredoc, here-string, input redirection, `--dir "$PWD"`, a
+    shell variable, or command substitution. Do not replace the wrapper with a
+    direct `codex` fallback.
 - For codex reviewer lens diversity use `prompt` mode (a focused prompt on
   stdin); `review` mode is a single holistic diff pass and takes no focus, so
   use it at most once per fan-out stage.
@@ -141,7 +158,10 @@ validator:
 
 Every reviewer is codex; you synthesize after the automatic background-
 completion message arrives, not after the immediate acceptance result. Replace
-`<REPO>` with the absolute path to the repo or worktree under review.
+`<REPO>` with the concrete absolute path to the repo or worktree under review
+before submitting the plan. Replace the entire `'<REPO>'` token with that path
+properly shell-quoted as one literal `--dir` argument; the child must not
+substitute `$PWD`, a shell variable, or `$(...)`.
 
 ```json
 {
@@ -152,15 +172,15 @@ completion message arrives, not after the immediate acceptance result. Replace
       "tasks": [
         {
           "agentType": "codex-reviewer",
-          "task": "Holistically review the uncommitted changes in <REPO>. Run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir <REPO> (Bash timeout 600000 ms). Report codex's findings faithfully, each with severity (Critical|High|Medium|Low), file:line, problem, and suggestion. Label the report reviewer=codex:holistic."
+          "task": "Holistically review the uncommitted changes in <REPO>. Run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir '<REPO>' (Bash timeout 600000 ms). Report codex's findings faithfully, each with severity (Critical|High|Medium|Low), file:line, problem, and suggestion. Label the report reviewer=codex:holistic."
         },
         {
           "agentType": "codex-reviewer",
-          "task": "Review the uncommitted changes in <REPO> for CORRECTNESS BUGS only. Run codex in prompt mode: printf '%s' 'Read the uncommitted diff (git diff) in this repository and report ONLY correctness bugs — logic errors, missing cases, broken invariants, off-by-one — each with file:line.' | ~/.claude/hooks/lib/codex-stage.sh prompt --dir <REPO> --timeout 600 (Bash timeout 600000 ms). Label the report reviewer=codex:correctness."
+          "task": "Review the uncommitted changes in <REPO> for CORRECTNESS BUGS only. Run codex in prompt mode: printf '%s' 'Read the uncommitted diff (git diff) in this repository and report ONLY correctness bugs — logic errors, missing cases, broken invariants, off-by-one — each with file:line.' | ~/.claude/hooks/lib/codex-stage.sh prompt --dir '<REPO>' --timeout 600 (Bash timeout 600000 ms). Label the report reviewer=codex:correctness."
         },
         {
           "agentType": "codex-reviewer",
-          "task": "Review the uncommitted changes in <REPO> for CONVENTION VIOLATIONS and risky patterns only. Run codex in prompt mode: printf '%s' 'Read the uncommitted diff (git diff) in this repository and report ONLY convention violations and risky patterns, each with file:line.' | ~/.claude/hooks/lib/codex-stage.sh prompt --dir <REPO> --timeout 600 (Bash timeout 600000 ms). Label the report reviewer=codex:conventions."
+          "task": "Review the uncommitted changes in <REPO> for CONVENTION VIOLATIONS and risky patterns only. Run codex in prompt mode: printf '%s' 'Read the uncommitted diff (git diff) in this repository and report ONLY convention violations and risky patterns, each with file:line.' | ~/.claude/hooks/lib/codex-stage.sh prompt --dir '<REPO>' --timeout 600 (Bash timeout 600000 ms). Label the report reviewer=codex:conventions."
         }
       ]
     }
@@ -220,11 +240,11 @@ verification).
       "tasks": [
         {
           "agentType": "codex-reviewer",
-          "task": "The implement stage's PoC reports (with each builder's worktree absolute path) follow:\n{previous}\nReview the PoC labeled builder=codex:direct: find its worktree absolute path in the reports above, then run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir <that worktree> (Bash timeout 600000 ms). Report findings with severity and file:line; note builder=codex:direct."
+          "task": "The implement stage's PoC reports (with each builder's worktree absolute path) follow:\n{previous}\nReview the PoC labeled builder=codex:direct: find its worktree absolute path in the reports above, then run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir '<that worktree>' (Bash timeout 600000 ms). Report findings with severity and file:line; note builder=codex:direct."
         },
         {
           "agentType": "codex-reviewer",
-          "task": "The implement stage's PoC reports (with each builder's worktree absolute path) follow:\n{previous}\nReview the PoC labeled builder=codex:robust: find its worktree absolute path in the reports above, then run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir <that worktree> (Bash timeout 600000 ms). Report findings with severity and file:line; note builder=codex:robust."
+          "task": "The implement stage's PoC reports (with each builder's worktree absolute path) follow:\n{previous}\nReview the PoC labeled builder=codex:robust: find its worktree absolute path in the reports above, then run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir '<that worktree>' (Bash timeout 600000 ms). Report findings with severity and file:line; note builder=codex:robust."
         }
       ]
     }
@@ -242,8 +262,10 @@ delegate it to a plan stage.
 The PoC worktree paths are engine-assigned and unknown when you write the plan,
 so the review tasks reference them through `{previous}` — the engine splices the
 implement stage's reports (including each worktree absolute path) into the
-review prompts at run time. This keeps the implement→review flow in a single
-`workflow` call.
+review prompts at run time. The reviewer must copy the selected concrete path
+as one properly shell-quoted literal `--dir '/absolute path'` argument, never
+through a shell variable or substitution. This keeps the implement→review flow
+in a single `workflow` call.
 
 An optional Claude PoC is +α: append to the implement roster a Claude-family
 task with `"isolation": "worktree"` — the codex PoCs remain the mandatory
@@ -270,13 +292,13 @@ into.
           "agentType": "codex-runner",
           "cwd": "<REPO>/packages/a",
           "writeScope": ["packages/a"],
-          "task": "Delegate this write task to codex, scoped to <REPO>/packages/a (--dir). Touch ONLY files under packages/a; do not write outside it. Spec: <what to create/modify under packages/a, and how to verify>. Run: ~/.claude/hooks/lib/codex-stage.sh run --dir <REPO>/packages/a --timeout 600 (task on stdin; Bash timeout 600000 ms). Report codex's summary, git diff --stat, and status (complete or incomplete)."
+          "task": "Delegate this write task to codex, scoped to <REPO>/packages/a (--dir). Touch ONLY files under packages/a; do not write outside it. Spec: <what to create/modify under packages/a, and how to verify>. Run: ~/.claude/hooks/lib/codex-stage.sh run --dir '<REPO>/packages/a' --timeout 600 (task on stdin; Bash timeout 600000 ms). Report codex's summary, git diff --stat, and status (complete or incomplete)."
         },
         {
           "agentType": "codex-runner",
           "cwd": "<REPO>/packages/b",
           "writeScope": ["packages/b"],
-          "task": "Delegate this write task to codex, scoped to <REPO>/packages/b (--dir). Touch ONLY files under packages/b; do not write outside it. Spec: <what to create/modify under packages/b, and how to verify>. Run: ~/.claude/hooks/lib/codex-stage.sh run --dir <REPO>/packages/b --timeout 600 (task on stdin; Bash timeout 600000 ms). Report codex's summary, git diff --stat, and status (complete or incomplete)."
+          "task": "Delegate this write task to codex, scoped to <REPO>/packages/b (--dir). Touch ONLY files under packages/b; do not write outside it. Spec: <what to create/modify under packages/b, and how to verify>. Run: ~/.claude/hooks/lib/codex-stage.sh run --dir '<REPO>/packages/b' --timeout 600 (task on stdin; Bash timeout 600000 ms). Report codex's summary, git diff --stat, and status (complete or incomplete)."
         }
       ]
     },
@@ -286,7 +308,7 @@ into.
       "tasks": [
         {
           "agentType": "codex-reviewer",
-          "task": "Review the aggregate uncommitted changes in <REPO>. Run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir <REPO> (Bash timeout 600000 ms). This aggregate review is the authoritative view of the parallel writes (per-runner diffstats overlap). Report findings with severity and file:line."
+          "task": "Review the aggregate uncommitted changes in <REPO>. Run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir '<REPO>' (Bash timeout 600000 ms). This aggregate review is the authoritative view of the parallel writes (per-runner diffstats overlap). Report findings with severity and file:line."
         }
       ]
     }
@@ -301,6 +323,24 @@ codex-sandbox-enforced (writable root = the `--dir` target). Nothing is
 committed — you decide what to keep from the aggregate diff.
 
 ## Wrapper quick reference
+
+Permission-safe reviewer prompt input:
+
+```bash
+# Desired cwd is already active: omit --dir so both pipeline segments are explicit allows.
+printf '%s' 'Review the uncommitted diff for correctness bugs only.' |
+  ~/.claude/hooks/lib/codex-stage.sh prompt --timeout 600
+
+# A different cwd: replace the example with one shell-quoted literal absolute path.
+printf '%s' 'Review the uncommitted diff for correctness bugs only.' |
+  ~/.claude/hooks/lib/codex-stage.sh prompt --dir '/literal/absolute path' --timeout 600
+```
+
+For a large artifact, first allocate the private directory with the documented
+`mkdtemp` command, write its `prompt.md`, and change the literal instruction to
+`Read /tmp/codex-reviewer-a1B2C3/prompt.md completely and follow it exactly.`
+The `codex-reviewer` agent definition contains the matching literal-path cleanup
+command.
 
 ```bash
 ~/.claude/hooks/lib/codex-stage.sh review [--uncommitted | --base <branch> | --commit <sha>] --dir <abs> [--timeout <sec>]

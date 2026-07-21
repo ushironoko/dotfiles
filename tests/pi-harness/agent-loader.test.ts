@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { existsSync, promises as fs, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
+import {
+  DEFAULT_PERMISSION_JUDGE_CONFIG,
+  type HarnessConfig,
+} from "../../pi/extensions/pi-harness/config";
+import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
 import setupSubagent from "../../pi/extensions/pi-harness/features/subagent/index";
 import {
   CHILD_PERMISSION_SIGNAL_ENV,
@@ -576,6 +580,148 @@ describe("pi-harness subagent", () => {
       pi.ctx,
     );
     await expect(execution).rejects.toThrow(/stopReason length/);
+  });
+
+  test("runs the documented codex-reviewer pipeline in a non-interactive child", async () => {
+    const home = await makeTempDirectory("pi-subagent-codex-reviewer");
+    const agentsDirectory = resolvePaths(home).claudeAgentsDir;
+    const wrapperDirectory = join(home, ".claude", "hooks", "lib");
+    const wrapperPath = join(wrapperDirectory, "codex-stage.sh");
+    const privatePromptDirectory = join(home, "codex-reviewer-a1B2C3");
+    const promptArtifact = join(privatePromptDirectory, "prompt.md");
+    const receivedPrompt = join(home, "mock-codex-stdin.txt");
+    await fs.mkdir(agentsDirectory, { recursive: true });
+    await fs.mkdir(wrapperDirectory, { recursive: true });
+    await fs.mkdir(privatePromptDirectory, { mode: 0o700 });
+    await fs.copyFile(
+      join(import.meta.dir, "../../claude/.claude/agents/codex-reviewer.md"),
+      join(agentsDirectory, "codex-reviewer.md"),
+    );
+    await fs.writeFile(promptArtifact, "Review this integration artifact.");
+    await fs.writeFile(
+      wrapperPath,
+      [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        'cat > "$MOCK_CODEX_STDIN"',
+        "printf '%s\\n' 'mock codex reached'",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    let policyDecision: Awaited<
+      ReturnType<ReturnType<typeof createFakePi>["emitToolCall"]>
+    > = undefined;
+    const spawnFn: SpawnFunction = (_command, args, launchOptions) => {
+      const promptFlag = args.indexOf("--append-system-prompt");
+      const instructions = readFileSync(args[promptFlag + 1] ?? "", "utf8");
+      const wrapperExamples = [
+        ...instructions.matchAll(/```bash\n([\s\S]*?)```/g),
+      ]
+        .map((match) => match[1] ?? "")
+        .filter((example) => example.includes("codex-stage.sh"))
+        .join("\n");
+      expect(wrapperExamples).not.toContain("<<");
+      expect(wrapperExamples).not.toContain('--dir "$PWD"');
+      const commandMatch =
+        /```bash\n[ \t]*(printf '%s' 'Read \/tmp\/codex-reviewer-a1B2C3\/prompt\.md completely and follow it exactly\.' \|\n[ \t]+~\/\.claude\/hooks\/lib\/codex-stage\.sh prompt --timeout 600)\n[ \t]*```/.exec(
+          instructions,
+        );
+      if (commandMatch?.[1] === undefined) {
+        throw new Error("documented default-cwd reviewer pipeline not found");
+      }
+      const documentedCommand = commandMatch[1].replaceAll(
+        "/tmp/codex-reviewer-a1B2C3/prompt.md",
+        promptArtifact,
+      );
+      const controller = createFakeProcess();
+      queueMicrotask(() => {
+        void (async () => {
+          try {
+            const childPi = createFakePi({
+              hasUI: false,
+              cwd: home,
+            });
+            setupPermissionPolicy(
+              childPi,
+              {
+                ...makeConfig(home),
+                isChild: true,
+                permissionJudge: {
+                  ...DEFAULT_PERMISSION_JUDGE_CONFIG,
+                  configurationError:
+                    "integration fallback judge must not be reached",
+                },
+              },
+              {
+                permissionSignalToken:
+                  launchOptions.env[CHILD_PERMISSION_SIGNAL_ENV],
+                writePermissionSignal: (text) => controller.emitStderr(text),
+              },
+            );
+            policyDecision = await childPi.emitToolCall({
+              type: "tool_call",
+              toolName: "bash",
+              toolCallId: "codex-reviewer-pipeline",
+              input: { command: documentedCommand },
+            });
+            if (policyDecision !== undefined) {
+              controller.emitStdout(
+                assistantEvent(`blocked: ${policyDecision.reason}`),
+              );
+              controller.close(0);
+              return;
+            }
+
+            const executed = Bun.spawnSync(["bash", "-c", documentedCommand], {
+              cwd: home,
+              env: {
+                ...launchOptions.env,
+                HOME: home,
+                MOCK_CODEX_STDIN: receivedPrompt,
+              },
+              stdout: "pipe",
+              stderr: "pipe",
+            });
+            const stderr = Buffer.from(executed.stderr).toString("utf8");
+            if (stderr !== "") controller.emitStderr(stderr);
+            controller.emitStdout(
+              assistantEvent(Buffer.from(executed.stdout).toString("utf8")),
+            );
+            controller.close(executed.exitCode);
+          } catch (error) {
+            controller.emitStderr(String(error));
+            controller.close(1);
+          }
+        })();
+      });
+      return controller.process;
+    };
+    const pi = createFakePi({ cwd: home });
+    setupSubagent(pi, makeConfig(home), { spawnFn });
+
+    const value = await executeTool(
+      pi.tools[0],
+      { agent: "codex-reviewer", task: "Review the test artifact" },
+      pi.ctx,
+    );
+    if (
+      !isRecord(value) ||
+      !isRecord(value.details) ||
+      !Array.isArray(value.details.results) ||
+      !isRecord(value.details.results[0])
+    ) {
+      throw new Error("Expected a spawned codex-reviewer result");
+    }
+    const [result] = value.details.results;
+
+    expect(policyDecision).toBeUndefined();
+    expect(result.permissionBlocked).toBeUndefined();
+    expect(result.failed).toBe(false);
+    expect(result.output).toContain("mock codex reached");
+    expect(await fs.readFile(receivedPrompt, "utf8")).toBe(
+      `Read ${promptArtifact} completely and follow it exactly.`,
+    );
   });
 
   test("treats a child permission block as failure even when pi exits zero", async () => {
