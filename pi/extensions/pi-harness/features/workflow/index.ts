@@ -14,6 +14,7 @@
 import { randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import type { HarnessConfig } from "../../config";
+import { MAX_NOTIFICATION_RESULT_BYTES } from "../child-runs/background";
 import type { ChildRunsIntegration } from "../child-runs/index";
 import type { ChildObservation } from "../child-runs/model";
 import { renderChildRunsResult } from "../child-runs/presentation";
@@ -149,17 +150,25 @@ const failureLabel = (result: SpawnResult): string => {
     : `stopReason ${result.stopReason}`;
 };
 
-// The report text shares one PER_TASK_OUTPUT_CAP budget across every task; a
-// single prefix-preserving cap would let one oversized early output erase
-// later tasks (including PoC worktree paths the parent needs for judging).
-// Headers and worktree identities are never subject to the output budget.
+// The report text shares the background notification's retained-result budget
+// across every task. A single prefix-preserving cap would let one oversized
+// early output erase later tasks (including reviewer identities and PoC
+// worktree paths the parent needs for judging). Headers and worktree identities
+// are never subject to the output budget.
 const REPORT_OVERHEAD_BYTES = 2_048;
 const REPORT_TASK_HEADER_ALLOWANCE = 256;
-const MIN_TASK_OUTPUT_BUDGET = 512;
+const MIN_TASK_OUTPUT_BUDGET = 64;
+// Background completion wraps the report in a JSON string. Quotes, backslashes,
+// and newlines can double in size during JSON escaping, so leave one quarter of
+// the raw-result cap unused; the enclosing 50 KiB notification then retains the
+// whole fair-share report instead of prefix-truncating later task identities.
+const MAX_WORKFLOW_NOTIFICATION_RESULT_BYTES = Math.floor(
+  MAX_NOTIFICATION_RESULT_BYTES * 0.75,
+);
 
 const taskOutputBudget = (taskCount: number): number => {
   const available =
-    PER_TASK_OUTPUT_CAP -
+    MAX_WORKFLOW_NOTIFICATION_RESULT_BYTES -
     REPORT_OVERHEAD_BYTES -
     taskCount * REPORT_TASK_HEADER_ALLOWANCE;
   return Math.max(
@@ -499,8 +508,11 @@ const setupWorkflow = (
                   }
                   cwd = boundary.canonicalCwd;
                 }
+                const definition = findAgent(agents, task.agentType);
                 const result = await spawnAgent(
-                  findAgent(agents, task.agentType),
+                  task.readOnly === true
+                    ? { ...definition, tools: ["read"] }
+                    : definition,
                   taskText,
                   {
                     cwd,
@@ -613,7 +625,10 @@ const setupWorkflow = (
             content: [
               {
                 type: "text" as const,
-                text: capText(`${summary}\n\n${stageDigest}${worktreeNote}`),
+                text: capText(
+                  `${summary}\n\n${stageDigest}${worktreeNote}`,
+                  MAX_WORKFLOW_NOTIFICATION_RESULT_BYTES,
+                ),
               },
             ],
             details: {
@@ -662,6 +677,7 @@ const setupWorkflow = (
                         (text): text is string => typeof text === "string",
                       )
                       .join("\n") || "(no output)",
+                    MAX_WORKFLOW_NOTIFICATION_RESULT_BYTES,
                   ),
                 };
               } catch (error) {

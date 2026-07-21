@@ -27,6 +27,7 @@ export interface WorkflowTaskPlan {
   task: string;
   cwd?: string;
   isolation?: "worktree";
+  readOnly?: boolean;
   writeScope?: string[];
 }
 
@@ -153,6 +154,15 @@ const validateTask = (
     }
   }
 
+  let readOnly: boolean | undefined;
+  if (value.readOnly !== undefined) {
+    if (typeof value.readOnly !== "boolean") {
+      errors.push(`${label}.readOnly: must be a boolean when present`);
+    } else {
+      readOnly = value.readOnly;
+    }
+  }
+
   let writeScope: string[] | undefined;
   if (value.writeScope !== undefined) {
     if (!isNonEmptyStringArray(value.writeScope)) {
@@ -189,6 +199,7 @@ const validateTask = (
       task: taskText,
       ...(cwd === undefined ? {} : { cwd }),
       ...(isolation === undefined ? {} : { isolation }),
+      ...(readOnly === undefined ? {} : { readOnly }),
       ...(writeScope === undefined ? {} : { writeScope }),
     },
     errors,

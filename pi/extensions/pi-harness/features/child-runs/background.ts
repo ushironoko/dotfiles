@@ -12,7 +12,7 @@ export const MAX_ACTIVE_BACKGROUND_INVOCATIONS = 8;
 export const MAX_BACKGROUND_CHILDREN = 4;
 
 const MAX_NOTIFICATION_BYTES = 50 * 1024;
-const MAX_NOTIFICATION_RESULT_BYTES = 32 * 1024;
+export const MAX_NOTIFICATION_RESULT_BYTES = 32 * 1024;
 
 export interface BackgroundHost {
   appendEntry(customType: string, data?: unknown): void;
