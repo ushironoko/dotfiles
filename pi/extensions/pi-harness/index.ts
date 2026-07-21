@@ -21,6 +21,7 @@ import setupStatusline from "./features/statusline/index";
 import setupProviderLog from "./features/provider-log/index";
 import setupAsukuNotify from "./features/asuku-notify/index";
 import setupAskUserQuestion from "./features/ask-user-question/index";
+import setupBtw from "./features/btw/index";
 import setupChildRuns from "./features/child-runs/index";
 
 // The parameter is typed against the narrowed PiLike seam instead of pi's
@@ -45,6 +46,7 @@ const setupHarness = (pi: PiLike, config: HarnessConfig): void => {
   if (config.features["provider-log"]) setupProviderLog(pi, config);
   if (config.features["asuku-notify"]) setupAsukuNotify(pi, config);
   if (config.features["ask-user-question"]) setupAskUserQuestion(pi);
+  if (!config.isChild) setupBtw(pi);
 };
 
 const piHarness: ExtensionFactory = (pi): void => {

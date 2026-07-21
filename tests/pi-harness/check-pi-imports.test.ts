@@ -39,13 +39,20 @@ describe("check-pi-imports self-containment analysis", () => {
     );
   });
 
-  test("allows only pi-tui's documented root runtime import in pi-harness", () => {
-    expect(
-      check('import { visibleWidth } from "@earendil-works/pi-tui";'),
-    ).toEqual([]);
+  test("allows only documented root runtime imports in pi-harness", () => {
+    for (const specifier of [
+      "@earendil-works/pi-coding-agent",
+      "@earendil-works/pi-tui",
+    ]) {
+      expect(check(`import { x } from ${JSON.stringify(specifier)};`)).toEqual(
+        [],
+      );
+    }
 
     for (const specifier of [
       "@earendil-works/pi-ai",
+      "@earendil-works/pi-coding-agent/dist/index.js",
+      "@earendil-works/pi-coding-agent-evil",
       "@earendil-works/pi-tui/dist/index.js",
       "@earendil-works/pi-tui-evil",
     ]) {
@@ -56,14 +63,18 @@ describe("check-pi-imports self-containment analysis", () => {
   });
 
   test("does not grant the pi-harness runtime allowlist to codex-web", () => {
-    const source = 'import { visibleWidth } from "@earendil-works/pi-tui";';
-    const violations = collectViolations(
-      "index.ts",
-      join(CODEX_WEB_EXTENSION_ROOT, "index.ts"),
-      source,
-      CODEX_WEB_EXTENSION_ROOT,
-    );
-    expect(violations[0]).toContain("runtime import of @earendil-works/pi-tui");
+    for (const specifier of [
+      "@earendil-works/pi-coding-agent",
+      "@earendil-works/pi-tui",
+    ]) {
+      const violations = collectViolations(
+        "index.ts",
+        join(CODEX_WEB_EXTENSION_ROOT, "index.ts"),
+        `import { x } from ${JSON.stringify(specifier)};`,
+        CODEX_WEB_EXTENSION_ROOT,
+      );
+      expect(violations[0]).toContain(`runtime import of ${specifier}`);
+    }
   });
 
   test("flags a relative import that escapes the extension root", () => {
