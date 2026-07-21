@@ -21,6 +21,7 @@ import {
 import type { DetachedSpawnFunction } from "../../pi/extensions/pi-harness/lib/detached";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import type { ThemeLike } from "../../pi/extensions/pi-harness/lib/pi-like";
+import { worktreeIdentityDetails } from "../../pi/extensions/pi-harness/lib/worktree-identity";
 import { cleanupTestDirectory, setupTestDirectory } from "../test-helpers";
 import { createFakePi } from "./fake-pi";
 
@@ -148,6 +149,27 @@ const gitText = async (cwd: string, args: string[]): Promise<string> => {
   ]);
   if (exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${stderr}`);
   return stdout.trim();
+};
+
+const createdWorktreeDetails = async (path: string) => {
+  const [rootStats, dotGitStats, gitDir] = await Promise.all([
+    fs.lstat(path, { bigint: true }),
+    fs.lstat(join(path, ".git"), { bigint: true }),
+    gitText(path, ["rev-parse", "--absolute-git-dir"]),
+  ]);
+  return worktreeIdentityDetails({
+    version: 1,
+    path,
+    root: {
+      dev: rootStats.dev.toString(10),
+      ino: rootStats.ino.toString(10),
+    },
+    dotGit: {
+      dev: dotGitStats.dev.toString(10),
+      ino: dotGitStats.ino.toString(10),
+    },
+    gitDir: await fs.realpath(gitDir),
+  });
 };
 
 describe("Claude-compatible statusline rendering", () => {
@@ -363,11 +385,13 @@ describe("pi-harness statusline lifecycle", () => {
     });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    const details = await createdWorktreeDetails(canonicalWorktree);
     await pi.emitToolResult({
       type: "tool_result",
       toolName: "worktree_create",
       input: { name: "topic" },
       content: [{ type: "text", text: canonicalWorktree }],
+      details,
       isError: false,
     });
     await pi.emitAgentSettled();
@@ -377,7 +401,13 @@ describe("pi-harness statusline lifecycle", () => {
       canonicalWorktree,
     ]);
     expect(checkLaunches).toEqual([
-      [runner, canonicalWorktree, canonicalWorktree],
+      [
+        runner,
+        canonicalWorktree,
+        canonicalWorktree,
+        details.worktreeIdentity.root.dev,
+        details.worktreeIdentity.root.ino,
+      ],
     ]);
 
     // Git still has stale registration metadata, but neither a plain
@@ -396,7 +426,13 @@ describe("pi-harness statusline lifecycle", () => {
       canonicalWorktree,
     ]);
     expect(checkLaunches).toEqual([
-      [runner, canonicalWorktree, canonicalWorktree],
+      [
+        runner,
+        canonicalWorktree,
+        canonicalWorktree,
+        details.worktreeIdentity.root.dev,
+        details.worktreeIdentity.root.ino,
+      ],
     ]);
   });
 
@@ -446,6 +482,7 @@ describe("pi-harness statusline lifecycle", () => {
       toolName: "worktree_create",
       input: { name: "topic-a" },
       content: [{ type: "text", text: canonicalWorktreeA }],
+      details: await createdWorktreeDetails(canonicalWorktreeA),
       isError: false,
     });
     await pi.emitAgentSettled();
@@ -503,6 +540,183 @@ describe("pi-harness statusline lifecycle", () => {
     expect(checkLaunches).toHaveLength(1);
   });
 
+  test("rejects recreation at the same path with the original .git contents", async () => {
+    const home = await tempDirectory("pi-statusline-worktree-recreated");
+    const project = join(home, "repo");
+    const worktree = join(home, "topic-worktree");
+    await fs.mkdir(project, { recursive: true });
+    await markAsProject(project);
+    await runGit(project, ["init", "-b", "main"]);
+    await runGit(project, ["config", "user.email", "test@example.com"]);
+    await runGit(project, ["config", "user.name", "Status Test"]);
+    await runGit(project, ["add", "."]);
+    await runGit(project, ["commit", "-m", "initial"]);
+    await runGit(project, ["worktree", "add", "-b", "topic", worktree]);
+    const canonicalProject = await fs.realpath(project);
+    const canonicalWorktree = await fs.realpath(worktree);
+    const originalDotGit = await fs.readFile(join(worktree, ".git"));
+    const originalGitDir = await gitText(canonicalWorktree, [
+      "rev-parse",
+      "--absolute-git-dir",
+    ]);
+    const runner = join(
+      resolvePaths(home).claudeHooksDir,
+      "lib/statusline_checks_run.sh",
+    );
+    await fs.mkdir(dirname(runner), { recursive: true });
+    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+
+    const gitReads: string[] = [];
+    const checkLaunches: string[][] = [];
+    const pi = createFakePi({ cwd: canonicalProject, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home, [canonicalProject]), {
+      cacheDir: join(home, "cache"),
+      getGitStatus: async (cwd) => {
+        gitReads.push(cwd);
+        return gitStatus({ repository: undefined });
+      },
+      getBranch: async (cwd) => (cwd === canonicalWorktree ? "topic" : "main"),
+      spawnDetached: (_command, args) => {
+        checkLaunches.push(args);
+      },
+    });
+
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    await pi.emitToolResult({
+      type: "tool_result",
+      toolName: "worktree_create",
+      input: { name: "topic" },
+      content: [{ type: "text", text: canonicalWorktree }],
+      details: await createdWorktreeDetails(canonicalWorktree),
+      isError: false,
+    });
+    await pi.emitAgentSettled();
+    expect(checkLaunches).toHaveLength(1);
+
+    await fs.rm(worktree, { recursive: true, force: true });
+    await fs.mkdir(worktree);
+    await markAsProject(worktree);
+    await fs.writeFile(join(worktree, ".git"), originalDotGit);
+
+    // Restoring the original .git contents satisfies every live Git/backlink
+    // check. The creation-time root and .git inodes are what distinguish this
+    // attacker-controlled replacement from the worktree produced by the tool.
+    const [replacementTop, replacementGitDir, list, backlink] =
+      await Promise.all([
+        gitText(canonicalWorktree, [
+          "rev-parse",
+          "--path-format=absolute",
+          "--show-toplevel",
+        ]),
+        gitText(canonicalWorktree, ["rev-parse", "--absolute-git-dir"]),
+        gitText(canonicalProject, ["worktree", "list", "--porcelain"]),
+        fs.readFile(join(originalGitDir, "gitdir"), "utf8"),
+      ]);
+    expect(await fs.realpath(replacementTop)).toBe(canonicalWorktree);
+    expect(await fs.realpath(replacementGitDir)).toBe(originalGitDir);
+    expect(list).toContain(`worktree ${canonicalWorktree}`);
+    expect(await fs.realpath(backlink.trim())).toBe(
+      join(canonicalWorktree, ".git"),
+    );
+
+    await pi.emitAgentSettled();
+    expect(gitReads).toEqual([
+      canonicalProject,
+      canonicalWorktree,
+      canonicalWorktree,
+    ]);
+    expect(checkLaunches).toHaveLength(1);
+  });
+
+  test("rechecks identity after concurrent Git and backlink validation", async () => {
+    const home = await tempDirectory("pi-statusline-worktree-validation-race");
+    const project = join(home, "repo");
+    const worktree = join(home, "topic-worktree");
+    await fs.mkdir(project, { recursive: true });
+    await markAsProject(project);
+    await runGit(project, ["init", "-b", "main"]);
+    await runGit(project, ["config", "user.email", "test@example.com"]);
+    await runGit(project, ["config", "user.name", "Status Test"]);
+    await runGit(project, ["add", "."]);
+    await runGit(project, ["commit", "-m", "initial"]);
+    await runGit(project, ["worktree", "add", "-b", "topic", worktree]);
+    const canonicalProject = await fs.realpath(project);
+    const canonicalWorktree = await fs.realpath(worktree);
+    const originalDotGit = await fs.readFile(join(worktree, ".git"));
+    const details = await createdWorktreeDetails(canonicalWorktree);
+    const runner = join(
+      resolvePaths(home).claudeHooksDir,
+      "lib/statusline_checks_run.sh",
+    );
+    await fs.mkdir(dirname(runner), { recursive: true });
+    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+
+    let raceEnabled = false;
+    let arrivals = 0;
+    let releaseBarrier: (() => void) | undefined;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const readGit = async (
+      cwd: string,
+      args: string[],
+    ): Promise<string | undefined> => {
+      if (raceEnabled) {
+        arrivals += 1;
+        if (arrivals === 5) {
+          await fs.rm(worktree, { recursive: true, force: true });
+          await fs.mkdir(worktree);
+          await markAsProject(worktree);
+          await fs.writeFile(join(worktree, ".git"), originalDotGit);
+          releaseBarrier?.();
+        }
+        await barrier;
+      }
+      try {
+        return await gitText(cwd, args);
+      } catch {
+        return undefined;
+      }
+    };
+
+    const gitReads: string[] = [];
+    const checkLaunches: string[][] = [];
+    const pi = createFakePi({ cwd: canonicalProject, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home, [canonicalProject]), {
+      gitOutput: readGit,
+      getGitStatus: async (cwd) => {
+        gitReads.push(cwd);
+        return gitStatus({ repository: undefined });
+      },
+      getBranch: async (cwd) => (cwd === canonicalWorktree ? "topic" : "main"),
+      spawnDetached: (_command, args) => {
+        checkLaunches.push(args);
+      },
+    });
+
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    await pi.emitToolResult({
+      type: "tool_result",
+      toolName: "worktree_create",
+      input: { name: "topic" },
+      content: [{ type: "text", text: canonicalWorktree }],
+      details,
+      isError: false,
+    });
+    await pi.emitAgentSettled();
+    expect(checkLaunches).toHaveLength(1);
+
+    raceEnabled = true;
+    await pi.emitAgentSettled();
+    expect(arrivals).toBe(5);
+    expect(gitReads).toEqual([
+      canonicalProject,
+      canonicalWorktree,
+      canonicalWorktree,
+    ]);
+    expect(checkLaunches).toHaveLength(1);
+  });
+
   test("accepts a valid relative admin gitdir backlink", async () => {
     const home = await tempDirectory("pi-statusline-worktree-relative");
     const project = join(home, "repo");
@@ -549,11 +763,13 @@ describe("pi-harness statusline lifecycle", () => {
     });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    const details = await createdWorktreeDetails(canonicalWorktree);
     await pi.emitToolResult({
       type: "tool_result",
       toolName: "worktree_create",
       input: { name: "topic" },
       content: [{ type: "text", text: canonicalWorktree }],
+      details,
       isError: false,
     });
     await pi.emitAgentSettled();
@@ -563,7 +779,13 @@ describe("pi-harness statusline lifecycle", () => {
       canonicalWorktree,
     ]);
     expect(checkLaunches).toEqual([
-      [runner, canonicalWorktree, canonicalWorktree],
+      [
+        runner,
+        canonicalWorktree,
+        canonicalWorktree,
+        details.worktreeIdentity.root.dev,
+        details.worktreeIdentity.root.ino,
+      ],
     ]);
   });
 
@@ -659,6 +881,13 @@ describe("pi-harness statusline lifecycle", () => {
       toolName: "worktree_create",
       input: { name: "topic" },
       content: [{ type: "text", text: worktree }],
+      details: worktreeIdentityDetails({
+        version: 1,
+        path: worktree,
+        root: { dev: "1", ino: "1" },
+        dotGit: { dev: "1", ino: "2" },
+        gitDir: join(worktree, ".git", "worktrees", "topic"),
+      }),
       isError: false,
     });
     expect(pi.renderFooter(100)).toEqual([
@@ -673,7 +902,7 @@ describe("pi-harness statusline lifecycle", () => {
     expect(pi.renderFooter(100)).toEqual([
       "topic-worktree | topic-next | TS L? T? X?",
     ]);
-    expect(checkLaunches).toEqual([[runner, worktree, worktree]]);
+    expect(checkLaunches).toEqual([[runner, worktree, worktree, "1", "1"]]);
 
     // A later identity failure revokes inherited trust before any Git read or
     // repository-defined check can run, while retaining the last safe branch.
@@ -683,7 +912,7 @@ describe("pi-harness statusline lifecycle", () => {
     expect(pi.renderFooter(100)).toEqual([
       "topic-worktree | topic-next | TS L? T? X?",
     ]);
-    expect(checkLaunches).toEqual([[runner, worktree, worktree]]);
+    expect(checkLaunches).toEqual([[runner, worktree, worktree, "1", "1"]]);
     expect(gitReads).toEqual([project, worktree, worktree]);
 
     await pi.emitToolResult({
@@ -695,6 +924,58 @@ describe("pi-harness statusline lifecycle", () => {
     });
     expect(pi.renderFooter(100)).toEqual(["repo | stale-main | TS L? T? X?"]);
     expect(gitReads).toEqual([project, worktree, worktree, project]);
+  });
+
+  test("missing creation details follow display state without inheriting trust", async () => {
+    const home = await tempDirectory("pi-statusline-worktree-capture-fail");
+    const project = join(home, "repo");
+    const worktree = join(home, "topic-worktree");
+    await fs.mkdir(project, { recursive: true });
+    await fs.mkdir(worktree, { recursive: true });
+    await markAsProject(project);
+    await markAsProject(worktree);
+    const runner = join(
+      resolvePaths(home).claudeHooksDir,
+      "lib/statusline_checks_run.sh",
+    );
+    await fs.mkdir(dirname(runner), { recursive: true });
+    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+
+    const gitReads: string[] = [];
+    const checkLaunches: string[][] = [];
+    let validatorCalls = 0;
+    const pi = createFakePi({ cwd: project, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home, [project]), {
+      getGitStatus: async (cwd) => {
+        gitReads.push(cwd);
+        return gitStatus({ repository: undefined });
+      },
+      getBranch: async () => "main",
+      spawnDetached: (_command, args) => {
+        checkLaunches.push(args);
+      },
+      validateInheritedWorktree: async () => {
+        validatorCalls += 1;
+        return true;
+      },
+    });
+
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    await pi.emitToolResult({
+      type: "tool_result",
+      toolName: "worktree_create",
+      input: { name: "topic" },
+      content: [{ type: "text", text: worktree }],
+      isError: false,
+    });
+    await pi.emitAgentSettled();
+
+    expect(pi.renderFooter(100)).toEqual([
+      "topic-worktree | topic | TS L? T? X?",
+    ]);
+    expect(validatorCalls).toBe(0);
+    expect(gitReads).toEqual([project]);
+    expect(checkLaunches).toEqual([]);
   });
 
   test("default git collection renders origin and tracked diff totals", async () => {

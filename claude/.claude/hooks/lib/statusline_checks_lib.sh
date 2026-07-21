@@ -31,6 +31,24 @@ statusline_cache_dir() {
     echo "${STATUSLINE_CACHE_DIR:-${TMPDIR:-/tmp}/claude-statusline-checks}"
 }
 
+# Echo a decimal device:inode pair for a file or directory. GNU and BSD stat
+# use different format flags; callers fail closed when neither is available.
+file_identity() {
+    local path=$1
+    local identity=''
+    if identity=$(stat -c '%d:%i' -- "$path" 2>/dev/null); then
+        :
+    elif identity=$(stat -f '%d:%i' "$path" 2>/dev/null); then
+        :
+    else
+        return 1
+    fi
+    case "$identity" in
+        *[!0-9:]* | :* | *: | *:*:*) return 1 ;;
+    esac
+    printf '%s\n' "$identity"
+}
+
 # walks up from CWD until project marker is found; echoes the abs path or empty.
 find_project_root() {
     local dir=$1

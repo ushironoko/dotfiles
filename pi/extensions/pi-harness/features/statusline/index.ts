@@ -27,6 +27,11 @@ import type {
 } from "../../lib/pi-like";
 import { isPathWithin, matchedTrustedRoot } from "../../lib/trust";
 import {
+  matchesFileIdentity,
+  type WorktreeIdentityV1,
+  worktreeIdentityFromDetails,
+} from "../../lib/worktree-identity";
+import {
   formatModelName,
   type GitStatus,
   parseStatuslineCache,
@@ -42,9 +47,11 @@ interface StatuslineDeps {
   spawnDetached?: DetachedSpawnFunction;
   getGitStatus?: (cwd: string) => Promise<GitStatus>;
   getBranch?: (cwd: string) => Promise<string | undefined>;
+  gitOutput?: (cwd: string, args: string[]) => Promise<string | undefined>;
   validateInheritedWorktree?: (
     sourceCwd: string,
     worktreePath: string,
+    identity: WorktreeIdentityV1,
   ) => Promise<boolean>;
 }
 
@@ -52,6 +59,7 @@ interface ActiveWorktree {
   path: string;
   branch?: string;
   sourceCwd: string;
+  identity?: WorktreeIdentityV1;
 }
 
 const successfulToolResultText = (
@@ -174,34 +182,55 @@ const gitOutput = (cwd: string, args: string[]): Promise<string | undefined> =>
 /**
  * Revalidate the identity that worktree_create established before extending
  * source-checkout trust to an external gwq path. Git registration, common-dir
- * identity, linked-worktree git-dir placement, and the original canonical path
- * must all still agree; stale metadata or a symlink replacement fails closed.
+ * identity, linked-worktree git-dir placement, and the creation-time root,
+ * .git file, and admin git-dir must all still agree. This closes static path
+ * replacement; the later runner launch remains a separate best-effort TOCTOU
+ * boundary and therefore retains the runner's own trusted-root checks.
  */
 const validateInheritedWorktree = async (
   sourceCwd: string,
   worktreePath: string,
+  identity: WorktreeIdentityV1,
+  readGit: (
+    cwd: string,
+    args: string[],
+  ) => Promise<string | undefined> = gitOutput,
 ): Promise<boolean> => {
   try {
-    if ((await realpath(worktreePath)) !== worktreePath) return false;
+    const worktreeDotGit = join(worktreePath, ".git");
+    const [canonicalRoot, rootStats, dotGitStats] = await Promise.all([
+      realpath(worktreePath),
+      lstat(worktreePath, { bigint: true }),
+      lstat(worktreeDotGit, { bigint: true }),
+    ]);
+    if (
+      canonicalRoot !== worktreePath ||
+      !rootStats.isDirectory() ||
+      !dotGitStats.isFile() ||
+      !matchesFileIdentity(rootStats, identity.root) ||
+      !matchesFileIdentity(dotGitStats, identity.dotGit)
+    ) {
+      return false;
+    }
     const [sourceCommon, worktreeCommon, worktreeTop, worktreeGitDir, list] =
       await Promise.all([
-        gitOutput(sourceCwd, [
+        readGit(sourceCwd, [
           "rev-parse",
           "--path-format=absolute",
           "--git-common-dir",
         ]),
-        gitOutput(worktreePath, [
+        readGit(worktreePath, [
           "rev-parse",
           "--path-format=absolute",
           "--git-common-dir",
         ]),
-        gitOutput(worktreePath, [
+        readGit(worktreePath, [
           "rev-parse",
           "--path-format=absolute",
           "--show-toplevel",
         ]),
-        gitOutput(worktreePath, ["rev-parse", "--absolute-git-dir"]),
-        gitOutput(sourceCwd, ["worktree", "list", "--porcelain"]),
+        readGit(worktreePath, ["rev-parse", "--absolute-git-dir"]),
+        readGit(sourceCwd, ["worktree", "list", "--porcelain"]),
       ]);
     const required = [
       sourceCommon,
@@ -232,6 +261,7 @@ const validateInheritedWorktree = async (
     if (
       canonicalSourceCommon !== canonicalWorktreeCommon ||
       canonicalTop !== worktreePath ||
+      gitDir !== identity.gitDir ||
       gitDir === linkedGitDirRoot ||
       !isPathWithin(gitDir, linkedGitDirRoot) ||
       !registered
@@ -243,17 +273,9 @@ const validateInheritedWorktree = async (
     // registered linked-worktree directory inside the trusted common dir.
     // This prevents an attacker-controlled replacement path from making us
     // read an arbitrary path (or FIFO) before the containment checks run.
-    const worktreeDotGit = join(worktreePath, ".git");
     const backlinkFile = join(gitDir, "gitdir");
-    const [dotGitStats, backlinkStats] = await Promise.all([
-      lstat(worktreeDotGit),
-      lstat(backlinkFile),
-    ]);
-    if (
-      !dotGitStats.isFile() ||
-      !backlinkStats.isFile() ||
-      backlinkStats.size > 4_096
-    ) {
+    const backlinkStats = await lstat(backlinkFile);
+    if (!backlinkStats.isFile() || backlinkStats.size > 4_096) {
       return false;
     }
 
@@ -274,7 +296,21 @@ const validateInheritedWorktree = async (
       realpath(worktreeDotGit),
       realpath(backlinkTarget),
     ]);
-    return canonicalDotGit === canonicalBacklink;
+    if (canonicalDotGit !== canonicalBacklink) return false;
+
+    // Git and backlink discovery above are asynchronous. Re-check both inode
+    // identities at the end so a replacement during that interval cannot be
+    // trusted before the runner performs its own pinned-cwd verification.
+    const [finalRootStats, finalDotGitStats] = await Promise.all([
+      lstat(worktreePath, { bigint: true }),
+      lstat(worktreeDotGit, { bigint: true }),
+    ]);
+    return (
+      finalRootStats.isDirectory() &&
+      finalDotGitStats.isFile() &&
+      matchesFileIdentity(finalRootStats, identity.root) &&
+      matchesFileIdentity(finalDotGitStats, identity.dotGit)
+    );
   } catch {
     return false;
   }
@@ -346,7 +382,14 @@ export default function setupStatusline(
   const getGitStatus = deps.getGitStatus ?? defaultGetGitStatus;
   const getBranch = deps.getBranch ?? defaultGetBranch;
   const validateWorktree =
-    deps.validateInheritedWorktree ?? validateInheritedWorktree;
+    deps.validateInheritedWorktree ??
+    ((sourceCwd, worktreePath, identity) =>
+      validateInheritedWorktree(
+        sourceCwd,
+        worktreePath,
+        identity,
+        deps.gitOutput ?? gitOutput,
+      ));
   const runner = join(
     config.paths.claudeHooksDir,
     "lib/statusline_checks_run.sh",
@@ -439,21 +482,44 @@ export default function setupStatusline(
     // closed. The worktree itself is the shell runner boundary.
     const directlyTrustedRoot = matchedTrustedRoot(cwd, config.trust);
     let trustedRoot = directlyTrustedRoot;
+    let trustedWorktreeIdentity: WorktreeIdentityV1 | undefined;
     if (
       trustedRoot === undefined &&
       activeWorktree?.path === cwd &&
       matchedTrustedRoot(activeWorktree.sourceCwd, config.trust) !== undefined
     ) {
       try {
-        if (await validateWorktree(activeWorktree.sourceCwd, cwd)) {
+        if (
+          activeWorktree.identity !== undefined &&
+          (await validateWorktree(
+            activeWorktree.sourceCwd,
+            cwd,
+            activeWorktree.identity,
+          ))
+        ) {
           trustedRoot = cwd;
+          trustedWorktreeIdentity = activeWorktree.identity;
         }
       } catch {
         trustedRoot = undefined;
       }
     }
     if (launchChecks && trustedRoot !== undefined && existsSync(runner)) {
-      spawnDetached("bash", [runner, cwd, trustedRoot], { cwd });
+      spawnDetached(
+        "bash",
+        [
+          runner,
+          cwd,
+          trustedRoot,
+          ...(trustedWorktreeIdentity === undefined
+            ? []
+            : [
+                trustedWorktreeIdentity.root.dev,
+                trustedWorktreeIdentity.root.ino,
+              ]),
+        ],
+        { cwd },
+      );
     }
 
     // Print/JSON modes expose no-op UI methods. Preserve lifecycle checks, but
@@ -504,10 +570,12 @@ export default function setupStatusline(
   pi.on("tool_result", async (event, ctx) => {
     const createdPath = createdWorktreePath(event);
     if (createdPath !== undefined) {
+      const identity = worktreeIdentityFromDetails(event.details, createdPath);
       activeWorktree = {
         path: createdPath,
         branch: toolInputString(event, "name"),
         sourceCwd: ctx.cwd ?? process.cwd(),
+        ...(identity === undefined ? {} : { identity }),
       };
       await refresh(ctx, false);
       return;

@@ -80,6 +80,31 @@ const readTextResult = (result: unknown): string => {
   return text;
 };
 
+const mockWorktreePublication = async (path: string) => {
+  const gitDirPath = join(path, "..", ".mock-admin");
+  await fs.mkdir(gitDirPath);
+  const gitDir = await fs.realpath(gitDirPath);
+  await fs.writeFile(join(path, ".git"), `gitdir: ${gitDir}\n`);
+  const [rootStats, dotGitStats] = await Promise.all([
+    fs.lstat(path, { bigint: true }),
+    fs.lstat(join(path, ".git"), { bigint: true }),
+  ]);
+  const identity = {
+    version: 1 as const,
+    path,
+    root: {
+      dev: rootStats.dev.toString(10),
+      ino: rootStats.ino.toString(10),
+    },
+    dotGit: {
+      dev: dotGitStats.dev.toString(10),
+      ino: dotGitStats.ino.toString(10),
+    },
+    gitDir,
+  };
+  return { identity, stdout: `${path}\n${JSON.stringify(identity)}\n` };
+};
+
 describe("bit-task lifecycle", () => {
   test("builds a sequence-aware marker", () => {
     expect(buildTaskMarker("feature/harness", 3, "task-123")).toBe(
@@ -225,6 +250,7 @@ describe("bit-task tool registration", () => {
     const directory = await setupTestDirectory("pi-bit-task-env", ["created"]);
     try {
       const created = await fs.realpath(join(directory, "created"));
+      const publication = await mockWorktreePublication(created);
       const hookEnvs: (Record<string, string | undefined> | undefined)[] = [];
       const commandEnvs: (Record<string, string | undefined> | undefined)[] =
         [];
@@ -236,12 +262,19 @@ describe("bit-task tool registration", () => {
           return {
             exitCode: 0,
             timedOut: false,
-            stdout: `${created}\n`,
+            stdout: publication.stdout,
             stderr: "",
           };
         },
         runCommand: async (_command, args, options) => {
           commandEnvs.push(options.env);
+          if (args.includes("--absolute-git-dir")) {
+            return {
+              exitCode: 0,
+              stdout: `${publication.identity.gitDir}\n`,
+              stderr: "",
+            };
+          }
           if (args.includes("--git-common-dir")) {
             const commonDir = await fs.realpath(directory);
             return { exitCode: 0, stdout: `${commonDir}\n`, stderr: "" };
@@ -262,8 +295,8 @@ describe("bit-task tool registration", () => {
         ),
       ).resolves.toBeDefined();
       expect(hookEnvs).toHaveLength(1);
-      // worktree list + two common-dir identity resolutions (postcondition).
-      expect(commandEnvs).toHaveLength(3);
+      // Two admin-identity checks + worktree list + two common-dir checks.
+      expect(commandEnvs).toHaveLength(5);
       expect(hookEnvs[0]?.PI_HARNESS_CHILD).toBe("1");
       for (const env of commandEnvs) {
         expect(env?.PI_HARNESS_CHILD).toBe("1");
@@ -319,6 +352,174 @@ describe("bit-task tool registration", () => {
     }
   });
 
+  test("rejects a successful hook that omits its creation identity", async () => {
+    const directory = await setupTestDirectory("pi-bit-task-no-identity", [
+      "created",
+    ]);
+    try {
+      const created = await fs.realpath(join(directory, "created"));
+      let commandCalls = 0;
+      const pi = createFakePi({ cwd: directory });
+      setupBitTask(pi, makeConfig(), {
+        runHook: async () => ({
+          exitCode: 0,
+          timedOut: false,
+          stdout: `${created}\n`,
+          stderr: "",
+        }),
+        runCommand: async () => {
+          commandCalls += 1;
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      });
+
+      const error = await captureError(
+        executeTool(
+          getTool(pi.tools, "worktree_create"),
+          { name: "missing-identity" },
+          pi.ctx,
+        ),
+      );
+      expect(error.message).toContain("omitted its creation identity");
+      expect(error.message).toContain(created);
+      expect(commandCalls).toBe(0);
+    } finally {
+      await cleanupTestDirectory(directory);
+    }
+  });
+
+  test("reports the retained path before rejecting a malformed identity", async () => {
+    const directory = await setupTestDirectory("pi-bit-task-bad-identity", [
+      "created",
+    ]);
+    try {
+      const created = await fs.realpath(join(directory, "created"));
+      let commandCalls = 0;
+      const pi = createFakePi({ cwd: directory });
+      setupBitTask(pi, makeConfig(), {
+        runHook: async () => ({
+          exitCode: 0,
+          timedOut: false,
+          stdout: `${created}\nnot-json\n`,
+          stderr: "",
+        }),
+        runCommand: async () => {
+          commandCalls += 1;
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      });
+
+      const error = await captureError(
+        executeTool(
+          getTool(pi.tools, "worktree_create"),
+          { name: "malformed-identity" },
+          pi.ctx,
+        ),
+      );
+      expect(error.message).toContain("invalid identity record");
+      expect(error.message).toContain(created);
+      expect(error.message).toContain("worktree_remove");
+      expect(commandCalls).toBe(0);
+    } finally {
+      await cleanupTestDirectory(directory);
+    }
+  });
+
+  test("rejects replacement between hook publication and parent validation", async () => {
+    const directory = await setupTestDirectory("pi-bit-task-identity-race", [
+      "created",
+    ]);
+    try {
+      const created = await fs.realpath(join(directory, "created"));
+      const publication = await mockWorktreePublication(created);
+      let commandCalls = 0;
+      const pi = createFakePi({ cwd: directory });
+      setupBitTask(pi, makeConfig(), {
+        runHook: async () => {
+          await fs.rm(created, { recursive: true, force: true });
+          await fs.mkdir(created);
+          await fs.writeFile(
+            join(created, ".git"),
+            `gitdir: ${publication.identity.gitDir}\n`,
+          );
+          return {
+            exitCode: 0,
+            timedOut: false,
+            stdout: publication.stdout,
+            stderr: "",
+          };
+        },
+        runCommand: async () => {
+          commandCalls += 1;
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      });
+
+      const error = await captureError(
+        executeTool(
+          getTool(pi.tools, "worktree_create"),
+          { name: "replaced-before-validation" },
+          pi.ctx,
+        ),
+      );
+      expect(error.message).toContain("filesystem identity changed");
+      expect(error.message).toContain(created);
+      expect(commandCalls).toBe(0);
+    } finally {
+      await cleanupTestDirectory(directory);
+    }
+  });
+
+  test("rejects replacement during parent Git identity validation", async () => {
+    const directory = await setupTestDirectory("pi-bit-task-git-race", [
+      "created",
+    ]);
+    try {
+      const created = await fs.realpath(join(directory, "created"));
+      const publication = await mockWorktreePublication(created);
+      let commandCalls = 0;
+      const pi = createFakePi({ cwd: directory });
+      setupBitTask(pi, makeConfig(), {
+        runHook: async () => ({
+          exitCode: 0,
+          timedOut: false,
+          stdout: publication.stdout,
+          stderr: "",
+        }),
+        runCommand: async (_command, args) => {
+          commandCalls += 1;
+          if (args.includes("--absolute-git-dir")) {
+            await fs.rm(created, { recursive: true, force: true });
+            await fs.mkdir(created);
+            await fs.writeFile(
+              join(created, ".git"),
+              `gitdir: ${publication.identity.gitDir}\n`,
+            );
+            return {
+              exitCode: 0,
+              stdout: `${publication.identity.gitDir}\n`,
+              stderr: "",
+            };
+          }
+          throw new Error("registration must not run after identity swap");
+        },
+      });
+
+      const error = await captureError(
+        executeTool(
+          getTool(pi.tools, "worktree_create"),
+          { name: "replaced-during-git" },
+          pi.ctx,
+        ),
+      );
+      expect(error.message).toContain("changed during parent validation");
+      expect(error.message).toContain(created);
+      expect(commandCalls).toBe(1);
+    } finally {
+      await cleanupTestDirectory(directory);
+    }
+  });
+
   test("public worktree tool reports a retained path after hook timeout", async () => {
     const directory = await setupTestDirectory("pi-bit-task-tool-timeout", [
       "created",
@@ -359,17 +560,20 @@ describe("bit-task tool registration", () => {
     ]);
     try {
       const created = await fs.realpath(join(directory, "created"));
+      const publication = await mockWorktreePublication(created);
       const pi = createFakePi({ cwd: directory });
       setupBitTask(pi, makeConfig(), {
         runHook: async () => ({
           exitCode: 0,
           timedOut: false,
-          stdout: `${created}\n`,
+          stdout: publication.stdout,
           stderr: "",
         }),
-        runCommand: async () => ({
+        runCommand: async (_command, args) => ({
           exitCode: 0,
-          stdout: "",
+          stdout: args.includes("--absolute-git-dir")
+            ? `${publication.identity.gitDir}\n`
+            : "",
           stderr: "",
         }),
       });

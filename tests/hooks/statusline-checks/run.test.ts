@@ -342,6 +342,170 @@ const runRunnerBounded = async (
   return { exitCode: await proc.exited };
 };
 
+const runRunnerIdentified = async (
+  projectDir: string,
+  boundary: string,
+  dev: string,
+  ino?: string,
+  env: Record<string, string> = {},
+): Promise<{ exitCode: number }> => {
+  const proc = Bun.spawn(
+    [
+      "bash",
+      RUNNER,
+      projectDir,
+      boundary,
+      dev,
+      ...(ino === undefined ? [] : [ino]),
+    ],
+    {
+      env: { ...process.env, ...env },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  await new Response(proc.stdout).text();
+  await new Response(proc.stderr).text();
+  return { exitCode: await proc.exited };
+};
+
+const seedRunnableProject = async (
+  root: string,
+  sentinel: string,
+): Promise<void> => {
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(
+    join(root, "package.json"),
+    JSON.stringify({ scripts: { lint: "bash check.sh" } }),
+  );
+  await fs.writeFile(join(root, "bun.lock"), "");
+  await fs.writeFile(join(root, ".git"), "gitdir: /nonexistent\n");
+  await fs.writeFile(
+    join(root, "check.sh"),
+    `#!/bin/bash\nprintf 'ran\\n' >> ${JSON.stringify(sentinel)}\n`,
+    { mode: 0o755 },
+  );
+};
+
+describe("runner: pinned worktree identity", () => {
+  const tmps: string[] = [];
+  afterEach(async () => {
+    await Promise.all(tmps.splice(0).map(cleanupTestDirectory));
+  });
+
+  test("partial identity arguments fail closed for an otherwise runnable project", async () => {
+    const tmp = await setupTestDirectory("run-identity-partial");
+    tmps.push(tmp);
+    const project = join(tmp, "project");
+    const sentinel = join(tmp, "ran");
+    const cacheDir = join(tmp, "cache");
+    await seedRunnableProject(project, sentinel);
+    const stats = await fs.lstat(project, { bigint: true });
+
+    const result = await runRunnerIdentified(
+      project,
+      project,
+      stats.dev.toString(10),
+      undefined,
+      { STATUSLINE_CACHE_DIR: cacheDir },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(await readCache(cacheDir)).toBeNull();
+    expect(fs.access(sentinel)).rejects.toThrow();
+  });
+
+  test("rejects an otherwise runnable replacement before cwd pinning", async () => {
+    const tmp = await setupTestDirectory("run-identity-pre-pin");
+    tmps.push(tmp);
+    const project = join(tmp, "project");
+    const oldSentinel = join(tmp, "old-ran");
+    const replacementSentinel = join(tmp, "replacement-ran");
+    const cacheDir = join(tmp, "cache");
+    await seedRunnableProject(project, oldSentinel);
+    const stats = await fs.lstat(project, { bigint: true });
+    await fs.rm(project, { recursive: true, force: true });
+    await seedRunnableProject(project, replacementSentinel);
+
+    const result = await runRunnerIdentified(
+      project,
+      project,
+      stats.dev.toString(10),
+      stats.ino.toString(10),
+      { STATUSLINE_CACHE_DIR: cacheDir },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(await readCache(cacheDir)).toBeNull();
+    expect(fs.access(oldSentinel)).rejects.toThrow();
+    expect(fs.access(replacementSentinel)).rejects.toThrow();
+  });
+
+  test("executes only from the pinned inode after pathname replacement", async () => {
+    const tmp = await setupTestDirectory("run-identity-post-pin");
+    tmps.push(tmp);
+    const project = join(tmp, "project");
+    const moved = join(tmp, "moved-original");
+    const replacement = join(tmp, "replacement-seed");
+    const oldSentinel = join(tmp, "old-ran");
+    const replacementSentinel = join(tmp, "replacement-ran");
+    const cacheDir = join(tmp, "cache");
+    const bin = join(tmp, "bin");
+    const swapped = join(tmp, "swapped");
+    await seedRunnableProject(project, oldSentinel);
+    await seedRunnableProject(replacement, replacementSentinel);
+    await fs.mkdir(bin);
+    const stats = await fs.lstat(project, { bigint: true });
+    const realStat = Bun.which("stat");
+    const realMv = Bun.which("mv");
+    const realCp = Bun.which("cp");
+    if (realStat === null || realMv === null || realCp === null) {
+      throw new Error("stat, mv, and cp are required for this test");
+    }
+    await fs.writeFile(
+      join(bin, "stat"),
+      [
+        "#!/usr/bin/env bash",
+        "set -uo pipefail",
+        'output=$("$REAL_STAT" "$@" 2>/dev/null)',
+        "status=$?",
+        '[ "$status" -eq 0 ] || exit "$status"',
+        String.raw`printf '%s\n' "$output"`,
+        "last=${!#}",
+        'if [ "$last" = "." ] && [ ! -e "$SWAPPED" ]; then',
+        '  : > "$SWAPPED"',
+        '  "$REAL_MV" -- "$PROJECT" "$MOVED"',
+        '  "$REAL_CP" -R -- "$REPLACEMENT" "$PROJECT"',
+        "fi",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = await runRunnerIdentified(
+      project,
+      project,
+      stats.dev.toString(10),
+      stats.ino.toString(10),
+      {
+        STATUSLINE_CACHE_DIR: cacheDir,
+        STATUSLINE_NOW_OVERRIDE: "70000",
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        REAL_STAT: realStat,
+        REAL_MV: realMv,
+        REAL_CP: realCp,
+        PROJECT: project,
+        MOVED: moved,
+        REPLACEMENT: replacement,
+        SWAPPED: swapped,
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(await fs.readFile(oldSentinel, "utf8")).toContain("ran");
+    expect(fs.access(replacementSentinel)).rejects.toThrow();
+    const cache = await readCache(cacheDir);
+    const checks = cache?.checks as Record<string, { status: string }>;
+    expect(checks.lint.status).toBe("ok");
+  });
+});
+
 describe("runner: trust boundary", () => {
   const tmps: string[] = [];
   afterEach(async () => {

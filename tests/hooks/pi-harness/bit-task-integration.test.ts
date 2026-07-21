@@ -4,6 +4,10 @@ import { join, resolve } from "node:path";
 import type { HarnessConfig } from "../../../pi/extensions/pi-harness/config";
 import setupBitTask from "../../../pi/extensions/pi-harness/features/bit-task/index";
 import { resolvePaths } from "../../../pi/extensions/pi-harness/lib/paths";
+import {
+  matchesFileIdentity,
+  worktreeIdentityFromDetails,
+} from "../../../pi/extensions/pi-harness/lib/worktree-identity";
 import type {
   CtxLike,
   ToolDefLike,
@@ -228,6 +232,19 @@ describe("pi-harness bit-task integration", () => {
     );
 
     expect(readTextResult(result)).toBe(expected);
+    const details =
+      result !== null && typeof result === "object"
+        ? Reflect.get(result, "details")
+        : undefined;
+    const identity = worktreeIdentityFromDetails(details, expected);
+    expect(identity).toBeDefined();
+    if (identity === undefined) throw new Error("missing worktree identity");
+    const [rootStats, dotGitStats] = await Promise.all([
+      fs.lstat(expected, { bigint: true }),
+      fs.lstat(join(expected, ".git"), { bigint: true }),
+    ]);
+    expect(matchesFileIdentity(rootStats, identity.root)).toBe(true);
+    expect(matchesFileIdentity(dotGitStats, identity.dotGit)).toBe(true);
   });
 
   test("rejects a successful create hook that returns a nonexistent path", async () => {
@@ -254,6 +271,51 @@ describe("pi-harness bit-task integration", () => {
         pi.ctx,
       ),
     ).rejects.toThrow(/worktree_create postcondition failed/i);
+  });
+
+  test("rejects replacement after hook publication before parent validation", async () => {
+    const fixture = await setupRepo("feature/pi-bit-task-race");
+    const hooks = join(fixture.directory, "race-hooks");
+    await fs.mkdir(join(hooks, "worktree"), { recursive: true });
+    await fs.writeFile(
+      join(hooks, "worktree/create.sh"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'output=$(bash "$REAL_CREATE_HOOK")',
+        "path=$" + String.raw`{output%%$'\n'*}`,
+        'dot_git=$(cat "$path/.git")',
+        'rm -rf -- "$path"',
+        'mkdir -- "$path"',
+        String.raw`printf "%s\n" "$dot_git" > "$path/.git"`,
+        String.raw`printf "%s\n" "$output"`,
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const config: HarnessConfig = {
+      ...fixture.config,
+      paths: { ...fixture.config.paths, codexHooksDir: hooks },
+    };
+    const pi = createFakePi({ cwd: fixture.repo });
+    setupBitTask(pi, config, {
+      cwd: fixture.repo,
+      env: {
+        ...fixture.env,
+        REAL_CREATE_HOOK: join(CODEX_HOOKS, "worktree/create.sh"),
+      },
+    });
+
+    await expect(
+      executeTool(
+        getTool(pi.tools, "worktree_create"),
+        { name: "pi-worktree-race" },
+        pi.ctx,
+      ),
+    ).rejects.toThrow(/filesystem identity changed after hook publication/i);
+    const replacementStats = await fs.stat(
+      join(fixture.worktrees, "pi-worktree-race"),
+    );
+    expect(replacementStats.isDirectory()).toBe(true);
   });
 
   test("removes a clean worktree created through the tool", async () => {
