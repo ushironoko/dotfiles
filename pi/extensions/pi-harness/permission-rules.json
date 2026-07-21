@@ -59,6 +59,10 @@
       "pattern": "^find(?: |(?![\\s\\S]))"
     },
     {
+      "source": "Bash(printf:*)",
+      "pattern": "^printf(?: |(?![\\s\\S]))"
+    },
+    {
       "source": "Bash(gh:*)",
       "pattern": "^gh(?: |(?![\\s\\S]))"
     },

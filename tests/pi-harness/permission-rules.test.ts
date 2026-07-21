@@ -63,6 +63,19 @@ const destructiveCommands: string[] = [
   "rm -r -f /",
   "git push origin main --force",
   "git push -f origin main",
+  "git push -fu origin main",
+  "git push -vd origin main",
+  "git push --del origin main",
+  "git push --mir origin",
+  "git push --pru origin",
+  "git push origin +HEAD:main",
+  "git push --exec=/tmp/receive-pack origin main",
+  'git push --exec="$helper" origin main',
+  "/usr/bin/git -C /tmp push --del origin main",
+  "git push ext::payload HEAD",
+  "git push --repo=helper::payload HEAD",
+  "git --attr-source HEAD push --force origin main",
+  "git --future-option HEAD push --force origin main",
   "git clean -fd",
   "git clean -df",
   "git clean -f -d",
@@ -244,6 +257,58 @@ describe("explicit allow matching", () => {
       "utf8",
     ),
   );
+
+  test("allows the documented codex-reviewer staging, prompt, and cleanup commands", () => {
+    const instruction =
+      "printf '%s' 'Read /tmp/codex-reviewer-a1B2C3/prompt.md completely and follow it exactly.'";
+    for (const wrapper of [
+      "~/.claude/hooks/lib/codex-stage.sh prompt --timeout 600",
+      "~/.claude/hooks/lib/codex-stage.sh prompt --dir '/tmp/My Repo' --timeout 600",
+    ]) {
+      expect(
+        evaluateCommand(`${instruction} |\n  ${wrapper}`, productionRules)
+          .verdict,
+      ).toBe("allow");
+    }
+
+    const staging =
+      'bun -e \'const { mkdtemp } = await import("node:fs/promises"); console.log(await mkdtemp("/tmp/codex-reviewer-"));\'';
+    const cleanup =
+      'bun -e \'const { rm } = await import("node:fs/promises"); await rm("/tmp/codex-reviewer-a1B2C3", { recursive: true, force: true });\'';
+    expect(evaluateCommand(staging, productionRules).verdict).toBe("allow");
+    expect(evaluateCommand(cleanup, productionRules).verdict).toBe("allow");
+  });
+
+  test("does not widen the codex-stage allow to unsafe prompt forms", () => {
+    const wrapper = "~/.claude/hooks/lib/codex-stage.sh prompt --dir /tmp";
+    expect(
+      evaluateCommand(
+        `printf '%s' "$(bit relay sync)" | ${wrapper}`,
+        productionRules,
+      ).verdict,
+    ).toBe("deny");
+    for (const command of [
+      `printf '%s' "$(cat ~/.ssh/id_ed25519)" | ${wrapper}`,
+      "printf '%s' 'review this' | /tmp/codex-stage.sh prompt",
+      `printf '%s' 'review this' | ~/.claude/hooks/lib/codex-stage.sh prompt --dir "$PWD"`,
+      "~/.claude/hooks/lib/codex-stage.sh prompt <<< 'review this'",
+      "~/.claude/hooks/lib/codex-stage.sh prompt < /tmp/review-prompt.md",
+    ]) {
+      expect(evaluateCommand(command, productionRules).verdict).toBe(
+        "default-continue",
+      );
+    }
+    expect(
+      evaluateCommand(
+        [
+          "~/.claude/hooks/lib/codex-stage.sh prompt << 'PROMPT_EOF'",
+          "review this",
+          "PROMPT_EOF",
+        ].join("\n"),
+        productionRules,
+      ).verdict,
+    ).toBe("deny");
+  });
 
   test.each([
     "bun\u00a0evil",

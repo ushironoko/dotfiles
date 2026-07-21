@@ -98,6 +98,17 @@ describe("child-run persisted details", () => {
     });
   });
 
+  test("preserves the permission-blocked terminal reason", () => {
+    const blocked = payload();
+    blocked.runs[0]!.status = "failed";
+    blocked.runs[0]!.terminalReason = "permission-blocked";
+
+    expect(decodePersistedChildRuns(blocked)?.runs[0]).toMatchObject({
+      status: "failed",
+      terminalReason: "permission-blocked",
+    });
+  });
+
   test("rejects future, malformed, nonterminal, and oversized data", () => {
     expect(
       decodePersistedChildRuns({ ...payload(), version: 999 }),

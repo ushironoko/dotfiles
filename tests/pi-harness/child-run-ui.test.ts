@@ -380,6 +380,61 @@ describe("child-session detail component", () => {
     expect(lines.every((item) => visibleWidth(item) <= 28)).toBe(true);
   });
 
+  test("wraps long detail rows without clipping their tails", () => {
+    const { registry, tui, keybindings } = setup(60);
+    const { runIds } = registry.beginInvocation({
+      toolCallId: "parent",
+      source: "workflow",
+      mode: "single",
+      label: "workflow invocation with extended context LABEL-END",
+      runs: [
+        {
+          agent: "reviewer-agent-with-a-descriptive-name AGENT-END",
+          task: "review the implementation carefully and report every discovered regression TASK-END",
+          taskIndex: 0,
+          stageIndex: 0,
+          stageName: "verification stage with additional context STAGE-END",
+        },
+      ],
+    });
+    const runId = runAt(runIds, 0);
+    registry.observe(runId, { type: "process_started", at: 1 });
+    registry.observe(runId, {
+      type: "tool_finished",
+      localId: 1,
+      name: "tool-with-a-long-descriptive-name TOOL-END",
+      failed: false,
+      at: 2,
+    });
+    registry.observe(runId, {
+      type: "assistant_final",
+      text: "A complete assistant response must remain readable through its final marker ASSISTANT-END",
+      at: 3,
+    });
+    registry.finishRun(runId, {
+      status: "succeeded",
+      reason: "completed",
+      endedAt: 4,
+    });
+    const detail = new ChildRunDetailComponent(
+      registry,
+      runId,
+      tui,
+      keybindings,
+      () => {},
+    );
+
+    const lines = detail.render(24);
+    const rendered = lines.join("\n");
+    expect(rendered).toContain("AGENT-END");
+    expect(rendered).toContain("LABEL-END");
+    expect(rendered).toContain("STAGE-END");
+    expect(rendered).toContain("TASK-END");
+    expect(rendered).toContain("TOOL-END");
+    expect(rendered).toContain("ASSISTANT-END");
+    expect(lines.every((item) => visibleWidth(item) <= 24)).toBe(true);
+  });
+
   test("pauses live follow on upward scroll and resumes with End", () => {
     const { registry, tui, keybindings } = setup();
     const { runIds } = registry.beginInvocation({

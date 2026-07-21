@@ -81,6 +81,19 @@ interactive sessions and blocks in child/non-UI sessions; set
 [`LOCAL_PERMISSION_JUDGE.md`](./LOCAL_PERMISSION_JUDGE.md) for setup,
 configuration, data boundaries, and qualification steps.
 
+An explicitly invoked `/skill:<name>` may pre-approve parent-session Bash
+commands through its `allowed-tools` frontmatter. The permission policy records
+the accepted interactive/RPC input before Pi expands it, then requires the
+latest processed user message to exactly match that loaded `SKILL.md` and its
+arguments. The run snapshots both the skill body and grants, so later
+frontmatter edits cannot widen it. Pasted expansions and extension-generated
+messages grant nothing. It recalculates grants at every provider context,
+including queued prompts, and clears them when the run settles. Deterministic
+deny/ask and shell-structure
+rules still take precedence; child profiles never inherit grants. A skill's
+`git -C` grant is additionally limited to worktrees sharing the active cwd's
+canonical Git common directory.
+
 ## Codex web tools
 
 `extensions/codex-web` registers `web_search` and `web_fetch` for the current
@@ -152,6 +165,38 @@ typebox baseline + acceptance/rejection through pi's real `validateToolArguments
 Known gaps vs Claude Code: no Claude server-side auto mode (the local Ollama
 judge plus deterministic rules approximates it), no LSP plugins, provider-log
 is a request/status logger (not full logproxy).
+
+## BTW side questions
+
+`/btw <question>` answers a side question from a stable snapshot of the active
+parent-session leaf without adding the question or answer to the parent model's
+context. With no inline argument, TUI/RPC UI modes open a short input dialog.
+The command requires one of those UI-capable modes; RPC answers are also sent
+through the UI notification channel. Print/JSON mode reports an unsupported-mode
+error instead of producing an invisible answer.
+
+Each invocation creates an in-memory child, copies the parent's resolved
+(compaction-aware) messages, current model/thinking level, and system prompt,
+and disposes the child immediately after the answer. The child loads no
+extensions, skills, prompt templates, themes, or newly discovered context
+files or append-system prompts. It uses isolated in-memory settings, so
+configured packages cannot auto-install, and forces image blocks out of model
+context. Its exact tool allowlist is pi's built-in `read` and `ls`, with the
+same filesystem read scope as the parent session (this is a read-only boundary,
+not a filesystem sandbox). The `grep`/`find` wrappers are deliberately omitted
+because they can auto-install missing `rg`/`fd` binaries. `bash`, `edit`, and
+`write` are explicitly denied and the active set is checked before the model
+runs.
+
+Successful Q/A records are appended as custom entries in the parent session.
+They remain visible after resuming that parent (hidden records are replayed
+after parent compaction) but are never sent to its LLM, and no independently
+resumable child session or child file is created. Stored and rendered fields are
+terminal-control sanitized. Deleting the parent session therefore deletes BTW
+history with it. BTW is not registered inside `PI_HARNESS_CHILD=1` child
+profiles, and one parent session runs at most one BTW invocation at a time.
+Cancel a slow BTW request with `/btw-cancel` or `Ctrl+Alt+B`; parent session
+shutdown also aborts and disposes the child.
 
 ## AskUserQuestion compatibility
 

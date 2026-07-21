@@ -3,6 +3,10 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import { BackgroundInvocationManager } from "../../pi/extensions/pi-harness/features/child-runs/background";
+import {
+  CHILD_PERMISSION_SIGNAL_ENV,
+  formatChildPermissionSignal,
+} from "../../pi/extensions/pi-harness/features/permission-policy/block";
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
 import setupWorkflow from "../../pi/extensions/pi-harness/features/workflow/index";
 import type {
@@ -80,6 +84,8 @@ interface ScriptedResponse {
   stderr?: string;
   code?: number;
   stopReason?: string;
+  permissionBlocked?: boolean;
+  permissionSignalPrefix?: string;
 }
 
 interface RecordedSpawn {
@@ -89,7 +95,10 @@ interface RecordedSpawn {
   taskArg: string;
 }
 
-const createScriptedProcess = (script: ScriptedResponse): SpawnedProcess => {
+const createScriptedProcess = (
+  script: ScriptedResponse,
+  permissionSignalToken?: string,
+): SpawnedProcess => {
   const stdoutListeners: ((chunk: string) => void)[] = [];
   const stderrListeners: ((chunk: string) => void)[] = [];
   const closeListeners: ((
@@ -98,6 +107,13 @@ const createScriptedProcess = (script: ScriptedResponse): SpawnedProcess => {
   ) => void)[] = [];
 
   setTimeout(() => {
+    if (script.permissionBlocked === true) {
+      const signal = formatChildPermissionSignal(permissionSignalToken);
+      if (signal === undefined) throw new Error("missing permission signal");
+      for (const listener of stderrListeners) {
+        listener(`${script.permissionSignalPrefix ?? ""}${signal}\n`);
+      }
+    }
     if (script.text !== undefined) {
       for (const listener of stdoutListeners) {
         listener(
@@ -149,7 +165,10 @@ const makeSpawnFn = (
   const spawnFn: SpawnFunction = (command, args, options) => {
     const taskArg = args[args.length - 1] ?? "";
     records.push({ command, args, options, taskArg });
-    return createScriptedProcess(respond(taskArg));
+    return createScriptedProcess(
+      respond(taskArg),
+      options.env[CHILD_PERMISSION_SIGNAL_ENV],
+    );
   };
   return { records, spawnFn };
 };
@@ -478,6 +497,62 @@ describe("pi-harness workflow", () => {
     expect(text).toContain("FAILED");
     expect(text).toContain("stopReason length");
     expect(details.succeeded).toBe(1);
+  });
+
+  test("degrades a permission-blocked task even when pi exits zero", async () => {
+    const home = await makeTempDirectory("pi-workflow-permission-block");
+    await writeAgents(home, ["codex-reviewer"]);
+    const { spawnFn } = makeSpawnFn((taskArg) =>
+      taskArg.includes("blocked")
+        ? {
+            text: "Please approve the required wrapper invocation",
+            permissionBlocked: true,
+            permissionSignalPrefix: "stderr prelude:",
+          }
+        : { text: "survivor" },
+    );
+    const registry = new ChildRunRegistry({
+      idFactory: (() => {
+        let nextId = 0;
+        return () => `permission-block-${++nextId}`;
+      })(),
+      now: () => 100,
+    });
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      childRuns: { registry, ensureVisible: () => undefined },
+    });
+
+    const result = await executeTool(
+      findWorkflowTool(pi.tools),
+      {
+        stages: [
+          {
+            mode: "fanout",
+            tasks: [
+              { agentType: "codex-reviewer", task: "healthy lens" },
+              { agentType: "codex-reviewer", task: "blocked lens" },
+            ],
+          },
+        ],
+      },
+      pi.ctx,
+    );
+
+    const { text, details } = getResult(result);
+    expect(text).toContain("1/2");
+    expect(text).toContain("FAILED (permission blocked)");
+    expect(details.succeeded).toBe(1);
+    const reports = getStageTaskReports(details, 0);
+    expect(reports[1]?.result).toMatchObject({
+      permissionBlocked: true,
+      stderr: "stderr prelude:",
+    });
+    expect(registry.getSnapshots()[0]?.runs[1]).toMatchObject({
+      status: "failed",
+      terminalReason: "permission-blocked",
+    });
   });
 
   test("provisions an isolated worktree for codex-poc and leaves it in place", async () => {
