@@ -2,6 +2,11 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { PiLike } from "../../lib/pi-like";
 import type { HarnessConfig } from "../../config";
+import {
+  createPermissionTaskTracker,
+  discoverProjectContext,
+  type PermissionProjectContext,
+} from "./context";
 import { createPermissionJudge, type JudgeOutcome } from "./judge";
 import { evaluateCommand, loadRules } from "./rules";
 import { resolveTrustedLeadingCd } from "./trusted-cd";
@@ -28,7 +33,18 @@ const JUDGE_WARNING_KINDS: ReadonlySet<JudgeOutcome["kind"]> = new Set([
   "unavailable",
 ]);
 
-const setupPermissionPolicy = (pi: PiLike, config: HarnessConfig): void => {
+interface SetupPermissionPolicyOptions {
+  readonly discoverProject?: (
+    cwd: string,
+    signal?: AbortSignal,
+  ) => Promise<PermissionProjectContext>;
+}
+
+const setupPermissionPolicy = (
+  pi: PiLike,
+  config: HarnessConfig,
+  options: SetupPermissionPolicyOptions = {},
+): void => {
   const rules = loadRules(readPermissionRules());
   const judgeConfig = config.permissionJudge;
   const judge =
@@ -36,8 +52,35 @@ const setupPermissionPolicy = (pi: PiLike, config: HarnessConfig): void => {
       ? createPermissionJudge(judgeConfig)
       : undefined;
   let judgeWarningShown = false;
+  const taskTracker = createPermissionTaskTracker();
+  const discoverProject =
+    options.discoverProject ??
+    ((cwd: string, signal?: AbortSignal) =>
+      discoverProjectContext(cwd, {}, signal));
 
+  pi.on("input", (event) => {
+    taskTracker.capture({
+      text: event.text,
+      source: event.source,
+      ...(event.streamingBehavior === undefined
+        ? {}
+        : { streamingBehavior: event.streamingBehavior }),
+    });
+  });
+  pi.on("before_agent_start", (event) => {
+    taskTracker.activate(event.prompt);
+  });
+  pi.on("context", (event) => {
+    // Steering/follow-up messages can enter an already-running agent without
+    // another before_agent_start. Correlate their final user message with the
+    // raw input record before the provider sees the next turn.
+    taskTracker.activateFromMessages(event.messages);
+  });
+  pi.on("agent_settled", () => {
+    taskTracker.settle();
+  });
   pi.on("session_shutdown", () => {
+    taskTracker.clear();
     judge?.clear();
   });
 
@@ -98,9 +141,20 @@ const setupPermissionPolicy = (pi: PiLike, config: HarnessConfig): void => {
         }
       }
 
+      let project: PermissionProjectContext | undefined;
+      if (ctx.cwd !== undefined) {
+        try {
+          project = await discoverProject(ctx.cwd, signal);
+        } catch {
+          // Project context improves classification but never grants on its
+          // own. An adapter failure is represented as unverified context.
+        }
+      }
       const outcome = await judge.judge(command, {
         cwd: ctx.cwd,
         signal,
+        task: taskTracker.current(),
+        project,
       });
       if (outcome.kind === "allow") {
         if (!outcome.cached) judgeWarningShown = false;

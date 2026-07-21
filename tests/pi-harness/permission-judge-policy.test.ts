@@ -6,6 +6,7 @@ import {
   type PermissionJudgeConfig,
 } from "../../pi/extensions/pi-harness/config";
 import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
+import type { PermissionProjectContext } from "../../pi/extensions/pi-harness/features/permission-policy/context";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import type { ToolCallEvent } from "../../pi/extensions/pi-harness/lib/pi-like";
 import { startMockUpstream, type MockUpstream } from "../test-helpers";
@@ -83,6 +84,15 @@ const bashCall = (command: string, id = "judge-1"): ToolCallEvent => ({
   input: { command },
 });
 
+const verifiedProject = (cwd: string): PermissionProjectContext => ({
+  kind: "git",
+  name: "dotfiles",
+  cwd,
+  activeWorktree: cwd,
+  worktrees: [cwd],
+  fingerprint: `project:${cwd}`,
+});
+
 const createTestAbortController = (): {
   signal: AbortSignal;
   abort: () => void;
@@ -118,6 +128,114 @@ describe("permission policy local judge routing", () => {
       "/api/tags",
       "/api/chat",
     ]);
+  });
+
+  test("uses bounded raw current-turn input instead of the expanded prompt", async () => {
+    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const cwd = resolve(import.meta.dir, "../..");
+    const pi = createFakePi({ cwd });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => verifiedProject(cwd),
+    });
+
+    await pi.emitInput({
+      type: "input",
+      text: "/skill:start-work implement contextual judging",
+      source: "interactive",
+    });
+    await pi.emitBeforeAgentStart({
+      type: "before_agent_start",
+      prompt: "PRIVATE EXPANDED SKILL FILE CONTENTS",
+    });
+    expect(
+      await pi.emitToolCall(bashCall("git status --short")),
+    ).toBeUndefined();
+
+    const firstBody = chatRequests(upstream)[0]?.body ?? "";
+    expect(firstBody).toContain(
+      "/skill:start-work implement contextual judging",
+    );
+    expect(firstBody).not.toContain("PRIVATE EXPANDED SKILL FILE CONTENTS");
+    expect(firstBody).toContain(cwd);
+
+    await pi.emitAgentSettled();
+    expect(
+      await pi.emitToolCall(bashCall("git status --short", "after-settled")),
+    ).toBeUndefined();
+    const secondBody = chatRequests(upstream)[1]?.body ?? "";
+    expect(secondBody).not.toContain("/skill:start-work");
+    expect(chatRequests(upstream)).toHaveLength(2);
+  });
+
+  test("does not bind a queued expanded skill before provider delivery", async () => {
+    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const cwd = resolve(import.meta.dir, "../..");
+    const pi = createFakePi({ cwd });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => verifiedProject(cwd),
+    });
+
+    await pi.emitInput({
+      type: "input",
+      text: "Initial review task",
+      source: "interactive",
+    });
+    await pi.emitBeforeAgentStart({
+      type: "before_agent_start",
+      prompt: "Initial review task",
+    });
+    const previousMessages = [{ role: "user", content: "Initial review task" }];
+    await pi.emitContext(previousMessages);
+    await pi.emitInput({
+      type: "input",
+      text: "/skill:start-work implement follow-up",
+      source: "interactive",
+      streamingBehavior: "followUp",
+    });
+    await pi.emitContext(previousMessages);
+
+    await pi.emitToolCall(bashCall("git status --short", "before-delivery"));
+    const beforeDelivery = chatRequests(upstream)[0]?.body ?? "";
+    expect(beforeDelivery).toContain("Initial review task");
+    expect(beforeDelivery).not.toContain("/skill:start-work");
+
+    await pi.emitContext([
+      ...previousMessages,
+      { role: "assistant", content: [] },
+      { role: "user", content: "PRIVATE EXPANDED SKILL CONTENT" },
+    ]);
+    await pi.emitToolCall(bashCall("git log -1", "after-delivery"));
+    const afterDelivery = chatRequests(upstream)[1]?.body ?? "";
+    expect(afterDelivery).toContain("/skill:start-work implement follow-up");
+    expect(afterDelivery).not.toContain("PRIVATE EXPANDED SKILL CONTENT");
+  });
+
+  test("routes unavailable project context conservatively without exposing its reason", async () => {
+    const upstream = await start(() => ollamaResponse("ASK"));
+    const cwd = "/tmp/project";
+    const pi = createFakePi({ cwd, hasUI: false });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => ({
+        kind: "unavailable",
+        cwd,
+        reason: "PRIVATE DISCOVERY DETAILS",
+        fingerprint: "project:unavailable",
+      }),
+    });
+
+    expect(await pi.emitToolCall(bashCall("git add src/parser.ts"))).toEqual({
+      block: true,
+      reason: "local judge requested user confirmation",
+    });
+    expect(chatRequests(upstream)).toHaveLength(1);
+    const payload = JSON.parse(chatRequests(upstream)[0]?.body ?? "") as {
+      messages: { role: string; content: string }[];
+    };
+    const userContent = payload.messages.find(
+      (message) => message.role === "user",
+    )?.content;
+    expect(userContent).toContain('"kind":"unavailable"');
+    expect(userContent).not.toContain("PRIVATE DISCOVERY DETAILS");
   });
 
   test("a hidden substitution does not inherit the outer explicit allow", async () => {
@@ -219,10 +337,16 @@ describe("permission policy local judge routing", () => {
     expect(upstream.received).toHaveLength(0);
   });
 
-  test("deny, explicit allow, and built-in ask never call the judge", async () => {
+  test("deny, explicit allow, and built-in ask never discover context or call the judge", async () => {
     const upstream = await start(() => ollamaResponse("ALLOW"));
     const pi = createFakePi();
-    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
+    let discoveries = 0;
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => {
+        discoveries += 1;
+        return verifiedProject("/tmp/project");
+      },
+    });
 
     expect(await pi.emitToolCall(bashCall("bit relay sync", "deny"))).toEqual({
       block: true,
@@ -236,6 +360,7 @@ describe("permission policy local judge routing", () => {
       await pi.emitToolCall(bashCall("rm -rf /tmp/project", "ask")),
     ).toBeUndefined();
     expect(upstream.received).toHaveLength(0);
+    expect(discoveries).toBe(0);
   });
 
   test("bypasses the judge only for a leading same-repository cd plus an explicit allow", async () => {

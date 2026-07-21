@@ -75,9 +75,16 @@ Child pi processes spawned by subagent/workflow receive `PI_HARNESS_CHILD=1`
 and keep only the safety layer (no recursion, no duplicate notifications).
 
 The safety layer includes a default-on local Ollama fallback for Bash commands
-that match no deterministic deny/allow/ask rule. An unavailable judge asks in
-interactive sessions and blocks in child/non-UI sessions; set
-`permissionJudge.enabled` to `false` for the previous rule-only behavior. See
+that match no deterministic deny/allow/ask rule. It classifies a bounded JSON
+envelope containing the command, raw current-turn task text, and locally
+verified cwd/project/worktree context; it never receives expanded skills,
+conversation history, repository contents, remotes, environment, or tool
+results. A strict 250 ms local discovery deadline covers Git probing and path
+canonicalization before each fallback/cache lookup. An unavailable judge asks
+in interactive sessions and
+blocks in child/non-UI sessions; set `permissionJudge.enabled` to `false` for
+the previous rule-only behavior. Existing broad explicit grants still bypass
+the fallback by design. See
 [`LOCAL_PERMISSION_JUDGE.md`](./LOCAL_PERMISSION_JUDGE.md) for setup,
 configuration, data boundaries, and qualification steps.
 

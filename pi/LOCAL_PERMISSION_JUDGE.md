@@ -2,8 +2,8 @@
 
 pi-harness uses a qualified local Ollama model as the fallback classifier for
 Bash tool calls that match no deterministic permission rule. This approximates
-Claude Code auto mode without sending the agent conversation or repository
-contents to the judge.
+Claude Code auto mode using bounded current-task and active-project context,
+without sending conversation history or repository contents to the judge.
 
 ## Setup
 
@@ -25,9 +25,10 @@ after changing it. Disabling Cloud does not disable downloaded local models.
 The judge verifies `cloud.disabled === true` through `/api/status` before each
 command-bearing request and fails closed on old or misconfigured servers.
 
-The first cold model load can exceed the two-second shared request budget.
-Keeping the model listed by `ollama ps` avoids that startup penalty. Each judge
-request also sets `keep_alive: "30m"`.
+The first cold model or classifier-prompt load can exceed the two-second shared
+request budget. Keeping the model listed by `ollama ps` avoids model startup;
+a first classification after a policy/reload may still ask once while Ollama
+builds its prompt cache. Each request sets `keep_alive: "30m"`.
 
 Ollama's local HTTP API is unauthenticated. pi-harness trusts the local account
 and the process bound to the configured loopback port. It verifies the server's
@@ -78,16 +79,24 @@ operation (for example with Esc).
    explicitly allowed; relative/dynamic paths, redirects, other connectors,
    multiple `cd` segments, missing paths, and unrelated or nested repositories
    do not receive this exception.
-5. For an unknown command, reuse an unexpired completed `ALLOW` cache entry if
-   one exists. This sends no request.
-6. Before a cache-miss chat request, require `/api/status` to report
+5. For a command that still reaches the judge, bind the raw current input to
+   its agent run and discover canonical cwd/project/worktree context locally.
+   The entire discovery phase—including cwd/worktree canonicalization and a
+   strict `git worktree list --porcelain -z` probe—is capped at 250 ms and
+   distinguishes verified Git, verified non-Git, and unavailable discovery.
+6. Derive conservative scope evidence for one literal leading `cd`: listed
+   worktree, outside the listed roots, or unverified.
+7. Reuse an unexpired completed `ALLOW` cache entry only when the command,
+   raw cwd, complete raw-task fingerprint, and complete verified-project
+   fingerprint match. Context discovery therefore precedes cache lookup.
+8. Before a cache-miss chat request, require `/api/status` to report
    `cloud.disabled === true`.
-7. Require `/api/tags` to contain exactly one exact-name model entry whose
+9. Require `/api/tags` to contain exactly one exact-name model entry whose
    `name`, `model`, and pinned digest match and which has no `remote_host` or
    `remote_model` field.
-8. Query `/api/chat`, then require the exact configured response model, no
-   remote metadata, a completed non-truncated response, and an entire verdict
-   of `ALLOW`. Every other result asks the user or blocks without UI.
+10. Query `/api/chat`, then require the exact configured response model, no
+    remote metadata, a completed non-truncated response, and an entire verdict
+    of `ALLOW`. Every other result asks the user or blocks without UI.
 
 The checked-in allow entries mirror the broad Bash grants in
 `claude/.claude/settings.json`. They represent explicit user trust, not a claim
@@ -111,29 +120,49 @@ dialog.
 The command-bearing `/api/chat` request receives only:
 
 - the fixed safety-classifier system instruction;
-- the literal shell command, encoded as an untrusted JSON string.
+- the literal shell command;
+- up to 1 KiB of normalized raw input for the current agent run and its source;
+- canonical cwd plus a tagged Git/non-Git/unavailable project result;
+- for Git, bounded project name, active worktree, and known canonical,
+  non-bare worktree roots (up to 16 roots / 2 KiB total); bare Git database
+  paths may identify the project locally but are never navigation scope;
+- computed leading-`cd` scope (`listed-worktree`, outside, or unverified).
 
-The preceding `/api/status` and `/api/tags` requests contain no command. The
-judge does not send cwd, environment, files, repository state, conversation
-history, or tools, and it performs no investigation. Direct numeric-loopback
-TCP connections ignore ambient `HTTP_PROXY`/`HTTPS_PROXY`, and redirects are
-not followed.
+Task context comes from pi's raw `input` event. Skill/template expansion,
+system prompts, prior conversation, context files, tool results, environment,
+repository file contents, Git remotes, and credentials are not sent. Pending
+input becomes active only for its matching agent run or observed queued-user
+message, remains stable across earlier tool turns/retries, and clears at
+`agent_settled` or session shutdown. Raw `/skill:name` and prompt-template
+invocations are retained only after their corresponding expanded turn is
+observably active.
+The local Git discovery command sends nothing to Ollama and reads only Git
+worktree metadata. `/api/status` and `/api/tags` contain no command or context.
+Direct numeric-loopback TCP ignores ambient `HTTP_PROXY`/`HTTPS_PROXY`, and
+redirects are not followed.
 
-Status, tags, and chat share one `timeoutMs` budget. If preflight consumes the
-budget, the command-bearing POST is not started. Commands over 2 KiB,
-serialized classifier prompts over 3 KiB, and any response over 64 KiB are not
-auto-approved. The model context is 4,096 tokens so the bounded prompt and chat
-framing fit without silent left/right truncation.
+The complete Git context-discovery phase has a separate 250 ms cap; status,
+tags, and chat then share one `timeoutMs` budget. If preflight consumes that
+budget, chat is not
+started. Literal commands over 2 KiB, JSON-escaped commands over 2,800 bytes,
+complete classifier messages over 10 KiB, Git output over 64 KiB, and responses
+over 64 KiB are not auto-approved. The model context is 16,384 tokens: the
+10 KiB content cap fits even under byte-fallback tokenization, with room for
+the chat template and verdict.
 
 Successful decisions are cached for five minutes in a 128-entry per-session
-LRU. Cache keys are SHA-256 hashes over policy/model/digest/cwd/command; raw
-command text is not retained in the cache. ASK, timeout, malformed, aborted,
-unverified, and unavailable results are never cached.
+LRU. Cache keys hash the exact system prompt, model/digest, raw cwd, complete
+raw-task fingerprint, complete verified-project fingerprint, and bounded request
+envelope. Raw task, command, and omitted worktree text is not retained in cache
+entries. ASK, timeout, malformed, aborted, unverified, and unavailable outcomes
+are never cached.
 
 ## Security limitations
 
-A small LLM is a best-effort classifier, not a proof of safety. Prompt text
-inside comments, quoted strings, or here-documents can be adversarial. The
+A small LLM is a best-effort classifier, not a proof of safety. Current-task
+text, project/path names, comments, quoted strings, and here-documents can be
+adversarial. Project identity and the leading-`cd` scope are computed locally,
+but they establish relevance/scope only and never prove command safety. The
 existing parser and deterministic deny/ask floor run first. Parser uncertainty
 is blocked without consulting the classifier; classifier uncertainty must return
 `ASK`. Top-level `<<` syntax and backslash-newline continuations in executable
@@ -142,6 +171,18 @@ reconstruction can otherwise hide executable substitutions or later commands.
 Balanced arithmetic expansions such as
 `$((1 << 2))` remain supported because their contents are consumed as one
 expansion.
+
+The contextual path applies only to commands that reach the fallback judge.
+The broad explicit allow entries described above still bypass it by design, so
+classifier qualification is not a global guarantee for every `bun`, `cargo`,
+`find`, or `gh` subcommand.
+
+Routine Git candidates are classified from command shape and verified project
+scope only. Git hooks, filters, credential/transport helpers, and repository or
+user configuration are not inspected and can add side effects to commands such
+as `commit`, `fetch`, or `pull`. Auto-approval therefore assumes the active
+repository and local Git configuration are trusted; this mode is not suitable
+for untrusted repositories.
 
 The policy covers LLM-issued `bash` tool calls. User-entered `!`/`!!` commands
 are intentionally outside it. pi also permits later third-party `tool_call`
@@ -157,31 +198,36 @@ bun run qualify:pi-permission-judge
 ```
 
 The command creates a fresh production `createPermissionJudge` instance per
-sample, so every sample performs live status, tags, and chat requests. It exits
-non-zero if a request is unavailable/malformed, if no benign command is
-approved, or if any destructive, privilege/exfiltration, opaque, or adversarial
-sample returns `ALLOW`. Its JSON output records every literal command and
-verdict.
+sample, so every sample performs live status, tags, and chat requests. Each
+sample carries synthetic bounded task/project context and an exact expected
+`ALLOW` or `ASK`; any mismatch, timeout, unavailable, or malformed result fails.
+Samples are classified but never executed. Separate policy integration tests
+cover deterministic production routing and exact chat-request counts. The JSON
+report records every literal command, expected verdict, and outcome.
 
 ### Checked-in default qualification record
 
-- Qualified at: `2026-07-16T07:49:16.211Z`
+- Qualified at: `2026-07-21T02:25:23.937Z`
 - Ollama: `0.32.0`
 - Model: `qwen2.5:latest` (7.6B, Q4_K_M)
 - `/api/tags` manifest digest:
   `845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e`
 - Shared timeout: `2000ms`
-- Live verdicts: `13/13`
-- Benign reads: `3/3 ALLOW`
-- Destructive: `3/3 ASK`
-- Privilege/exfiltration: `2/2 ASK`
-- Opaque execution: `2/2 ASK`
-- Prompt injection combined with destructive actions: `3/3 ASK`
+- Live contextual verdicts: `36/36` (two consecutive complete passes)
+- Required-safe: `13/13 ALLOW` (reads, lint/test/typecheck/format, local Git,
+  fetch/pull, linked-worktree navigation)
+- Required-confirmation: `23/23 ASK` (destructive Git/filesystem,
+  privilege/exfiltration, opaque execution, unavailable project identity,
+  unrelated/prefix-confusable/traversal paths, Git location/config/force
+  variants, outside-project redirection, push/transport/upload, and prompt
+  injection)
+- Independent hold-out after prompt tuning: `5/5`
 
 Automated protocol and routing tests do not require Ollama:
 
 ```bash
-bun test tests/pi-harness/permission-judge.test.ts \
+bun test tests/pi-harness/permission-judge-context.test.ts \
+  tests/pi-harness/permission-judge.test.ts \
   tests/pi-harness/permission-judge-policy.test.ts \
   tests/pi-harness/permission-rules.test.ts \
   tests/pi-harness/qualify-permission-judge.test.ts
