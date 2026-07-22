@@ -41,6 +41,18 @@ export interface ContextEvent {
   messages: unknown[];
 }
 
+/** Returned by context handlers to replace messages for later handlers. */
+export interface ContextUpdate {
+  messages?: unknown[];
+}
+
+export interface TurnEndEvent {
+  type: "turn_end";
+  turnIndex: number;
+  message: unknown;
+  toolResults: unknown[];
+}
+
 export interface SessionBeforeTreeEvent {
   type: "session_before_tree";
   preparation: {
@@ -81,6 +93,7 @@ export interface PiEventMap {
   input: InputEvent;
   before_agent_start: BeforeAgentStartEvent;
   context: ContextEvent;
+  turn_end: TurnEndEvent;
   tool_call: ToolCallEvent;
   tool_result: ToolResultEvent;
   agent_settled: GenericEvent;
@@ -122,7 +135,8 @@ export interface PiEventResultMap {
   session_start: void;
   input: void;
   before_agent_start: AgentStartInjection | undefined | void;
-  context: void;
+  context: ContextUpdate | undefined | void;
+  turn_end: void;
   tool_call: ToolCallBlockResult | undefined | void;
   tool_result: ToolResultPatch | undefined | void;
   agent_settled: void;

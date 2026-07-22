@@ -10,6 +10,8 @@
  *   short-circuits the chain (V2 verified block + verbatim reason delivery
  *   with a single handler; multi-handler ordering follows pi docs "load
  *   order chaining").
+ * - context: handlers chain middleware-style; a messages replacement returned
+ *   by one handler is visible to the next without mutating the caller's input.
  * - tool_result: handlers chain middleware-style; a patch returned by one
  *   handler is visible to the next (pi docs).
  * - Blocked tool calls fire NO tool_result event (V2 measurement: blocked
@@ -18,6 +20,7 @@
 import type {
   AgentStartInjection,
   BeforeAgentStartEvent,
+  ContextUpdate,
   ContextUsageLike,
   CtxLike,
   DialogOptionsLike,
@@ -40,6 +43,7 @@ import type {
   ToolDefLike,
   ToolResultEvent,
   ToolResultPatch,
+  TurnEndEvent,
 } from "../../pi/extensions/pi-harness/lib/pi-like";
 
 interface Notification {
@@ -70,6 +74,7 @@ interface HandlerStore {
   input: PiEventHandler<"input">[];
   before_agent_start: PiEventHandler<"before_agent_start">[];
   context: PiEventHandler<"context">[];
+  turn_end: PiEventHandler<"turn_end">[];
   tool_call: PiEventHandler<"tool_call">[];
   tool_result: PiEventHandler<"tool_result">[];
   agent_settled: PiEventHandler<"agent_settled">[];
@@ -86,7 +91,8 @@ export interface FakePi extends PiLike {
   emitBeforeAgentStart(
     payload: BeforeAgentStartEvent,
   ): Promise<AgentStartInjection | undefined>;
-  emitContext(messages: unknown[]): Promise<void>;
+  emitContext(messages: unknown[]): Promise<unknown[]>;
+  emitTurnEnd(payload: TurnEndEvent): Promise<void>;
   emitToolCall(
     payload: ToolCallEvent,
   ): Promise<ToolCallBlockResult | undefined>;
@@ -155,6 +161,7 @@ export function createFakePi(
     input: [],
     before_agent_start: [],
     context: [],
+    turn_end: [],
     tool_call: [],
     tool_result: [],
     agent_settled: [],
@@ -248,6 +255,7 @@ export function createFakePi(
     input: (handler) => store.input.push(handler),
     before_agent_start: (handler) => store.before_agent_start.push(handler),
     context: (handler) => store.context.push(handler),
+    turn_end: (handler) => store.turn_end.push(handler),
     tool_call: (handler) => store.tool_call.push(handler),
     tool_result: (handler) => store.tool_result.push(handler),
     agent_settled: (handler) => store.agent_settled.push(handler),
@@ -313,9 +321,18 @@ export function createFakePi(
       return injection;
     },
     async emitContext(messages) {
+      let current = structuredClone(messages);
       for (const handler of store.context) {
-        await handler({ type: "context", messages }, ctx);
+        const result: ContextUpdate | undefined | void = await handler(
+          { type: "context", messages: current },
+          ctx,
+        );
+        if (result?.messages !== undefined) current = result.messages;
       }
+      return current;
+    },
+    async emitTurnEnd(payload) {
+      for (const handler of store.turn_end) await handler(payload, ctx);
     },
     async emitToolCall(payload) {
       for (const handler of store.tool_call) {
