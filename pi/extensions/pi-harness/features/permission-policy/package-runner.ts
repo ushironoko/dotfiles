@@ -174,7 +174,11 @@ const PNPM_RUNNER_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "exec",
   "x",
 ]);
-const NPM_RUNNER_SUBCOMMANDS: ReadonlySet<string> = new Set(["exec", "x"]);
+const NPM_RUNNER_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "exec",
+  "exe",
+  "x",
+]);
 const YARN_RUNNER_SUBCOMMANDS: ReadonlySet<string> = new Set(["dlx", "exec"]);
 
 interface SubcommandScan {

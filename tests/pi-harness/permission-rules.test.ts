@@ -354,6 +354,8 @@ describe("explicit allow matching", () => {
       "pnpm --version=false exec totally-unknown-package",
       "pnpm --future-option exec totally-unknown-package",
       "npm exec totally-unknown-package",
+      "npm exe totally-unknown-package",
+      "npm --yes exe totally-unknown-package",
       "npm x totally-unknown-package",
       "npm --yes exec totally-unknown-package",
       "npm --prefix . x totally-unknown-package",
