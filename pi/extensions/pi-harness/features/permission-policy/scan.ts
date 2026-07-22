@@ -79,12 +79,16 @@ export interface Segment {
   readonly words: readonly string[];
   readonly opaque: ReadonlySet<number>;
   readonly opaqueUnquoted: ReadonlySet<number>;
+  /** Opaque word indices caused only by literal shell glob syntax. */
+  readonly literalGlobs: ReadonlySet<number>;
   /** Word indices containing Bash ANSI-C `$'…'` syntax. */
   readonly ansiC: ReadonlySet<number>;
   /** ANSI-C syntax appeared anywhere in this executable segment. */
   readonly hasAnsiC: boolean;
   /** A file-opening output redirect (>, >>, >|, &>) appeared in this segment. */
   readonly hasOutputRedirection: boolean;
+  /** An input redirect (<, <<</process input) appeared in this segment. */
+  readonly hasInputRedirection: boolean;
   /** Concrete redirect targets, retained only for local risk inspection. */
   readonly redirectionTargets: readonly string[];
   /** True only when this segment is outside a parenthesized shell group. */
@@ -564,19 +568,23 @@ export const scanCommand = (command: string): ScanResult => {
   let words: string[] = [];
   let opaque = new Set<number>();
   let opaqueUnquoted = new Set<number>();
+  let literalGlobs = new Set<number>();
   let ansiC = new Set<number>();
   let segmentHasAnsiC = false;
   let segmentHasOutputRedirection = false;
+  let segmentHasInputRedirection = false;
   let redirectionTargets: string[] = [];
   let word = "";
   let wordStarted = false;
   let wordOpaque = false;
   let wordOpaqueUnquoted = false;
+  let wordLiteralGlob = false;
+  let wordDynamicOpaque = false;
   let wordAnsiC = false;
   let atWordStart = true;
   let pendingRedirectTarget = false;
   let pendingFdDuplicationTarget = false;
-  let pendingFdDuplicationOutput = false;
+  let pendingOutputRedirection = false;
   let allowEligible = true;
   let groupDepth = 0;
   let i = 0;
@@ -586,6 +594,8 @@ export const scanCommand = (command: string): ScanResult => {
     wordStarted = false;
     wordOpaque = false;
     wordOpaqueUnquoted = false;
+    wordLiteralGlob = false;
+    wordDynamicOpaque = false;
     wordAnsiC = false;
   };
   const flushWord = (): void => {
@@ -600,13 +610,17 @@ export const scanCommand = (command: string): ScanResult => {
         pendingFdDuplicationTarget &&
         !wordOpaque &&
         /^(?:\d+-?|-)$/u.test(word);
-      if (pendingFdDuplicationOutput && !concreteFdDuplication) {
+      if (
+        pendingOutputRedirection &&
+        !concreteFdDuplication &&
+        (wordOpaque || word !== "/dev/null")
+      ) {
         segmentHasOutputRedirection = true;
       }
       redirectionTargets.push(word);
       pendingRedirectTarget = false;
       pendingFdDuplicationTarget = false;
-      pendingFdDuplicationOutput = false;
+      pendingOutputRedirection = false;
       resetWord();
       return;
     }
@@ -614,6 +628,7 @@ export const scanCommand = (command: string): ScanResult => {
     words.push(word);
     if (wordOpaque) opaque.add(index);
     if (wordOpaqueUnquoted) opaqueUnquoted.add(index);
+    if (wordLiteralGlob && !wordDynamicOpaque) literalGlobs.add(index);
     if (wordAnsiC) ansiC.add(index);
     resetWord();
   };
@@ -621,7 +636,7 @@ export const scanCommand = (command: string): ScanResult => {
     flushWord();
     pendingRedirectTarget = false;
     pendingFdDuplicationTarget = false;
-    pendingFdDuplicationOutput = false;
+    pendingOutputRedirection = false;
     if (words.length > 0 || !allowEligible) {
       // Preserve argv boundaries when rendering the regex candidate. Literal
       // whitespace produced inside one quoted/escaped shell word must not turn
@@ -640,9 +655,11 @@ export const scanCommand = (command: string): ScanResult => {
         words,
         opaque,
         opaqueUnquoted,
+        literalGlobs,
         ansiC,
         hasAnsiC: segmentHasAnsiC,
         hasOutputRedirection: segmentHasOutputRedirection,
+        hasInputRedirection: segmentHasInputRedirection,
         redirectionTargets,
         topLevel: groupDepth === 0,
         followedByAnd,
@@ -652,9 +669,11 @@ export const scanCommand = (command: string): ScanResult => {
     words = [];
     opaque = new Set<number>();
     opaqueUnquoted = new Set<number>();
+    literalGlobs = new Set<number>();
     ansiC = new Set<number>();
     segmentHasAnsiC = false;
     segmentHasOutputRedirection = false;
+    segmentHasInputRedirection = false;
     redirectionTargets = [];
     allowEligible = true;
   };
@@ -662,10 +681,12 @@ export const scanCommand = (command: string): ScanResult => {
   const markHeadSyntax = (): void => {
     if (words.length === 0) allowEligible = false;
   };
-  const markOpaque = (unquoted: boolean): void => {
+  const markOpaque = (unquoted: boolean, literalGlob = false): void => {
     wordStarted = true;
     wordOpaque = true;
     if (unquoted) wordOpaqueUnquoted = true;
+    if (literalGlob) wordLiteralGlob = true;
+    else wordDynamicOpaque = true;
   };
 
   while (i < command.length) {
@@ -711,7 +732,10 @@ export const scanCommand = (command: string): ScanResult => {
       word += dq.literal;
       wordStarted = true;
       subs.push(...dq.subs);
-      if (dq.opaque) wordOpaque = true; // quoted: not word-splitting
+      if (dq.opaque) {
+        wordOpaque = true; // quoted: not word-splitting
+        wordDynamicOpaque = true;
+      }
       if (dq.ansiC) {
         wordAnsiC = true;
         segmentHasAnsiC = true;
@@ -735,13 +759,13 @@ export const scanCommand = (command: string): ScanResult => {
         // write risk instead of letting an empty boundary drop the redirect.
         allowEligible = false;
         if (pendingRedirectTarget) {
-          if (pendingFdDuplicationOutput) {
+          if (pendingOutputRedirection) {
             segmentHasOutputRedirection = true;
           }
           redirectionTargets.push(OPAQUE);
           pendingRedirectTarget = false;
           pendingFdDuplicationTarget = false;
-          pendingFdDuplicationOutput = false;
+          pendingOutputRedirection = false;
           resetWord();
         } else {
           flushWord();
@@ -780,6 +804,7 @@ export const scanCommand = (command: string): ScanResult => {
 
     if (c === "<" || c === ">") {
       allowEligible = false;
+      if (c === "<") segmentHasInputRedirection = true;
       if (command[i + 1] === "(") {
         const bal = readBalanced(command, i + 1, "(", ")");
         if (bal === undefined) return fail();
@@ -810,6 +835,7 @@ export const scanCommand = (command: string): ScanResult => {
         i += 1;
       }
       if (command[i] === "|") i += 1; // >|
+      pendingOutputRedirection = c === ">";
       if (command[i] === "&") {
         // Defer fd-duplication classification until the complete redirect word
         // has been tokenized. Quoted/spaced numeric descriptors are valid, but
@@ -817,9 +843,7 @@ export const scanCommand = (command: string): ScanResult => {
         i += 1;
         pendingRedirectTarget = true;
         pendingFdDuplicationTarget = true;
-        pendingFdDuplicationOutput = c === ">";
       } else {
-        if (c === ">") segmentHasOutputRedirection = true;
         pendingRedirectTarget = true;
       }
       atWordStart = true;
@@ -859,11 +883,11 @@ export const scanCommand = (command: string): ScanResult => {
       // &> / &>> redirect-all — a redirection, not a background operator.
       if (command[i + 1] === ">") {
         allowEligible = false;
-        segmentHasOutputRedirection = true;
         flushWord();
         i += 2;
         if (command[i] === ">") i += 1;
         pendingRedirectTarget = true;
+        pendingOutputRedirection = true;
         atWordStart = true;
         continue;
       }
@@ -894,14 +918,14 @@ export const scanCommand = (command: string): ScanResult => {
     // Brace expansion / glob: statically-unknown expansion (unquoted).
     if (c === "{" && isBraceExpansion(command, i)) {
       word += c;
-      markOpaque(true);
+      markOpaque(true, true);
       atWordStart = false;
       i += 1;
       continue;
     }
     if (BRACE_GLOB.test(c)) {
       word += c;
-      markOpaque(true);
+      markOpaque(true, true);
       atWordStart = false;
       i += 1;
       continue;
@@ -925,6 +949,7 @@ export interface NormalizedSegment {
   readonly words: readonly string[];
   readonly opaque: ReadonlySet<number>;
   readonly opaqueUnquoted: ReadonlySet<number>;
+  readonly literalGlobs: ReadonlySet<number>;
   readonly ansiC: ReadonlySet<number>;
   readonly hasAnsiC: boolean;
   readonly privileged: boolean;
@@ -959,11 +984,13 @@ const normalizeBitWords = (
   words: readonly string[],
   opaque: ReadonlySet<number>,
   opaqueUnquoted: ReadonlySet<number>,
+  literalGlobs: ReadonlySet<number>,
   ansiC: ReadonlySet<number>,
 ): {
   words: string[];
   opaque: Set<number>;
   opaqueUnquoted: Set<number>;
+  literalGlobs: Set<number>;
   ansiC: Set<number>;
 } => {
   const kept: KeptWord[] = [{ from: 0 }]; // "bit"
@@ -1015,6 +1042,7 @@ const normalizeBitWords = (
   const outWords: string[] = [];
   const outOpaque = new Set<number>();
   const outOpaqueUnquoted = new Set<number>();
+  const outLiteralGlobs = new Set<number>();
   const outAnsiC = new Set<number>();
   kept.forEach((k, idx) => {
     if ("literal" in k) {
@@ -1024,12 +1052,14 @@ const normalizeBitWords = (
     outWords.push(words[k.from]);
     if (opaque.has(k.from)) outOpaque.add(idx);
     if (opaqueUnquoted.has(k.from)) outOpaqueUnquoted.add(idx);
+    if (literalGlobs.has(k.from)) outLiteralGlobs.add(idx);
     if (ansiC.has(k.from)) outAnsiC.add(idx);
   });
   return {
     words: outWords,
     opaque: outOpaque,
     opaqueUnquoted: outOpaqueUnquoted,
+    literalGlobs: outLiteralGlobs,
     ansiC: outAnsiC,
   };
 };
@@ -1066,6 +1096,7 @@ export const normalizeSegment = (segment: Segment): NormalizedSegment => {
   let words: readonly string[] = segment.words.slice(shift);
   let opaque: ReadonlySet<number> = remap(segment.opaque);
   let opaqueUnquoted: ReadonlySet<number> = remap(segment.opaqueUnquoted);
+  let literalGlobs: ReadonlySet<number> = remap(segment.literalGlobs);
   let ansiC: ReadonlySet<number> = remap(segment.ansiC);
 
   // Basename-normalize a concrete path-form head (opaque heads are left for
@@ -1078,10 +1109,17 @@ export const normalizeSegment = (segment: Segment): NormalizedSegment => {
   // Fold bit global options / repo / hub so the deny floor sees the real
   // subcommand (this rewrites indices, so remap the opaque sets too).
   if (words[0] === "bit") {
-    const folded = normalizeBitWords(words, opaque, opaqueUnquoted, ansiC);
+    const folded = normalizeBitWords(
+      words,
+      opaque,
+      opaqueUnquoted,
+      literalGlobs,
+      ansiC,
+    );
     words = folded.words;
     opaque = folded.opaque;
     opaqueUnquoted = folded.opaqueUnquoted;
+    literalGlobs = folded.literalGlobs;
     ansiC = folded.ansiC;
   }
 
@@ -1093,6 +1131,7 @@ export const normalizeSegment = (segment: Segment): NormalizedSegment => {
     words,
     opaque,
     opaqueUnquoted,
+    literalGlobs,
     ansiC,
     hasAnsiC: segment.hasAnsiC,
     privileged,

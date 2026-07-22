@@ -9,12 +9,14 @@ import {
   createPermissionTaskTracker,
   derivePermissionRunEvidence,
   discoverProjectContext,
+  type PermissionLeadingNavigation,
   type PermissionProjectContext,
   type PermissionRunEvidence,
 } from "./context";
 import { createPermissionJudge, type JudgeOutcome } from "./judge";
 import {
   evaluateCommand,
+  gitReadCwdTarget,
   hasProjectSensitiveMutation,
   hasUnverifiedProjectMutationNavigation,
   loadRules,
@@ -360,6 +362,8 @@ const setupPermissionPolicy = (
         signal !== undefined && "aborted" in signal && signal.aborted === true;
 
       let projectDiscovery: PermissionProjectContext | undefined;
+      let gitCwdNavigation: PermissionLeadingNavigation | undefined;
+      let trustedGitReadCwdTarget: string | undefined;
       let result = evaluateCommandWithSkillAllows(
         command,
         rules,
@@ -402,6 +406,31 @@ const setupPermissionPolicy = (
         return confirmed && !isAborted() ? undefined : blocked(reason);
       };
 
+      if (result.verdict === "ask") {
+        const readCwdTarget = gitReadCwdTarget(command);
+        if (readCwdTarget !== undefined && ctx.cwd !== undefined) {
+          const candidate = resolve(ctx.cwd, readCwdTarget);
+          projectDiscovery = await discoverProject(ctx.cwd, signal, candidate);
+          if (isAborted()) {
+            return blocked("the active pi operation was cancelled");
+          }
+          gitCwdNavigation = projectDiscovery.leadingNavigation;
+          if (
+            gitCwdNavigation?.scope !== "listed-worktree" ||
+            !gitCwdNavigation.sameRepository
+          ) {
+            return confirm(
+              "検証できないGit作業場所を使用しますか？",
+              "git -C の対象を登録済みの同一リポジトリworktree内と確認できませんでした",
+            );
+          }
+          trustedGitReadCwdTarget = readCwdTarget;
+          result = evaluateCommand(command, rules, {
+            trustedGitCwdTarget: readCwdTarget,
+          });
+        }
+      }
+      if (result.verdict === "deny") return blocked(result.reason);
       if (result.verdict === "ask") {
         return confirm("危険なコマンドを実行しますか？", result.reason);
       }
@@ -487,6 +516,9 @@ const setupPermissionPolicy = (
           ...(trustedLeadingCdTarget === undefined
             ? {}
             : { trustedLeadingCdTarget }),
+          ...(trustedGitReadCwdTarget === undefined
+            ? {}
+            : { trustedGitCwdTarget: trustedGitReadCwdTarget }),
           ...(trustedReadContext === undefined ? {} : { trustedReadContext }),
         });
         if (result.verdict === "deny") return blocked(result.reason);
@@ -509,6 +541,7 @@ const setupPermissionPolicy = (
         ...(runEvidence === undefined ? {} : { runEvidence }),
         project,
         ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
+        ...(gitCwdNavigation === undefined ? {} : { gitCwd: gitCwdNavigation }),
       });
       if (outcome.kind === "allow") {
         if (!outcome.cached) judgeWarningShown = false;
