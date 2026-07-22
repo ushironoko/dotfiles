@@ -36,6 +36,7 @@ import {
   type GitStatus,
   parseStatuslineCache,
   remainingContextPercent,
+  renderExtensionStatuses,
   renderStatusline,
   STATUSLINE_WIDGET_KEY,
   type StatuslineCache,
@@ -108,6 +109,15 @@ const EMPTY_GIT_STATUS: GitStatus = {
 };
 
 const IDENTITY_THEME: ThemeLike = { fg: (_color, text) => text };
+
+interface ExtensionStatusFooterData {
+  getExtensionStatuses(): ReadonlyMap<string, string>;
+}
+
+const hasExtensionStatusData = (
+  footerData: object,
+): footerData is object & ExtensionStatusFooterData =>
+  typeof Reflect.get(footerData, "getExtensionStatuses") === "function";
 
 // The shell library tests markers with [ -f ] (regular file, symlinks
 // followed); existsSync would also accept directories and make the two
@@ -421,7 +431,7 @@ export default function setupStatusline(
             invalidate() {},
             render(width: number): string[] {
               const current = activeContext;
-              return renderStatusline(
+              const lines = renderStatusline(
                 snapshot,
                 {
                   branch:
@@ -436,6 +446,14 @@ export default function setupStatusline(
                 width,
                 theme,
               );
+              const extensionStatus = hasExtensionStatusData(footerData)
+                ? renderExtensionStatuses(
+                    footerData.getExtensionStatuses(),
+                    width,
+                  )
+                : undefined;
+              if (extensionStatus !== undefined) lines.push(extensionStatus);
+              return lines;
             },
             dispose() {
               unsubscribeBranch();

@@ -1,3 +1,4 @@
+import { truncateToWidth as truncateStyledToWidth } from "@earendil-works/pi-tui";
 import type {
   ContextUsageLike,
   ModelLike,
@@ -90,6 +91,155 @@ const graphemes = (value: string): string[] =>
 const graphemeWidth = (grapheme: string): number => visibleWidth(grapheme);
 
 export const visibleStatuslineWidth = visibleWidth;
+
+const consumeCsi = (
+  value: string,
+  start: number,
+): { end: number; final?: string; valid: boolean } => {
+  let valid = true;
+  for (let index = start; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 64 && code <= 126) {
+      return { end: index + 1, final: value[index], valid };
+    }
+    if (code < 32 || code > 63) valid = false;
+  }
+  return { end: value.length, valid: false };
+};
+
+const sgrIsOnlyFullReset = (body: string): boolean =>
+  body
+    .split(";")
+    .every((parameter) => parameter === "" || /^0+$/.test(parameter));
+
+const consumeControlString = (value: string, start: number): number => {
+  for (let index = start; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 7 || code === 156) return index + 1;
+    if (value[index] === "\u001b" && value[index + 1] === "\\") {
+      return index + 2;
+    }
+  }
+  return value.length;
+};
+
+const consumeEscapeSequence = (value: string, start: number): number => {
+  for (let index = start; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 48 && code <= 126) return index + 1;
+    if (code < 32 || code > 47) return index + 1;
+  }
+  return value.length;
+};
+
+/**
+ * Preserve extension SGR styling, but collapse whitespace and every other
+ * terminal control so one status cannot alter or add footer lines.
+ */
+const singleLineExtensionStatus = (value: string): string | undefined => {
+  let output = "";
+  let pendingSpace = false;
+  let hasVisibleCharacter = false;
+  let sgrNeedsReset = false;
+  let index = 0;
+
+  while (index < value.length) {
+    const code = value.charCodeAt(index);
+    if (value[index] === "\u001b") {
+      const next = value[index + 1];
+      if (next === "[") {
+        const csi = consumeCsi(value, index + 2);
+        if (csi.valid && csi.final === "m") {
+          output += value.slice(index, csi.end);
+          sgrNeedsReset = !sgrIsOnlyFullReset(
+            value.slice(index + 2, csi.end - 1),
+          );
+        } else pendingSpace = true;
+        index = csi.end;
+        continue;
+      }
+      if (
+        next === "]" ||
+        next === "P" ||
+        next === "X" ||
+        next === "^" ||
+        next === "_"
+      ) {
+        pendingSpace = true;
+        index = consumeControlString(value, index + 2);
+        continue;
+      }
+      pendingSpace = true;
+      index = consumeEscapeSequence(value, index + 1);
+      continue;
+    }
+    if (code === 155) {
+      const csi = consumeCsi(value, index + 1);
+      if (csi.valid && csi.final === "m") {
+        output += `\u001b[${value.slice(index + 1, csi.end)}`;
+        sgrNeedsReset = !sgrIsOnlyFullReset(
+          value.slice(index + 1, csi.end - 1),
+        );
+      } else pendingSpace = true;
+      index = csi.end;
+      continue;
+    }
+    if (
+      code === 157 ||
+      code === 144 ||
+      code === 152 ||
+      code === 158 ||
+      code === 159
+    ) {
+      pendingSpace = true;
+      index = consumeControlString(value, index + 1);
+      continue;
+    }
+    if (
+      code <= 32 ||
+      (code >= 127 && code <= 159) ||
+      code === 8232 ||
+      code === 8233
+    ) {
+      pendingSpace = true;
+      index += 1;
+      continue;
+    }
+
+    if (pendingSpace && hasVisibleCharacter) output += " ";
+    output += value[index];
+    pendingSpace = false;
+    hasVisibleCharacter = true;
+    index += 1;
+  }
+
+  if (!hasVisibleCharacter || visibleWidth(output) === 0) return undefined;
+  return sgrNeedsReset ? `${output}\u001b[0m` : output;
+};
+
+const compareExtensionStatusKeys = (
+  [left]: readonly [string, string],
+  [right]: readonly [string, string],
+): number => {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+};
+
+/** Render every extension status on one stable, terminal-width-safe line. */
+export const renderExtensionStatuses = (
+  statuses: ReadonlyMap<string, string>,
+  width: number,
+): string | undefined => {
+  if (width <= 0) return undefined;
+  const statusLine = [...statuses.entries()]
+    .sort(compareExtensionStatusKeys)
+    .map(([, text]) => singleLineExtensionStatus(text))
+    .filter((text): text is string => text !== undefined)
+    .join(" ");
+  if (statusLine === "") return undefined;
+  return truncateStyledToWidth(statusLine, width, "…");
+};
 
 const appendSpan = (spans: Span[], span: Span): void => {
   if (span.text === "") return;
