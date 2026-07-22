@@ -120,6 +120,8 @@ export interface FakePi extends PiLike {
   renderFooter(width: number): string[] | undefined;
   /** Notify footer branch subscribers, matching FooterDataProvider behavior. */
   setGitBranch(branch: string | null): void;
+  /** Replace the active session branch visible through ctx.sessionManager. */
+  setSessionBranch(entries: readonly unknown[]): void;
   /** Replace the context-usage result returned by the handler context. */
   setContextUsage(usage: ContextUsageLike | undefined): void;
   /** Number of renders requested through the fake TUI. */
@@ -177,6 +179,7 @@ export function createFakePi(
   const confirmDialogs: ConfirmDialog[] = [];
   const branchCallbacks = new Set<() => void>();
   let gitBranch = options.gitBranch ?? null;
+  let sessionBranch: unknown[] = [];
   let { contextUsage } = options;
   let footerComponent: FooterComponentLike | undefined;
   let footerRenderRequests = 0;
@@ -200,6 +203,9 @@ export function createFakePi(
     mode: options.mode ?? "tui",
     cwd: options.cwd,
     model: options.model,
+    sessionManager: {
+      getBranch: () => [...sessionBranch],
+    },
     getContextUsage: () => contextUsage,
     ui: {
       select: async (title, choices, dialogOptions) => {
@@ -283,10 +289,26 @@ export function createFakePi(
       for (const handler of store.input) await handler(payload, ctx);
     },
     async emitBeforeAgentStart(payload) {
+      let current = payload;
       let injection: AgentStartInjection | undefined;
       for (const handler of store.before_agent_start) {
-        const result = await handler(payload, ctx);
-        if (result !== undefined) injection = result;
+        const result = await handler(current, ctx);
+        if (result === undefined) continue;
+        injection = {
+          ...(injection?.message === undefined
+            ? {}
+            : { message: injection.message }),
+          ...(injection?.systemPrompt === undefined
+            ? {}
+            : { systemPrompt: injection.systemPrompt }),
+          ...(result.message === undefined ? {} : { message: result.message }),
+          ...(result.systemPrompt === undefined
+            ? {}
+            : { systemPrompt: result.systemPrompt }),
+        };
+        if (result.systemPrompt !== undefined) {
+          current = { ...current, systemPrompt: result.systemPrompt };
+        }
       }
       return injection;
     },
@@ -351,6 +373,9 @@ export function createFakePi(
     setGitBranch(branch) {
       gitBranch = branch;
       for (const callback of branchCallbacks) callback();
+    },
+    setSessionBranch(entries) {
+      sessionBranch = [...entries];
     },
     setContextUsage(usage) {
       contextUsage = usage;

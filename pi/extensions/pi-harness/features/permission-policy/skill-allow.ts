@@ -4,6 +4,7 @@ import type { BeforeAgentStartEvent } from "../../lib/pi-like";
 import {
   evaluateCommand,
   type AllowRule,
+  isSkillOverridableAsk,
   type LoadedRules,
   type Verdict,
 } from "./rules";
@@ -264,15 +265,47 @@ const resolveActiveSkillBashAllows = (
 
 type SkillAwareVerdict = Verdict & { readonly grantedBySkill?: boolean };
 
+const matchingConcreteSkillAllow = (
+  command: string,
+  skillAllows: readonly AllowRule[],
+): AllowRule | undefined => {
+  const scanned = scanCommand(command);
+  if (
+    !scanned.ok ||
+    scanned.subs.length !== 0 ||
+    scanned.segments.length !== 1
+  ) {
+    return undefined;
+  }
+  const candidate = scanned.segments[0]?.allowCandidate;
+  return candidate === undefined
+    ? undefined
+    : skillAllows.find((rule) => rule.pattern.test(candidate));
+};
+
 const evaluateCommandWithSkillAllows = (
   command: string,
   rules: LoadedRules,
   skillAllows: readonly AllowRule[],
 ): SkillAwareVerdict => {
   const base = evaluateCommand(command, rules);
-  // Skill grants are intentionally below every normal deny, ask, and static
-  // allow decision. In particular, `git push --force` must still ask even if
-  // the active skill broadly grants `git push *`.
+  const matchingSkill = matchingConcreteSkillAllow(command, skillAllows);
+  // An authenticated active-skill grant is itself explicit user approval for a
+  // plain push or a verified git -C location. Force, destructive Git, secrets,
+  // opaque syntax, and every other deterministic ask remain above the grant.
+  if (
+    base.verdict === "ask" &&
+    matchingSkill !== undefined &&
+    isSkillOverridableAsk(command)
+  ) {
+    return {
+      verdict: "allow",
+      ...(matchingSkill.reason === undefined
+        ? {}
+        : { reason: matchingSkill.reason }),
+      grantedBySkill: true,
+    };
+  }
   if (base.verdict !== "default-continue" || skillAllows.length === 0) {
     return base;
   }

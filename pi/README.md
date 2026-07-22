@@ -78,20 +78,33 @@ feature toggles live in `~/.pi/agent/pi-harness.local.json` (machine-local):
 Child pi processes spawned by subagent/workflow receive `PI_HARNESS_CHILD=1`
 and keep only the safety layer (no recursion, no duplicate notifications).
 
+The safety layer also appends soft command-hygiene guidance to every parent and
+child system prompt: prefer dedicated file tools, literal project-bounded
+commands, transparent pipelines, existing repository scripts, and
+`rg --no-config`; explain necessity and exact scope before genuinely required
+dynamic shell or ad-hoc scripts instead of sacrificing correctness to a fragile
+one-liner. This generation preference does not relax any permission boundary.
+
 The safety layer includes a default-on local Ollama fallback for Bash commands
-that match no deterministic deny/allow/ask rule. It classifies a bounded JSON
-envelope containing the command, raw current-turn task text, and locally
-verified cwd/project/worktree context; it never receives expanded skills,
-conversation history, repository contents, remotes, environment, or tool
-results. One cumulative 250 ms local discovery deadline covers async child-env
-sanitization, Git probing, per-root registered-worktree/common-dir validation,
-and path canonicalization before each fallback/cache lookup. Queued expanded
-inputs without an exact delivery match become uncorrelated and cannot reuse or
-populate the `ALLOW` cache; ANSI-C shell words are fixed at
-the deterministic ask floor. An unavailable judge asks in interactive sessions
-and blocks in child/non-UI sessions; set `permissionJudge.enabled` to `false` for
+that remain ambiguous after deterministic routing. Known risky shapes require
+confirmation before Ollama; stdin-only `head -N` and `rg --no-config` whose
+path operands canonicalize inside a verified worktree are approved mechanically.
+Git reads remain residual because repository/global helper configuration can
+execute programs. Residual commands use a bounded JSON envelope containing the command, raw current-turn
+task text, authenticated same-turn assistant text, preceding tool names plus
+success/failure status, and locally verified cwd/project/worktree context. It
+never receives assistant thinking, tool arguments, tool output content/details,
+expanded skills, prior-turn conversation, repository contents, remotes, or
+environment. One cumulative 250 ms local discovery deadline covers async child-
+env sanitization, Git probing, per-root registered-worktree/common-dir
+validation, and path canonicalization before each fallback/cache lookup. Queued
+expanded inputs without an exact delivery match become uncorrelated and cannot
+reuse or populate the `ALLOW` cache; ANSI-C shell words are fixed at the
+deterministic ask floor. An unavailable judge asks in interactive sessions and
+blocks in child/non-UI sessions; set `permissionJudge.enabled` to `false` for
 the previous rule-only behavior. Existing broad explicit grants still bypass
-the fallback by design. See
+the fallback by design except for helper-capable Git reads and `rg` reads that
+have not independently satisfied the no-config/canonical-path conditions. See
 [`LOCAL_PERMISSION_JUDGE.md`](./LOCAL_PERMISSION_JUDGE.md) for setup,
 configuration, data boundaries, and qualification steps.
 
@@ -102,9 +115,11 @@ latest processed user message to exactly match that loaded `SKILL.md` and its
 arguments. The run snapshots both the skill body and grants, so later
 frontmatter edits cannot widen it. Pasted expansions and extension-generated
 messages grant nothing. It recalculates grants at every provider context,
-including queued prompts, and clears them when the run settles. Deterministic
-deny/ask and shell-structure rules still take precedence; child profiles never
-inherit grants. A skill's
+including queued prompts, and clears them when the run settles. An authenticated
+grant may satisfy the ordinary plain-push confirmation or a `git -C` location
+confirmation; deny, force/destructive, secret, opaque, helper-capable Git reads,
+unverified `rg`, and other shell-structure floors still take precedence or stay
+on the judge route, and child profiles never inherit grants. A skill's
 `git -C` grant is additionally limited to a canonical registered non-bare
 worktree that shares the active cwd's canonical Git common directory.
 

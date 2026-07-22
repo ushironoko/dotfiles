@@ -84,7 +84,7 @@ describe("pi-harness GitHub CLI reminder", () => {
       type: "before_agent_start",
       prompt: "continue after compaction",
     });
-    expect(refreshed?.message.customType).toBe(GITHUB_CLI_REMINDER_TYPE);
+    expect(refreshed?.message?.customType).toBe(GITHUB_CLI_REMINDER_TYPE);
 
     for (const command of [
       "gh repo view",
@@ -129,7 +129,7 @@ describe("pi-harness GitHub CLI reminder", () => {
       type: "before_agent_start",
       prompt: "navigate before the reminder",
     });
-    expect(refreshed?.message.customType).toBe(GITHUB_CLI_REMINDER_TYPE);
+    expect(refreshed?.message?.customType).toBe(GITHUB_CLI_REMINDER_TYPE);
   });
 
   test("the umbrella registers the reminder only for parent pi sessions", async () => {
@@ -142,8 +142,8 @@ describe("pi-harness GitHub CLI reminder", () => {
       type: "before_agent_start",
       prompt: "inspect GitHub",
     });
-    expect(parentInjection?.message.customType).toBe(GITHUB_CLI_REMINDER_TYPE);
-    expect(parentInjection?.message.display).toBe(false);
+    expect(parentInjection?.message?.customType).toBe(GITHUB_CLI_REMINDER_TYPE);
+    expect(parentInjection?.message?.display).toBe(false);
 
     const child = createFakePi({ cwd: directory, hasUI: false });
     setupHarness(child, makeConfig(directory, true));

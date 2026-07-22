@@ -15,6 +15,7 @@ import { promisify } from "node:util";
 import {
   boundTaskContext,
   createPermissionTaskTracker,
+  derivePermissionRunEvidence,
   discoverProjectContext,
   runGitWorktreeList,
   type GitWorktreeListResult,
@@ -282,6 +283,155 @@ describe("current permission task context", () => {
     });
     tracker.activateFromMessages([{ role: "user", content: "second" }]);
     expect(tracker.current()).toEqual({ correlation: "uncorrelated" });
+  });
+});
+
+describe("current permission run evidence", () => {
+  test("binds active-turn assistant text and metadata-only prior results to the exact tool call", () => {
+    const evidence = derivePermissionRunEvidence(
+      [
+        {
+          type: "message",
+          message: {
+            role: "user",
+            content: "Old task",
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "OLD ASSISTANT CONTEXT" }],
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "user",
+            content: "Diagnose permission prompts",
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Inspect the policy implementation." },
+              {
+                type: "toolCall",
+                id: "prior-call",
+                name: "read",
+                arguments: { path: "PRIVATE ARGUMENT" },
+              },
+            ],
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "prior-call",
+            toolName: "read",
+            content: [{ type: "text", text: "PRIVATE TOOL OUTPUT" }],
+            details: { secret: "PRIVATE DETAILS" },
+            isError: false,
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "PRIVATE THINKING" },
+              { type: "text", text: "Now inspect the local judge logs." },
+              {
+                type: "toolCall",
+                id: "current-call",
+                name: "bash",
+                arguments: { command: "PRIVATE CURRENT ARGUMENT" },
+              },
+            ],
+          },
+        },
+      ],
+      "current-call",
+    );
+
+    expect(evidence).toMatchObject({
+      assistantText:
+        "Inspect the policy implementation.\nNow inspect the local judge logs.",
+      priorToolResults: [{ toolName: "read", status: "ok" }],
+    });
+    const serialized = JSON.stringify(evidence);
+    expect(serialized).not.toContain("OLD ASSISTANT CONTEXT");
+    expect(serialized).not.toContain("PRIVATE ARGUMENT");
+    expect(serialized).not.toContain("PRIVATE TOOL OUTPUT");
+    expect(serialized).not.toContain("PRIVATE DETAILS");
+    expect(serialized).not.toContain("PRIVATE THINKING");
+  });
+
+  test("fails closed on a missing or duplicate current tool identity", () => {
+    const assistant = {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Inspect" },
+          { type: "toolCall", id: "same", name: "bash", arguments: {} },
+        ],
+      },
+    };
+    expect(derivePermissionRunEvidence([assistant], "missing")).toBeUndefined();
+    expect(
+      derivePermissionRunEvidence([assistant, assistant], "same"),
+    ).toBeUndefined();
+  });
+
+  test("bounds visible evidence while fingerprinting omitted assistant text and tool results", () => {
+    const entries: unknown[] = [
+      { type: "message", message: { role: "user", content: "task" } },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: `${"a".repeat(3_000)}TAIL` }],
+        },
+      },
+    ];
+    for (let index = 0; index < 20; index += 1) {
+      entries.push({
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: `tool-${index}`,
+          isError: index % 2 === 0,
+        },
+      });
+    }
+    entries.push({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "current", name: "bash" }],
+      },
+    });
+
+    const first = derivePermissionRunEvidence(entries, "current");
+    expect(Buffer.byteLength(first?.assistantText ?? "")).toBeLessThanOrEqual(
+      2 * 1_024,
+    );
+    expect(first?.assistantText).toEndWith("TAIL");
+    expect(first?.priorToolResults).toHaveLength(16);
+    expect(first?.priorToolResults[0]?.toolName).toBe("tool-4");
+
+    const changed = structuredClone(entries) as Array<Record<string, unknown>>;
+    const assistantEntry = changed[1] as {
+      message: { content: Array<{ text: string }> };
+    };
+    assistantEntry.message.content[0]!.text = `${"b".repeat(3_000)}TAIL`;
+    expect(derivePermissionRunEvidence(changed, "current")?.fingerprint).not.toBe(
+      first?.fingerprint,
+    );
   });
 });
 

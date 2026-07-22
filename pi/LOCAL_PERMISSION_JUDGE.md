@@ -1,9 +1,10 @@
 # Local command permission judge
 
 pi-harness uses a qualified local Ollama model as the fallback classifier for
-Bash tool calls that match no deterministic permission rule. This approximates
-Claude Code auto mode using bounded current-task and active-project context,
-without sending conversation history or repository contents to the judge.
+Bash tool calls that remain ambiguous after deterministic permission routing.
+This approximates Claude Code auto mode using bounded current-task,
+current-assistant-run, and active-project context without sending prior-turn
+conversation or repository contents to the judge.
 
 ## Setup
 
@@ -11,12 +12,12 @@ Install Ollama **v0.16.2 or newer**, disable Ollama Cloud, and load the pinned
 model. The checked-in model was qualified with Ollama 0.32.0.
 
 ```bash
-ollama pull qwen2.5
-ollama run qwen2.5:latest 'Reply only ALLOW' >/dev/null
+ollama pull granite4.1:3b
+ollama run granite4.1:3b 'Reply only ALLOW' >/dev/null
 curl -fsS http://127.0.0.1:11434/api/status | jq -e '.cloud.disabled == true'
 curl -fsS http://127.0.0.1:11434/api/tags |
-  jq -e '.models[] | select(.name == "qwen2.5:latest") |
-    .digest == "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e"'
+  jq -e '.models[] | select(.name == "granite4.1:3b") |
+    .digest == "6fd349357287c7ffc9e38189a93b48ea175d24fc566b38f09cfc564fb7f303eb"'
 ```
 
 Ollama Desktop exposes a Cloud toggle. The equivalent server setting is
@@ -50,8 +51,8 @@ The judge is enabled by default. Override it in the machine-local
   "permissionJudge": {
     "enabled": true,
     "url": "http://127.0.0.1:11434/api/chat",
-    "model": "qwen2.5:latest",
-    "expectedDigest": "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+    "model": "granite4.1:3b",
+    "expectedDigest": "6fd349357287c7ffc9e38189a93b48ea175d24fc566b38f09cfc564fb7f303eb",
     "timeoutMs": 10000,
     "keepAlive": "30m"
   }
@@ -71,39 +72,70 @@ require human confirmation or block. Interactive permission confirmations have
 no countdown: they remain open until the user responds or aborts the active pi
 operation (for example with Esc).
 
+## Command hygiene guidance
+
+Before each parent or child agent run, the mandatory permission-policy feature
+appends a short soft-preference section to the system prompt. It asks the model
+to prefer dedicated file tools, literal commands, project-relative paths,
+transparent pipelines, existing repository scripts, and canonicalizable
+`rg --no-config` searches. Convenience-only dynamic shell and generated scripts
+are discouraged, not forbidden. When an ad-hoc script is genuinely needed, the
+model is told to preserve correctness/capability and first state its necessity,
+exact scope, and concrete task relationship. This guidance only reduces
+hard-to-parse command generation; it never replaces or weakens the deterministic
+floor, explicit confirmation, or local judge.
+
 ## Decision order
 
 1. Mandatory deny rule: block.
-2. Explicit allow rule: approve without Ollama.
-3. Built-in/dynamic/opaque ask rule: ask the user, or block without UI.
-4. ANSI-C `$'…'` syntax is never eligible for automatic approval. Its decoded
-   text remains available to the concrete deny floor, but byte/escape semantics
-   are conservatively fixed at `ASK` instead of being approximated as Bash argv.
-5. For an otherwise unknown compound command, treat one leading top-level
+2. Mandatory structural risk floor: ask the user, or block without UI. This
+   includes destructive/force Git and filesystem operations, Git location or
+   transport overrides, privilege/secrets (including input redirects), upload,
+   package runners, opaque or stdin-fed script execution, output redirection,
+   and read options that can launch an
+   external program or write a file. ANSI-C `$'…'` syntax is never eligible for
+   automatic approval: its decoded text remains available to the deny floor,
+   but byte/escape semantics are conservatively fixed at `ASK`.
+3. Explicit allow rule: approve without Ollama after the mandatory floor,
+   except that helper-capable Git reads and unverified `rg` reads remain residual
+   until their independent safety conditions are satisfied.
+4. Configured ask and speculative risk: ask the user before any built-in read
+   optimization.
+5. Built-in literal project-bounded non-executing read: approve without Ollama.
+   This narrow class covers stdin-only `head -N` and `rg --no-config` only when
+   every omitted or explicit path operand canonicalizes inside a verified
+   registered worktree. Dynamic words, path-spelled/wrapped executables,
+   missing/absolute/home/traversing/symlink-escaping paths, `rg --pre`,
+   `rg --search-zip`, `rg --hostname-bin`, and `rg --follow` do not inherit it.
+   Git reads stay residual because repository/global fsmonitor, external-diff,
+   and textconv configuration can execute helpers even for read subcommands.
+6. For an otherwise unknown compound command, treat one leading top-level
    `cd <absolute-literal-path> &&` segment as neutral only when the canonical
    destination is contained by the complete registered non-bare worktree set
    and has the same canonical Git common directory as the tool cwd. Every
-   remaining executable segment must be explicitly allowed; relative/dynamic
-   paths, redirects, other connectors, multiple `cd` segments, missing paths,
-   forged `.git` pointers, and unrelated or nested repositories do not receive
-   this exception.
-6. For a command that still reaches the judge, bind the raw current input to
-   its agent run and discover canonical cwd/project/worktree context locally.
-   Async child-environment sanitization, Git probes, cwd/worktree/leading-target
-   canonicalization, and common-directory checks share one cumulative 250 ms
-   deadline and abort signal.
-7. Derive conservative scope evidence for one literal leading `cd`: registered
-   worktree, outside the registered roots, or unverified.
-8. Reuse an unexpired completed `ALLOW` cache entry only when the command,
-   raw cwd, complete raw-task fingerprint, and complete verified-project
-   fingerprint match. A task-correlation failure disables both cache reads and
-   writes. Context discovery therefore precedes cache lookup.
-9. Before a cache-miss chat request, require `/api/status` to report
-   `cloud.disabled === true`.
-10. Require `/api/tags` to contain exactly one exact-name model entry whose
+   remaining executable segment must be allowed; relative/dynamic paths,
+   redirects, other connectors, multiple `cd` segments, missing paths, forged
+   `.git` pointers, and unrelated or nested repositories receive no exception.
+7. Require confirmation before a project mutation when project discovery is
+   unavailable, and before leading navigation that is not a verified registered
+   same-repository worktree. These outcomes never reach Ollama.
+8. For a command that still reaches the judge, bind the raw current input and
+   authenticated current-run assistant evidence to its agent run, then discover
+   canonical cwd/project/worktree context locally. Async child-environment
+   sanitization, Git probes, cwd/worktree/leading-target canonicalization, and
+   common-directory checks share one cumulative 250 ms deadline and abort
+   signal.
+9. Reuse an unexpired completed `ALLOW` cache entry only when the command, raw
+   cwd, complete raw-task fingerprint, complete current-run-evidence
+   fingerprint, and complete verified-project fingerprint match. A task-
+   correlation failure disables cache reads and writes. Context discovery
+   therefore precedes cache lookup.
+10. Before a cache-miss chat request, require `/api/status` to report
+    `cloud.disabled === true`.
+11. Require `/api/tags` to contain exactly one exact-name model entry whose
     `name`, `model`, and pinned digest match and which has no `remote_host` or
     `remote_model` field.
-11. Query `/api/chat`, then require the exact configured response model, no
+12. Query `/api/chat`, then require the exact configured response model, no
     remote metadata, a completed non-truncated response, and an entire verdict
     of `ALLOW`. Every other result asks the user or blocks without UI.
 
@@ -130,7 +162,11 @@ redirections, and background execution do not inherit an allow entry. Quoted
 literal arguments remain concrete, but embedded whitespace remains inside its
 original argv word and cannot satisfy a multi-word allow prefix. Except for the
 narrow same-repository leading `cd` case above, a compound command bypasses
-Ollama only when every executable segment is explicitly allowed.
+Ollama only when every executable segment is explicitly allowed. An
+authenticated explicitly invoked skill grant also counts as user approval for
+an ordinary plain push or a `git -C` location after same-repository worktree
+validation; force/destructive, secret, opaque, helper-capable Git reads, and
+unverified `rg` reads remain above or outside that grant.
 
 When Ollama is unavailable or cannot be verified, TUI/RPC sessions show a
 confirmation and non-interactive/child sessions block unknown commands. A
@@ -146,6 +182,9 @@ The command-bearing `/api/chat` request receives only:
 - the fixed safety-classifier system instruction;
 - the literal shell command;
 - up to 1 KiB of normalized raw input for the current agent run and its source;
+- up to 2 KiB of authenticated assistant text from that same active user turn;
+- up to 16 authenticated preceding tool-result records containing only tool name
+  and `ok`/`error`/`unknown` status;
 - canonical cwd plus a tagged Git/non-Git/unavailable project result;
 - for Git, bounded project name, active worktree, and a display-only subset of
   canonical non-bare worktree roots (up to 16 roots / 2 KiB total); boundary
@@ -155,8 +194,11 @@ The command-bearing `/api/chat` request receives only:
   never navigation scope;
 - computed leading-`cd` scope (`listed-worktree`, outside, or unverified).
 
-Task context comes from pi's raw `input` event. Skill/template expansion,
-system prompts, prior conversation, context files, tool results, environment,
+Task context comes from pi's raw `input` event. Current-run evidence is accepted
+only from the active branch after an exact current Bash `toolCallId` match and a
+unique latest user-turn boundary. Assistant thinking, tool-call arguments, tool-
+result content/details, unauthenticated or later results, expanded skill/template
+text, system prompts, prior-turn conversation, context files, environment,
 repository file contents, Git remotes, and credentials are not sent. Pending
 input becomes active only after an established append-only message baseline,
 a positive user-message delta, Pi's steering-before-follow-up delivery order,
@@ -178,24 +220,27 @@ redirects are not followed.
 The complete permission-discovery phase has a separate cumulative 250 ms cap,
 including async PATH sanitization, all Git processes, and every filesystem
 canonicalization; status, tags, and chat then share one `timeoutMs` budget. If
-preflight consumes that budget, chat is not started. Literal commands over 2 KiB, JSON-escaped commands over 2,800 bytes,
-complete classifier messages over 10 KiB, Git output over 64 KiB, and responses
+preflight consumes that budget, chat is not started. Literal commands over
+2 KiB, JSON-escaped commands over 2,800 bytes, complete classifier messages over
+14 KiB, Git output over 64 KiB, and responses
 over 64 KiB are not auto-approved. The model context is 16,384 tokens: the
-10 KiB content cap fits even under byte-fallback tokenization, with room for
+14 KiB content cap fits even under byte-fallback tokenization, with room for
 the chat template and verdict.
 
 Successful decisions are cached for five minutes in a 128-entry per-session
 LRU. Cache keys hash the exact system prompt, model/digest, raw cwd, complete
-raw-task fingerprint, complete verified-project fingerprint, and bounded request
-envelope. Raw task, command, and omitted worktree text is not retained in cache
-entries. ASK, timeout, malformed, aborted, unverified, unavailable, and
-uncorrelated outcomes are never cached.
+raw-task fingerprint, complete authenticated run-evidence fingerprint, complete
+verified-project fingerprint, and bounded request envelope. Raw task, assistant
+text, command, and omitted worktree text is not retained in cache entries. ASK,
+timeout, malformed, aborted, unverified, unavailable, and uncorrelated outcomes
+are never cached.
 
 ## Security limitations
 
-A small LLM is a best-effort classifier, not a proof of safety. Current-task
-text, project/path names, comments, quoted strings, and here-documents can be
-adversarial. Project identity and the leading-`cd` scope are computed locally,
+A small LLM is a best-effort classifier, not a proof of safety. Current-task and
+assistant text, tool-result names/statuses, project/path names, comments, quoted
+strings, and here-documents can be adversarial. Project identity and the
+leading-`cd` scope are computed locally,
 but they establish relevance/scope only and never prove command safety. The
 existing parser and deterministic deny/ask floor run first. Parser uncertainty
 is blocked without consulting the classifier; classifier uncertainty must return
@@ -233,33 +278,35 @@ Run the checked-in production-path corpus without executing any sample:
 bun run qualify:pi-permission-judge
 ```
 
-The command creates a fresh production `createPermissionJudge` instance per
-sample, so every sample performs live status, tags, and chat requests. Each
-sample carries synthetic bounded task/project context and an exact expected
-`ALLOW` or `ASK`; any mismatch, timeout, unavailable, or malformed result fails.
-Samples are classified but never executed. Separate policy integration tests
-cover deterministic production routing and exact chat-request counts. The JSON
-report records every literal command, expected verdict, and outcome.
+The command runs every sample through production routing without executing it.
+Known safe/risky forms receive the scanner's mechanical verdict; a fresh
+`createPermissionJudge` instance performs live status, tags, and chat requests
+only for each residual sample. Every sample carries synthetic bounded
+current-task/run/project context and an exact expected `ALLOW` or `ASK`; any
+mismatch, timeout, unavailable, malformed response, or unexpected deterministic
+deny fails. The JSON report records each literal command, expected verdict,
+outcome, route, and mechanical/model totals.
 
 ### Checked-in default qualification record
 
-- Qualified at: `2026-07-21T11:13:32.764Z`
+- Qualified at: `2026-07-22T05:58:27.098Z`
 - Ollama: `0.32.0`
-- Model: `qwen2.5:latest` (7.6B, Q4_K_M)
+- Model: `granite4.1:3b` (3.4B, GGUF Q4_K_M, approximately 2.1 GB)
 - `/api/tags` manifest digest:
-  `845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e`
+  `6fd349357287c7ffc9e38189a93b48ea175d24fc566b38f09cfc564fb7f303eb`
 - Shared timeout: `10000ms`
-- Live contextual verdicts: `45/45` (two consecutive complete passes)
-- Required-safe: `20/20 ALLOW` (reads including HOME-based `find`, read-only
-  Git history/diff, same-worktree multi-diff, harness metadata/version
-  inspection, and bounded `rg | head`; lint/test/typecheck/format, local Git,
-  fetch/pull, linked-worktree navigation)
-- Required-confirmation: `25/25 ASK` (destructive Git/filesystem,
-  privilege/exfiltration, package-runner/opaque execution, unavailable project
-  identity, unrelated/prefix-confusable/traversal paths, Git location/config/force
-  variants, outside-project redirection, push/transport/upload, and prompt
-  injection)
-- Independent hold-out after prompt tuning: `5/5`
+- Production-path verdicts: `55/55`
+- Routing: `33 mechanical`, `22 live model`
+- Required-safe: `23/23 ALLOW` (read-only Git/plain `rg`, canonicalized
+  `rg --no-config`, HOME-based `find`, harness metadata/version inspection,
+  lint/test/typecheck/format, bounded local
+  Git mutations, fetch/pull, and verified linked-worktree navigation)
+- Required-confirmation: `32/32 ASK` (destructive Git/filesystem,
+  privilege/exfiltration including input redirects, package-runner/stdin-shell/
+  opaque execution, unavailable project identity and mutations, unrelated/
+  prefix-confusable/traversal paths, Git location/config/force/abbreviated-delete
+  variants, external read helpers, output redirects including `>&file`,
+  push/transport/curl-body upload, and prompt injection)
 
 Automated protocol and routing tests do not require Ollama:
 
