@@ -32,12 +32,18 @@ describe("permission command hygiene prompt", () => {
     expect(prompt).toContain("preference, not a hard constraint");
     expect(prompt).toContain("dedicated read, edit, and write tools");
     expect(prompt).toContain("directly executable literal commands");
+    expect(prompt).toContain("long or multiline content passed to a CLI");
+    expect(prompt).toContain("--body-file");
+    expect(prompt).toContain("ANSI-C-quoted or escaped payload");
+    expect(prompt).toContain("data file is not an ad-hoc executable script");
     expect(prompt).toContain("bun x, bunx, npx, or pnpm dlx");
     expect(prompt).toContain("bun run test are repository scripts");
     expect(prompt).toContain("rg --no-config");
     expect(prompt).toContain("first state briefly why it is needed");
     expect(prompt).toContain("instead of merely claiming that it is safe");
-    expect(prompt).toContain("Do not compress complex work into a fragile one-liner");
+    expect(prompt).toContain(
+      "Do not compress complex work into a fragile one-liner",
+    );
     expect(COMMAND_HYGIENE_GUIDANCE).not.toContain("never use Bash");
   });
 

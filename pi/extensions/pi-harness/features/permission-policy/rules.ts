@@ -467,11 +467,7 @@ const clusteredPushRisk = (
 
 const optionIs = (word: string, ...names: readonly string[]): boolean =>
   names.includes(word) ||
-  names.some(
-    (name) =>
-      name.startsWith("--") &&
-      word.startsWith(`${name}=`),
-  );
+  names.some((name) => name.startsWith("--") && word.startsWith(`${name}=`));
 
 const hasPathTraversal = (word: string): boolean =>
   word.split("/").some((part) => part === "..");
@@ -508,22 +504,22 @@ const gitSubcommandAsk = (
   rest: readonly string[],
 ): string | undefined => {
   if (subcommand === "push") {
-    return gitPushRisk(rest) ?? "git push は remote を変更するため確認が必要です";
+    return (
+      gitPushRisk(rest) ?? "git push は remote を変更するため確認が必要です"
+    );
   }
   if (subcommand === "help") {
     return "Git help viewer の外部program実行には確認が必要です";
   }
   if (
-    ["reset", "restore", "rebase", "cherry-pick", "revert"].includes(
-      subcommand,
-    )
+    ["reset", "restore", "rebase", "cherry-pick", "revert"].includes(subcommand)
   ) {
     return `git ${subcommand} は作業ツリーまたは履歴を変更するため確認が必要です`;
   }
   if (
     subcommand === "clean" &&
-    rest.some((word) =>
-      optionIs(word, "-f", "--force") || /^-[^-]*f/.test(word),
+    rest.some(
+      (word) => optionIs(word, "-f", "--force") || /^-[^-]*f/.test(word),
     )
   ) {
     return "git clean によるファイル削除には確認が必要です";
@@ -580,10 +576,7 @@ const structuralGitAsk = (seg: NormalizedSegment): string | undefined => {
 
   const subcommand = seg.words[position.index];
   if (subcommand === undefined) return undefined;
-  return gitSubcommandAsk(
-    subcommand,
-    seg.words.slice(position.index + 1),
-  );
+  return gitSubcommandAsk(subcommand, seg.words.slice(position.index + 1));
 };
 
 const FIND_RISK_TOKENS: ReadonlySet<string> = new Set([
@@ -661,13 +654,15 @@ const RG_EXECUTION_OPTIONS: ReadonlySet<string> = new Set([
 ]);
 
 const hasRgExecutionOption = (words: readonly string[]): boolean =>
-  words.slice(1).some(
-    (word) =>
-      RG_EXECUTION_OPTIONS.has(word) ||
-      word.startsWith("--pre=") ||
-      word.startsWith("--hostname-bin=") ||
-      (/^-[^-]/.test(word) && /[Lz]/.test(word.slice(1))),
-  );
+  words
+    .slice(1)
+    .some(
+      (word) =>
+        RG_EXECUTION_OPTIONS.has(word) ||
+        word.startsWith("--pre=") ||
+        word.startsWith("--hostname-bin=") ||
+        (/^-[^-]/.test(word) && /[Lz]/.test(word.slice(1))),
+    );
 
 const hasGitReadExecutionOption = (words: readonly string[]): boolean =>
   words.some(
@@ -747,7 +742,8 @@ const isProjectBoundedRgRead = (
   words: readonly string[],
   context: TrustedReadContext | undefined,
 ): boolean => {
-  if (context === undefined || context.navigableRoots.length === 0) return false;
+  if (context === undefined || context.navigableRoots.length === 0)
+    return false;
   const operands = rgReadOperands(words);
   if (operands === undefined) return false;
   const paths = operands.length === 0 ? ["."] : operands;
@@ -780,10 +776,7 @@ const structuralKnownAsk = (
     return "ファイルへの出力リダイレクトには確認が必要です";
   }
   if (
-    containsSensitivePath([
-      ...normalized.words,
-      ...segment.redirectionTargets,
-    ])
+    containsSensitivePath([...normalized.words, ...segment.redirectionTargets])
   ) {
     return "認証情報または機密設定へのアクセスには確認が必要です";
   }
@@ -799,10 +792,7 @@ const structuralKnownAsk = (
   if (isUploadCommand(normalized.words)) {
     return "remote 実行またはデータ送信には確認が必要です";
   }
-  if (
-    normalized.words[0] === "rg" &&
-    hasRgExecutionOption(normalized.words)
-  ) {
+  if (normalized.words[0] === "rg" && hasRgExecutionOption(normalized.words)) {
     return "rg の外部preprocessor・archive展開・symlink追跡には確認が必要です";
   }
   if (
@@ -858,10 +848,7 @@ const isSkillOverridableAsk = (command: string): boolean => {
   }
 
   const subcommand = normalized.words[position.index];
-  if (
-    subcommand === undefined ||
-    HELPER_CAPABLE_GIT_READS.has(subcommand)
-  ) {
+  if (subcommand === undefined || HELPER_CAPABLE_GIT_READS.has(subcommand)) {
     return false;
   }
   const rest = normalized.words.slice(position.index + 1);
@@ -934,12 +921,13 @@ const evaluateNormalized = (
   trustedReadContext: TrustedReadContext | undefined,
 ): Verdict => {
   if (normalized.words.length === 0) {
-    return segment.hasOutputRedirection
-      ? {
-          verdict: "ask",
-          reason: "ファイルへの出力リダイレクトには確認が必要です",
-        }
-      : { verdict: "default-continue" };
+    // A parenthesized group can leave redirects in a wordless outer segment.
+    // Apply every segment-wide floor before returning so a sensitive input
+    // target or output write cannot disappear behind that shell shape.
+    const structuralAsk = structuralKnownAsk(segment, normalized);
+    return structuralAsk === undefined
+      ? { verdict: "default-continue" }
+      : { verdict: "ask", reason: structuralAsk };
   }
   const command = normalized.words.join(" ");
   const potential = speculativeFloor(normalized);
@@ -1099,27 +1087,89 @@ const PROJECT_SENSITIVE_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "worktree",
 ]);
 
-const hasProjectSensitiveMutation = (command: string): boolean => {
+const segmentHasProjectSensitiveMutation = (segment: Segment): boolean => {
+  const normalized = normalizeSegment(segment);
+  const position = gitSubcommandPosition(normalized.words);
+  if (
+    position === undefined ||
+    position.ambiguousOption ||
+    position.riskyGlobalOption ||
+    normalized.opaque.has(position.index)
+  ) {
+    return false;
+  }
+  const subcommand = normalized.words[position.index];
+  return (
+    subcommand !== undefined &&
+    PROJECT_SENSITIVE_GIT_SUBCOMMANDS.has(subcommand)
+  );
+};
+
+const hasProjectSensitiveMutationInner = (
+  command: string,
+  depth: number,
+): boolean => {
+  if (depth > MAX_SUBSTITUTION_DEPTH) return true;
   const scanned = scanCommand(command);
   if (!scanned.ok) return true;
-  return scanned.segments.some((segment) => {
-    const normalized = normalizeSegment(segment);
-    const position = gitSubcommandPosition(normalized.words);
-    if (
-      position === undefined ||
-      position.ambiguousOption ||
-      position.riskyGlobalOption ||
-      normalized.opaque.has(position.index)
-    ) {
-      return false;
-    }
-    const subcommand = normalized.words[position.index];
-    return (
-      subcommand !== undefined &&
-      PROJECT_SENSITIVE_GIT_SUBCOMMANDS.has(subcommand)
-    );
-  });
+  return (
+    scanned.segments.some(segmentHasProjectSensitiveMutation) ||
+    scanned.subs.some((sub) => hasProjectSensitiveMutationInner(sub, depth + 1))
+  );
 };
+
+const SHELL_NAVIGATION_COMMANDS: ReadonlySet<string> = new Set([
+  "cd",
+  "popd",
+  "pushd",
+]);
+
+const segmentHasShellNavigation = (segment: Segment): boolean =>
+  SHELL_NAVIGATION_COMMANDS.has(normalizeSegment(segment).words[0] ?? "");
+
+const hasUnverifiedProjectMutationNavigationInner = (
+  command: string,
+  depth: number,
+  allowLeadingCd: boolean,
+): boolean => {
+  if (depth > MAX_SUBSTITUTION_DEPTH) return true;
+  const scanned = scanCommand(command);
+  if (!scanned.ok) return true;
+  const directMutation = scanned.segments.some(
+    segmentHasProjectSensitiveMutation,
+  );
+  const navigationIndices = scanned.segments
+    .map((segment, index) =>
+      segmentHasShellNavigation(segment) ? index : undefined,
+    )
+    .filter((index): index is number => index !== undefined);
+  const [firstSegment] = scanned.segments;
+  const onlyVerifiedLeadingCd =
+    allowLeadingCd &&
+    navigationIndices.length === 1 &&
+    navigationIndices[0] === 0 &&
+    firstSegment !== undefined &&
+    firstSegment.topLevel &&
+    firstSegment.followedByAnd &&
+    normalizeSegment(firstSegment).words[0] === "cd";
+  const unverifiedSameScope =
+    directMutation && navigationIndices.length > 0 && !onlyVerifiedLeadingCd;
+  return (
+    unverifiedSameScope ||
+    scanned.subs.some((sub) =>
+      hasUnverifiedProjectMutationNavigationInner(sub, depth + 1, false),
+    )
+  );
+};
+
+const hasProjectSensitiveMutation = (command: string): boolean =>
+  hasProjectSensitiveMutationInner(command, 0);
+
+const hasUnverifiedProjectMutationNavigation = (
+  command: string,
+  allowLeadingCd: boolean,
+): boolean =>
+  hasUnverifiedProjectMutationNavigationInner(command, 0, allowLeadingCd);
 
 const evaluateCommand = (
   command: string,
@@ -1130,6 +1180,7 @@ const evaluateCommand = (
 export {
   evaluateCommand,
   hasProjectSensitiveMutation,
+  hasUnverifiedProjectMutationNavigation,
   isSkillOverridableAsk,
   loadRules,
 };

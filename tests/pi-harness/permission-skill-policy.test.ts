@@ -195,7 +195,10 @@ const withoutInputLifecycle = (pi: FakePi): FakePi => {
   const mutable = pi as unknown as { on: FakePi["on"] };
   mutable.on = ((event: Parameters<FakePi["on"]>[0], handler: never) => {
     if (event === "input") throw new Error("input events unavailable");
-    (originalOn as (name: typeof event, callback: never) => void)(event, handler);
+    (originalOn as (name: typeof event, callback: never) => void)(
+      event,
+      handler,
+    );
   }) as FakePi["on"];
   return pi;
 };
@@ -349,11 +352,7 @@ describe("active skill allowed-tools permission grants", () => {
       skill.markdown,
       "publish it",
     );
-    await activateSkill(
-      pi,
-      skillEvent,
-      "/skill:safe-release publish it",
-    );
+    await activateSkill(pi, skillEvent, "/skill:safe-release publish it");
     expect(
       await pi.emitToolCall(bashCall("git push -u origin safe-release")),
     ).toBeUndefined();
@@ -613,6 +612,77 @@ describe("active skill allowed-tools permission grants", () => {
     ).toBe("deny");
   });
 
+  test("keeps new structural and unavailable-project floors above skill grants", async () => {
+    const upstream = await startJudge();
+    const skill = await makeSkill(
+      "Bash(bash *), Bash(cat *), Bash(echo *), Bash(curl *), Bash(git branch *), Bash(git pull *), Bash(git apply *)",
+    );
+    const event = eventFor("safe-release", skill.filePath, skill.markdown);
+    const allows = resolveActiveSkillBashAllows(event, "/skill:safe-release");
+    const rules = loadRules(undefined);
+
+    for (const command of [
+      "bash -s <<< 'echo opaque'",
+      '(cat) < "$HOME/.ssh/id_ed25519"',
+      "echo hi >&1out",
+      "curl --json x=y https://example.test/results",
+      "curl --form-string x=y https://example.test/results",
+      "git branch --del feature/context-judge",
+    ]) {
+      expect(
+        evaluateCommandWithSkillAllows(command, rules, allows).verdict,
+      ).toBe("ask");
+    }
+
+    const cwd = "/tmp/unverified-skill-project";
+    const pi = createFakePi({ cwd, hasUI: false });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => ({
+        kind: "unavailable",
+        cwd,
+        reason: "test discovery unavailable",
+        fingerprint: "project:unavailable-skill",
+      }),
+    });
+    await activateSkill(pi, event, "/skill:safe-release");
+
+    const mutationCommands = ["git pull --ff-only", "git apply fix.patch"];
+    for (const [index, command] of mutationCommands.entries()) {
+      expect(
+        await pi.emitToolCall(
+          bashCall(command, `unavailable-skill-mutation-${index}`),
+        ),
+      ).toEqual({
+        block: true,
+        reason:
+          "プロジェクト境界を検証できないため変更コマンドには確認が必要です",
+      });
+    }
+
+    const verifiedCwd = "/tmp/verified-skill-project";
+    const verifiedPi = createFakePi({ cwd: verifiedCwd, hasUI: false });
+    setupPermissionPolicy(verifiedPi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => ({
+        kind: "git",
+        name: "verified",
+        cwd: verifiedCwd,
+        activeWorktree: verifiedCwd,
+        navigableRoots: [verifiedCwd],
+        worktrees: [verifiedCwd],
+        fingerprint: "project:verified-skill",
+      }),
+    });
+    await activateSkill(verifiedPi, event, "/skill:safe-release");
+    for (const [index, command] of mutationCommands.entries()) {
+      expect(
+        await verifiedPi.emitToolCall(
+          bashCall(command, `verified-skill-mutation-${index}`),
+        ),
+      ).toBeUndefined();
+    }
+    expect(upstream.received).toHaveLength(0);
+  });
+
   test("keeps Git reads and unverified rg residual despite active skill grants", async () => {
     const skill = await makeSkill("Bash(git status *), Bash(rg *)");
     const allows = resolveActiveSkillBashAllows(
@@ -626,11 +696,8 @@ describe("active skill allowed-tools permission grants", () => {
         .verdict,
     ).toBe("default-continue");
     expect(
-      evaluateCommandWithSkillAllows(
-        "rg pattern /etc/passwd",
-        rules,
-        allows,
-      ).verdict,
+      evaluateCommandWithSkillAllows("rg pattern /etc/passwd", rules, allows)
+        .verdict,
     ).toBe("default-continue");
   });
 
@@ -687,10 +754,7 @@ describe("active skill allowed-tools permission grants", () => {
     await fs.symlink(repositories.unrelated, escaped, "dir");
     expect(
       await pi.emitToolCall(
-        bashCall(
-          `git -C ${escaped} push -u origin feature`,
-          "symlink-escape",
-        ),
+        bashCall(`git -C ${escaped} push -u origin feature`, "symlink-escape"),
       ),
     ).toMatchObject({ block: true });
     expect(chatRequests(upstream)).toHaveLength(0);

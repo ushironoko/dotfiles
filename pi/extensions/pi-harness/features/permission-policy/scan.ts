@@ -575,6 +575,8 @@ export const scanCommand = (command: string): ScanResult => {
   let wordAnsiC = false;
   let atWordStart = true;
   let pendingRedirectTarget = false;
+  let pendingFdDuplicationTarget = false;
+  let pendingFdDuplicationOutput = false;
   let allowEligible = true;
   let groupDepth = 0;
   let i = 0;
@@ -591,9 +593,20 @@ export const scanCommand = (command: string): ScanResult => {
     if (pendingRedirectTarget) {
       // This word is a redirect target (data, not a command word). Retain its
       // concrete portion for sensitive-path inspection, but never treat it as
-      // argv or as eligible explicit-allow text.
+      // argv or as eligible explicit-allow text. `>&word` is fd duplication
+      // only when the complete expanded word is a concrete decimal descriptor,
+      // descriptor move (`2-`), or `-`; prefixes such as `1out` are file names.
+      const concreteFdDuplication =
+        pendingFdDuplicationTarget &&
+        !wordOpaque &&
+        /^(?:\d+-?|-)$/u.test(word);
+      if (pendingFdDuplicationOutput && !concreteFdDuplication) {
+        segmentHasOutputRedirection = true;
+      }
       redirectionTargets.push(word);
       pendingRedirectTarget = false;
+      pendingFdDuplicationTarget = false;
+      pendingFdDuplicationOutput = false;
       resetWord();
       return;
     }
@@ -607,6 +620,8 @@ export const scanCommand = (command: string): ScanResult => {
   const flushSegment = (followedByAnd = false): void => {
     flushWord();
     pendingRedirectTarget = false;
+    pendingFdDuplicationTarget = false;
+    pendingFdDuplicationOutput = false;
     if (words.length > 0 || !allowEligible) {
       // Preserve argv boundaries when rendering the regex candidate. Literal
       // whitespace produced inside one quoted/escaped shell word must not turn
@@ -715,9 +730,22 @@ export const scanCommand = (command: string): ScanResult => {
       if (dollar.boundary) {
         // Shell comment recognition happens before expansion: in `$IFS#x`,
         // `#x` is part of the same lexical word, not a comment. Keep that
-        // lexical state and never derive an explicit allow through IFS.
+        // lexical state and never derive an explicit allow through IFS. When
+        // IFS is the target of `>&`, retain the dynamic target as an output
+        // write risk instead of letting an empty boundary drop the redirect.
         allowEligible = false;
-        flushWord();
+        if (pendingRedirectTarget) {
+          if (pendingFdDuplicationOutput) {
+            segmentHasOutputRedirection = true;
+          }
+          redirectionTargets.push(OPAQUE);
+          pendingRedirectTarget = false;
+          pendingFdDuplicationTarget = false;
+          pendingFdDuplicationOutput = false;
+          resetWord();
+        } else {
+          flushWord();
+        }
         atWordStart = false;
         i = dollar.end;
         continue;
@@ -783,16 +811,13 @@ export const scanCommand = (command: string): ScanResult => {
       }
       if (command[i] === "|") i += 1; // >|
       if (command[i] === "&") {
-        // Numeric fd duplication/closure (>&1, <&-) has no file target. Bash's
-        // `>&file` shorthand does open a file, so retain a non-fd target and
-        // classify the output write before it can inherit an allow.
+        // Defer fd-duplication classification until the complete redirect word
+        // has been tokenized. Quoted/spaced numeric descriptors are valid, but
+        // a numeric prefix such as `1out` is a file target.
         i += 1;
-        const targetStart = i;
-        while (i < command.length && /[0-9-]/.test(command[i])) i += 1;
-        if (i === targetStart && c === ">") {
-          segmentHasOutputRedirection = true;
-          pendingRedirectTarget = true;
-        }
+        pendingRedirectTarget = true;
+        pendingFdDuplicationTarget = true;
+        pendingFdDuplicationOutput = c === ">";
       } else {
         if (c === ">") segmentHasOutputRedirection = true;
         pendingRedirectTarget = true;

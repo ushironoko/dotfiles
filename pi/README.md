@@ -81,9 +81,10 @@ and keep only the safety layer (no recursion, no duplicate notifications).
 The safety layer also appends soft command-hygiene guidance to every parent and
 child system prompt: prefer dedicated file tools, literal project-bounded
 commands, transparent pipelines, existing repository scripts, and
-`rg --no-config`; explain necessity and exact scope before genuinely required
-dynamic shell or ad-hoc scripts instead of sacrificing correctness to a fragile
-one-liner. This generation preference does not relax any permission boundary.
+`rg --no-config`; pass long or multiline CLI data through a file-input option
+rather than shell-escaped one-liners; explain necessity and exact scope before
+genuinely required dynamic shell or ad-hoc scripts instead of sacrificing
+correctness. This generation preference does not relax any permission boundary.
 
 The safety layer includes a default-on local Ollama fallback for Bash commands
 that remain ambiguous after deterministic routing. Known risky shapes require

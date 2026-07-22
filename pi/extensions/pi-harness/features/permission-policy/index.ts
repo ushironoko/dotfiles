@@ -16,8 +16,10 @@ import { createPermissionJudge, type JudgeOutcome } from "./judge";
 import {
   evaluateCommand,
   hasProjectSensitiveMutation,
+  hasUnverifiedProjectMutationNavigation,
   loadRules,
   type AllowRule,
+  type LoadedRules,
 } from "./rules";
 import {
   createActiveSkillBashAllowResolver,
@@ -129,6 +131,7 @@ const currentRunEvidence = (
 
 interface SetupPermissionPolicyOptions {
   permissionSignalToken?: string;
+  rules?: LoadedRules;
   writePermissionSignal?: (text: string) => void;
   blockToolCall?: (reason: string) => PermissionBlockResult;
   discoverProject?: (
@@ -143,7 +146,7 @@ const setupPermissionPolicy = (
   config: HarnessConfig,
   options: SetupPermissionPolicyOptions = {},
 ): void => {
-  const rules = loadRules(readPermissionRules());
+  const rules = options.rules ?? loadRules(readPermissionRules());
   const judgeConfig = config.permissionJudge;
   const judge =
     judgeConfig?.enabled === true
@@ -402,10 +405,29 @@ const setupPermissionPolicy = (
       if (result.verdict === "ask") {
         return confirm("危険なコマンドを実行しますか？", result.reason);
       }
-      if (result.verdict === "allow") return undefined;
 
       const leadingCdTarget = leadingTrustedCdTarget(command);
       const projectSensitiveMutation = hasProjectSensitiveMutation(command);
+      const unverifiedMutationNavigation =
+        hasUnverifiedProjectMutationNavigation(
+          command,
+          leadingCdTarget !== undefined,
+        );
+      if (unverifiedMutationNavigation) {
+        return confirm(
+          "検証できない移動後のプロジェクト変更を実行しますか？",
+          "プロジェクト変更前の作業場所を検証できないため確認が必要です",
+        );
+      }
+      // Context-free allows remain cheap, but an allow cannot bypass verified
+      // leading navigation or the verified-project floor for a Git mutation.
+      if (
+        result.verdict === "allow" &&
+        leadingCdTarget === undefined &&
+        !projectSensitiveMutation
+      ) {
+        return undefined;
+      }
       if (
         judge === undefined &&
         leadingCdTarget === undefined &&
@@ -442,6 +464,8 @@ const setupPermissionPolicy = (
           "プロジェクト境界を検証できないため変更コマンドには確認が必要です",
         );
       }
+      if (result.verdict === "allow") return undefined;
+
       const trustedLeadingCdTarget =
         leadingCdTarget !== undefined &&
         leadingNavigation?.scope === "listed-worktree" &&

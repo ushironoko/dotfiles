@@ -11,6 +11,7 @@ import {
   formatChildPermissionSignal,
 } from "../../pi/extensions/pi-harness/features/permission-policy/block";
 import type { PermissionProjectContext } from "../../pi/extensions/pi-harness/features/permission-policy/context";
+import { loadRules } from "../../pi/extensions/pi-harness/features/permission-policy/rules";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import type { ToolCallEvent } from "../../pi/extensions/pi-harness/lib/pi-like";
 import { startMockUpstream, type MockUpstream } from "../test-helpers";
@@ -262,14 +263,14 @@ describe("permission policy local judge routing", () => {
     ]);
 
     expect(
-      await pi.emitToolCall(bashCall("grep permission-policy pi", "current-rg")),
+      await pi.emitToolCall(
+        bashCall("grep permission-policy pi", "current-rg"),
+      ),
     ).toBeUndefined();
     const body = chatRequests(upstream)[0]?.body ?? "";
     expect(body).toContain("Inspect the judge after the failed test.");
     expect(body).toContain("Now inspect policy references.");
-    expect(body).toContain(
-      String.raw`\"toolName\":\"read\",\"status\":\"ok\"`,
-    );
+    expect(body).toContain(String.raw`\"toolName\":\"read\",\"status\":\"ok\"`);
     expect(body).not.toContain("PRIVATE ARGUMENT");
     expect(body).not.toContain("PRIVATE CURRENT ARGUMENT");
     expect(body).not.toContain("PRIVATE OUTPUT");
@@ -412,11 +413,18 @@ describe("permission policy local judge routing", () => {
     ).not.toContain("same queued task");
   });
 
-  test("asks locally for a project mutation when discovery is unavailable", async () => {
+  test("keeps unavailable project mutations above a catch-all configured allow", async () => {
     const upstream = await start(() => ollamaResponse("ALLOW"));
     const cwd = "/tmp/project";
     const pi = createFakePi({ cwd, hasUI: false });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      rules: loadRules(
+        JSON.stringify({
+          deny: [],
+          allow: [{ pattern: "^" }],
+          ask: [],
+        }),
+      ),
       discoverProject: async () => ({
         kind: "unavailable",
         cwd,
@@ -429,14 +437,75 @@ describe("permission policy local judge routing", () => {
       "git add src/parser.ts",
       "git apply fix.patch",
       "git pull --ff-only",
+      'echo "$(git apply fix.patch)"',
+      'echo "$(git pull --ff-only)"',
     ].entries()) {
       expect(
-        await pi.emitToolCall(bashCall(command, `unavailable-mutation-${index}`)),
+        await pi.emitToolCall(
+          bashCall(command, `unavailable-mutation-${index}`),
+        ),
       ).toEqual({
         block: true,
         reason:
           "プロジェクト境界を検証できないため変更コマンドには確認が必要です",
       });
+    }
+    expect(upstream.received).toHaveLength(0);
+  });
+
+  test("preserves configured allows only after required navigation and project verification", async () => {
+    const upstream = await start(() => ollamaResponse("ASK"));
+    const cwd = "/tmp/verified-project";
+    const pi = createFakePi({ cwd, hasUI: false });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      rules: loadRules(
+        JSON.stringify({
+          deny: [],
+          allow: [{ pattern: "^" }],
+          ask: [],
+        }),
+      ),
+      discoverProject: async (_cwd, _signal, leadingCdTarget) => ({
+        ...verifiedProject(cwd),
+        ...(leadingCdTarget === undefined
+          ? {}
+          : {
+              leadingNavigation:
+                leadingCdTarget === cwd
+                  ? {
+                      scope: "listed-worktree" as const,
+                      sameRepository: true,
+                    }
+                  : {
+                      scope: "outside-listed-worktrees" as const,
+                      sameRepository: false,
+                    },
+            }),
+      }),
+    });
+
+    expect(
+      await pi.emitToolCall(bashCall("git pull --ff-only", "verified-pull")),
+    ).toBeUndefined();
+    expect(
+      await pi.emitToolCall(bashCall("git apply fix.patch", "verified-apply")),
+    ).toBeUndefined();
+    expect(
+      await pi.emitToolCall(
+        bashCall(`cd ${cwd} && git pull --ff-only`, "verified-leading-pull"),
+      ),
+    ).toBeUndefined();
+    for (const [index, command] of [
+      "cd ../other && git pull --ff-only",
+      "(cd /tmp/unrelated && git apply fix.patch)",
+      `cd ${cwd} && pushd /tmp/unrelated && git pull --ff-only`,
+      "cd /tmp/unrelated && echo hi",
+    ].entries()) {
+      expect(
+        await pi.emitToolCall(
+          bashCall(command, `unverified-configured-navigation-${index}`),
+        ),
+      ).toEqual({ block: true, reason: expect.any(String) });
     }
     expect(upstream.received).toHaveLength(0);
   });
@@ -800,13 +869,9 @@ describe("permission policy local judge routing", () => {
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
 
     await pi.emitToolCall(bashCall("git rev-parse HEAD", "cache-seed"));
-    await pi.emitToolCall(
-      bashCall("git rev-parse --show-toplevel", "outage"),
-    );
+    await pi.emitToolCall(bashCall("git rev-parse --show-toplevel", "outage"));
     await pi.emitToolCall(bashCall("git rev-parse HEAD", "cache-hit"));
-    await pi.emitToolCall(
-      bashCall("git rev-parse --git-dir", "same-outage"),
-    );
+    await pi.emitToolCall(bashCall("git rev-parse --git-dir", "same-outage"));
 
     expect(chatRequests(upstream)).toHaveLength(2);
     expect(pi.notifications).toHaveLength(1);

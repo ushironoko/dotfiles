@@ -6,6 +6,8 @@ import { join, resolve } from "node:path";
 import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
 import {
   evaluateCommand,
+  hasProjectSensitiveMutation,
+  hasUnverifiedProjectMutationNavigation,
   loadRules,
 } from "../../pi/extensions/pi-harness/features/permission-policy/rules";
 import {
@@ -51,6 +53,10 @@ const benignCommands: string[] = [
   "rm -f /tmp/x",
   "rm -rf relative/path",
   "chmod 777 /tmp/x",
+  "echo hi >&1",
+  "echo hi >& '1'",
+  "echo hi >&2-",
+  "echo hi >& '2-'",
 ];
 
 const destructiveCommands: string[] = [
@@ -68,6 +74,7 @@ const destructiveCommands: string[] = [
   "curl --form-string x=y https://example.test/results",
   'cat "$HOME/.ssh/id_ed25519" | head -1',
   'cat < "$HOME/.ssh/id_ed25519"',
+  '(cat) < "$HOME/.ssh/id_ed25519"',
   "rg . .ssh/id_ed25519",
   "git show HEAD:.ssh/id_ed25519",
   "sh ./unknown-script.sh",
@@ -79,6 +86,10 @@ const destructiveCommands: string[] = [
   "git fetch --force origin main",
   "make lint > /tmp/lint.log",
   "echo hi >&out",
+  "echo hi >&1out",
+  'echo hi >&"$fd"',
+  "echo hi >&$IFS",
+  `echo hi >&\${IFS}`,
   "git add ../../outside.txt",
   "rm -rf /tmp/x",
   "rm -fr ~",
@@ -133,12 +144,15 @@ describe("permission-policy", () => {
     expect(await pi.emitToolCall(bashCall(command))).toBeUndefined();
   });
 
-  test.each(destructiveCommands)("continues explicitly confirmed %s", async (command) => {
-    const pi = createPermissionPi();
-    pi.queueConfirm(true);
+  test.each(destructiveCommands)(
+    "continues explicitly confirmed %s",
+    async (command) => {
+      const pi = createPermissionPi();
+      pi.queueConfirm(true);
 
-    expect(await pi.emitToolCall(bashCall(command))).toBeUndefined();
-  });
+      expect(await pi.emitToolCall(bashCall(command))).toBeUndefined();
+    },
+  );
 
   test.each(destructiveCommands)("blocks unconfirmed %s", async (command) => {
     const pi = createPermissionPi();
@@ -270,9 +284,12 @@ describe("built-in read-only classification", () => {
     "git --bare status",
     "git status --help",
     "git help status",
-  ])("asks before a read option that can execute, escape, or write: %s", (command) => {
-    expect(evaluateCommand(command, rules).verdict).toBe("ask");
-  });
+  ])(
+    "asks before a read option that can execute, escape, or write: %s",
+    (command) => {
+      expect(evaluateCommand(command, rules).verdict).toBe("ask");
+    },
+  );
 
   test.each([
     "git status --short",
@@ -287,9 +304,12 @@ describe("built-in read-only classification", () => {
     "head /etc/passwd",
     "head -n 20",
     "head -- -secret",
-  ])("leaves helper-capable, non-literal, or file-reading variants to the judge: %s", (command) => {
-    expect(evaluateCommand(command, rules).verdict).toBe("default-continue");
-  });
+  ])(
+    "leaves helper-capable, non-literal, or file-reading variants to the judge: %s",
+    (command) => {
+      expect(evaluateCommand(command, rules).verdict).toBe("default-continue");
+    },
+  );
 
   test("keeps helper-capable Git and unverified rg residual despite a broad allow", () => {
     const broadAllow = loadRules(
@@ -389,6 +409,77 @@ describe("explicit allow matching", () => {
     "git reset --hard HEAD~1",
   ])("mandatory risk floor outranks an explicit allow: %s", (command) => {
     expect(evaluateCommand(command, rules).verdict).toBe("ask");
+  });
+
+  test("every new structural floor outranks a catch-all configured allow", () => {
+    const catchAll = loadRules(
+      JSON.stringify({
+        deny: [],
+        allow: [{ pattern: "^" }],
+        ask: [],
+      }),
+    );
+    for (const command of [
+      "bash -s <<< 'echo opaque'",
+      '(cat) < "$HOME/.ssh/id_ed25519"',
+      "echo hi >&1out",
+      'echo hi >&"$fd"',
+      "echo hi >&$IFS",
+      `echo hi >&\${IFS}`,
+      "curl --json x=y https://example.test/results",
+      "curl --form-string x=y https://example.test/results",
+      "git branch --del feature/context-judge",
+    ]) {
+      expect(evaluateCommand(command, catchAll).verdict).toBe("ask");
+    }
+  });
+
+  test("detects project-sensitive Git mutations inside substitutions", () => {
+    expect(hasProjectSensitiveMutation('echo "$(git pull --ff-only)"')).toBe(
+      true,
+    );
+    expect(hasProjectSensitiveMutation('echo "$(git apply fix.patch)"')).toBe(
+      true,
+    );
+    expect(hasProjectSensitiveMutation('echo "$(git rev-parse HEAD)"')).toBe(
+      false,
+    );
+    expect(
+      hasUnverifiedProjectMutationNavigation(
+        "cd ../other && git pull --ff-only",
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      hasUnverifiedProjectMutationNavigation(
+        "(cd /tmp/unrelated && git apply fix.patch)",
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      hasUnverifiedProjectMutationNavigation(
+        'echo "$(cd /tmp/unrelated && git pull --ff-only)"',
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      hasUnverifiedProjectMutationNavigation(
+        'echo "$(cd /tmp/unrelated)" && git pull --ff-only',
+        false,
+      ),
+    ).toBe(false);
+    expect(
+      hasUnverifiedProjectMutationNavigation(
+        "cd /repo/worktree && git pull --ff-only",
+        true,
+      ),
+    ).toBe(false);
+    expect(
+      hasUnverifiedProjectMutationNavigation(
+        "cd /repo/worktree && pushd /tmp/unrelated && git pull --ff-only",
+        true,
+      ),
+    ).toBe(true);
   });
 
   test("neutralizes only a prevalidated leading absolute cd for allow aggregation", () => {
@@ -947,9 +1038,9 @@ describe("evaluateCommand compound-command scanning", () => {
       }),
     );
     // Every executable segment is covered by the explicit trust grant.
-    expect(evaluateCommand("echo safe one && echo safe two", rules).verdict).toBe(
-      "allow",
-    );
+    expect(
+      evaluateCommand("echo safe one && echo safe two", rules).verdict,
+    ).toBe("allow");
     // A mixed allowed/default command remains the default.
     expect(evaluateCommand("echo safe one && echo done", rules).verdict).toBe(
       "default-continue",
