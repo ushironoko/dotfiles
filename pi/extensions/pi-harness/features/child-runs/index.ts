@@ -26,6 +26,10 @@ interface RuntimeToolResultEvent {
   isError?: boolean;
 }
 
+interface RuntimeBeforeAgentStartEvent {
+  systemPrompt?: unknown;
+}
+
 interface RuntimePiLike {
   on(
     event: string,
@@ -77,6 +81,15 @@ const completionInvocationId = (details: unknown): string | undefined => {
   const invocationId = (details as { invocationId?: unknown }).invocationId;
   return typeof invocationId === "string" ? invocationId : undefined;
 };
+
+const BACKGROUND_AGENT_SYSTEM_PROMPT = `## Background agent completion
+
+The subagent and workflow tools run child agents asynchronously. After either tool accepts a background invocation, never use sleep, shell polling, repeated status checks, or any other blocking or waiting call to wait for it. Pi delivers completion automatically as a new message and starts the continuation turn. Continue only work that is independent of the child; otherwise end the current response and return control to Pi.`;
+
+const appendBackgroundAgentSystemPrompt = (systemPrompt: string): string =>
+  systemPrompt === ""
+    ? BACKGROUND_AGENT_SYSTEM_PROMPT
+    : `${systemPrompt}\n\n${BACKGROUND_AGENT_SYSTEM_PROMPT}`;
 
 export interface ChildRunsIntegration {
   registry: ChildRunRegistry;
@@ -199,8 +212,15 @@ const setupChildRuns = (pi: PiLike): ChildRunsIntegration => {
       background?.acknowledgeToolResult(event.message.toolCallId);
     }
   });
-  runtime.on("before_agent_start", () => {
+  runtime.on("before_agent_start", (rawEvent) => {
     background?.markAgentPreflightStarted();
+    if (background === undefined) return undefined;
+
+    const event = rawEvent as RuntimeBeforeAgentStartEvent;
+    if (typeof event.systemPrompt !== "string") return undefined;
+    return {
+      systemPrompt: appendBackgroundAgentSystemPrompt(event.systemPrompt),
+    };
   });
   runtime.on("agent_start", () => background?.markAgentStarted());
   runtime.on("agent_settled", (_event, ctx) => {

@@ -50,6 +50,14 @@ requests an automatic follow-up parent turn. Completion delivery is serialized:
 only one result is handed to pi at a time, while later results remain in the
 manager-local queue until the preceding notification turn settles.
 
+Whenever that background delivery runtime is available, pi-harness also
+appends parent system-prompt guidance before every agent run. It tells the
+parent never to wait with `sleep`, shell polling, repeated status checks, or
+other blocking calls: the parent may continue independent work, but otherwise
+must return control to pi until the automatic completion message starts the
+next turn. The guidance is omitted for the legacy synchronous fallback, where
+the tool call itself waits and returns the final result.
+
 A permission-policy block in a no-UI child emits a diagnostic signal bound to a
 random per-spawn token and makes that child run fail even if the model responds
 with a normal final message and pi exits zero. The signal is filtered from child
