@@ -13,6 +13,7 @@ import {
 import type {
   BoundedTaskContext,
   PermissionProjectContext,
+  PermissionRunEvidence,
 } from "../../pi/extensions/pi-harness/features/permission-policy/context";
 import { startMockUpstream, type MockUpstream } from "../test-helpers";
 
@@ -151,6 +152,17 @@ const taskContext = (
   fingerprint,
 });
 
+const runEvidence = (
+  fingerprint = "run:a",
+): PermissionRunEvidence => ({
+  assistantText: "Inspect the policy after the failed test.",
+  priorToolResults: [
+    { toolName: "bash", status: "error" },
+    { toolName: "read", status: "ok" },
+  ],
+  fingerprint,
+});
+
 const gitProject = (fingerprint = "project:a"): PermissionProjectContext => ({
   kind: "git",
   name: "project",
@@ -198,7 +210,7 @@ describe("local Ollama permission judge", () => {
     }
   });
 
-  test("sends only bounded command, current task, and project context with low-latency options", async () => {
+  test("sends bounded task, current-run evidence, and project context with low-latency options", async () => {
     const upstream = await start(() => validResponse());
     const judge = createPermissionJudge(configFor(upstream));
 
@@ -206,6 +218,7 @@ describe("local Ollama permission judge", () => {
       await judge.judge("git status --short", {
         cwd: "/private/project-worktree/packages/app",
         task: taskContext("Inspect the current repository state"),
+        runEvidence: runEvidence(),
         project: gitProject(),
       }),
     ).toEqual({ kind: "allow", cached: false });
@@ -238,10 +251,20 @@ describe("local Ollama permission judge", () => {
     ).toBeUndefined();
     expect(request?.body).toContain("git status --short");
     expect(request?.body).toContain("Inspect the current repository state");
+    expect(request?.body).toContain(
+      "Inspect the policy after the failed test.",
+    );
+    expect(request?.body).toContain(
+      '\\"toolName\\":\\"bash\\",\\"status\\":\\"error\\"',
+    );
+    expect(request?.body).toContain(
+      '\\"toolName\\":\\"read\\",\\"status\\":\\"ok\\"',
+    );
     expect(request?.body).toContain("/private/project-worktree");
     expect(request?.body).toContain("/private/project");
     expect(request?.body).not.toContain("task:Inspect");
     expect(request?.body).not.toContain("project:a");
+    expect(request?.body).not.toContain("run:a");
     expect(request?.body).not.toContain("conversation history");
     expect(request?.body).not.toContain("systemPromptOptions");
     expect(request?.body).not.toContain("process.env");
@@ -790,7 +813,7 @@ describe("local Ollama permission judge", () => {
     expect(chatRequests(upstream)).toHaveLength(2);
   });
 
-  test("does not share ALLOW cache entries across raw task or project changes", async () => {
+  test("does not share ALLOW cache entries across task, run evidence, or project changes", async () => {
     const upstream = await start(() => validResponse());
     const judge = createPermissionJudge(configFor(upstream));
     const command = "make check";
@@ -798,12 +821,14 @@ describe("local Ollama permission judge", () => {
     await judge.judge(command, {
       cwd: "/private/project",
       task: taskContext("Run checks…", "complete-task-a"),
+      runEvidence: runEvidence("complete-run-a"),
       project: gitProject("complete-project-a"),
     });
     expect(
       await judge.judge(command, {
         cwd: "/private/project",
         task: taskContext("Run checks…", "complete-task-a"),
+        runEvidence: runEvidence("complete-run-a"),
         project: gitProject("complete-project-a"),
       }),
     ).toEqual({ kind: "allow", cached: true });
@@ -811,15 +836,23 @@ describe("local Ollama permission judge", () => {
     await judge.judge(command, {
       cwd: "/private/project",
       task: taskContext("Run checks…", "complete-task-b"),
+      runEvidence: runEvidence("complete-run-a"),
       project: gitProject("complete-project-a"),
     });
     await judge.judge(command, {
       cwd: "/private/project",
       task: taskContext("Run checks…", "complete-task-b"),
+      runEvidence: runEvidence("complete-run-b"),
+      project: gitProject("complete-project-a"),
+    });
+    await judge.judge(command, {
+      cwd: "/private/project",
+      task: taskContext("Run checks…", "complete-task-b"),
+      runEvidence: runEvidence("complete-run-b"),
       project: gitProject("complete-project-b"),
     });
 
-    expect(chatRequests(upstream)).toHaveLength(3);
+    expect(chatRequests(upstream)).toHaveLength(4);
   });
 
   test("never reads or writes ALLOW cache while task correlation is unknown", async () => {

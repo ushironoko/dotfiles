@@ -108,13 +108,14 @@ export interface ToolResultPatch {
   isError?: boolean;
 }
 
-/** Returned by before_agent_start handlers to inject a message. */
+/** Returned by before_agent_start handlers to inject a message or chain the system prompt. */
 export interface AgentStartInjection {
-  message: {
+  message?: {
     customType: string;
     content: string;
     display: boolean;
   };
+  systemPrompt?: string;
 }
 
 export interface PiEventResultMap {
@@ -204,12 +205,18 @@ export interface UiLike {
   setFooter?(factory: FooterFactoryLike | undefined): void;
 }
 
+export interface SessionManagerLike {
+  /** Active branch in root-to-leaf order, synchronized through tool_call. */
+  getBranch(): unknown[];
+}
+
 export interface CtxLike {
   hasUI: boolean;
   ui: UiLike;
   mode?: PiModeLike;
   cwd?: string;
   model?: ModelLike;
+  sessionManager?: SessionManagerLike;
   getContextUsage?(): ContextUsageLike | undefined;
 }
 

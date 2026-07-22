@@ -230,7 +230,10 @@ describe("pi-harness hook bridge", () => {
       input: { command: "bun x totally-unknown-package" },
     });
     expect(passedToPolicy?.block).toBe(true);
-    expect(passedToPolicy?.reason).toContain("permission judge should not run");
+    expect(passedToPolicy?.reason).toContain("パッケージランナー");
+    expect(passedToPolicy?.reason).not.toContain(
+      "permission judge should not run",
+    );
     expect(permissionSignals).toEqual([
       `${formatChildPermissionSignal(permissionSignalToken)}\n`,
       `${formatChildPermissionSignal(permissionSignalToken)}\n`,
@@ -320,9 +323,9 @@ describe("pi-harness hook bridge", () => {
       type: "before_agent_start",
       prompt: "please run ultracode on this",
     });
-    expect(injection?.message.customType).toBe("pi-harness-hook-bridge");
-    expect(injection?.message.content.length).toBeGreaterThan(0);
-    expect(injection?.message.display).toBe(false);
+    expect(injection?.message?.customType).toBe("pi-harness-hook-bridge");
+    expect(injection?.message?.content.length).toBeGreaterThan(0);
+    expect(injection?.message?.display).toBe(false);
 
     const ignored = await pi.emitBeforeAgentStart({
       type: "before_agent_start",

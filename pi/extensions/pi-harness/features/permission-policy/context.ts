@@ -287,6 +287,138 @@ export const createPermissionTaskTracker = (): PermissionTaskTracker => {
   };
 };
 
+const MAX_ASSISTANT_CONTEXT_BYTES = 2 * 1_024;
+const MAX_PRIOR_TOOL_RESULTS = 16;
+const MAX_TOOL_NAME_BYTES = 128;
+
+export interface PermissionToolResultEvidence {
+  readonly toolName: string;
+  readonly status: "ok" | "error" | "unknown";
+}
+
+export interface PermissionRunEvidence {
+  /** Bounded text blocks from assistant messages in the active user turn. */
+  readonly assistantText?: string;
+  /** Result metadata only; tool arguments, output, and details are excluded. */
+  readonly priorToolResults: readonly PermissionToolResultEvidence[];
+  /** Hash of the complete untruncated evidence for cache isolation. */
+  readonly fingerprint: string;
+}
+
+const sessionMessage = (entry: unknown): Record<string, unknown> | undefined =>
+  isRecord(entry) && entry.type === "message" && isRecord(entry.message)
+    ? entry.message
+    : undefined;
+
+const assistantTextBlocks = (message: Record<string, unknown>): string[] => {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return [];
+  return message.content.flatMap((block) =>
+    isRecord(block) && block.type === "text" && typeof block.text === "string"
+      ? [block.text]
+      : [],
+  );
+};
+
+const containsToolCall = (
+  message: Record<string, unknown>,
+  toolCallId: string,
+): boolean =>
+  message.role === "assistant" &&
+  Array.isArray(message.content) &&
+  message.content.some(
+    (block) =>
+      isRecord(block) &&
+      block.type === "toolCall" &&
+      block.id === toolCallId,
+  );
+
+const truncateUtf8Tail = (value: string, maxBytes: number): string => {
+  const encoded = Buffer.from(value, "utf8");
+  if (encoded.byteLength <= maxBytes) return value;
+  const marker = Buffer.from("…", "utf8");
+  let start = Math.min(encoded.byteLength, marker.byteLength);
+  const targetStart = encoded.byteLength - (maxBytes - marker.byteLength);
+  start = Math.max(start, targetStart);
+  while (
+    start < encoded.byteLength &&
+    (encoded[start] ?? 0) >= 0x80 &&
+    (encoded[start] ?? 0) < 0xC0
+  ) {
+    start += 1;
+  }
+  return `${marker.toString("utf8")}${encoded.subarray(start).toString("utf8")}`;
+};
+
+/**
+ * Derive evidence only from the active user turn containing the exact tool call.
+ * Pi synchronizes SessionManager through the current assistant message before
+ * tool_call handlers run. Matching the tool id prevents stale branch text from
+ * being attached when that lifecycle guarantee is absent or malformed.
+ */
+export const derivePermissionRunEvidence = (
+  entries: readonly unknown[],
+  toolCallId: string,
+): PermissionRunEvidence | undefined => {
+  if (toolCallId === "") return undefined;
+
+  const matches: number[] = [];
+  for (const [index, entry] of entries.entries()) {
+    const message = sessionMessage(entry);
+    if (message !== undefined && containsToolCall(message, toolCallId)) {
+      matches.push(index);
+    }
+  }
+  if (matches.length !== 1) return undefined;
+  const [currentAssistantIndex] = matches;
+  if (currentAssistantIndex === undefined) return undefined;
+
+  let turnStart = 0;
+  for (let index = 0; index < currentAssistantIndex; index += 1) {
+    if (sessionMessage(entries[index])?.role === "user") turnStart = index + 1;
+  }
+
+  const rawAssistantText: string[] = [];
+  const allToolResults: PermissionToolResultEvidence[] = [];
+  const fingerprintParts: string[] = ["run-evidence-v1"];
+  for (let index = turnStart; index <= currentAssistantIndex; index += 1) {
+    const message = sessionMessage(entries[index]);
+    if (message === undefined) continue;
+    if (message.role === "assistant") {
+      const text = assistantTextBlocks(message);
+      rawAssistantText.push(...text);
+      fingerprintParts.push("assistant", ...text);
+      continue;
+    }
+    if (message.role !== "toolResult") continue;
+    const rawToolName =
+      typeof message.toolName === "string" ? message.toolName : "unknown";
+    let status: PermissionToolResultEvidence["status"] = "unknown";
+    if (message.isError === true) status = "error";
+    else if (message.isError === false) status = "ok";
+    allToolResults.push({
+      toolName: truncateUtf8(sanitizeTaskText(rawToolName), MAX_TOOL_NAME_BYTES),
+      status,
+    });
+    fingerprintParts.push("tool-result", rawToolName, status);
+  }
+
+  const assistantText = sanitizeTaskText(rawAssistantText.join("\n"));
+  const priorToolResults = allToolResults.slice(-MAX_PRIOR_TOOL_RESULTS);
+  if (assistantText === "" && priorToolResults.length === 0) return undefined;
+  return {
+    ...(assistantText === ""
+      ? {}
+      : {
+          assistantText: truncateUtf8Tail(
+            assistantText,
+            MAX_ASSISTANT_CONTEXT_BYTES,
+          ),
+        }),
+    priorToolResults,
+    fingerprint: fingerprint(...fingerprintParts),
+  };
+};
+
 export type GitWorktreeListResult =
   | { readonly kind: "ok"; readonly stdout: Uint8Array }
   | { readonly kind: "non-git" }

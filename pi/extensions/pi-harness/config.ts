@@ -56,9 +56,9 @@ export const DEFAULT_PERMISSION_JUDGE_CONFIG: Readonly<PermissionJudgeConfig> =
   {
     enabled: true,
     url: "http://127.0.0.1:11434/api/chat",
-    model: "qwen2.5:latest",
+    model: "granite4.1:3b",
     expectedDigest:
-      "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+      "6fd349357287c7ffc9e38189a93b48ea175d24fc566b38f09cfc564fb7f303eb",
     timeoutMs: 10_000,
     keepAlive: "30m",
   };

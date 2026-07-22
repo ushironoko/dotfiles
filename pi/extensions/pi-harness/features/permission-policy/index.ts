@@ -4,13 +4,23 @@ import { fileURLToPath } from "node:url";
 import type { InputEvent, PiLike } from "../../lib/pi-like";
 import type { HarnessConfig } from "../../config";
 import { createPermissionBlocker, type PermissionBlockResult } from "./block";
+import { appendCommandHygiene } from "./command-hygiene";
 import {
   createPermissionTaskTracker,
+  derivePermissionRunEvidence,
   discoverProjectContext,
   type PermissionProjectContext,
+  type PermissionRunEvidence,
 } from "./context";
 import { createPermissionJudge, type JudgeOutcome } from "./judge";
-import { evaluateCommand, loadRules, type AllowRule } from "./rules";
+import {
+  evaluateCommand,
+  hasProjectSensitiveMutation,
+  hasUnverifiedProjectMutationNavigation,
+  loadRules,
+  type AllowRule,
+  type LoadedRules,
+} from "./rules";
 import {
   createActiveSkillBashAllowResolver,
   evaluateCommandWithSkillAllows,
@@ -103,8 +113,25 @@ const JUDGE_WARNING_KINDS: ReadonlySet<JudgeOutcome["kind"]> = new Set([
   "unavailable",
 ]);
 
+const currentRunEvidence = (
+  ctx: { sessionManager?: { getBranch(): unknown[] } },
+  toolCallId: string,
+): PermissionRunEvidence | undefined => {
+  try {
+    return derivePermissionRunEvidence(
+      ctx.sessionManager?.getBranch() ?? [],
+      toolCallId,
+    );
+  } catch {
+    // Session evidence improves classification but is never required to keep
+    // the mandatory permission boundary operational.
+    return undefined;
+  }
+};
+
 interface SetupPermissionPolicyOptions {
   permissionSignalToken?: string;
+  rules?: LoadedRules;
   writePermissionSignal?: (text: string) => void;
   blockToolCall?: (reason: string) => PermissionBlockResult;
   discoverProject?: (
@@ -119,7 +146,7 @@ const setupPermissionPolicy = (
   config: HarnessConfig,
   options: SetupPermissionPolicyOptions = {},
 ): void => {
-  const rules = loadRules(readPermissionRules());
+  const rules = options.rules ?? loadRules(readPermissionRules());
   const judgeConfig = config.permissionJudge;
   const judge =
     judgeConfig?.enabled === true
@@ -296,6 +323,9 @@ const setupPermissionPolicy = (
           ? []
           : resolveActiveSkillBashAllows(event.prompt, invocation),
     };
+    return typeof event.systemPrompt === "string"
+      ? { systemPrompt: appendCommandHygiene(event.systemPrompt) }
+      : undefined;
   });
 
   pi.on("agent_settled", () => {
@@ -341,18 +371,20 @@ const setupPermissionPolicy = (
           gitCwd === undefined ||
           (gitCwd !== null && ctx.cwd === undefined)
         ) {
-          result = { verdict: "default-continue" };
+          result = evaluateCommand(command, rules);
         } else if (gitCwd !== null && ctx.cwd !== undefined) {
           const candidate = resolve(ctx.cwd, gitCwd);
           projectDiscovery = await discoverProject(ctx.cwd, signal, candidate);
           if (
-            isAborted() ||
             projectDiscovery.leadingNavigation?.scope !== "listed-worktree" ||
             !projectDiscovery.leadingNavigation.sameRepository
           ) {
-            result = { verdict: "default-continue" };
+            result = evaluateCommand(command, rules);
           }
         }
+      }
+      if (isAborted()) {
+        return blocked("the active pi operation was cancelled");
       }
       if (result.verdict === "deny") {
         return blocked(result.reason);
@@ -373,9 +405,36 @@ const setupPermissionPolicy = (
       if (result.verdict === "ask") {
         return confirm("危険なコマンドを実行しますか？", result.reason);
       }
-      if (result.verdict === "allow" || judge === undefined) return undefined;
 
       const leadingCdTarget = leadingTrustedCdTarget(command);
+      const projectSensitiveMutation = hasProjectSensitiveMutation(command);
+      const unverifiedMutationNavigation =
+        hasUnverifiedProjectMutationNavigation(
+          command,
+          leadingCdTarget !== undefined,
+        );
+      if (unverifiedMutationNavigation) {
+        return confirm(
+          "検証できない移動後のプロジェクト変更を実行しますか？",
+          "プロジェクト変更前の作業場所を検証できないため確認が必要です",
+        );
+      }
+      // Context-free allows remain cheap, but an allow cannot bypass verified
+      // leading navigation or the verified-project floor for a Git mutation.
+      if (
+        result.verdict === "allow" &&
+        leadingCdTarget === undefined &&
+        !projectSensitiveMutation
+      ) {
+        return undefined;
+      }
+      if (
+        judge === undefined &&
+        leadingCdTarget === undefined &&
+        !projectSensitiveMutation
+      ) {
+        return undefined;
+      }
       const project =
         ctx.cwd === undefined
           ? undefined
@@ -388,11 +447,47 @@ const setupPermissionPolicy = (
         leadingCdTarget === undefined ? undefined : project?.leadingNavigation;
       if (
         leadingCdTarget !== undefined &&
+        (leadingNavigation?.scope !== "listed-worktree" ||
+          !leadingNavigation.sameRepository)
+      ) {
+        return confirm(
+          "プロジェクト外へ移動するコマンドを実行しますか？",
+          "登録済みの同一リポジトリworktreeへの移動と確認できませんでした",
+        );
+      }
+      if (
+        projectSensitiveMutation &&
+        (project === undefined || project.kind === "unavailable")
+      ) {
+        return confirm(
+          "検証できないプロジェクト変更を実行しますか？",
+          "プロジェクト境界を検証できないため変更コマンドには確認が必要です",
+        );
+      }
+      if (result.verdict === "allow") return undefined;
+
+      const trustedLeadingCdTarget =
+        leadingCdTarget !== undefined &&
         leadingNavigation?.scope === "listed-worktree" &&
         leadingNavigation.sameRepository
+          ? leadingCdTarget
+          : undefined;
+      const trustedReadContext =
+        project?.kind === "git"
+          ? {
+              cwd: trustedLeadingCdTarget ?? project.cwd,
+              navigableRoots: project.navigableRoots,
+            }
+          : undefined;
+      if (
+        trustedLeadingCdTarget !== undefined ||
+        trustedReadContext !== undefined
       ) {
         result = evaluateCommand(command, rules, {
-          trustedLeadingCdTarget: leadingCdTarget,
+          ...(trustedLeadingCdTarget === undefined
+            ? {}
+            : { trustedLeadingCdTarget }),
+          ...(trustedReadContext === undefined ? {} : { trustedReadContext }),
         });
         if (result.verdict === "deny") return blocked(result.reason);
         if (result.verdict === "ask") {
@@ -400,8 +495,10 @@ const setupPermissionPolicy = (
         }
         if (result.verdict === "allow") return undefined;
       }
+      if (judge === undefined) return undefined;
 
       const trackedTask = taskTracker.current();
+      const runEvidence = currentRunEvidence(ctx, event.toolCallId);
       const outcome = await judge.judge(command, {
         cwd: ctx.cwd,
         signal,
@@ -409,6 +506,7 @@ const setupPermissionPolicy = (
           ? { task: trackedTask.task }
           : {}),
         taskCorrelation: trackedTask.correlation,
+        ...(runEvidence === undefined ? {} : { runEvidence }),
         project,
         ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
       });

@@ -195,7 +195,10 @@ const withoutInputLifecycle = (pi: FakePi): FakePi => {
   const mutable = pi as unknown as { on: FakePi["on"] };
   mutable.on = ((event: Parameters<FakePi["on"]>[0], handler: never) => {
     if (event === "input") throw new Error("input events unavailable");
-    (originalOn as (name: typeof event, callback: never) => void)(event, handler);
+    (originalOn as (name: typeof event, callback: never) => void)(
+      event,
+      handler,
+    );
   }) as FakePi["on"];
   return pi;
 };
@@ -349,11 +352,7 @@ describe("active skill allowed-tools permission grants", () => {
       skill.markdown,
       "publish it",
     );
-    await activateSkill(
-      pi,
-      skillEvent,
-      "/skill:safe-release publish it",
-    );
+    await activateSkill(pi, skillEvent, "/skill:safe-release publish it");
     expect(
       await pi.emitToolCall(bashCall("git push -u origin safe-release")),
     ).toBeUndefined();
@@ -371,7 +370,7 @@ describe("active skill allowed-tools permission grants", () => {
         bashCall("git push -u origin another", "after-reset"),
       ),
     ).toMatchObject({ block: true });
-    expect(chatRequests(upstream)).toHaveLength(1);
+    expect(chatRequests(upstream)).toHaveLength(0);
 
     await emitInput(pi, "/skill:safe-release publish it", {
       streamingBehavior: "steer",
@@ -386,7 +385,7 @@ describe("active skill allowed-tools permission grants", () => {
         bashCall("git push -u origin queued-skill", "queued"),
       ),
     ).toBeUndefined();
-    expect(chatRequests(upstream)).toHaveLength(1);
+    expect(chatRequests(upstream)).toHaveLength(0);
 
     await pi.emitAgentSettled();
     expect(
@@ -394,7 +393,7 @@ describe("active skill allowed-tools permission grants", () => {
         bashCall("git push -u origin after-settled", "settled"),
       ),
     ).toMatchObject({ block: true });
-    expect(chatRequests(upstream)).toHaveLength(2);
+    expect(chatRequests(upstream)).toHaveLength(0);
   });
 
   test("does not trust pasted expansions or extension-generated input", async () => {
@@ -420,7 +419,7 @@ describe("active skill allowed-tools permission grants", () => {
         bashCall("git push origin extension", "extension-generated"),
       ),
     ).toMatchObject({ block: true });
-    expect(chatRequests(upstream)).toHaveLength(2);
+    expect(chatRequests(upstream)).toHaveLength(0);
   });
 
   test("snapshots allowed-tools for the active run", async () => {
@@ -477,7 +476,7 @@ describe("active skill allowed-tools permission grants", () => {
     expect(
       await pi.emitToolCall(bashCall("git push origin replayed", "replayed")),
     ).toMatchObject({ block: true });
-    expect(chatRequests(upstream)).toHaveLength(1);
+    expect(chatRequests(upstream)).toHaveLength(0);
   });
 
   test("fails closed when raw-input lifecycle tracking is unavailable", async () => {
@@ -496,7 +495,7 @@ describe("active skill allowed-tools permission grants", () => {
         bashCall("git push -u origin no-input-event", "no-input-event"),
       ),
     ).toMatchObject({ block: true });
-    expect(chatRequests(upstream)).toHaveLength(1);
+    expect(chatRequests(upstream)).toHaveLength(0);
   });
 
   test("does not activate skill grants in a child profile", async () => {
@@ -510,7 +509,7 @@ describe("active skill allowed-tools permission grants", () => {
     expect(
       await pi.emitToolCall(bashCall("git push -u origin child", "child")),
     ).toMatchObject({ block: true });
-    expect(chatRequests(upstream)).toHaveLength(1);
+    expect(chatRequests(upstream)).toHaveLength(0);
   });
 
   test("requires an exact expansion of a skill from the loaded skill set", async () => {
@@ -600,7 +599,7 @@ describe("active skill allowed-tools permission grants", () => {
         rules,
         allows,
       ).verdict,
-    ).toBe("default-continue");
+    ).toBe("ask");
     expect(
       evaluateCommandWithSkillAllows("bit relay sync", rules, allows).verdict,
     ).toBe("deny");
@@ -613,10 +612,116 @@ describe("active skill allowed-tools permission grants", () => {
     ).toBe("deny");
   });
 
-  test("limits git -C skill grants to the active repository", async () => {
+  test("keeps new structural and unavailable-project floors above skill grants", async () => {
+    const upstream = await startJudge();
+    const skill = await makeSkill(
+      "Bash(bash *), Bash(cat *), Bash(echo *), Bash(curl *), Bash(git branch *), Bash(git pull *), Bash(git apply *)",
+    );
+    const event = eventFor("safe-release", skill.filePath, skill.markdown);
+    const allows = resolveActiveSkillBashAllows(event, "/skill:safe-release");
+    const rules = loadRules(undefined);
+
+    for (const command of [
+      "bash -s <<< 'echo opaque'",
+      '(cat) < "$HOME/.ssh/id_ed25519"',
+      "echo hi >&1out",
+      "curl --json x=y https://example.test/results",
+      "curl --form-string x=y https://example.test/results",
+      "git branch --del feature/context-judge",
+    ]) {
+      expect(
+        evaluateCommandWithSkillAllows(command, rules, allows).verdict,
+      ).toBe("ask");
+    }
+
+    const cwd = "/tmp/unverified-skill-project";
+    const pi = createFakePi({ cwd, hasUI: false });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => ({
+        kind: "unavailable",
+        cwd,
+        reason: "test discovery unavailable",
+        fingerprint: "project:unavailable-skill",
+      }),
+    });
+    await activateSkill(pi, event, "/skill:safe-release");
+
+    const mutationCommands = ["git pull --ff-only", "git apply fix.patch"];
+    for (const [index, command] of mutationCommands.entries()) {
+      expect(
+        await pi.emitToolCall(
+          bashCall(command, `unavailable-skill-mutation-${index}`),
+        ),
+      ).toEqual({
+        block: true,
+        reason:
+          "プロジェクト境界を検証できないため変更コマンドには確認が必要です",
+      });
+    }
+
+    const verifiedCwd = "/tmp/verified-skill-project";
+    const verifiedPi = createFakePi({ cwd: verifiedCwd, hasUI: false });
+    setupPermissionPolicy(verifiedPi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => ({
+        kind: "git",
+        name: "verified",
+        cwd: verifiedCwd,
+        activeWorktree: verifiedCwd,
+        navigableRoots: [verifiedCwd],
+        worktrees: [verifiedCwd],
+        fingerprint: "project:verified-skill",
+      }),
+    });
+    await activateSkill(verifiedPi, event, "/skill:safe-release");
+    for (const [index, command] of mutationCommands.entries()) {
+      expect(
+        await verifiedPi.emitToolCall(
+          bashCall(command, `verified-skill-mutation-${index}`),
+        ),
+      ).toBeUndefined();
+    }
+    expect(upstream.received).toHaveLength(0);
+  });
+
+  test("keeps Git reads and unverified rg residual despite active skill grants", async () => {
+    const skill = await makeSkill("Bash(git status *), Bash(rg *)");
+    const allows = resolveActiveSkillBashAllows(
+      eventFor("safe-release", skill.filePath, skill.markdown),
+      "/skill:safe-release",
+    );
+    const rules = loadRules(undefined);
+
+    expect(
+      evaluateCommandWithSkillAllows("git status --short", rules, allows)
+        .verdict,
+    ).toBe("default-continue");
+    expect(
+      evaluateCommandWithSkillAllows("rg pattern /etc/passwd", rules, allows)
+        .verdict,
+    ).toBe("default-continue");
+  });
+
+  test("does not let a git -C skill grant override helper-capable read risk", async () => {
     const upstream = await startJudge();
     const repositories = await makeGitRepositories();
     const skill = await makeSkill("Bash(git -C * status *)");
+    const event = eventFor("safe-release", skill.filePath, skill.markdown);
+    const pi = createFakePi({ hasUI: false, cwd: repositories.root });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
+    await activateSkill(pi, event, "/skill:safe-release");
+
+    expect(
+      await pi.emitToolCall(
+        bashCall(`git -C ${repositories.root} status --short`, "git-read"),
+      ),
+    ).toMatchObject({ block: true });
+    expect(chatRequests(upstream)).toHaveLength(0);
+  });
+
+  test("limits git -C push skill grants to the active repository", async () => {
+    const upstream = await startJudge();
+    const repositories = await makeGitRepositories();
+    const skill = await makeSkill("Bash(git -C * push *)");
     const event = eventFor("safe-release", skill.filePath, skill.markdown);
     const pi = createFakePi({ hasUI: false, cwd: repositories.root });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
@@ -628,7 +733,10 @@ describe("active skill allowed-tools permission grants", () => {
     ].entries()) {
       expect(
         await pi.emitToolCall(
-          bashCall(`git -C ${cwd} status --short`, `same-repo-${index}`),
+          bashCall(
+            `git -C ${cwd} push -u origin feature`,
+            `same-repo-${index}`,
+          ),
         ),
       ).toBeUndefined();
     }
@@ -636,7 +744,7 @@ describe("active skill allowed-tools permission grants", () => {
     expect(
       await pi.emitToolCall(
         bashCall(
-          `git -C ${repositories.unrelated} status --short`,
+          `git -C ${repositories.unrelated} push -u origin feature`,
           "unrelated-repo",
         ),
       ),
@@ -646,10 +754,10 @@ describe("active skill allowed-tools permission grants", () => {
     await fs.symlink(repositories.unrelated, escaped, "dir");
     expect(
       await pi.emitToolCall(
-        bashCall(`git -C ${escaped} status --short`, "symlink-escape"),
+        bashCall(`git -C ${escaped} push -u origin feature`, "symlink-escape"),
       ),
     ).toMatchObject({ block: true });
-    expect(chatRequests(upstream)).toHaveLength(2);
+    expect(chatRequests(upstream)).toHaveLength(0);
   });
 
   test("the create-pr skill grants its worktree push form", () => {

@@ -83,6 +83,10 @@ export interface Segment {
   readonly ansiC: ReadonlySet<number>;
   /** ANSI-C syntax appeared anywhere in this executable segment. */
   readonly hasAnsiC: boolean;
+  /** A file-opening output redirect (>, >>, >|, &>) appeared in this segment. */
+  readonly hasOutputRedirection: boolean;
+  /** Concrete redirect targets, retained only for local risk inspection. */
+  readonly redirectionTargets: readonly string[];
   /** True only when this segment is outside a parenthesized shell group. */
   readonly topLevel: boolean;
   /** True only when the shell connector immediately after this segment is &&. */
@@ -562,6 +566,8 @@ export const scanCommand = (command: string): ScanResult => {
   let opaqueUnquoted = new Set<number>();
   let ansiC = new Set<number>();
   let segmentHasAnsiC = false;
+  let segmentHasOutputRedirection = false;
+  let redirectionTargets: string[] = [];
   let word = "";
   let wordStarted = false;
   let wordOpaque = false;
@@ -569,6 +575,8 @@ export const scanCommand = (command: string): ScanResult => {
   let wordAnsiC = false;
   let atWordStart = true;
   let pendingRedirectTarget = false;
+  let pendingFdDuplicationTarget = false;
+  let pendingFdDuplicationOutput = false;
   let allowEligible = true;
   let groupDepth = 0;
   let i = 0;
@@ -583,8 +591,22 @@ export const scanCommand = (command: string): ScanResult => {
   const flushWord = (): void => {
     if (!wordStarted && word === "") return;
     if (pendingRedirectTarget) {
-      // This word is a redirect target (data, not a command word); drop it.
+      // This word is a redirect target (data, not a command word). Retain its
+      // concrete portion for sensitive-path inspection, but never treat it as
+      // argv or as eligible explicit-allow text. `>&word` is fd duplication
+      // only when the complete expanded word is a concrete decimal descriptor,
+      // descriptor move (`2-`), or `-`; prefixes such as `1out` are file names.
+      const concreteFdDuplication =
+        pendingFdDuplicationTarget &&
+        !wordOpaque &&
+        /^(?:\d+-?|-)$/u.test(word);
+      if (pendingFdDuplicationOutput && !concreteFdDuplication) {
+        segmentHasOutputRedirection = true;
+      }
+      redirectionTargets.push(word);
       pendingRedirectTarget = false;
+      pendingFdDuplicationTarget = false;
+      pendingFdDuplicationOutput = false;
       resetWord();
       return;
     }
@@ -598,6 +620,8 @@ export const scanCommand = (command: string): ScanResult => {
   const flushSegment = (followedByAnd = false): void => {
     flushWord();
     pendingRedirectTarget = false;
+    pendingFdDuplicationTarget = false;
+    pendingFdDuplicationOutput = false;
     if (words.length > 0 || !allowEligible) {
       // Preserve argv boundaries when rendering the regex candidate. Literal
       // whitespace produced inside one quoted/escaped shell word must not turn
@@ -618,6 +642,8 @@ export const scanCommand = (command: string): ScanResult => {
         opaqueUnquoted,
         ansiC,
         hasAnsiC: segmentHasAnsiC,
+        hasOutputRedirection: segmentHasOutputRedirection,
+        redirectionTargets,
         topLevel: groupDepth === 0,
         followedByAnd,
         ...(allowCandidate === undefined ? {} : { allowCandidate }),
@@ -628,6 +654,8 @@ export const scanCommand = (command: string): ScanResult => {
     opaqueUnquoted = new Set<number>();
     ansiC = new Set<number>();
     segmentHasAnsiC = false;
+    segmentHasOutputRedirection = false;
+    redirectionTargets = [];
     allowEligible = true;
   };
   const fail = (): ScanResult => ({ segments, subs, ok: false });
@@ -702,9 +730,22 @@ export const scanCommand = (command: string): ScanResult => {
       if (dollar.boundary) {
         // Shell comment recognition happens before expansion: in `$IFS#x`,
         // `#x` is part of the same lexical word, not a comment. Keep that
-        // lexical state and never derive an explicit allow through IFS.
+        // lexical state and never derive an explicit allow through IFS. When
+        // IFS is the target of `>&`, retain the dynamic target as an output
+        // write risk instead of letting an empty boundary drop the redirect.
         allowEligible = false;
-        flushWord();
+        if (pendingRedirectTarget) {
+          if (pendingFdDuplicationOutput) {
+            segmentHasOutputRedirection = true;
+          }
+          redirectionTargets.push(OPAQUE);
+          pendingRedirectTarget = false;
+          pendingFdDuplicationTarget = false;
+          pendingFdDuplicationOutput = false;
+          resetWord();
+        } else {
+          flushWord();
+        }
         atWordStart = false;
         i = dollar.end;
         continue;
@@ -770,10 +811,15 @@ export const scanCommand = (command: string): ScanResult => {
       }
       if (command[i] === "|") i += 1; // >|
       if (command[i] === "&") {
-        // fd-dup (>&1, <&-): the target is consumed inline, not a word.
+        // Defer fd-duplication classification until the complete redirect word
+        // has been tokenized. Quoted/spaced numeric descriptors are valid, but
+        // a numeric prefix such as `1out` is a file target.
         i += 1;
-        while (i < command.length && /[0-9-]/.test(command[i])) i += 1;
+        pendingRedirectTarget = true;
+        pendingFdDuplicationTarget = true;
+        pendingFdDuplicationOutput = c === ">";
       } else {
+        if (c === ">") segmentHasOutputRedirection = true;
         pendingRedirectTarget = true;
       }
       atWordStart = true;
@@ -813,6 +859,7 @@ export const scanCommand = (command: string): ScanResult => {
       // &> / &>> redirect-all — a redirection, not a background operator.
       if (command[i + 1] === ">") {
         allowEligible = false;
+        segmentHasOutputRedirection = true;
         flushWord();
         i += 2;
         if (command[i] === ">") i += 1;
@@ -880,6 +927,7 @@ export interface NormalizedSegment {
   readonly opaqueUnquoted: ReadonlySet<number>;
   readonly ansiC: ReadonlySet<number>;
   readonly hasAnsiC: boolean;
+  readonly privileged: boolean;
   readonly headOpaque: boolean;
 }
 
@@ -994,6 +1042,7 @@ const normalizeBitWords = (
 // invocations map to the same floor as their canonical form.
 export const normalizeSegment = (segment: Segment): NormalizedSegment => {
   let start = 0;
+  let privileged = false;
   while (start < segment.words.length) {
     const raw = segment.words[start];
     if (segment.opaque.has(start)) break; // opaque head — stop, handle below
@@ -1001,6 +1050,7 @@ export const normalizeSegment = (segment: Segment): NormalizedSegment => {
     // still has its wrapper stripped.
     const base = isPathHead(raw) ? basenameOf(raw) : raw;
     if (raw === "{" || ASSIGNMENT_PREFIX.test(raw) || STRIP_WORDS.has(base)) {
+      if (base === "sudo") privileged = true;
       start += 1;
       continue;
     }
@@ -1045,6 +1095,7 @@ export const normalizeSegment = (segment: Segment): NormalizedSegment => {
     opaqueUnquoted,
     ansiC,
     hasAnsiC: segment.hasAnsiC,
+    privileged,
     headOpaque,
   };
 };
@@ -1186,9 +1237,11 @@ export const isOpaqueExecutor = (words: readonly string[]): boolean => {
   const head = words[0];
   if (head === undefined) return false;
   if (OPAQUE_HEAD_WORDS.has(head)) return true;
-  if (SHELL_INTERPRETERS.has(head)) {
-    return words.slice(1).some((w) => w === "-c");
-  }
+  // A shell interpreter can always execute script text from stdin, including
+  // forms whose redirect target the argv scanner intentionally removes
+  // (`bash -s <<< ...`, `bash -x < script`). Concrete -c bodies are still
+  // recursed separately so a built-in deny inside them remains a hard deny.
+  if (SHELL_INTERPRETERS.has(head)) return true;
   return false;
 };
 
