@@ -1,8 +1,12 @@
+import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import {
-  stripTerminalControls,
-  truncateToWidth,
-  wrapPlainText,
-} from "../../lib/terminal-text";
+  Box,
+  Container,
+  Spacer,
+  Text,
+  type Component,
+} from "@earendil-works/pi-tui";
+import { stripTerminalControls } from "../../lib/terminal-text";
 import type {
   ChildRunRenderSummary,
   ChildRunStatus,
@@ -11,12 +15,7 @@ import type {
 } from "./model";
 import { decodePersistedChildRuns } from "./persistence";
 
-export interface ComponentLike {
-  render(width: number): string[];
-  invalidate(): void;
-  handleInput?(data: string): void;
-  dispose?(): void;
-}
+export type ComponentLike = Component;
 
 interface ToolResultLike {
   content?: unknown;
@@ -25,7 +24,20 @@ interface ToolResultLike {
 
 interface RenderOptionsLike {
   expanded?: boolean;
+  isPartial?: boolean;
 }
+
+interface RenderTheme {
+  fg(color: ThemeColor, text: string): string;
+  bold(text: string): string;
+}
+
+// pi always supplies a Theme. The identity fallback preserves direct renderer
+// use in tests and non-TUI compatibility shims that only exercise layout.
+const plainTheme: RenderTheme = {
+  fg: (_color, text) => text,
+  bold: (text) => text,
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -41,22 +53,54 @@ const contentText = (content: unknown): string => {
     .join("\n");
 };
 
-export const statusIcon = (status: ChildRunStatus): string => {
-  switch (status) {
-    case "queued":
-      return "○";
-    case "running":
-      return "◌";
-    case "succeeded":
-      return "✓";
-    case "failed":
-      return "✗";
-    case "aborted":
-      return "■";
-    case "skipped":
-      return "–";
-  }
+const safeInline = (value: unknown, fallback: string): string => {
+  if (typeof value !== "string") return fallback;
+  const sanitized = stripTerminalControls(value, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized === "" ? fallback : sanitized;
 };
+
+const safeBlock = (value: string): string => stripTerminalControls(value);
+
+const childRunStatuses: readonly ChildRunStatus[] = [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "aborted",
+  "skipped",
+];
+
+const safeStatus = (value: unknown): ChildRunStatus =>
+  typeof value === "string" &&
+  childRunStatuses.includes(value as ChildRunStatus)
+    ? (value as ChildRunStatus)
+    : "failed";
+
+const statusIcons: Record<ChildRunStatus, string> = {
+  queued: "○",
+  running: "◌",
+  succeeded: "✓",
+  failed: "✗",
+  aborted: "■",
+  skipped: "–",
+};
+
+export const statusIcon = (status: ChildRunStatus): string =>
+  statusIcons[status];
+
+const statusColors: Record<ChildRunStatus, ThemeColor> = {
+  queued: "dim",
+  running: "warning",
+  succeeded: "success",
+  failed: "error",
+  aborted: "warning",
+  skipped: "dim",
+};
+
+const statusColor = (status: ChildRunStatus): ThemeColor =>
+  statusColors[status];
 
 const summaryFromDetails = (
   details: unknown,
@@ -67,7 +111,7 @@ const summaryFromDetails = (
     }
   | undefined => {
   if (!isRecord(details) || !isRecord(details.childRuns)) return undefined;
-  const childRuns = details.childRuns;
+  const { childRuns } = details;
   if (childRuns.kind === "summary" && Array.isArray(childRuns.runs)) {
     const runs = childRuns.runs.filter((run): run is ChildRunRenderSummary =>
       isRecord(run),
@@ -99,54 +143,108 @@ export const persistedRows = (
   payload: PersistedChildRunsV1,
 ): PersistedChildRunV1[] => payload.runs;
 
-class PlainLinesComponent implements ComponentLike {
-  constructor(private readonly lines: string[]) {}
+const countStatuses = (
+  runs: ChildRunRenderSummary[],
+  status: ChildRunStatus,
+): number => runs.filter((run) => safeStatus(run.status) === status).length;
 
-  render(width: number): string[] {
-    if (width <= 0) return [""];
-    return this.lines.flatMap((line) =>
-      wrapPlainText(stripTerminalControls(line), width).map((wrapped) =>
-        truncateToWidth(wrapped, width, ""),
-      ),
-    );
-  }
+const renderHeader = (
+  label: string,
+  runs: ChildRunRenderSummary[],
+  theme: RenderTheme,
+): Text => {
+  const completed = runs.filter((run) => {
+    const status = safeStatus(run.status);
+    return status !== "queued" && status !== "running";
+  }).length;
+  const counters = childRunStatuses.flatMap((status) => {
+    const count = countStatuses(runs, status);
+    return count === 0
+      ? []
+      : [theme.fg(statusColor(status), `${statusIcon(status)}${count}`)];
+  });
+  const title = theme.fg(
+    "toolTitle",
+    theme.bold(safeInline(label, "child runs")),
+  );
+  const progress = theme.fg("muted", `${completed}/${runs.length} finished`);
+  const counts = counters.length === 0 ? "" : `  ${counters.join("  ")}`;
+  return new Text(`${title} ${progress}${counts}`, 0, 0);
+};
 
-  invalidate(): void {}
-}
+const renderRun = (run: ChildRunRenderSummary, theme: RenderTheme): Text => {
+  const status = safeStatus(run.status);
+  const taskIndex =
+    Number.isSafeInteger(run.taskIndex) && run.taskIndex >= 0
+      ? run.taskIndex + 1
+      : 1;
+  const stageIndex =
+    Number.isSafeInteger(run.stageIndex) && (run.stageIndex ?? -1) >= 0
+      ? (run.stageIndex as number) + 1
+      : undefined;
+  const position =
+    stageIndex === undefined ? `${taskIndex}` : `S${stageIndex}/T${taskIndex}`;
+  const icon = theme.fg(statusColor(status), statusIcon(status));
+  const badge = theme.fg("accent", theme.bold(`[${position}]`));
+  const agent = theme.fg("toolTitle", safeInline(run.agent, "unknown agent"));
+  const task = theme.fg(
+    "toolOutput",
+    safeInline(run.taskPreview, "(no task preview)"),
+  );
+  const reason =
+    status === "succeeded" || run.terminalReason === undefined
+      ? ""
+      : ` ${theme.fg(statusColor(status), `(${safeInline(run.terminalReason, "unknown")})`)}`;
+  return new Text(`${icon} ${badge} ${agent} — ${task}${reason}`, 0, 0);
+};
 
 export const renderChildRunsResult = (
   result: ToolResultLike,
   options: RenderOptionsLike = {},
+  theme: RenderTheme = plainTheme,
+  _context?: unknown,
 ): ComponentLike => {
   const summary = summaryFromDetails(result.details);
   if (summary === undefined) {
-    return new PlainLinesComponent([contentText(result.content)]);
+    return new Text(
+      theme.fg("toolOutput", safeBlock(contentText(result.content))),
+      0,
+      0,
+    );
   }
-  const completed = summary.runs.filter(
-    (run) => run.status !== "queued" && run.status !== "running",
-  ).length;
-  const lines = [
-    `${summary.label}: ${completed}/${summary.runs.length} finished`,
-  ];
+
+  const root = new Container();
+  root.addChild(renderHeader(summary.label, summary.runs, theme));
+
+  const rows = new Box(1, 0);
   const visibleRuns = options.expanded
     ? summary.runs
     : summary.runs.slice(0, 8);
-  for (const run of visibleRuns) {
-    const stage =
-      run.stageIndex === undefined
-        ? `${run.taskIndex + 1}`
-        : `S${run.stageIndex + 1}/T${run.taskIndex + 1}`;
-    lines.push(
-      `${statusIcon(run.status)} ${stage} ${run.agent} — ${run.taskPreview}`,
+  for (const run of visibleRuns) rows.addChild(renderRun(run, theme));
+  if (visibleRuns.length < summary.runs.length) {
+    rows.addChild(
+      new Text(
+        theme.fg("dim", `… ${summary.runs.length - visibleRuns.length} more`),
+        0,
+        0,
+      ),
     );
   }
-  if (visibleRuns.length < summary.runs.length) {
-    lines.push(`… ${summary.runs.length - visibleRuns.length} more`);
-  }
+  root.addChild(rows);
+
   if (options.expanded) {
-    const original = contentText(result.content);
-    if (original !== "") lines.push("", "Result:", original);
+    const original = safeBlock(contentText(result.content));
+    if (original !== "") {
+      root.addChild(new Spacer(1));
+      root.addChild(new Text(theme.fg("muted", theme.bold("Result")), 0, 0));
+      const output = new Box(1, 0);
+      output.addChild(new Text(theme.fg("toolOutput", original), 0, 0));
+      root.addChild(output);
+    }
   }
-  lines.push("/subagents to inspect transcripts");
-  return new PlainLinesComponent(lines);
+
+  root.addChild(
+    new Text(theme.fg("dim", "↳ /subagents to inspect transcripts"), 0, 0),
+  );
+  return root;
 };
