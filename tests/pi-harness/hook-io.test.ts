@@ -8,7 +8,10 @@ import {
   type RawHookResult,
 } from "../../pi/extensions/pi-harness/lib/claude-hook-io";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
-import { buildRegistry } from "../../pi/extensions/pi-harness/features/hook-bridge/registry";
+import {
+  buildRegistry,
+  partitionBridgeRegistry,
+} from "../../pi/extensions/pi-harness/features/hook-bridge/registry";
 
 const makeRaw = (overrides: Partial<RawHookResult> = {}): RawHookResult => ({
   exitCode: 0,
@@ -301,7 +304,8 @@ describe("interpretUserPromptSubmit", () => {
 describe("buildRegistry", () => {
   test("builds the Phase 2B hook table from harness paths", () => {
     const paths = resolvePaths("/tmp/pi-harness-home");
-    const registry = buildRegistry(paths).map((spec) => ({
+    const fullRegistry = buildRegistry(paths);
+    const registry = fullRegistry.map((spec) => ({
       ...spec,
       matcher: spec.matcher?.toString(),
     }));
@@ -358,6 +362,17 @@ describe("buildRegistry", () => {
         timeoutMs: 10_000,
         maxOutputBytes: 65_536,
       },
+    ]);
+
+    const partition = partitionBridgeRegistry(fullRegistry);
+    expect(partition.permissionPreflight.map(({ id }) => id)).toEqual([
+      "npm-script-preference",
+    ]);
+    expect(partition.remaining.map(({ id }) => id)).toEqual([
+      "codex-stage-guard",
+      "coding-cycle",
+      "type-safety-check",
+      "ultracode-codex-context",
     ]);
   });
 });

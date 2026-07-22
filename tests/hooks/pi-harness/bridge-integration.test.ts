@@ -1,9 +1,20 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, promises as fs } from "node:fs";
 import { join, resolve } from "node:path";
-import type { HarnessConfig } from "../../../pi/extensions/pi-harness/config";
+import {
+  DEFAULT_PERMISSION_JUDGE_CONFIG,
+  type HarnessConfig,
+} from "../../../pi/extensions/pi-harness/config";
+import {
+  PERMISSION_PREFLIGHT_PATH,
+  setupHarness,
+} from "../../../pi/extensions/pi-harness/index";
 import setupHookBridge from "../../../pi/extensions/pi-harness/features/hook-bridge/index";
 import type { BridgeHookSpec } from "../../../pi/extensions/pi-harness/features/hook-bridge/registry";
+import {
+  CHILD_PERMISSION_SIGNAL_ENV,
+  formatChildPermissionSignal,
+} from "../../../pi/extensions/pi-harness/features/permission-policy/block";
 import { resolvePaths } from "../../../pi/extensions/pi-harness/lib/paths";
 import { createFakePi } from "../../pi-harness/fake-pi";
 import { cleanupTestDirectory, setupTestDirectory } from "../../test-helpers";
@@ -109,7 +120,7 @@ describe("pi-harness hook bridge", () => {
     expect(nonInteractive?.reason).toBe("confirm hook action");
   });
 
-  test("round-trips npm_script_preference through a mapped Bash call", async () => {
+  test("npm_script_preference blocks before later permission handlers", async () => {
     const directory = await makeTempDirectory("pi-hook-npm-preference");
     await fs.writeFile(
       join(directory, "package.json"),
@@ -128,6 +139,11 @@ describe("pi-harness hook bridge", () => {
         ),
       ],
     });
+    let laterPermissionCalls = 0;
+    pi.on("tool_call", () => {
+      laterPermissionCalls += 1;
+      return undefined;
+    });
 
     const blocked = await pi.emitToolCall({
       type: "tool_call",
@@ -137,6 +153,7 @@ describe("pi-harness hook bridge", () => {
     });
     expect(blocked?.block).toBe(true);
     expect(blocked?.reason).toContain("format");
+    expect(laterPermissionCalls).toBe(0);
 
     const allowed = await pi.emitToolCall({
       type: "tool_call",
@@ -145,6 +162,127 @@ describe("pi-harness hook bridge", () => {
       input: { command: "bun run format" },
     });
     expect(allowed).toBeUndefined();
+    expect(laterPermissionCalls).toBe(1);
+  });
+
+  test("umbrella orders npm preflight before policy and signals child blocks", async () => {
+    const directory = await makeTempDirectory("pi-hook-npm-preflight");
+    await fs.writeFile(
+      join(directory, "package.json"),
+      JSON.stringify({ scripts: { format: "prettier --write ." } }),
+    );
+    const pi = createFakePi({ cwd: directory, hasUI: false });
+    const config: HarnessConfig = {
+      ...makeConfig(directory, [], true),
+      features: {
+        "hook-bridge": true,
+        subagent: false,
+        workflow: false,
+        "bit-task": false,
+        statusline: false,
+        "provider-log": false,
+        "asuku-notify": false,
+        "ask-user-question": false,
+      },
+      paths: {
+        ...resolvePaths(directory),
+        claudeHooksDir: HOOKS,
+      },
+      permissionJudge: {
+        ...DEFAULT_PERMISSION_JUDGE_CONFIG,
+        configurationError: "permission judge should not run",
+      },
+    };
+    const permissionSignalToken = "123e4567-e89b-42d3-a456-426614174000";
+    const permissionSignals: string[] = [];
+    const previousSignalToken = process.env[CHILD_PERMISSION_SIGNAL_ENV];
+    process.env[CHILD_PERMISSION_SIGNAL_ENV] = permissionSignalToken;
+    try {
+      setupHarness(pi, config, {
+        writePermissionSignal: (text) => permissionSignals.push(text),
+      });
+      expect(process.env[CHILD_PERMISSION_SIGNAL_ENV]).toBeUndefined();
+    } finally {
+      if (previousSignalToken === undefined) {
+        delete process.env[CHILD_PERMISSION_SIGNAL_ENV];
+      } else {
+        process.env[CHILD_PERMISSION_SIGNAL_ENV] = previousSignalToken;
+      }
+    }
+
+    const blocked = await pi.emitToolCall({
+      type: "tool_call",
+      toolName: "bash",
+      toolCallId: "preflight-1",
+      input: { command: "npx prettier --write ." },
+    });
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.reason).toContain("run format");
+    expect(blocked?.reason).not.toContain("permission judge should not run");
+    expect(permissionSignals).toEqual([
+      `${formatChildPermissionSignal(permissionSignalToken)}\n`,
+    ]);
+
+    const passedToPolicy = await pi.emitToolCall({
+      type: "tool_call",
+      toolName: "bash",
+      toolCallId: "preflight-2",
+      input: { command: "bun x totally-unknown-package" },
+    });
+    expect(passedToPolicy?.block).toBe(true);
+    expect(passedToPolicy?.reason).toContain("permission judge should not run");
+    expect(permissionSignals).toEqual([
+      `${formatChildPermissionSignal(permissionSignalToken)}\n`,
+      `${formatChildPermissionSignal(permissionSignalToken)}\n`,
+    ]);
+  });
+
+  test("pins the pre-permission hook to a repository-independent PATH", async () => {
+    const directory = await makeTempDirectory("pi-hook-fixed-path", [
+      "nested",
+      "pre_tool_use",
+    ]);
+    await fs.writeFile(
+      join(directory, "pre_tool_use/npm_script_preference.sh"),
+      [
+        "#!/bin/bash",
+        "cat > /dev/null",
+        `jq -n --arg path "$PATH" '{hookSpecificOutput:{permissionDecision:"deny",permissionDecisionReason:$path}}'`,
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const pi = createFakePi({ cwd: join(directory, "nested"), hasUI: false });
+    const config: HarnessConfig = {
+      ...makeConfig(directory, [], true),
+      features: {
+        "hook-bridge": true,
+        subagent: false,
+        workflow: false,
+        "bit-task": false,
+        statusline: false,
+        "provider-log": false,
+        "asuku-notify": false,
+        "ask-user-question": false,
+      },
+      paths: {
+        ...resolvePaths(directory),
+        claudeHooksDir: directory,
+      },
+      permissionJudge: {
+        ...DEFAULT_PERMISSION_JUDGE_CONFIG,
+        configurationError: "permission judge should not run",
+      },
+    };
+    setupHarness(pi, config);
+
+    const blocked = await pi.emitToolCall({
+      type: "tool_call",
+      toolName: "bash",
+      toolCallId: "fixed-path-1",
+      input: { command: "npx prettier --write ." },
+    });
+    expect(blocked?.reason).toBe(PERMISSION_PREFLIGHT_PATH);
+    expect(blocked?.reason).not.toContain(directory);
   });
 
   test("injects ultracode context only for matching prompts", async () => {

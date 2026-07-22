@@ -1,12 +1,9 @@
-import { readFileSync, writeSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { InputEvent, PiLike } from "../../lib/pi-like";
 import type { HarnessConfig } from "../../config";
-import {
-  CHILD_PERMISSION_SIGNAL_ENV,
-  formatChildPermissionSignal,
-} from "./block";
+import { createPermissionBlocker, type PermissionBlockResult } from "./block";
 import {
   createPermissionTaskTracker,
   discoverProjectContext,
@@ -109,6 +106,7 @@ const JUDGE_WARNING_KINDS: ReadonlySet<JudgeOutcome["kind"]> = new Set([
 interface SetupPermissionPolicyOptions {
   permissionSignalToken?: string;
   writePermissionSignal?: (text: string) => void;
+  blockToolCall?: (reason: string) => PermissionBlockResult;
   discoverProject?: (
     cwd: string,
     signal?: AbortSignal,
@@ -273,28 +271,12 @@ const setupPermissionPolicy = (
     // Older/test adapters without both lifecycle events fail closed.
   }
 
-  const permissionSignalToken =
-    options.permissionSignalToken ?? process.env[CHILD_PERMISSION_SIGNAL_ENV];
-  if (config.isChild && options.permissionSignalToken === undefined) {
-    // Keep the per-spawn token in this closure; child tools and grandchildren
-    // must not inherit the diagnostic authenticator from process.env.
-    delete process.env[CHILD_PERMISSION_SIGNAL_ENV];
-  }
-  const writePermissionSignal =
-    options.writePermissionSignal ?? ((text: string) => writeSync(2, text));
-  const blocked = (reason: string): { block: true; reason: string } => {
-    if (config.isChild) {
-      const signal = formatChildPermissionSignal(permissionSignalToken);
-      if (signal !== undefined) {
-        try {
-          writePermissionSignal(`${signal}\n`);
-        } catch {
-          // A diagnostic side-channel failure must never unblock the command.
-        }
-      }
-    }
-    return { block: true, reason };
-  };
+  const blocked =
+    options.blockToolCall ??
+    createPermissionBlocker(config.isChild, {
+      permissionSignalToken: options.permissionSignalToken,
+      writePermissionSignal: options.writePermissionSignal,
+    });
 
   pi.on("before_agent_start", (event) => {
     taskTracker.activate(event.prompt);

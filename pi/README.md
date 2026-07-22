@@ -51,9 +51,13 @@ is the no-extra-cost alternative for evaluation.
 ## Extension architecture
 
 The harness stays a single umbrella extension (`extensions/pi-harness/index.ts`)
-composing compatibility features in a fixed order — permission-policy first
-(safety floor, not toggleable), then hook-bridge and the rest. The narrowly
-scoped `codex-web` extension is separate because it owns provider credentials
+composing compatibility features in a fixed order: the non-executing npm-script
+rejection may short-circuit first, then permission-policy remains the mandatory
+safety floor before every path that can execute a command, followed by the
+remaining hook-bridge features. The preflight uses `/bin/bash` with a fixed
+root-owned system `PATH`, never the repository-influenced inherited path. The
+narrowly scoped `codex-web` extension is
+separate because it owns provider credentials
 and network traffic rather than harness lifecycle compatibility. Harness
 feature toggles live in `~/.pi/agent/pi-harness.local.json` (machine-local):
 
@@ -274,8 +278,10 @@ Automated coverage lives in `tests/pi-harness/` + `tests/hooks/pi-harness/`
 - [x] `bun run check:pi-baseline` passes (local lock/install integrity)
 - [x] `bun run check:pi-compat` passes (global declarations + isolated RPC)
 - [x] pi startup shows no pi-harness load errors
-- [x] Phase 2: `npx prettier` blocked; `bit issue claim` blocked; "ultracode"
-      prompt injects the codex mandate (verified 2026-07-10)
+- [x] Phase 2: matching `npx`/`bunx` rejected by the npm-script preflight
+      before local judging; other commands reach permission-policy;
+      `bit issue claim` blocked; "ultracode" prompt injects the codex mandate
+      (verified 2026-07-21)
 - [x] Phase 3: subagent tool runs a `~/.claude/agents` definition with
       `PI_HARNESS_CHILD=1` (nonce smoke, 2026-07-11)
 - [x] Phase 4: workflow 2-task fan-out completes with degradation reporting;
