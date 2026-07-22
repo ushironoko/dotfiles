@@ -102,6 +102,18 @@ describe("rich child-run tool result rendering", () => {
     expect(plain).toContain(" full workflow result");
   });
 
+  test("keeps compact and expanded output within a one-column width", () => {
+    for (const expanded of [false, true]) {
+      const { raw, plain } = render(summaryResult(), { expanded }, 1);
+      const joined = plain.join("");
+
+      expect(raw.every((line) => visibleWidth(line) <= 1)).toBe(true);
+      expect(joined).toContain("workflow");
+      expect(joined).toContain("[S1/T1]agent-0");
+      if (expanded) expect(joined).toContain("fullworkflowresult");
+    }
+  });
+
   test("sanitizes tool-controlled text while retaining theme styling", () => {
     const result: ToolResultLike = {
       content: [{ type: "text", text: "unused" }],

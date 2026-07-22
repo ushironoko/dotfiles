@@ -39,6 +39,23 @@ const plainTheme: RenderTheme = {
   bold: (text) => text,
 };
 
+class AdaptiveIndent implements Component {
+  private readonly indented = new Box(1, 0);
+
+  constructor(private readonly child: Component) {
+    this.indented.addChild(child);
+  }
+
+  render(width: number): string[] {
+    if (width <= 0) return [""];
+    return width === 1 ? this.child.render(width) : this.indented.render(width);
+  }
+
+  invalidate(): void {
+    this.indented.invalidate();
+  }
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -216,7 +233,7 @@ export const renderChildRunsResult = (
   const root = new Container();
   root.addChild(renderHeader(summary.label, summary.runs, theme));
 
-  const rows = new Box(1, 0);
+  const rows = new Container();
   const visibleRuns = options.expanded
     ? summary.runs
     : summary.runs.slice(0, 8);
@@ -230,16 +247,16 @@ export const renderChildRunsResult = (
       ),
     );
   }
-  root.addChild(rows);
+  root.addChild(new AdaptiveIndent(rows));
 
   if (options.expanded) {
     const original = safeBlock(contentText(result.content));
     if (original !== "") {
       root.addChild(new Spacer(1));
       root.addChild(new Text(theme.fg("muted", theme.bold("Result")), 0, 0));
-      const output = new Box(1, 0);
-      output.addChild(new Text(theme.fg("toolOutput", original), 0, 0));
-      root.addChild(output);
+      root.addChild(
+        new AdaptiveIndent(new Text(theme.fg("toolOutput", original), 0, 0)),
+      );
     }
   }
 
