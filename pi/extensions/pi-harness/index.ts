@@ -20,6 +20,7 @@ import {
   type PermissionBlockerOptions,
 } from "./features/permission-policy/block";
 import setupHookBridge from "./features/hook-bridge/index";
+import setupGitHubCliReminder from "./features/github-cli-reminder/index";
 import {
   buildRegistry,
   partitionBridgeRegistry,
@@ -69,6 +70,10 @@ const setupHarness = (
     config.features.subagent || config.features.workflow
       ? setupChildRuns(pi)
       : undefined;
+
+  // Parent turns receive one hidden soft-policy reminder. Child processes omit
+  // it to avoid duplicating guidance already supplied by their orchestrator.
+  if (!config.isChild) setupGitHubCliReminder(pi);
 
   // Reject package runners with an equivalent project script before the local
   // judge can ask. A hook pass, timeout, or error still falls through to the
