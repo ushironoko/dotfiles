@@ -1,5 +1,6 @@
 import { describe, expect, test, afterEach } from "bun:test";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -32,6 +33,33 @@ describe("runHook", () => {
     expect(result.exitCode).toBe(0);
     expect(result.timedOut).toBe(false);
     expect(result.stdout.trim()).toBe('{"ok":true}');
+  });
+
+  test("does not resolve bash through an injected PATH", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-run-hook-path-"));
+    cleanups.push(directory);
+    const marker = join(directory, "hijacked");
+    const fakeBin = join(directory, "bin");
+    await mkdir(fakeBin, { recursive: true });
+    await writeFile(
+      join(fakeBin, "bash"),
+      `#!/bin/sh\n/bin/echo hijacked > "${marker}"\nexit 99\n`,
+      { mode: 0o755 },
+    );
+    const script = join(directory, "hook.sh");
+    await writeFile(
+      script,
+      "#!/bin/bash\n/bin/cat > /dev/null\n/bin/echo safe\n",
+      { mode: 0o755 },
+    );
+
+    const result = await runHook(script, "{}", {
+      env: { PATH: `${fakeBin}:/usr/bin:/bin` },
+      timeoutMs: 5_000,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe("safe");
+    expect(existsSync(marker)).toBe(false);
   });
 
   test("delivers stdin JSON to the script", async () => {

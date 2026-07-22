@@ -25,10 +25,14 @@ after changing it. Disabling Cloud does not disable downloaded local models.
 The judge verifies `cloud.disabled === true` through `/api/status` before each
 command-bearing request and fails closed on old or misconfigured servers.
 
-The first cold model or classifier-prompt load can exceed the two-second shared
-request budget. Keeping the model listed by `ollama ps` avoids model startup;
-a first classification after a policy/reload may still ask once while Ollama
-builds its prompt cache. Each request sets `keep_alive: "30m"`.
+A cold model or classifier-prompt load can consume several seconds. Routine
+real-repository requests measured over two seconds and a first qualification
+request also crossed three seconds on the qualified model. Auto mode prioritizes
+avoiding user feedback over a shorter fallback, so the default shared request
+budget is ten seconds. Keeping the model listed by `ollama ps` avoids model
+startup; a first classification after a policy/reload may still ask if Ollama
+exceeds that budget while building its prompt cache. Each request sets
+`keep_alive: "30m"`.
 
 Ollama's local HTTP API is unauthenticated. pi-harness trusts the local account
 and the process bound to the configured loopback port. It verifies the server's
@@ -48,7 +52,7 @@ The judge is enabled by default. Override it in the machine-local
     "url": "http://127.0.0.1:11434/api/chat",
     "model": "qwen2.5:latest",
     "expectedDigest": "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
-    "timeoutMs": 2000,
+    "timeoutMs": 10000,
     "keepAlive": "30m"
   }
 }
@@ -102,6 +106,21 @@ operation (for example with Esc).
 11. Query `/api/chat`, then require the exact configured response model, no
     remote metadata, a completed non-truncated response, and an entire verdict
     of `ALLOW`. Every other result asks the user or blocks without UI.
+
+Pi runs the shared `npm_script_preference` hook as a blocking preflight before
+this decision. Because it precedes permission-policy, pi launches it with
+`/bin/bash` and a fixed root-owned system `PATH`; missing utilities make the
+hook pass into permission-policy rather than consulting inherited
+repository-influenced executable paths. A matching package-runner invocation
+is rejected with its npm script alternative without querying the judge.
+Package-runner forms that pass, time out, or error in the hook continue into
+the mandatory deterministic floor and local judge. The concrete scanner parses
+manager-level options before deciding whether `x`, `dlx`, or `exec` is the
+subcommand, so broad `bun` and `pnpm` grants still cover ordinary run scripts
+but not package runners; an unknown manager option before a later runner token
+stays conservative. In child profiles, preflight and policy rejections share the
+same authenticated permission-block signal so a blocked child cannot be
+reported as successful. Claude Code and Codex keep their existing hook behavior.
 
 The checked-in allow entries mirror the broad Bash grants in
 `claude/.claude/settings.json`. They represent explicit user trust, not a claim
@@ -224,18 +243,20 @@ report records every literal command, expected verdict, and outcome.
 
 ### Checked-in default qualification record
 
-- Qualified at: `2026-07-21T02:25:23.937Z`
+- Qualified at: `2026-07-21T11:13:32.764Z`
 - Ollama: `0.32.0`
 - Model: `qwen2.5:latest` (7.6B, Q4_K_M)
 - `/api/tags` manifest digest:
   `845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e`
-- Shared timeout: `2000ms`
-- Live contextual verdicts: `36/36` (two consecutive complete passes)
-- Required-safe: `13/13 ALLOW` (reads, lint/test/typecheck/format, local Git,
+- Shared timeout: `10000ms`
+- Live contextual verdicts: `45/45` (two consecutive complete passes)
+- Required-safe: `20/20 ALLOW` (reads including HOME-based `find`, read-only
+  Git history/diff, same-worktree multi-diff, harness metadata/version
+  inspection, and bounded `rg | head`; lint/test/typecheck/format, local Git,
   fetch/pull, linked-worktree navigation)
-- Required-confirmation: `23/23 ASK` (destructive Git/filesystem,
-  privilege/exfiltration, opaque execution, unavailable project identity,
-  unrelated/prefix-confusable/traversal paths, Git location/config/force
+- Required-confirmation: `25/25 ASK` (destructive Git/filesystem,
+  privilege/exfiltration, package-runner/opaque execution, unavailable project
+  identity, unrelated/prefix-confusable/traversal paths, Git location/config/force
   variants, outside-project redirection, push/transport/upload, and prompt
   injection)
 - Independent hold-out after prompt tuning: `5/5`

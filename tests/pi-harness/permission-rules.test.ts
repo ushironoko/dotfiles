@@ -321,6 +321,96 @@ describe("explicit allow matching", () => {
     ),
   );
 
+  const broadPackageManagerRules = loadRules(
+    JSON.stringify({
+      deny: [],
+      allow: [{ pattern: "^(?:bun|pnpm|npm|yarn)(?: |(?![\\s\\S]))" }],
+      ask: [],
+    }),
+  );
+
+  test("does not let broad package-manager grants approve package runners", () => {
+    for (const command of [
+      "bun x totally-unknown-package",
+      String.raw`bun \x totally-unknown-package`,
+      "bun 'x' totally-unknown-package",
+      "bun x --package totally-unknown-package tool",
+      "bun --cwd . x totally-unknown-package",
+      "bun --cwd=. x run",
+      "bun --version x totally-unknown-package",
+      "bun --version=false x totally-unknown-package",
+      "bun --help x totally-unknown-package",
+      "bun --help=full x totally-unknown-package",
+      "bun --revision x totally-unknown-package",
+      "bun --revision=false x totally-unknown-package",
+      "bun --future-option x totally-unknown-package",
+      "pnpm dlx totally-unknown-package",
+      "pnpm --silent dlx totally-unknown-package",
+      "pnpm exec totally-unknown-package",
+      "pnpm --dir . exec totally-unknown-package",
+      "pnpm --filter=foo dlx run",
+      "pnpm x totally-unknown-package",
+      "pnpm --silent x totally-unknown-package",
+      "pnpm --version=false exec totally-unknown-package",
+      "pnpm --future-option exec totally-unknown-package",
+      "npm exec totally-unknown-package",
+      "npm x totally-unknown-package",
+      "npm --yes exec totally-unknown-package",
+      "npm --prefix . x totally-unknown-package",
+      "npm --prefix=x exec totally-unknown-package",
+      "npm --version=false x totally-unknown-package",
+      "npm --future-option exec totally-unknown-package",
+      "yarn dlx totally-unknown-package",
+      "yarn exec totally-unknown-package",
+      "yarn --cwd . dlx totally-unknown-package",
+      "yarn --version=false exec totally-unknown-package",
+      "yarn --future-option exec totally-unknown-package",
+    ]) {
+      expect(evaluateCommand(command, broadPackageManagerRules).verdict).toBe(
+        "default-continue",
+      );
+    }
+    for (const command of [
+      "bun run x",
+      "bun test x",
+      "bun add x",
+      "bun --cwd . run x",
+      "bun --cwd=. run x",
+      "bun --cwd x run test",
+      "bun --silent run x",
+      `bun -e 'console.log("safe")' x totally-unknown-package`,
+      "bun -e1 x totally-unknown-package",
+      `bun --print '"safe"' x totally-unknown-package`,
+      "bun -p1 x totally-unknown-package",
+      "pnpm run exec",
+      "pnpm test exec",
+      "pnpm add exec",
+      "pnpm --dir . run exec",
+      "pnpm --dir=. run exec",
+      "pnpm --dir exec run test",
+      "pnpm --filter foo run exec",
+      "pnpm --recursive run exec",
+      "pnpm --version exec totally-unknown-package",
+      "pnpm --help dlx totally-unknown-package",
+      "npm run x",
+      "npm test exec",
+      "npm --prefix . run x",
+      "npm --prefix x run exec",
+      "npm --version x totally-unknown-package",
+      "npm --help exec totally-unknown-package",
+      "yarn run dlx",
+      "yarn test exec",
+      "yarn --cwd . run exec",
+      "yarn --cwd dlx run test",
+      "yarn --version dlx totally-unknown-package",
+      "yarn --help exec totally-unknown-package",
+    ]) {
+      expect(evaluateCommand(command, broadPackageManagerRules).verdict).toBe(
+        "allow",
+      );
+    }
+  });
+
   test("allows the documented codex-reviewer staging, prompt, and cleanup commands", () => {
     const instruction =
       "printf '%s' 'Read /tmp/codex-reviewer-a1B2C3/prompt.md completely and follow it exactly.'";

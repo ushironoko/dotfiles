@@ -59,7 +59,7 @@ export const DEFAULT_PERMISSION_JUDGE_CONFIG: Readonly<PermissionJudgeConfig> =
     model: "qwen2.5:latest",
     expectedDigest:
       "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
-    timeoutMs: 2_000,
+    timeoutMs: 10_000,
     keepAlive: "30m",
   };
 

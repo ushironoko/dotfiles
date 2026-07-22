@@ -59,3 +59,22 @@ export const buildRegistry = (paths: HarnessPaths): BridgeHookSpec[] => [
     maxOutputBytes: HOOK_OUTPUT_CAP_BYTES,
   },
 ];
+
+export interface BridgeRegistryPartition {
+  readonly permissionPreflight: BridgeHookSpec[];
+  readonly remaining: BridgeHookSpec[];
+}
+
+export const partitionBridgeRegistry = (
+  registry: readonly BridgeHookSpec[],
+): BridgeRegistryPartition => {
+  const permissionPreflight: BridgeHookSpec[] = [];
+  const remaining: BridgeHookSpec[] = [];
+  for (const spec of registry) {
+    (spec.id === "npm-script-preference"
+      ? permissionPreflight
+      : remaining
+    ).push(spec);
+  }
+  return { permissionPreflight, remaining };
+};

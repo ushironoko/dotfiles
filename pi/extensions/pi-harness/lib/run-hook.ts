@@ -21,6 +21,7 @@ export interface RunHookOptions {
   signal?: AbortSignal;
 }
 
+const BASH_PATH = "/bin/bash";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
 const DEFAULT_TERM_GRACE_MS = 2_000;
@@ -56,7 +57,7 @@ export function runHook(
   }
 
   return new Promise((resolve) => {
-    const child = spawn("bash", [scriptPath], {
+    const child = spawn(BASH_PATH, [scriptPath], {
       cwd: options.cwd,
       env: sanitizeChildEnv(process.env, options.env, { cwd: options.cwd }),
       stdio: ["pipe", "pipe", "pipe"],
@@ -173,11 +174,14 @@ export function fireDetachedHook(
   stdinJson: string,
   options: Pick<RunHookOptions, "cwd" | "env"> = {},
 ): void {
-  const child = spawn("bash", [scriptPath], {
+  const child = spawn(BASH_PATH, [scriptPath], {
     cwd: options.cwd,
     env: sanitizeChildEnv(process.env, options.env, { cwd: options.cwd }),
     stdio: ["pipe", "ignore", "ignore"],
     detached: true,
+  });
+  child.on("error", () => {
+    // A host without /bin/bash cannot run detached compatibility hooks.
   });
   child.stdin.on("error", () => {
     // Detached hooks may exit before reading stdin; ignore EPIPE.

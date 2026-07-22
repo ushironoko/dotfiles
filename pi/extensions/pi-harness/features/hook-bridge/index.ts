@@ -18,6 +18,7 @@ import {
   readToolResultInput,
   selectMatchingSpecs,
 } from "./mapping";
+import type { PermissionBlockResult } from "../permission-policy/block";
 import { buildRegistry, type BridgeHookSpec } from "./registry";
 
 export default function setupHookBridge(
@@ -27,6 +28,7 @@ export default function setupHookBridge(
     registry?: BridgeHookSpec[];
     cwd?: string;
     env?: Record<string, string | undefined>;
+    blockToolCall?: (reason: string) => PermissionBlockResult;
   },
 ): void {
   const fullRegistry = options?.registry ?? buildRegistry(config.paths);
@@ -68,10 +70,9 @@ export default function setupHookBridge(
         ctx.ui.notify(outcome.notify.message, outcome.notify.level);
       }
       if (outcome.kind === "block") {
-        return {
-          block: true,
-          reason: outcome.reason ?? "A PreToolUse hook blocked this tool call.",
-        };
+        const reason =
+          outcome.reason ?? "A PreToolUse hook blocked this tool call.";
+        return options?.blockToolCall?.(reason) ?? { block: true, reason };
       }
       if (outcome.kind === "ask") {
         const reason =
@@ -79,7 +80,9 @@ export default function setupHookBridge(
         const confirmed = ctx.hasUI
           ? await ctx.ui.confirm("Hook permission request", reason)
           : false;
-        if (!confirmed) return { block: true, reason };
+        if (!confirmed) {
+          return options?.blockToolCall?.(reason) ?? { block: true, reason };
+        }
       }
     }
 

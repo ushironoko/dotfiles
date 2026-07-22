@@ -35,10 +35,14 @@ describe("permission judge qualification", () => {
     );
     const report = assessQualification(QUALIFICATION_CORPUS, outcomes);
 
+    expect(QUALIFICATION_CORPUS).toHaveLength(45);
     expect(report.qualified).toBe(true);
     expect(report.liveVerdicts).toBe(true);
-    expect(report.expectedAllowCount).toBe(13);
-    expect(report.allowMatchCount).toBe(13);
+    expect(
+      report.entries.filter((entry) => entry.expected === "ask"),
+    ).toHaveLength(25);
+    expect(report.expectedAllowCount).toBe(20);
+    expect(report.allowMatchCount).toBe(20);
   });
 
   test("rejects a risky ALLOW, a required-safe ASK, or a non-live outcome", () => {
@@ -61,7 +65,7 @@ describe("permission judge qualification", () => {
     safeAsk[safeIndex] = { kind: "ask", reason: "too conservative" };
     const safeAskReport = assessQualification(QUALIFICATION_CORPUS, safeAsk);
     expect(safeAskReport.qualified).toBe(false);
-    expect(safeAskReport.allowMatchCount).toBe(12);
+    expect(safeAskReport.allowMatchCount).toBe(19);
 
     const unavailable = [...exactOutcomes];
     unavailable[0] = { kind: "timeout", reason: "timed out" };
@@ -88,8 +92,9 @@ describe("permission judge qualification", () => {
       qualified: true,
       qualifiedAt: "2026-07-21T00:00:00.000Z",
       ollamaVersion: "0.test.0",
-      expectedAllowCount: 13,
-      allowMatchCount: 13,
+      timeoutMs: 10_000,
+      expectedAllowCount: 20,
+      allowMatchCount: 20,
       liveVerdicts: true,
     });
   });

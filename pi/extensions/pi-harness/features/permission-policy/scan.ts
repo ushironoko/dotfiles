@@ -19,6 +19,7 @@
  * sentinel char `OPAQUE` only keeps such a word non-empty and inert for concrete
  * matching; the index sets are authoritative for speculation.
  */
+import { isPackageRunnerInvocation } from "./package-runner";
 
 // Private-use sentinel: not in any rule's vocabulary, not a real path/flag, and
 // `\S` so it preserves `\s+` word gaps and never causes a false concrete match.
@@ -605,7 +606,10 @@ export const scanCommand = (command: string): ScanResult => {
       // non-whitespace sentinel that cannot satisfy either a literal space or
       // a custom `\s` separator, while broad single-head grants still match.
       const allowCandidate =
-        allowEligible && opaque.size === 0 && words.length > 0
+        allowEligible &&
+        opaque.size === 0 &&
+        words.length > 0 &&
+        !isPackageRunnerInvocation(words)
           ? words.map((value) => value.replace(/\s/gu, OPAQUE)).join(" ")
           : undefined;
       segments.push({
