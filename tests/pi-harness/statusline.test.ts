@@ -13,6 +13,7 @@ import {
   type GitStatus,
   parseStatuslineCache,
   remainingContextPercent,
+  renderExtensionStatuses,
   renderStatusline,
   STATUSLINE_WIDGET_KEY,
   type StatuslineSnapshot,
@@ -20,7 +21,11 @@ import {
 } from "../../pi/extensions/pi-harness/features/statusline/render";
 import type { DetachedSpawnFunction } from "../../pi/extensions/pi-harness/lib/detached";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
-import type { ThemeLike } from "../../pi/extensions/pi-harness/lib/pi-like";
+import type {
+  FooterComponentLike,
+  ThemeLike,
+  TuiLike,
+} from "../../pi/extensions/pi-harness/lib/pi-like";
 import { worktreeIdentityDetails } from "../../pi/extensions/pi-harness/lib/worktree-identity";
 import { cleanupTestDirectory, setupTestDirectory } from "../test-helpers";
 import { createFakePi } from "./fake-pi";
@@ -192,6 +197,71 @@ describe("Claude-compatible statusline rendering", () => {
     expect(lines).toEqual([
       "ushironoko/dotfiles | dotfiles | feat/pi | +12 -3 | TS L✓ T… X✗ | Opus 4.8 | 42%",
     ]);
+  });
+
+  test("renders extension statuses safely in stable key order", () => {
+    const line = renderExtensionStatuses(
+      new Map([
+        ["z-last", "\u001b[31m赤い状態\u001b[0m"],
+        ["a-first", "  first\r\nstatus\tready\vnow\u2028safe  "],
+        ["m-empty", "\n\t"],
+      ]),
+      200,
+    );
+
+    expect(line).toBe(
+      "first status ready now safe \u001b[31m赤い状態\u001b[0m",
+    );
+    expect(renderExtensionStatuses(new Map(), 80)).toBeUndefined();
+    expect(
+      renderExtensionStatuses(new Map([["busy", "answering"]]), 0),
+    ).toBeUndefined();
+    expect(
+      renderExtensionStatuses(new Map([["empty", "\r\n\t"]]), 80),
+    ).toBeUndefined();
+    expect(
+      renderExtensionStatuses(
+        new Map([["styled-empty", "\u001b[31m \t\r\u001b[0m"]]),
+        80,
+      ),
+    ).toBeUndefined();
+
+    const sanitized = renderExtensionStatuses(
+      new Map([
+        [
+          "unsafe",
+          "safe\u001b[2Jspoof\u001b]0;bad\u0007end\u0008done\u001b[31\u0007mring",
+        ],
+      ]),
+      200,
+    );
+    expect(sanitized).toBe("safe spoof end done ring");
+    expect(
+      renderExtensionStatuses(
+        new Map([
+          ["a-styled", "\u001b[31mbusy"],
+          ["b-plain", "ready"],
+        ]),
+        80,
+      ),
+    ).toBe("\u001b[31mbusy\u001b[0m ready");
+    expect(
+      renderExtensionStatuses(
+        new Map([
+          ["a-extended-color", "\u001b[38;5;0mblack"],
+          ["b-plain", "ready"],
+        ]),
+        80,
+      ),
+    ).toBe("\u001b[38;5;0mblack\u001b[0m ready");
+
+    const truncated = renderExtensionStatuses(
+      new Map([["colored", "\u001b[31m回答生成中です回答生成中です\u001b[0m"]]),
+      7,
+    );
+    expect(truncated).toContain("\u001b[31m");
+    expect(truncated).not.toMatch(/[\r\n\t]/);
+    expect(piVisibleWidth(truncated ?? "")).toBeLessThanOrEqual(7);
   });
 
   test("renders pending checks before the first cache file exists", () => {
@@ -815,6 +885,63 @@ describe("pi-harness statusline lifecycle", () => {
     ]);
     expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toBeUndefined();
     expect(pi.footerRenderRequests).toBeGreaterThan(0);
+  });
+
+  test("reflects live extension status updates without reinstalling", async () => {
+    const home = await tempDirectory("pi-statusline-extension-status");
+    const project = join(home, "repo");
+    await fs.mkdir(project, { recursive: true });
+
+    const pi = createFakePi({ cwd: project, gitBranch: "main" });
+    const statuses = new Map<string, string>();
+    let footer: FooterComponentLike | undefined;
+    let footerInstallations = 0;
+    let renderRequests = 0;
+    const tui: TuiLike = {
+      requestRender() {
+        renderRequests += 1;
+      },
+    };
+    const footerData = {
+      getGitBranch: () => "main",
+      getExtensionStatuses: () => statuses,
+      onBranchChange: (_callback: () => void) => () => {},
+    };
+    pi.ctx.ui.setFooter = (factory) => {
+      footerInstallations += 1;
+      footer?.dispose?.();
+      footer = factory?.(tui, identityTheme, footerData);
+    };
+    const statusUi = pi.ctx.ui as typeof pi.ctx.ui & {
+      setStatus(key: string, value: string | undefined): void;
+    };
+    statusUi.setStatus = (key, value) => {
+      if (value === undefined) statuses.delete(key);
+      else statuses.set(key, value);
+      tui.requestRender();
+    };
+
+    setupStatusline(pi, makeConfig(home, [project]), {
+      getGitStatus: async () => gitStatus({ repository: undefined }),
+    });
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    const requestsAfterInstall = renderRequests;
+
+    expect(footer?.render(100)).toEqual(["repo | main"]);
+    statusUi.setStatus("pi-harness-btw", "btw: answering");
+    expect(footer?.render(100)).toEqual(["repo | main", "btw: answering"]);
+    statusUi.setStatus("pi-harness-btw", "btw: retrying");
+    expect(footer?.render(100)).toEqual(["repo | main", "btw: retrying"]);
+    statusUi.setStatus("other-extension", "other: busy");
+    expect(footer?.render(100)).toEqual([
+      "repo | main",
+      "other: busy btw: retrying",
+    ]);
+    statusUi.setStatus("other-extension", undefined);
+    statusUi.setStatus("pi-harness-btw", undefined);
+    expect(footer?.render(100)).toEqual(["repo | main"]);
+    expect(footerInstallations).toBe(1);
+    expect(renderRequests).toBe(requestsAfterInstall + 5);
   });
 
   test("branch, model, and context updates are reflected without reinstalling", async () => {
