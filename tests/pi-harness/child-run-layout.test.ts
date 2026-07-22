@@ -7,6 +7,10 @@ import {
   type EditorTheme,
   type Terminal,
 } from "@earendil-works/pi-tui";
+import {
+  BitIssueRegistry,
+  type BitIssueDataSource,
+} from "../../pi/extensions/pi-harness/features/bit-issues/registry";
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
 import { ChildRunsBrowserComponent } from "../../pi/extensions/pi-harness/features/child-runs/ui";
 
@@ -43,7 +47,11 @@ const createTerminal = (columns: number, rows: number): Terminal => ({
   setProgress() {},
 });
 
-const createLayout = (rows: number, columns: number) => {
+const createLayout = async (
+  rows: number,
+  columns: number,
+  includeIssues: boolean = false,
+) => {
   let id = 0;
   const registry = new ChildRunRegistry({
     idFactory: () => `layout-${++id}`,
@@ -60,6 +68,41 @@ const createLayout = (rows: number, columns: number) => {
       stageIndex: 0,
     })),
   });
+
+  const issueSource: BitIssueDataSource = {
+    listOpen: async () => ({
+      issues: Array.from({ length: 30 }, (_, index) => ({
+        id: `issue-${index}`,
+        title: `inspect issue ${index}`,
+        state: "open" as const,
+        author: "Pi Tester",
+        createdAt: 1,
+        updatedAt: 100 - index,
+        labels: [],
+      })),
+      truncated: false,
+    }),
+    getDetail: async (_cwd, id) => ({
+      issue: {
+        id,
+        title: id,
+        state: "open",
+        author: "Pi Tester",
+        createdAt: 1,
+        updatedAt: 1,
+        labels: [],
+        body: "body",
+      },
+      comments: { status: "none" },
+    }),
+  };
+  const issues = includeIssues
+    ? new BitIssueRegistry({ cli: issueSource })
+    : undefined;
+  if (issues !== undefined) {
+    issues.beginSession("/repo");
+    await issues.refresh("/repo");
+  }
 
   const terminal = createTerminal(columns, rows);
   const tui = new TUI(terminal);
@@ -81,6 +124,9 @@ const createLayout = (rows: number, columns: number) => {
     () => {},
     () => {},
     () => {},
+    issues === undefined
+      ? undefined
+      : { registry: issues, onInspect: () => {}, onRefresh: () => {} },
   );
   const footer = new Text("footer-main\nfooter-detail", 0, 0);
 
@@ -108,8 +154,8 @@ describe("child-session browser normal-flow layout", () => {
     [24, 80, 6],
     [40, 120, 10],
   ] as const) {
-    test(`keeps the editor visible in a ${rows}-row terminal`, () => {
-      const { editorLines, browserLines, viewport } = createLayout(
+    test(`keeps the editor visible in a ${rows}-row terminal`, async () => {
+      const { editorLines, browserLines, viewport } = await createLayout(
         rows,
         columns,
       );
@@ -127,4 +173,24 @@ describe("child-session browser normal-flow layout", () => {
       expect(viewport.at(-1)?.trimEnd()).toBe("footer-detail");
     });
   }
+
+  test("keeps the same total budget when child and issue sections coexist", async () => {
+    for (const [rows, columns, expectedPanelHeight] of [
+      [24, 80, 6],
+      [40, 120, 10],
+    ] as const) {
+      const { editorLines, browserLines, viewport } = await createLayout(
+        rows,
+        columns,
+        true,
+      );
+      expect(browserLines).toHaveLength(expectedPanelHeight);
+      expect(browserLines[0]).toContain("Open bit issues: 30");
+      for (const editorLine of new Set(editorLines)) {
+        expect(countLine(viewport, editorLine)).toBeGreaterThanOrEqual(
+          countLine(editorLines, editorLine),
+        );
+      }
+    }
+  });
 });

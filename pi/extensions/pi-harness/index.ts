@@ -68,8 +68,13 @@ const setupHarness = (
   // async before_agent_start handler. This manager has no tool_call handler, so
   // the npm preflight still remains first in the command-permission chain.
   const childRuns =
-    config.features.subagent || config.features.workflow
-      ? setupChildRuns(pi)
+    config.features.subagent ||
+    config.features.workflow ||
+    config.features["bit-task"]
+      ? setupChildRuns(pi, {
+          bitIssues: config.features["bit-task"],
+          childExecution: config.features.subagent || config.features.workflow,
+        })
       : undefined;
 
   // Parent turns receive hidden user-facing guidance. Child processes omit it
