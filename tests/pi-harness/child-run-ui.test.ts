@@ -9,7 +9,10 @@ import {
   ChildRunDetailComponent,
   ChildRunsBrowserComponent,
 } from "../../pi/extensions/pi-harness/features/child-runs/ui";
-import { visibleWidth } from "../../pi/extensions/pi-harness/lib/terminal-text";
+import {
+  stripTerminalControls,
+  visibleWidth,
+} from "../../pi/extensions/pi-harness/lib/terminal-text";
 
 describe("child-session private focus capability", () => {
   const component = { render: () => ["x"], invalidate() {} };
@@ -230,6 +233,78 @@ describe("child-session browser component", () => {
 });
 
 describe("child-session detail component", () => {
+  test("renders a themed metadata card and transcript status rows", () => {
+    const { registry, tui, keybindings } = setup(24);
+    const { runIds } = registry.beginInvocation({
+      toolCallId: "parent-themed",
+      source: "workflow",
+      mode: "single",
+      label: "review workflow\u001b]2;spoof\u0007",
+      runs: [
+        {
+          agent: "codex-reviewer",
+          task: "review the renderer",
+          taskIndex: 0,
+          stageIndex: 0,
+          stageName: "verification",
+        },
+      ],
+    });
+    const runId = runAt(runIds, 0);
+    registry.observe(runId, { type: "process_started", at: 1 });
+    registry.observe(runId, {
+      type: "tool_started",
+      localId: 1,
+      name: "read",
+      at: 2,
+    });
+    registry.observe(runId, {
+      type: "tool_finished",
+      localId: 1,
+      name: "read",
+      failed: true,
+      at: 3,
+    });
+    registry.observe(runId, {
+      type: "assistant_final",
+      text: "Found one actionable issue.",
+      at: 4,
+    });
+
+    const theme = {
+      fg(_color: string, text: string) {
+        return `\u001b[36m${text}\u001b[39m`;
+      },
+      bg(_color: string, text: string) {
+        return `\u001b[48;5;236m${text}\u001b[49m`;
+      },
+      bold(text: string) {
+        return `\u001b[1m${text}\u001b[22m`;
+      },
+    };
+    const detail = new ChildRunDetailComponent(
+      registry,
+      runId,
+      tui,
+      keybindings,
+      () => {},
+      theme,
+    );
+
+    const lines = detail.render(64);
+    const plain = lines.map((item) => stripTerminalControls(item).trimEnd());
+    const rendered = plain.join("\n");
+    expect(lines.join("\n")).toContain("\u001b[48;5;236m");
+    expect(lines.join("\n")).not.toContain("]2;spoof");
+    expect(rendered).toContain("codex-reviewer");
+    expect(rendered).toContain("review workflow · verification · S1/T1");
+    expect(rendered).toContain("task  review the renderer");
+    expect(rendered).toContain("Transcript");
+    expect(rendered).toContain("✗ tool-1 read (failed)");
+    expect(rendered).toContain("Found one actionable issue.");
+    expect(lines.every((item) => visibleWidth(item) <= 64)).toBe(true);
+  });
+
   test("uses the near-full terminal height and starts completed output at the top", () => {
     const { registry, tui, keybindings } = setup(24);
     const [runId] = addRuns(registry, 1);

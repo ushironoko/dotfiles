@@ -1,9 +1,15 @@
+import type { ThemeColor } from "@earendil-works/pi-coding-agent";
+import {
+  Box,
+  Container,
+  Text,
+  truncateToWidth as truncateStyledToWidth,
+} from "@earendil-works/pi-tui";
 import type { CtxLike } from "../../lib/pi-like";
 import {
   stripTerminalControls,
   truncateToWidth,
   visibleWidth,
-  wrapPlainText,
 } from "../../lib/terminal-text";
 import type {
   ChildInvocationSnapshot,
@@ -72,9 +78,6 @@ type FlatRun = {
   run: LiveChildRun;
 };
 
-const statusLabel = (status: ChildRunStatus): string =>
-  `${statusIcon(status)} ${status}`;
-
 const flattenRuns = (snapshots: ChildInvocationSnapshot[]): FlatRun[] =>
   snapshots.flatMap((invocation) =>
     invocation.runs.map((run) => ({ invocation, run })),
@@ -92,44 +95,81 @@ const line = (value: string, width: number): string =>
 const taskOneLine = (task: string): string =>
   stripTerminalControls(task, " ").replace(/\s+/g, " ").trim();
 
-const wrapDetailLine = (value: string, width: number): string[] =>
-  wrapPlainText(stripTerminalControls(value), Math.max(1, width));
+interface ChildRunTheme {
+  fg(color: ThemeColor, text: string): string;
+  bg(color: "selectedBg", text: string): string;
+  bold(text: string): string;
+}
 
-const wrapDetailText = (
-  prefix: string,
-  value: string,
-  width: number,
-): string[] => {
-  const safeWidth = Math.max(1, width);
-  const safePrefix = stripTerminalControls(prefix, " ");
-  const safeValue = stripTerminalControls(value);
-  const prefixWidth = visibleWidth(safePrefix);
-  if (prefixWidth >= safeWidth) {
-    return wrapDetailLine(`${safePrefix}${safeValue}`, safeWidth);
-  }
-  const continuation = " ".repeat(prefixWidth);
-  return wrapPlainText(safeValue, safeWidth - prefixWidth).map(
-    (part, index) => `${index === 0 ? safePrefix : continuation}${part}`,
-  );
+const plainTheme: ChildRunTheme = {
+  fg: (_color, text) => text,
+  bg: (_color, text) => text,
+  bold: (text) => text,
 };
 
-const transcriptLines = (item: TranscriptItem, width: number): string[] => {
+const resolveTheme = (value: unknown): ChildRunTheme => {
+  if (typeof value !== "object" || value === null) return plainTheme;
+  const candidate = value as Partial<ChildRunTheme>;
+  return typeof candidate.fg === "function" &&
+    typeof candidate.bg === "function" &&
+    typeof candidate.bold === "function"
+    ? (candidate as ChildRunTheme)
+    : plainTheme;
+};
+
+const safeBlock = (value: string): string => stripTerminalControls(value);
+
+const styledLine = (value: string, width: number): string => {
+  const safeWidth = Math.max(1, width);
+  return value.includes("\u001b")
+    ? truncateStyledToWidth(value, safeWidth, "")
+    : truncateToWidth(value, safeWidth, "");
+};
+
+const statusColors: Record<ChildRunStatus, ThemeColor> = {
+  queued: "dim",
+  running: "warning",
+  succeeded: "success",
+  failed: "error",
+  aborted: "warning",
+  skipped: "dim",
+};
+
+const statusColor = (status: ChildRunStatus): ThemeColor =>
+  statusColors[status];
+
+const transcriptComponent = (
+  item: TranscriptItem,
+  theme: ChildRunTheme,
+): ComponentLike => {
   if (item.type === "assistant") {
-    return ["assistant:", ...wrapDetailText("  ", item.text, width)];
+    const assistant = new Container();
+    assistant.addChild(
+      new Text(theme.fg("accent", theme.bold("assistant")), 0, 0),
+    );
+    const body = new Box(1, 0);
+    body.addChild(new Text(theme.fg("toolOutput", safeBlock(item.text)), 0, 0));
+    assistant.addChild(body);
+    return assistant;
   }
   if (item.type === "tool") {
     let runStatus: ChildRunStatus = "succeeded";
     if (item.status === "running") runStatus = "running";
     else if (item.status === "failed") runStatus = "failed";
     else if (item.status === "interrupted") runStatus = "aborted";
-    return wrapDetailLine(
-      `${statusIcon(runStatus)} tool-${item.localId} ${item.name} (${item.status})`,
-      width,
-    );
+    const icon = theme.fg(statusColor(runStatus), statusIcon(runStatus));
+    const tool = theme.fg("accent", theme.bold(`tool-${item.localId}`));
+    const name = theme.fg("toolOutput", taskOneLine(item.name));
+    const status = theme.fg(statusColor(runStatus), `(${item.status})`);
+    return new Text(`${icon} ${tool} ${name} ${status}`, 0, 0);
   }
-  return wrapDetailLine(
-    `… transcript truncated (${item.omittedItems} items, ${item.omittedBytes} bytes omitted)`,
-    width,
+  return new Text(
+    theme.fg(
+      "warning",
+      `… transcript truncated (${item.omittedItems} items, ${item.omittedBytes} bytes omitted)`,
+    ),
+    0,
+    0,
   );
 };
 
@@ -282,41 +322,99 @@ export class ChildRunsBrowserComponent implements ComponentLike {
   }
 }
 
-const detailContentLines = (selected: FlatRun, width: number): string[] => {
+const detailContentLines = (
+  selected: FlatRun,
+  width: number,
+  theme: ChildRunTheme,
+): string[] => {
   const { invocation, run } = selected;
-  const lines: string[] = [
-    ...wrapDetailLine(`${run.agent} · ${statusLabel(run.status)}`, width),
-    ...wrapDetailLine(
-      `${invocation.label}${run.stageName ? ` · ${run.stageName}` : ""}`,
-      width,
+  const root = new Container();
+  const metadata = new Box(1, 0, (text) => theme.bg("selectedBg", text));
+  const status = theme.fg(
+    statusColor(run.status),
+    `${statusIcon(run.status)} ${run.status}`,
+  );
+  const reason =
+    run.terminalReason === undefined
+      ? ""
+      : theme.fg(
+          statusColor(run.status),
+          ` (${taskOneLine(run.terminalReason)})`,
+        );
+  metadata.addChild(
+    new Text(
+      `${theme.fg("toolTitle", theme.bold(taskOneLine(run.agent)))}  ${status}${reason}`,
+      0,
+      0,
     ),
-    ...wrapDetailText("task: ", taskOneLine(run.task), width),
-    "",
-  ];
+  );
+
+  const taskPosition = `T${run.taskIndex + 1}`;
+  const position =
+    run.stageIndex === undefined
+      ? taskPosition
+      : `S${run.stageIndex + 1}/${taskPosition}`;
+  const invocationParts = [
+    taskOneLine(invocation.label),
+    run.stageName === undefined ? undefined : taskOneLine(run.stageName),
+    position,
+  ].filter((part): part is string => part !== undefined && part !== "");
+  metadata.addChild(
+    new Text(theme.fg("muted", invocationParts.join(" · ")), 0, 0),
+  );
+  metadata.addChild(
+    new Text(
+      theme.fg("muted", theme.bold("task  ")) +
+        theme.fg("toolOutput", taskOneLine(run.task)),
+      0,
+      0,
+    ),
+  );
+  root.addChild(metadata);
+  root.addChild(new Text(theme.fg("accent", theme.bold("Transcript")), 0, 0));
+
+  const transcript = new Box(1, 0);
   for (const item of run.transcript) {
-    lines.push(...transcriptLines(item, width));
+    transcript.addChild(transcriptComponent(item, theme));
   }
   if (run.liveDraft) {
-    lines.push("assistant [live]:");
-    lines.push(...wrapDetailText("  ", run.liveDraft, width));
+    transcript.addChild(
+      new Text(theme.fg("warning", theme.bold("assistant LIVE")), 0, 0),
+    );
+    const draft = new Box(1, 0);
+    draft.addChild(
+      new Text(theme.fg("toolOutput", safeBlock(run.liveDraft)), 0, 0),
+    );
+    transcript.addChild(draft);
   }
   if (run.transcript.length === 0 && !run.liveDraft) {
-    lines.push(
-      ...wrapDetailLine(
-        run.status === "queued" ? "(not launched)" : "(no assistant text yet)",
-        width,
+    transcript.addChild(
+      new Text(
+        theme.fg(
+          "dim",
+          run.status === "queued"
+            ? "(not launched)"
+            : "(no assistant text yet)",
+        ),
+        0,
+        0,
       ),
     );
   }
   if (run.protocolWarnings > 0) {
-    lines.push(
-      ...wrapDetailLine(
-        `(${run.protocolWarnings} child stream warning(s))`,
-        width,
+    transcript.addChild(
+      new Text(
+        theme.fg(
+          "warning",
+          `(${run.protocolWarnings} child stream warning(s))`,
+        ),
+        0,
+        0,
       ),
     );
   }
-  return lines;
+  root.addChild(transcript);
+  return root.render(Math.max(1, width));
 };
 
 /** Focused, near-full-screen transcript viewer for one fixed child run. */
@@ -326,6 +424,7 @@ export class ChildRunDetailComponent implements ComponentLike {
   private lastMaxOffset = 0;
   private lastViewport = 1;
   private readonly unsubscribe: () => void;
+  private readonly theme: ChildRunTheme;
 
   constructor(
     private readonly registry: ChildRunRegistry,
@@ -333,7 +432,9 @@ export class ChildRunDetailComponent implements ComponentLike {
     private readonly tui: TuiLike,
     private readonly keybindings: KeybindingsLike,
     private readonly onClose: () => void,
+    theme?: unknown,
   ) {
+    this.theme = resolveTheme(theme);
     const initialStatus = findRun(this.registry.getSnapshots(), this.runId)?.run
       .status;
     this.follow = initialStatus === "queued" || initialStatus === "running";
@@ -355,11 +456,15 @@ export class ChildRunDetailComponent implements ComponentLike {
     const selected = findRun(this.registry.getSnapshots(), this.runId);
     const allLines =
       selected === undefined
-        ? wrapDetailLine(
-            "Selected child run is no longer available.",
-            safeWidth,
-          )
-        : detailContentLines(selected, safeWidth);
+        ? new Text(
+            this.theme.fg(
+              "warning",
+              "Selected child run is no longer available.",
+            ),
+            0,
+            0,
+          ).render(safeWidth)
+        : detailContentLines(selected, safeWidth, this.theme);
 
     this.lastMaxOffset = Math.max(0, allLines.length - viewport);
     if (this.follow) this.offset = this.lastMaxOffset;
@@ -370,24 +475,29 @@ export class ChildRunDetailComponent implements ComponentLike {
 
     const running = selected?.run.status === "running";
     let state = "";
-    if (running && this.follow) state = " · LIVE";
-    else if (!this.follow) state = " · PAUSED";
-    const title = ` Child session${state} `;
+    if (running && this.follow) {
+      state = this.theme.fg("warning", " · LIVE");
+    } else if (!this.follow) {
+      state = this.theme.fg("warning", " · PAUSED");
+    }
+    const title = `${this.theme.fg("toolTitle", this.theme.bold(" Child session"))}${state} `;
     const borderWidth = Math.max(1, safeWidth - visibleWidth(title));
+    const border = this.theme.fg("borderMuted", "─".repeat(borderWidth));
     const first = allLines.length === 0 ? 0 : this.offset + 1;
     const last = Math.min(allLines.length, this.offset + viewport);
     const position = `${first}-${last}/${allLines.length}`;
     const output: string[] = [];
     if (showTitle) {
-      output.push(line(`${title}${"─".repeat(borderWidth)}`, safeWidth));
+      output.push(styledLine(`${title}${border}`, safeWidth));
     }
-    output.push(...visible.map((item) => line(item, safeWidth)));
+    output.push(...visible.map((item) => styledLine(item, safeWidth)));
     if (showHint) {
+      const hint = this.theme.fg(
+        "dim",
+        "↑↓ scroll  PgUp/PgDn page  Home/End  Esc/←/b close  ",
+      );
       output.push(
-        line(
-          `↑↓ scroll  PgUp/PgDn page  Home/End  Esc/←/b close  ${position}`,
-          safeWidth,
-        ),
+        styledLine(`${hint}${this.theme.fg("muted", position)}`, safeWidth),
       );
     }
     return output.slice(0, height);
@@ -729,7 +839,7 @@ export class ChildRunsPanelController {
     let detailPromise: Promise<void>;
     try {
       detailPromise = ui.custom<void>(
-        (tui, _theme, keybindings, done) => {
+        (tui, theme, keybindings, done) => {
           let closed = false;
           const close = () => {
             if (closed) return;
@@ -743,6 +853,7 @@ export class ChildRunsPanelController {
             tui,
             keybindings,
             close,
+            theme,
           );
         },
         {
