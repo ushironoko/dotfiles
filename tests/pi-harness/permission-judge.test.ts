@@ -126,12 +126,16 @@ afterEach(async () => {
   ]);
 });
 
-const verdictContent = (verdict: string): string => JSON.stringify({ verdict });
+const verdictContent = (safety: string, relevance = safety): string =>
+  JSON.stringify({ safety, relevance });
 
-const validResponse = (verdict = "ALLOW"): Response =>
+const validResponse = (safety = "ALLOW", relevance = safety): Response =>
   Response.json({
     model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-    message: { role: "assistant", content: verdictContent(verdict) },
+    message: {
+      role: "assistant",
+      content: verdictContent(safety, relevance),
+    },
     done: true,
     done_reason: "stop",
   });
@@ -242,15 +246,16 @@ describe("local Ollama permission judge", () => {
       format: {
         type: "object",
         properties: {
-          verdict: { type: "string", enum: ["ALLOW", "ASK"] },
+          safety: { type: "string", enum: ["ALLOW", "ASK"] },
+          relevance: { type: "string", enum: ["ALLOW", "ASK"] },
         },
-        required: ["verdict"],
+        required: ["safety", "relevance"],
         additionalProperties: false,
       },
       options: {
         temperature: 0,
         seed: 0,
-        num_ctx: 16_384,
+        num_ctx: 20_480,
         num_predict: 32,
       },
     });
@@ -276,6 +281,42 @@ describe("local Ollama permission judge", () => {
     expect(request?.body).not.toContain("conversation history");
     expect(request?.body).not.toContain("systemPromptOptions");
     expect(request?.body).not.toContain("process.env");
+    expect(request?.body).toContain("double quotes still evaluate");
+    expect(request?.body).toContain("quoted interpreter/program arguments");
+  });
+
+  test("keeps a producer-valid maximum context below the model input cap", async () => {
+    const upstream = await start(() => validResponse());
+    const judge = createPermissionJudge(configFor(upstream));
+    const worktrees = Array.from(
+      { length: 16 },
+      (_, index) => `/private/project-worktree/${"w".repeat(88)}${index}`,
+    );
+
+    const outcome = await judge.judge("git status --short", {
+      cwd: "/private/project-worktree/packages/app",
+      task: taskContext("t".repeat(1024), "task:max-bounded"),
+      runEvidence: {
+        assistantText: "a".repeat(2048),
+        priorToolResults: Array.from({ length: 16 }, (_, index) => ({
+          toolName: `${index}-${"x".repeat(124)}`,
+          status: index % 2 === 0 ? ("ok" as const) : ("error" as const),
+        })),
+        fingerprint: "run:max-bounded",
+      },
+      project: {
+        kind: "git",
+        name: "project",
+        cwd: "/private/project-worktree/packages/app",
+        activeWorktree: worktrees[0] ?? "/private/project-worktree",
+        navigableRoots: worktrees,
+        worktrees,
+        fingerprint: "project:max-bounded",
+      },
+    });
+
+    expect(outcome).toEqual({ kind: "allow", cached: false });
+    expect(chatRequests(upstream)).toHaveLength(1);
   });
 
   test("copies only precomputed leading-cd scope into the model envelope", async () => {
@@ -476,13 +517,20 @@ describe("local Ollama permission judge", () => {
     expect(chatRequests(upstream)).toHaveLength(1);
   });
 
-  test("returns ask without auto-approving", async () => {
-    const upstream = await start(() => validResponse("ASK"));
-    const outcome = await createPermissionJudge(configFor(upstream)).judge(
-      "curl https://example.test",
-    );
-    expect(outcome.kind).toBe("ask");
-  });
+  test.each([
+    { safety: "ASK", relevance: "ALLOW" },
+    { safety: "ALLOW", relevance: "ASK" },
+    { safety: "ASK", relevance: "ASK" },
+  ])(
+    "returns ask when either gate fails: $safety/$relevance",
+    async ({ safety, relevance }) => {
+      const upstream = await start(() => validResponse(safety, relevance));
+      const outcome = await createPermissionJudge(configFor(upstream)).judge(
+        "curl https://example.test",
+      );
+      expect(outcome.kind).toBe("ask");
+    },
+  );
 
   test.each([
     {
@@ -517,7 +565,11 @@ describe("local Ollama permission judge", () => {
       payload: {
         message: {
           role: "assistant",
-          content: JSON.stringify({ verdict: "ALLOW", reason: "safe" }),
+          content: JSON.stringify({
+            safety: "ALLOW",
+            relevance: "ALLOW",
+            reason: "safe",
+          }),
         },
         done: true,
         done_reason: "stop",
@@ -528,7 +580,7 @@ describe("local Ollama permission judge", () => {
       payload: {
         message: {
           role: "assistant",
-          content: JSON.stringify([{ verdict: "ALLOW" }]),
+          content: JSON.stringify([{ safety: "ALLOW", relevance: "ALLOW" }]),
         },
         done: true,
         done_reason: "stop",
