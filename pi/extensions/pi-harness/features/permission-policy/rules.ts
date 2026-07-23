@@ -594,7 +594,15 @@ const literalGitCwdTarget = (
       target = word.slice(2);
     }
   }
-  return target;
+  // Bash expands a leading `~`, while Node path resolution treats it as a
+  // literal directory. Likewise, lexical normalization of `link/..` differs
+  // from Git/chdir resolution when `link` is a symlink. Keep both shapes on
+  // the confirmation path instead of attaching false listed-worktree scope.
+  return target !== undefined &&
+    !target.startsWith("~") &&
+    !hasPathTraversal(target)
+    ? target
+    : undefined;
 };
 
 const GIT_GLOBAL_OPTION_REASON =
@@ -844,14 +852,20 @@ const simpleStarPattern = (value: string): RegExp | undefined => {
   return new RegExp(`^${source}$`, "u");
 };
 
-const isProjectBoundedRgGlob = (
+interface RgGlobInspection {
+  readonly bounded: boolean;
+  readonly optionLike: boolean;
+}
+
+const inspectProjectBoundedRgGlob = (
   operand: string,
   context: TrustedReadContext,
-): boolean => {
+): RgGlobInspection => {
+  const unsafe = { bounded: false, optionLike: false };
   const parentOperand = dirname(operand);
-  if (parentOperand.includes("*")) return false;
+  if (parentOperand.includes("*")) return unsafe;
   const match = simpleStarPattern(basename(operand));
-  if (match === undefined) return false;
+  if (match === undefined) return unsafe;
   const parentPath = isAbsolute(parentOperand)
     ? parentOperand
     : resolve(context.cwd, parentOperand);
@@ -859,30 +873,56 @@ const isProjectBoundedRgGlob = (
   try {
     canonicalParent = realpathSync(parentPath);
   } catch {
-    return false;
+    return unsafe;
   }
   if (!pathInsideVerifiedRoots(canonicalParent, context.navigableRoots)) {
-    return false;
+    return unsafe;
   }
 
   let entries: string[];
   try {
     entries = readdirSync(canonicalParent);
   } catch {
-    return false;
+    return unsafe;
   }
-  return entries
-    .filter((entry) => match.test(entry))
-    .every((entry) => {
-      try {
-        return pathInsideVerifiedRoots(
+  const matches = entries.filter((candidate) => match.test(candidate));
+  // Check the complete expansion set before containment so an earlier symlink
+  // escape cannot hide a later argv option from the deterministic ASK.
+  if (matches.some((entry) => entry.startsWith("-"))) {
+    // Shell expansion happens before rg parses argv. A basename such as `-L`
+    // or `--pre=sh` can therefore turn a path glob into an execution option.
+    return { bounded: false, optionLike: true };
+  }
+  for (const entry of matches) {
+    try {
+      if (
+        !pathInsideVerifiedRoots(
           realpathSync(resolve(canonicalParent, entry)),
           context.navigableRoots,
-        );
-      } catch {
-        return false;
+        )
+      ) {
+        return unsafe;
       }
-    });
+    } catch {
+      return unsafe;
+    }
+  }
+  return { bounded: true, optionLike: false };
+};
+
+const hasRgOptionLikeGlobExpansion = (
+  normalized: NormalizedSegment,
+  context: TrustedReadContext | undefined,
+): boolean => {
+  if (context === undefined) return false;
+  const operands = rgReadOperands(normalized);
+  return (
+    operands?.some(
+      (operand) =>
+        operand.literalGlob &&
+        inspectProjectBoundedRgGlob(operand.value, context).optionLike,
+    ) === true
+  );
 };
 
 const isProjectBoundedRgRead = (
@@ -907,7 +947,7 @@ const isProjectBoundedRgRead = (
       return false;
     }
     if (operand.literalGlob) {
-      return isProjectBoundedRgGlob(operand.value, context);
+      return inspectProjectBoundedRgGlob(operand.value, context).bounded;
     }
     const candidate = isAbsolute(operand.value)
       ? operand.value
@@ -1151,6 +1191,12 @@ const evaluateNormalized = (
   );
   if (structuralAsk !== undefined) {
     return { verdict: "ask", reason: structuralAsk };
+  }
+  if (hasRgOptionLikeGlobExpansion(normalized, trustedReadContext)) {
+    return {
+      verdict: "ask",
+      reason: "rg のglob展開が実行オプションとして解釈される可能性があります",
+    };
   }
 
   // A same-repository leading cd is neutral only for explicit-allow

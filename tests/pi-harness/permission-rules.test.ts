@@ -235,6 +235,7 @@ describe("built-in read-only classification", () => {
     const escapedDeclarations = join(root, "escaped-declarations");
     const dotglobDeclarations = join(root, "dotglob-declarations");
     const newlineDeclarations = join(root, "newline-declarations");
+    const optionGlobCwd = join(root, "option-glob-cwd");
     const linked = join(base, "linked-worktree");
     const outside = join(base, "outside.txt");
     try {
@@ -244,12 +245,16 @@ describe("built-in read-only classification", () => {
         mkdir(escapedDeclarations, { recursive: true }),
         mkdir(dotglobDeclarations, { recursive: true }),
         mkdir(newlineDeclarations, { recursive: true }),
+        mkdir(optionGlobCwd, { recursive: true }),
         mkdir(linked, { recursive: true }),
       ]);
       await Promise.all([
         writeFile(join(src, "a.ts"), "const value = 1;\n", "utf8"),
         writeFile(join(root, "root.d.ts"), "export {};\n", "utf8"),
         writeFile(join(declarations, "safe.d.ts"), "export {};\n", "utf8"),
+        writeFile(join(optionGlobCwd, "safe.ts"), "export {};\n", "utf8"),
+        writeFile(join(optionGlobCwd, "-L"), "not an option\n", "utf8"),
+        writeFile(join(optionGlobCwd, "--pre=sh"), "not an option\n", "utf8"),
         writeFile(join(linked, "linked.ts"), "export {};\n", "utf8"),
         writeFile(outside, "secret\n", "utf8"),
       ]);
@@ -299,6 +304,23 @@ describe("built-in read-only classification", () => {
           "default-continue",
         );
       }
+      const optionGlobOptions = {
+        trustedReadContext: {
+          cwd: realpathSync(optionGlobCwd),
+          navigableRoots: [canonicalRoot],
+        },
+      };
+      expect(
+        evaluateCommand("rg --no-config pattern *", rules, optionGlobOptions)
+          .verdict,
+      ).toBe("ask");
+      expect(
+        evaluateCommand(
+          "rg --no-config pattern *",
+          loadRules('{"deny":[],"allow":[{"pattern":"^"}],"ask":[]}'),
+          optionGlobOptions,
+        ).verdict,
+      ).toBe("ask");
       expect(
         evaluateCommand(
           "rg --no-config pattern src > /tmp/results",
@@ -334,6 +356,9 @@ describe("built-in read-only classification", () => {
       "git -C /repo push origin main",
       "git -C /repo -C /other status --short",
       'git -C "$repo" status --short',
+      "git -C ~/other status --short",
+      "git -C /repo/link/.. status --short",
+      "git -C ../repo status --short",
       "/usr/bin/git -C /repo status --short",
       "git -C /repo status --short && echo done",
       "git -C /repo status --short 2>/dev/null",

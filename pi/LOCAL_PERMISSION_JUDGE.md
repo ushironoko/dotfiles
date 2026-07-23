@@ -120,7 +120,8 @@ floor, explicit confirmation, or local judge.
    may be relative or absolute inside any verified registered worktree, may be
    missing when its nearest existing canonical ancestor stays inside one, and
    may contain a basename-only literal `*` glob after the parent directory and
-   every current match are verified. An exact `/dev/null` output sink remains
+   every current match are verified; an option-like match whose basename starts
+   with `-` requires confirmation. An exact `/dev/null` output sink remains
    eligible. Home expansion, traversal, symlink escapes, dynamic expansion
    (including a dynamic value mixed into a glob), directory-component or richer
    glob syntax, path-spelled/wrapped executables, `rg --pre`, `rg --search-zip`,
@@ -130,9 +131,10 @@ floor, explicit confirmation, or local judge.
    non-bare worktree with the same Git common directory as the tool cwd. The
    verified `gitCwd.scope` then accompanies the command to Ollama; the Git read
    is not mechanically allowed because repository/global fsmonitor,
-   external-diff, and textconv configuration can execute helpers. Repeated or
-   dynamic `-C`, other risky global options, output/helper-execution options,
-   compound commands, and non-read subcommands receive no exception.
+   external-diff, and textconv configuration can execute helpers. Tilde-prefixed
+   or `..`-containing targets, repeated or dynamic `-C`, other risky global
+   options, output/helper-execution options, compound commands, and non-read
+   subcommands receive no exception.
 8. For an otherwise unknown compound command, treat one leading top-level
    `cd <absolute-literal-path> &&` segment as neutral only when the canonical
    destination is contained by the complete registered non-bare worktree set
@@ -316,24 +318,25 @@ outcome, route, and mechanical/model totals.
 
 ### Checked-in default qualification record
 
-- Qualified at: `2026-07-22T08:27:12.026Z`
+- Qualified at: `2026-07-22T10:43:42.355Z`
 - Ollama: `0.32.0`
 - Model: `granite4.1:3b` (3.4B, GGUF Q4_K_M, approximately 2.1 GB)
 - `/api/tags` manifest digest:
   `6fd349357287c7ffc9e38189a93b48ea175d24fc566b38f09cfc564fb7f303eb`
 - Shared timeout: `10000ms`
-- Production-path verdicts: `66/66`
-- Routing: `43 mechanical`, `23 live model`
+- Production-path verdicts: `68/68`
+- Routing: `45 mechanical`, `23 live model`
 - Required-safe: `25/25 ALLOW` (read-only Git/plain `rg`, project-bounded
   `rg --no-config` including a missing-path diagnostic, HOME-based `find`,
   harness metadata/version inspection, lint/test/typecheck/format, bounded local
   Git mutations, fetch/pull, verified linked-worktree navigation, and a verified
   `git -C` status read)
-- Required-confirmation: `41/41 ASK` (destructive Git/filesystem,
+- Required-confirmation: `43/43 ASK` (destructive Git/filesystem,
   privilege/exfiltration including grouped input redirects, package-runner/
   stdin-shell/opaque execution, unavailable project identity and direct or
   substituted mutations, unrelated/prefix-confusable/traversal paths, Git
-  location/config/force/abbreviated-delete variants, external read helpers,
+  tilde/symlink-traversal location spellings plus config/force/
+  abbreviated-delete variants, external read helpers,
   output redirects including numeric-prefix or IFS-dynamic `>&file`, unverified
   relative/grouped/additional navigation before mutation, push/transport/
   curl-body upload, and prompt injection)

@@ -95,12 +95,14 @@ confirmation before Ollama. Stdin-only `head -N` and project-bounded
 `rg --no-config` are approved mechanically; rg operands may be relative or
 absolute inside any verified worktree of the active repository, may be missing
 when their nearest existing ancestor remains inside one, and may use a narrow
-basename-only literal `*` glob after every current match is verified. Exact
-`/dev/null` output sinks are non-persistent rather than file-write prompts.
+basename-only literal `*` glob after every current match is verified as both
+in-bounds and non-option-like. Exact `/dev/null` output sinks are non-persistent
+rather than file-write prompts.
 Other Git reads remain residual because repository/global helper configuration
 can execute programs. A literal single-command `git -C` status/diff/log/show
 reaches that same residual judge path only after the effective cwd is verified
-inside a listed same-repository worktree; unverified locations still ask before
+inside a listed same-repository worktree; tilde-prefixed and `..`-containing
+location spellings remain unverified, and unverified locations still ask before
 Ollama. Residual commands use a bounded JSON envelope containing the command, raw current-turn
 task text, authenticated same-turn assistant text, preceding tool names plus
 success/failure status, and locally verified cwd/project/worktree context. It

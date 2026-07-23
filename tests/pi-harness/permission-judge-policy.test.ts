@@ -228,6 +228,33 @@ describe("permission policy local judge routing", () => {
     expect(upstream.received).toHaveLength(0);
   });
 
+  test("never verifies shell-sensitive git -C path spellings", async () => {
+    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const cwd = resolve(import.meta.dir, "../..");
+    const pi = createFakePi({ cwd, hasUI: false });
+    let discoveries = 0;
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => {
+        discoveries += 1;
+        return verifiedGitCwdProject(cwd);
+      },
+    });
+
+    for (const command of [
+      "git -C ~/other status --short",
+      "git -C /repo/link/.. status --short",
+      "git -C ../linked-worktree status --short",
+    ]) {
+      expect(await pi.emitToolCall(bashCall(command))).toEqual({
+        block: true,
+        reason:
+          "Git の作業場所・設定・不明なグローバルオプション変更には確認が必要です",
+      });
+    }
+    expect(discoveries).toBe(0);
+    expect(upstream.received).toHaveLength(0);
+  });
+
   test("uses bounded raw current-turn input instead of the expanded prompt", async () => {
     const upstream = await start(() => ollamaResponse("ALLOW"));
     const cwd = resolve(import.meta.dir, "../..");

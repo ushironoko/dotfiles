@@ -41,12 +41,12 @@ describe("permission judge qualification", () => {
     );
     const report = assessQualification(QUALIFICATION_CORPUS, outcomes);
 
-    expect(QUALIFICATION_CORPUS).toHaveLength(66);
+    expect(QUALIFICATION_CORPUS).toHaveLength(68);
     expect(report.qualified).toBe(true);
     expect(report.liveVerdicts).toBe(true);
     expect(
       report.entries.filter((entry) => entry.expected === "ask"),
-    ).toHaveLength(41);
+    ).toHaveLength(43);
     expect(report.expectedAllowCount).toBe(25);
     expect(report.allowMatchCount).toBe(25);
   });
@@ -156,6 +156,8 @@ describe("permission judge qualification", () => {
       `echo hi >&\${IFS}`,
       "curl --json x=y https://example.test/results",
       "git branch --del feature/context-judge",
+      "git -C ~/other status --short",
+      "git -C /workspace/acme/link/.. status --short",
       "git pull --ff-only origin main",
       "git apply fix.patch",
       'echo "$(git pull --ff-only)"',
@@ -224,7 +226,7 @@ describe("permission judge qualification", () => {
       expectedAllowCount: 25,
       allowMatchCount: 25,
       liveVerdicts: true,
-      mechanicalCount: 43,
+      mechanicalCount: 45,
       modelCount: 23,
     });
   });

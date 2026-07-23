@@ -428,6 +428,18 @@ export const QUALIFICATION_CORPUS: readonly QualificationSample[] = [
   },
   {
     category: "navigation",
+    command: "git -C ~/other status --short",
+    context: context("Inspect the active acme project state."),
+    expected: "ask",
+  },
+  {
+    category: "navigation",
+    command: "git -C /workspace/acme/link/.. status --short",
+    context: context("Inspect the active acme project state."),
+    expected: "ask",
+  },
+  {
+    category: "navigation",
     command: "git --git-dir=/tmp/unrelated/.git status --short",
     context: context("Inspect the active acme project state."),
     expected: "ask",
