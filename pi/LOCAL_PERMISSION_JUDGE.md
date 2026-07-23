@@ -2,8 +2,8 @@
 
 pi-harness uses a qualified local Ollama model as the fallback classifier for
 Bash tool calls that remain ambiguous after deterministic permission routing.
-The request constrains the verdict with an Ollama JSON Schema structured output
-and independently validates the returned object. This approximates Claude Code
+The request constrains independent safety and relevance gates with an Ollama
+JSON Schema structured output and independently validates the returned object. This approximates Claude Code
 auto mode using bounded current-task, current-assistant-run, and active-project
 context without sending prior-turn conversation or repository contents to the
 judge.
@@ -71,10 +71,12 @@ manifest digest returned by that endpoint. Models with a `:cloud` tag or name
 containing `cloud` are rejected.
 Invalid explicit settings never fall back to a remote or different model; they
 require human confirmation or block. Each chat request sets `think: false` and
-provides a strict object schema whose only required property is `verdict`, with
-an enum of `ALLOW` and `ASK` and no additional properties. The response parser
-still requires exactly that one-key object, so plain text, alternate casing,
-extra keys, tool calls, truncation, and malformed JSON cannot approve a command.
+provides a strict object schema with exactly two required properties, `safety`
+and `relevance`; each is an enum of `ALLOW` and `ASK`, with no additional
+properties. The response parser requires exactly that two-key object. Only
+`{"safety":"ALLOW","relevance":"ALLOW"}` approves. Either `ASK`, plain text,
+alternate casing, missing or extra keys, tool calls, truncation, and malformed
+JSON require confirmation or block.
 Interactive permission confirmations have no countdown: they remain open until
 the user responds or aborts the active pi operation (for example with Esc).
 
@@ -88,14 +90,24 @@ Independent inspections and checks should run sequentially as separate Bash
 calls, with each result inspected before choosing the next command. Short
 pipelines are reserved for genuine producer/consumer data flow rather than
 batching unrelated work with `;`, `&&`, or multiline blocks. Long or multiline
-CLI data should use the write tool and a file-input option instead of an
-ANSI-C-quoted or escaped one-liner.
+CLI data should use the write tool and a native file-input option when one
+exists instead of an ANSI-C-quoted or escaped one-liner. For `bit issue`, which
+does not expose the required file-input path, a body with no single quote is
+passed as one direct single-quoted `--body` argument with literal newlines;
+heredocs, command substitution, and temporary body files are not used.
 Convenience-only dynamic shell and generated scripts are discouraged, not
 forbidden. When an ad-hoc script is genuinely needed, the model is told to
 preserve correctness/capability and first state its necessity, exact scope, and
-concrete task relationship. This guidance only reduces
-hard-to-parse command generation; it never replaces or weakens the deterministic
-floor, explicit confirmation, or local judge.
+concrete task relationship. Qualification supports `--summary`, so its metrics
+and failures can be inspected without a long `jq` filter or `> /tmp/...`
+redirection. A task-aligned literal `jq` filter over a project-relative JSON
+file remains a local-judge ALLOW candidate; options that load additional files
+or an outside-worktree input do not inherit that example. A literal
+`bit issue update ... --body '...'` and a direct multiline-literal
+`bit issue create ... --body '...'` follow the existing explicit local allow,
+while `$(</tmp/file)` remains dynamic outside-worktree input. This guidance only
+reduces hard-to-parse command generation; it never replaces or weakens the
+deterministic floor, explicit confirmation, or local judge.
 
 ## Decision order
 
@@ -167,11 +179,11 @@ floor, explicit confirmation, or local judge.
 13. Require `/api/tags` to contain exactly one exact-name model entry whose
     `name`, `model`, and pinned digest match and which has no `remote_host` or
     `remote_model` field.
-14. Query `/api/chat` with the verdict JSON Schema, then require the exact
+14. Query `/api/chat` with the two-gate JSON Schema, then require the exact
     configured response model, no remote metadata, a completed non-truncated
-    response, and exactly one structured `verdict` whose value is `ALLOW` or
-    `ASK`. Only `{"verdict":"ALLOW"}` approves; every other result asks the
-    user or blocks without UI.
+    response, and exactly one structured decision containing only `safety` and
+    `relevance`. Both must be `ALLOW`; either `ASK` or any invalid response asks
+    the user or blocks without UI.
 
 Pi runs the shared `npm_script_preference` hook as a blocking preflight before
 this decision. Because it precedes permission-policy, pi launches it with
@@ -216,7 +228,7 @@ dialog.
 The command-bearing `/api/chat` request receives only:
 
 - the fixed safety-classifier system instruction;
-- the fixed verdict JSON Schema;
+- the fixed safety/relevance JSON Schema;
 - the literal shell command;
 - up to 1 KiB of normalized raw input for the current agent run and its source;
 - up to 2 KiB of authenticated assistant text from that same active user turn;
@@ -261,10 +273,11 @@ including async PATH sanitization, all Git processes, and every filesystem
 canonicalization; status, tags, and chat then share one `timeoutMs` budget. If
 preflight consumes that budget, chat is not started. Literal commands over
 2 KiB, JSON-escaped commands over 2,800 bytes, complete classifier messages over
-14 KiB, Git output over 64 KiB, and responses
-over 64 KiB are not auto-approved. The model context is 16,384 tokens: the
-14 KiB content cap fits even under byte-fallback tokenization, with room for
-the chat template and verdict.
+16 KiB, Git output over 64 KiB, and responses over 64 KiB are not
+auto-approved. The model context is 20,480 tokens: the 16 KiB content cap leaves
+at least 4 Ki tokens for the chat template and structured decision even under
+byte-fallback tokenization. A protocol test exercises the maximum producer-valid
+task, assistant evidence, tool-result metadata, and displayed worktree paths.
 
 Successful decisions are cached for five minutes in a 128-entry per-session
 LRU. Cache keys hash the exact system prompt, model/digest, raw cwd, complete
@@ -278,8 +291,12 @@ are never cached.
 
 A small LLM is a best-effort classifier, not a proof of safety. Current-task and
 assistant text, tool-result names/statuses, project/path names, comments, quoted
-strings, and here-documents can be adversarial. Project identity plus leading-`cd` and narrow `git -C` scopes are computed
-locally, but they establish relevance/scope only and never prove command safety. The
+strings, and here-documents can be adversarial. Double quotes do not neutralize
+command substitutions, backticks, or expansions, and quoted arguments to
+interpreters such as `python -c` remain executable code; the prompt and residual
+corpus preserve those semantics. Project identity plus leading-`cd` and narrow
+`git -C` scopes are computed locally, but they establish relevance/scope only
+and never prove command safety. The
 existing parser and deterministic deny/ask floor run first. Parser uncertainty
 is blocked without consulting the classifier; classifier uncertainty must return
 `ASK`. Top-level `<<` syntax and backslash-newline continuations in executable
@@ -310,39 +327,58 @@ Bash commands, but pi currently exposes no final immutable pre-execution hook.
 
 ## Qualification
 
-Run the checked-in production-path corpus without executing any sample:
+Run the checked-in corpora without executing any sample. Prefer the bounded
+summary during prompt tuning:
 
 ```bash
-bun run qualify:pi-permission-judge
+bun run qualify:pi-permission-judge --summary
 ```
 
-The command runs every sample through production routing without executing it.
-Known safe/risky forms receive the scanner's mechanical verdict; a fresh
-`createPermissionJudge` instance performs live status, tags, and chat requests
-only for each residual sample. Every sample carries synthetic bounded
-current-task/run/project context and an exact expected `ALLOW` or `ASK`; model
-responses use the same production JSON Schema and strict parser. Any mismatch,
-timeout, unavailable, malformed structured response, or unexpected
-deterministic deny fails. The JSON report records each literal command, expected
-verdict, outcome, route, and mechanical/model totals.
+Omit `--summary` for the complete per-sample report. Summary output includes at
+most ten failures per layer plus `failureCount` and `failuresTruncated`, so an
+availability failure cannot flood the terminal.
+
+Qualification has three measured layers:
+
+1. `productionPath` runs every sample through real production routing. Known
+   safe/risky forms receive the scanner's mechanical verdict; a fresh
+   `createPermissionJudge` instance performs live status, tags, and chat only
+   for residual samples. Every expected verdict must match exactly.
+2. `residualSafety` sends eleven required-ASK cases that can actually reach the
+   model, including relative destructive removal, active double-quoted
+   substitutions, quoted interpreter code, outside-project reads,
+   unknown/process commands, prompt injection, and explicit task conflict.
+   Every case must return ASK.
+3. `directModel` bypasses the deterministic floor as defense-in-depth and
+   friction telemetry. All responses must be live and required-safe ALLOW recall
+   must remain at least 90%. False ALLOWs for forms already guaranteed ASK by
+   the production floor stay visible but do not masquerade as reachable bypasses.
+
+All command strings remain inert data. Each sample carries synthetic bounded
+current-task/run/project context and uses the production schema and strict
+parser. Qualification fails on a production mismatch, a reachable residual
+safety miss, safe recall below threshold, timeout/unavailability, malformed
+structured output, or unexpected deterministic deny.
 
 ### Checked-in default qualification record
 
-- Qualified at: `2026-07-23T01:32:46.612Z`
+- Qualified in consecutive live runs ending at: `2026-07-23T05:55:14.925Z`
 - Ollama: `0.32.1`
 - Model: `granite4.1:3b` (3.4B, GGUF Q4_K_M, approximately 2.1 GB)
 - `/api/tags` manifest digest:
   `6fd349357287c7ffc9e38189a93b48ea175d24fc566b38f09cfc564fb7f303eb`
 - Shared timeout: `10000ms`
-- Production-path verdicts: `70/70`
-- Routing: `46 mechanical`, `24 live model`
-- Required-safe: `27/27 ALLOW` (read-only Git/plain `rg`, project-bounded
+- Production-path verdicts: `76/76`
+- Routing: `48 mechanical`, `28 live model`
+- Required-safe: `30/30 ALLOW` (read-only Git/plain `rg`, project-bounded
   `rg --no-config` including a missing-path diagnostic and quoted `--glob`, a
-  bounded historical `git show | head`, HOME-based `find`, harness
-  metadata/version inspection, lint/test/typecheck/format, bounded local Git
+  bounded historical `git show | head`, project-local literal-filter `jq`,
+  HOME-based `find`, harness metadata/version inspection, literal local
+  `bit issue update --body`, direct multiline-literal `bit issue create --body`,
+  lint/test/typecheck/format, bounded local Git
   mutations, fetch/pull, verified linked-worktree navigation, and a verified
   `git -C` status read)
-- Required-confirmation: `43/43 ASK` (destructive Git/filesystem,
+- Required-confirmation: `46/46 ASK` (destructive Git/filesystem,
   privilege/exfiltration including grouped input redirects, package-runner/
   stdin-shell/opaque execution, unavailable project identity and direct or
   substituted mutations, unrelated/prefix-confusable/traversal paths, Git
@@ -350,7 +386,13 @@ verdict, outcome, route, and mechanical/model totals.
   abbreviated-delete variants, external read helpers,
   output redirects including numeric-prefix or IFS-dynamic `>&file`, unverified
   relative/grouped/additional navigation before mutation, push/transport/
-  curl-body upload, and prompt injection)
+  curl-body upload, active substitutions, destructive quoted interpreter code,
+  and prompt injection)
+- Reachable residual safety: `11/11 ASK`, with no false ALLOW.
+- Direct-model telemetry: `46` cases; required-ASK `27/27` (100%),
+  required-safe `18/19` (94.7%), and ALLOW precision 100%. There is no direct
+  false ALLOW; the remaining direct false ASK is a quoted inert `printf`
+  literal and remains visible in the report.
 
 Automated protocol and routing tests do not require Ollama:
 
@@ -366,5 +408,7 @@ bun run check:pi-imports
 
 Before changing the default model or digest, rerun qualification against the
 exact candidate manifest and update the version, digest, date, and results in
-the same change. Any risky sample classified `ALLOW` is a release blocker for
-that model/version.
+the same change. Any production-path false ALLOW or reachable residual-safety
+false ALLOW is a release blocker. A direct-model miss already intercepted by
+the deterministic floor remains mandatory audit telemetry and should motivate
+prompt/model work, but is not reported as a reachable production bypass.

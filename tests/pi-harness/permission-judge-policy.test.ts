@@ -55,7 +55,7 @@ const ollamaResponse = (verdict: string): Response =>
     model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
     message: {
       role: "assistant",
-      content: JSON.stringify({ verdict }),
+      content: JSON.stringify({ safety: verdict, relevance: verdict }),
     },
     done: true,
     done_reason: "stop",
@@ -854,7 +854,7 @@ describe("permission policy local judge routing", () => {
       await rejected.emitToolCall(bashCall("git rev-parse HEAD", "rejected")),
     ).toEqual({
       block: true,
-      reason: "local judge did not return a valid structured verdict",
+      reason: "local judge did not return a valid structured decision",
     });
   });
 
