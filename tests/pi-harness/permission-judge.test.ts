@@ -126,10 +126,12 @@ afterEach(async () => {
   ]);
 });
 
-const validResponse = (content = "ALLOW"): Response =>
+const verdictContent = (verdict: string): string => JSON.stringify({ verdict });
+
+const validResponse = (verdict = "ALLOW"): Response =>
   Response.json({
     model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-    message: { role: "assistant", content },
+    message: { role: "assistant", content: verdictContent(verdict) },
     done: true,
     done_reason: "stop",
   });
@@ -237,11 +239,19 @@ describe("local Ollama permission judge", () => {
       stream: false,
       think: false,
       keep_alive: "30m",
+      format: {
+        type: "object",
+        properties: {
+          verdict: { type: "string", enum: ["ALLOW", "ASK"] },
+        },
+        required: ["verdict"],
+        additionalProperties: false,
+      },
       options: {
         temperature: 0,
         seed: 0,
         num_ctx: 16_384,
-        num_predict: 8,
+        num_predict: 32,
       },
     });
     expect(
@@ -476,33 +486,50 @@ describe("local Ollama permission judge", () => {
 
   test.each([
     {
-      label: "lowercase verdict",
+      label: "plain-text verdict",
       payload: {
-        message: { role: "assistant", content: "allow" },
+        message: { role: "assistant", content: "ALLOW" },
         done: true,
         done_reason: "stop",
       },
     },
     {
-      label: "prose verdict",
+      label: "lowercase structured verdict",
       payload: {
-        message: { role: "assistant", content: "ALLOW because it is safe" },
+        message: { role: "assistant", content: verdictContent("allow") },
         done: true,
         done_reason: "stop",
       },
     },
     {
-      label: "whitespace-padded verdict",
+      label: "prose structured verdict",
       payload: {
-        message: { role: "assistant", content: " ALLOW\n" },
+        message: {
+          role: "assistant",
+          content: verdictContent("ALLOW because it is safe"),
+        },
         done: true,
         done_reason: "stop",
       },
     },
     {
-      label: "newline-suffixed second verdict",
+      label: "structured verdict with an extra property",
       payload: {
-        message: { role: "assistant", content: "ALLOW\nASK" },
+        message: {
+          role: "assistant",
+          content: JSON.stringify({ verdict: "ALLOW", reason: "safe" }),
+        },
+        done: true,
+        done_reason: "stop",
+      },
+    },
+    {
+      label: "structured verdict array",
+      payload: {
+        message: {
+          role: "assistant",
+          content: JSON.stringify([{ verdict: "ALLOW" }]),
+        },
         done: true,
         done_reason: "stop",
       },
@@ -510,7 +537,10 @@ describe("local Ollama permission judge", () => {
     {
       label: "length-truncated verdict",
       payload: {
-        message: { role: "assistant", content: "ALLOW" },
+        message: {
+          role: "assistant",
+          content: verdictContent("ALLOW"),
+        },
         done: true,
         done_reason: "length",
       },
@@ -518,7 +548,10 @@ describe("local Ollama permission judge", () => {
     {
       label: "missing completion reason",
       payload: {
-        message: { role: "assistant", content: "ALLOW" },
+        message: {
+          role: "assistant",
+          content: verdictContent("ALLOW"),
+        },
         done: true,
       },
     },
@@ -527,7 +560,7 @@ describe("local Ollama permission judge", () => {
       payload: {
         message: {
           role: "assistant",
-          content: "ALLOW",
+          content: verdictContent("ALLOW"),
           tool_calls: [{ function: { name: "shell" } }],
         },
         done: true,
@@ -537,7 +570,11 @@ describe("local Ollama permission judge", () => {
     {
       label: "empty tool call field",
       payload: {
-        message: { role: "assistant", content: "ALLOW", tool_calls: [] },
+        message: {
+          role: "assistant",
+          content: verdictContent("ALLOW"),
+          tool_calls: [],
+        },
         done: true,
         done_reason: "stop",
       },
@@ -545,7 +582,11 @@ describe("local Ollama permission judge", () => {
     {
       label: "null tool call field",
       payload: {
-        message: { role: "assistant", content: "ALLOW", tool_calls: null },
+        message: {
+          role: "assistant",
+          content: verdictContent("ALLOW"),
+          tool_calls: null,
+        },
         done: true,
         done_reason: "stop",
       },
@@ -574,7 +615,10 @@ describe("local Ollama permission judge", () => {
   test("never approves a valid JSON prefix after the response grows oversized", async () => {
     const payload = JSON.stringify({
       model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-      message: { role: "assistant", content: "ALLOW" },
+      message: {
+        role: "assistant",
+        content: verdictContent("ALLOW"),
+      },
       done: true,
       done_reason: "stop",
     });
@@ -606,7 +650,10 @@ describe("local Ollama permission judge", () => {
     async (variant) => {
       const payload = JSON.stringify({
         model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-        message: { role: "assistant", content: "ALLOW" },
+        message: {
+          role: "assistant",
+          content: verdictContent("ALLOW"),
+        },
         done: true,
         done_reason: "stop",
       });
@@ -631,10 +678,11 @@ describe("local Ollama permission judge", () => {
   );
 
   test("rejects invalid UTF-8 even when replacement decoding would preserve ALLOW", async () => {
+    const allowContent = verdictContent("ALLOW");
     const prefix = Buffer.from(
       JSON.stringify({
         model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-        message: { role: "assistant", content: "ALLOW" },
+        message: { role: "assistant", content: allowContent },
         done: true,
         done_reason: "stop",
         ignored: "",
@@ -646,7 +694,7 @@ describe("local Ollama permission judge", () => {
       Buffer.from('"}'),
     ]);
     expect(JSON.parse(body.toString("utf8"))).toMatchObject({
-      message: { content: "ALLOW" },
+      message: { content: allowContent },
     });
     const lossyUpstream = await start(
       () => new Response(body.toString("utf8")),
@@ -753,7 +801,10 @@ describe("local Ollama permission judge", () => {
   test("times out while waiting for a delayed response body", async () => {
     const payload = JSON.stringify({
       model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-      message: { role: "assistant", content: "ALLOW" },
+      message: {
+        role: "assistant",
+        content: verdictContent("ALLOW"),
+      },
       done: true,
       done_reason: "stop",
     });

@@ -50,10 +50,13 @@ afterEach(async () => {
   await Promise.all(upstreams.splice(0).map((upstream) => upstream.close()));
 });
 
-const ollamaResponse = (content: string): Response =>
+const ollamaResponse = (verdict: string): Response =>
   Response.json({
     model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-    message: { role: "assistant", content },
+    message: {
+      role: "assistant",
+      content: JSON.stringify({ verdict }),
+    },
     done: true,
     done_reason: "stop",
   });
@@ -130,7 +133,7 @@ const createTestAbortController = (): {
 };
 
 describe("permission policy local judge routing", () => {
-  test("auto-approves an unruled command only on exact ALLOW", async () => {
+  test("auto-approves an unruled command only on structured ALLOW", async () => {
     const upstream = await start(() => ollamaResponse("ALLOW"));
     const pi = createFakePi({ cwd: "/tmp/project" });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
@@ -851,7 +854,7 @@ describe("permission policy local judge routing", () => {
       await rejected.emitToolCall(bashCall("git rev-parse HEAD", "rejected")),
     ).toEqual({
       block: true,
-      reason: "local judge did not return an exact ALLOW verdict",
+      reason: "local judge did not return a valid structured verdict",
     });
   });
 

@@ -2,14 +2,16 @@
 
 pi-harness uses a qualified local Ollama model as the fallback classifier for
 Bash tool calls that remain ambiguous after deterministic permission routing.
-This approximates Claude Code auto mode using bounded current-task,
-current-assistant-run, and active-project context without sending prior-turn
-conversation or repository contents to the judge.
+The request constrains the verdict with an Ollama JSON Schema structured output
+and independently validates the returned object. This approximates Claude Code
+auto mode using bounded current-task, current-assistant-run, and active-project
+context without sending prior-turn conversation or repository contents to the
+judge.
 
 ## Setup
 
 Install Ollama **v0.16.2 or newer**, disable Ollama Cloud, and load the pinned
-model. The checked-in model was qualified with Ollama 0.32.0.
+model. The checked-in model was qualified with Ollama 0.32.1.
 
 ```bash
 ollama pull granite4.1:3b
@@ -68,9 +70,13 @@ exactly matches `/api/tags`. `expectedDigest` must be the exact lowercase 64-hex
 manifest digest returned by that endpoint. Models with a `:cloud` tag or name
 containing `cloud` are rejected.
 Invalid explicit settings never fall back to a remote or different model; they
-require human confirmation or block. Interactive permission confirmations have
-no countdown: they remain open until the user responds or aborts the active pi
-operation (for example with Esc).
+require human confirmation or block. Each chat request sets `think: false` and
+provides a strict object schema whose only required property is `verdict`, with
+an enum of `ALLOW` and `ASK` and no additional properties. The response parser
+still requires exactly that one-key object, so plain text, alternate casing,
+extra keys, tool calls, truncation, and malformed JSON cannot approve a command.
+Interactive permission confirmations have no countdown: they remain open until
+the user responds or aborts the active pi operation (for example with Esc).
 
 ## Command hygiene guidance
 
@@ -161,9 +167,11 @@ floor, explicit confirmation, or local judge.
 13. Require `/api/tags` to contain exactly one exact-name model entry whose
     `name`, `model`, and pinned digest match and which has no `remote_host` or
     `remote_model` field.
-14. Query `/api/chat`, then require the exact configured response model, no
-    remote metadata, a completed non-truncated response, and an entire verdict
-    of `ALLOW`. Every other result asks the user or blocks without UI.
+14. Query `/api/chat` with the verdict JSON Schema, then require the exact
+    configured response model, no remote metadata, a completed non-truncated
+    response, and exactly one structured `verdict` whose value is `ALLOW` or
+    `ASK`. Only `{"verdict":"ALLOW"}` approves; every other result asks the
+    user or blocks without UI.
 
 Pi runs the shared `npm_script_preference` hook as a blocking preflight before
 this decision. Because it precedes permission-policy, pi launches it with
@@ -208,6 +216,7 @@ dialog.
 The command-bearing `/api/chat` request receives only:
 
 - the fixed safety-classifier system instruction;
+- the fixed verdict JSON Schema;
 - the literal shell command;
 - up to 1 KiB of normalized raw input for the current agent run and its source;
 - up to 2 KiB of authenticated assistant text from that same active user turn;
@@ -311,25 +320,27 @@ The command runs every sample through production routing without executing it.
 Known safe/risky forms receive the scanner's mechanical verdict; a fresh
 `createPermissionJudge` instance performs live status, tags, and chat requests
 only for each residual sample. Every sample carries synthetic bounded
-current-task/run/project context and an exact expected `ALLOW` or `ASK`; any
-mismatch, timeout, unavailable, malformed response, or unexpected deterministic
-deny fails. The JSON report records each literal command, expected verdict,
-outcome, route, and mechanical/model totals.
+current-task/run/project context and an exact expected `ALLOW` or `ASK`; model
+responses use the same production JSON Schema and strict parser. Any mismatch,
+timeout, unavailable, malformed structured response, or unexpected
+deterministic deny fails. The JSON report records each literal command, expected
+verdict, outcome, route, and mechanical/model totals.
 
 ### Checked-in default qualification record
 
-- Qualified at: `2026-07-22T10:43:42.355Z`
-- Ollama: `0.32.0`
+- Qualified at: `2026-07-23T01:32:46.612Z`
+- Ollama: `0.32.1`
 - Model: `granite4.1:3b` (3.4B, GGUF Q4_K_M, approximately 2.1 GB)
 - `/api/tags` manifest digest:
   `6fd349357287c7ffc9e38189a93b48ea175d24fc566b38f09cfc564fb7f303eb`
 - Shared timeout: `10000ms`
-- Production-path verdicts: `68/68`
-- Routing: `45 mechanical`, `23 live model`
-- Required-safe: `25/25 ALLOW` (read-only Git/plain `rg`, project-bounded
-  `rg --no-config` including a missing-path diagnostic, HOME-based `find`,
-  harness metadata/version inspection, lint/test/typecheck/format, bounded local
-  Git mutations, fetch/pull, verified linked-worktree navigation, and a verified
+- Production-path verdicts: `70/70`
+- Routing: `46 mechanical`, `24 live model`
+- Required-safe: `27/27 ALLOW` (read-only Git/plain `rg`, project-bounded
+  `rg --no-config` including a missing-path diagnostic and quoted `--glob`, a
+  bounded historical `git show | head`, HOME-based `find`, harness
+  metadata/version inspection, lint/test/typecheck/format, bounded local Git
+  mutations, fetch/pull, verified linked-worktree navigation, and a verified
   `git -C` status read)
 - Required-confirmation: `43/43 ASK` (destructive Git/filesystem,
   privilege/exfiltration including grouped input redirects, package-runner/
