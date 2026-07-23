@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
 import {
   evaluateCommand,
+  gitReadCwdTarget,
   hasProjectSensitiveMutation,
   hasUnverifiedProjectMutationNavigation,
   loadRules,
@@ -226,27 +227,58 @@ describe("permission-policy", () => {
 describe("built-in read-only classification", () => {
   const rules = loadRules('{"deny":[],"allow":[],"ask":[]}');
 
-  test("allows only no-config rg operands that canonicalize inside a verified root", async () => {
+  test("allows bounded absolute, missing, globbed, and null-sink rg operands", async () => {
     const base = await mkdtemp(join(tmpdir(), "pi-rg-read-"));
     const root = join(base, "project");
     const src = join(root, "src");
+    const declarations = join(root, "declarations");
+    const escapedDeclarations = join(root, "escaped-declarations");
+    const dotglobDeclarations = join(root, "dotglob-declarations");
+    const newlineDeclarations = join(root, "newline-declarations");
+    const optionGlobCwd = join(root, "option-glob-cwd");
+    const linked = join(base, "linked-worktree");
     const outside = join(base, "outside.txt");
     try {
-      await mkdir(src, { recursive: true });
-      await writeFile(join(src, "a.ts"), "const value = 1;\n", "utf8");
-      await writeFile(outside, "secret\n", "utf8");
+      await Promise.all([
+        mkdir(src, { recursive: true }),
+        mkdir(declarations, { recursive: true }),
+        mkdir(escapedDeclarations, { recursive: true }),
+        mkdir(dotglobDeclarations, { recursive: true }),
+        mkdir(newlineDeclarations, { recursive: true }),
+        mkdir(optionGlobCwd, { recursive: true }),
+        mkdir(linked, { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(join(src, "a.ts"), "const value = 1;\n", "utf8"),
+        writeFile(join(root, "root.d.ts"), "export {};\n", "utf8"),
+        writeFile(join(declarations, "safe.d.ts"), "export {};\n", "utf8"),
+        writeFile(join(optionGlobCwd, "safe.ts"), "export {};\n", "utf8"),
+        writeFile(join(optionGlobCwd, "-L"), "not an option\n", "utf8"),
+        writeFile(join(optionGlobCwd, "--pre=sh"), "not an option\n", "utf8"),
+        writeFile(join(linked, "linked.ts"), "export {};\n", "utf8"),
+        writeFile(outside, "secret\n", "utf8"),
+      ]);
       await symlink(outside, join(root, "outside-link"));
+      await symlink(outside, join(escapedDeclarations, "escape.d.ts"));
+      await symlink(outside, join(dotglobDeclarations, ".escape.d.ts"));
+      await symlink(outside, join(newlineDeclarations, "escape\n.d.ts"));
       const canonicalRoot = realpathSync(root);
+      const canonicalLinked = realpathSync(linked);
       const options = {
         trustedReadContext: {
           cwd: canonicalRoot,
-          navigableRoots: [canonicalRoot],
+          navigableRoots: [canonicalRoot, canonicalLinked],
         },
       };
 
       for (const command of [
         "rg --no-config pattern",
         "rg --no-config -n pattern src",
+        "rg --no-config -n pattern missing",
+        `rg --no-config -n pattern ${src}`,
+        `rg --no-config -n pattern ${join(linked, "linked.ts")}`,
+        `rg --no-config -n pattern ${declarations}/*.d.ts`,
+        `rg --no-config -n pattern ${src} ${join(root, "types")} ${root}/*.d.ts 2>/dev/null`,
         "rg --no-config -n --hidden pattern . --glob '!node_modules' | head -200",
       ]) {
         expect(evaluateCommand(command, rules, options).verdict).toBe("allow");
@@ -254,19 +286,91 @@ describe("built-in read-only classification", () => {
       for (const command of [
         "rg pattern src",
         "rg --no-config pattern outside-link",
-        "rg --no-config pattern missing",
+        "rg --no-config pattern outside-link/missing",
+        `rg --no-config pattern ${outside}`,
+        `rg --no-config pattern ${escapedDeclarations}/*.d.ts`,
+        `rg --no-config pattern ${dotglobDeclarations}/*.d.ts`,
+        `rg --no-config pattern ${newlineDeclarations}/*.d.ts`,
+        'rg --no-config pattern src/*"$suffix"',
+        "rg --no-config pattern s*/a.ts",
+        "rg --no-config pattern src/?.ts",
         "rg --no-config pattern ../outside.txt",
         "rg --no-config --file=/tmp/patterns src",
         "rg --no-config --ignore-file=/tmp/ignore pattern src",
         "rg --no-config -f../patterns src",
+        "rg --no-config pattern src < /dev/null",
       ]) {
         expect(evaluateCommand(command, rules, options).verdict).toBe(
           "default-continue",
         );
       }
+      const optionGlobOptions = {
+        trustedReadContext: {
+          cwd: realpathSync(optionGlobCwd),
+          navigableRoots: [canonicalRoot],
+        },
+      };
+      expect(
+        evaluateCommand("rg --no-config pattern *", rules, optionGlobOptions)
+          .verdict,
+      ).toBe("ask");
+      expect(
+        evaluateCommand(
+          "rg --no-config pattern *",
+          loadRules('{"deny":[],"allow":[{"pattern":"^"}],"ask":[]}'),
+          optionGlobOptions,
+        ).verdict,
+      ).toBe("ask");
+      expect(
+        evaluateCommand(
+          "rg --no-config pattern src > /tmp/results",
+          rules,
+          options,
+        ).verdict,
+      ).toBe("ask");
     } finally {
       await rm(base, { recursive: true, force: true });
     }
+  });
+
+  test("neutralizes only a prevalidated git -C helper-capable read", () => {
+    for (const command of [
+      "git -C /repo status --short",
+      "git -C/repo diff --stat",
+      "git --no-pager -C /repo log -1 --oneline",
+      "git -C /repo show --stat HEAD",
+    ]) {
+      expect(gitReadCwdTarget(command)).toBe("/repo");
+      expect(evaluateCommand(command, rules).verdict).toBe("ask");
+      expect(
+        evaluateCommand(command, rules, {
+          trustedGitCwdTarget: "/repo",
+        }).verdict,
+      ).toBe("default-continue");
+    }
+
+    for (const command of [
+      "git -C /repo status --help",
+      "git -C /repo diff --ext-diff",
+      "git -C /repo config --list",
+      "git -C /repo push origin main",
+      "git -C /repo -C /other status --short",
+      'git -C "$repo" status --short',
+      "git -C ~/other status --short",
+      "git -C /repo/link/.. status --short",
+      "git -C ../repo status --short",
+      "/usr/bin/git -C /repo status --short",
+      "git -C /repo status --short && echo done",
+      "git -C /repo status --short 2>/dev/null",
+      "git --git-dir=/repo/.git status --short",
+    ]) {
+      expect(gitReadCwdTarget(command)).toBeUndefined();
+    }
+    expect(
+      evaluateCommand("git -c color.ui=false status --short", rules, {
+        trustedGitCwdTarget: "/repo",
+      }).verdict,
+    ).toBe("ask");
   });
 
   test.each([
@@ -284,6 +388,11 @@ describe("built-in read-only classification", () => {
     "git --bare status",
     "git status --help",
     "git help status",
+    "git log -1 -p --ext-diff --format='%h %s' -- src/a.ts && git status --short --branch",
+    "git log -1 --format='%h %s' -- src/a.ts > /tmp/log && git status --short --branch",
+    "git -c log.showSignature=true log -1 --format='%h %s' -- src/a.ts && git status --short --branch",
+    "git -C /tmp/unrelated log -1 --format='%h %s' -- src/a.ts && git status --short --branch",
+    "git log -1 --format='%h %s' -- src/a.ts && git status --short --branch && git reset --hard",
   ])(
     "asks before a read option that can execute, escape, or write: %s",
     (command) => {
@@ -331,16 +440,19 @@ describe("built-in read-only classification", () => {
       "git show --stat HEAD",
       "rg pattern tests",
       "rg --no-config pattern /etc/passwd",
-      "rg --no-config pattern missing",
     ]) {
       expect(evaluateCommand(command, broadAllow, options).verdict).toBe(
         "default-continue",
       );
     }
-    expect(
-      evaluateCommand("rg --no-config pattern tests", broadAllow, options)
-        .verdict,
-    ).toBe("allow");
+    for (const command of [
+      "rg --no-config pattern tests",
+      "rg --no-config pattern missing",
+    ]) {
+      expect(evaluateCommand(command, broadAllow, options).verdict).toBe(
+        "allow",
+      );
+    }
   });
 
   test("lets a configured ask override a verified built-in read-only allow", () => {

@@ -1,5 +1,5 @@
-import { realpathSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { readdirSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import {
   interpreterConcreteArg,
   isOpaqueExecutor,
@@ -52,6 +52,8 @@ interface TrustedReadContext {
 interface EvaluationOptions {
   /** Filesystem-verified target of a leading same-repository cd segment. */
   readonly trustedLeadingCdTarget?: string;
+  /** Literal git -C target verified as a same-repository listed worktree path. */
+  readonly trustedGitCwdTarget?: string;
   /** Filesystem-verified scope used only by narrow mechanical read allows. */
   readonly trustedReadContext?: TrustedReadContext;
 }
@@ -564,11 +566,62 @@ const gitSubcommandAsk = (
   return undefined;
 };
 
-const structuralGitAsk = (seg: NormalizedSegment): string | undefined => {
+const literalGitCwdTarget = (
+  seg: NormalizedSegment,
+  position: GitSubcommandPosition,
+): string | undefined => {
+  if (!position.cOnlyGlobalOption || position.ambiguousOption) return undefined;
+  let target: string | undefined;
+  for (let index = 1; index < position.index; index += 1) {
+    const word = seg.words[index];
+    if (word === undefined || seg.opaque.has(index)) return undefined;
+    if (word === "-C") {
+      const valueIndex = index + 1;
+      const value = seg.words[valueIndex];
+      if (
+        value === undefined ||
+        seg.opaque.has(valueIndex) ||
+        target !== undefined
+      ) {
+        return undefined;
+      }
+      target = value;
+      index = valueIndex;
+      continue;
+    }
+    if (word.startsWith("-C") && word.length > 2) {
+      if (target !== undefined) return undefined;
+      target = word.slice(2);
+    }
+  }
+  // Bash expands a leading `~`, while Node path resolution treats it as a
+  // literal directory. Likewise, lexical normalization of `link/..` differs
+  // from Git/chdir resolution when `link` is a symlink. Keep both shapes on
+  // the confirmation path instead of attaching false listed-worktree scope.
+  return target !== undefined &&
+    !target.startsWith("~") &&
+    !hasPathTraversal(target)
+    ? target
+    : undefined;
+};
+
+const GIT_GLOBAL_OPTION_REASON =
+  "Git の作業場所・設定・不明なグローバルオプション変更には確認が必要です";
+
+const structuralGitAsk = (
+  seg: NormalizedSegment,
+  trustedGitCwdTarget?: string,
+): string | undefined => {
   const position = gitSubcommandPosition(seg.words);
   if (position === undefined) return undefined;
-  if (position.riskyGlobalOption || position.ambiguousOption) {
-    return "Git の作業場所・設定・不明なグローバルオプション変更には確認が必要です";
+  const gitCwdTarget = literalGitCwdTarget(seg, position);
+  const verifiedGitCwd =
+    trustedGitCwdTarget !== undefined && gitCwdTarget === trustedGitCwdTarget;
+  if (
+    position.ambiguousOption ||
+    (position.riskyGlobalOption && !verifiedGitCwd)
+  ) {
+    return GIT_GLOBAL_OPTION_REASON;
   }
   if (seg.opaque.has(position.index)) {
     return "Git サブコマンドを静的に特定できないため確認が必要です";
@@ -700,12 +753,19 @@ const RG_SAFE_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "-T",
 ]);
 
+interface RgReadOperand {
+  readonly index: number;
+  readonly value: string;
+  readonly literalGlob: boolean;
+}
+
 const rgReadOperands = (
-  words: readonly string[],
-): readonly string[] | undefined => {
+  normalized: NormalizedSegment,
+): readonly RgReadOperand[] | undefined => {
+  const { words } = normalized;
   let literal = false;
   let noConfig = false;
-  const positional: string[] = [];
+  const positional: { index: number; value: string }[] = [];
   for (let index = 1; index < words.length; index += 1) {
     const word = words[index];
     if (word === undefined) return undefined;
@@ -732,44 +792,174 @@ const rgReadOperands = (
       if (/^-[FinisSw]+$/.test(word)) continue;
       return undefined;
     }
-    positional.push(word);
+    positional.push({ index, value: word });
   }
-  if (!noConfig || positional.length === 0) return undefined;
-  return positional.slice(1);
+  const [pattern, ...paths] = positional;
+  if (
+    !noConfig ||
+    pattern === undefined ||
+    normalized.opaque.has(pattern.index)
+  ) {
+    return undefined;
+  }
+
+  const operands = paths.map(({ index, value }) => ({
+    index,
+    value,
+    literalGlob: normalized.literalGlobs.has(index),
+  }));
+  const allowedOpaque = new Set(
+    operands
+      .filter((operand) => operand.literalGlob)
+      .map((operand) => operand.index),
+  );
+  for (const index of normalized.opaque) {
+    if (!allowedOpaque.has(index)) return undefined;
+  }
+  return operands;
+};
+
+const pathInsideVerifiedRoots = (
+  path: string,
+  roots: readonly string[],
+): boolean => roots.some((root) => isPathWithin(path, root));
+
+const canonicalOrAncestorInsideRoots = (
+  candidate: string,
+  roots: readonly string[],
+): boolean => {
+  let current = candidate;
+  while (true) {
+    try {
+      return pathInsideVerifiedRoots(realpathSync(current), roots);
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return false;
+      current = parent;
+    }
+  }
+};
+
+const simpleStarPattern = (value: string): RegExp | undefined => {
+  if (!value.includes("*") || /[?[\]{}]/.test(value)) return undefined;
+  const source = value
+    .split("*")
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    // Shell `*` may match newlines, and dotfiles can become eligible when the
+    // caller environment enables dotglob (directly or through GLOBIGNORE).
+    // Validate that conservative superset; basenames cannot contain `/`.
+    .join("[^/]*");
+  return new RegExp(`^${source}$`, "u");
+};
+
+interface RgGlobInspection {
+  readonly bounded: boolean;
+  readonly optionLike: boolean;
+}
+
+const inspectProjectBoundedRgGlob = (
+  operand: string,
+  context: TrustedReadContext,
+): RgGlobInspection => {
+  const unsafe = { bounded: false, optionLike: false };
+  const parentOperand = dirname(operand);
+  if (parentOperand.includes("*")) return unsafe;
+  const match = simpleStarPattern(basename(operand));
+  if (match === undefined) return unsafe;
+  const parentPath = isAbsolute(parentOperand)
+    ? parentOperand
+    : resolve(context.cwd, parentOperand);
+  let canonicalParent: string;
+  try {
+    canonicalParent = realpathSync(parentPath);
+  } catch {
+    return unsafe;
+  }
+  if (!pathInsideVerifiedRoots(canonicalParent, context.navigableRoots)) {
+    return unsafe;
+  }
+
+  let entries: string[];
+  try {
+    entries = readdirSync(canonicalParent);
+  } catch {
+    return unsafe;
+  }
+  const matches = entries.filter((candidate) => match.test(candidate));
+  // Check the complete expansion set before containment so an earlier symlink
+  // escape cannot hide a later argv option from the deterministic ASK.
+  if (matches.some((entry) => entry.startsWith("-"))) {
+    // Shell expansion happens before rg parses argv. A basename such as `-L`
+    // or `--pre=sh` can therefore turn a path glob into an execution option.
+    return { bounded: false, optionLike: true };
+  }
+  for (const entry of matches) {
+    try {
+      if (
+        !pathInsideVerifiedRoots(
+          realpathSync(resolve(canonicalParent, entry)),
+          context.navigableRoots,
+        )
+      ) {
+        return unsafe;
+      }
+    } catch {
+      return unsafe;
+    }
+  }
+  return { bounded: true, optionLike: false };
+};
+
+const hasRgOptionLikeGlobExpansion = (
+  normalized: NormalizedSegment,
+  context: TrustedReadContext | undefined,
+): boolean => {
+  if (context === undefined) return false;
+  const operands = rgReadOperands(normalized);
+  return (
+    operands?.some(
+      (operand) =>
+        operand.literalGlob &&
+        inspectProjectBoundedRgGlob(operand.value, context).optionLike,
+    ) === true
+  );
 };
 
 const isProjectBoundedRgRead = (
-  words: readonly string[],
+  normalized: NormalizedSegment,
   context: TrustedReadContext | undefined,
 ): boolean => {
-  if (context === undefined || context.navigableRoots.length === 0)
+  if (context === undefined || context.navigableRoots.length === 0) {
     return false;
-  const operands = rgReadOperands(words);
+  }
+  const operands = rgReadOperands(normalized);
   if (operands === undefined) return false;
-  const paths = operands.length === 0 ? ["."] : operands;
+  const paths =
+    operands.length === 0
+      ? [{ index: -1, value: ".", literalGlob: false }]
+      : operands;
   return paths.every((operand) => {
     if (
-      operand === "" ||
-      isAbsolute(operand) ||
-      operand.startsWith("~") ||
-      hasPathTraversal(operand)
+      operand.value === "" ||
+      operand.value.startsWith("~") ||
+      hasPathTraversal(operand.value)
     ) {
       return false;
     }
-    try {
-      const canonical = realpathSync(resolve(context.cwd, operand));
-      return context.navigableRoots.some((root) =>
-        isPathWithin(canonical, root),
-      );
-    } catch {
-      return false;
+    if (operand.literalGlob) {
+      return inspectProjectBoundedRgGlob(operand.value, context).bounded;
     }
+    const candidate = isAbsolute(operand.value)
+      ? operand.value
+      : resolve(context.cwd, operand.value);
+    return canonicalOrAncestorInsideRoots(candidate, context.navigableRoots);
   });
 };
 
 const structuralKnownAsk = (
   segment: Segment,
   normalized: NormalizedSegment,
+  trustedGitCwdTarget?: string,
 ): string | undefined => {
   if (normalized.privileged) return "sudo 経由の実行には確認が必要です";
   if (segment.hasOutputRedirection) {
@@ -804,7 +994,7 @@ const structuralKnownAsk = (
   if (isOpaqueExecutor(normalized.words)) {
     return OPAQUE_EXECUTOR_REASON;
   }
-  return structuralGitAsk(normalized);
+  return structuralGitAsk(normalized, trustedGitCwdTarget);
 };
 
 const HELPER_CAPABLE_GIT_READS: ReadonlySet<string> = new Set([
@@ -873,17 +1063,45 @@ const isHelperCapableGitRead = (normalized: NormalizedSegment): boolean => {
   return subcommand !== undefined && HELPER_CAPABLE_GIT_READS.has(subcommand);
 };
 
+const gitReadCwdTarget = (command: string): string | undefined => {
+  const scanned = scanCommand(command);
+  if (
+    !scanned.ok ||
+    scanned.subs.length !== 0 ||
+    scanned.segments.length !== 1
+  ) {
+    return undefined;
+  }
+  const [segment] = scanned.segments;
+  if (
+    segment === undefined ||
+    segment.allowCandidate === undefined ||
+    segment.redirectionTargets.length !== 0
+  ) {
+    return undefined;
+  }
+  const normalized = normalizeSegment(segment);
+  if (
+    normalized.hasAnsiC ||
+    normalized.opaque.size !== 0 ||
+    segment.words[0] !== normalized.words[0] ||
+    !isHelperCapableGitRead(normalized) ||
+    structuralKnownAsk(segment, normalized) !== GIT_GLOBAL_OPTION_REASON
+  ) {
+    return undefined;
+  }
+  const position = gitSubcommandPosition(normalized.words);
+  return position === undefined
+    ? undefined
+    : literalGitCwdTarget(normalized, position);
+};
+
 const structuralKnownAllow = (
   segment: Segment,
   normalized: NormalizedSegment,
   trustedReadContext: TrustedReadContext | undefined,
 ): boolean => {
-  if (
-    segment.allowCandidate === undefined ||
-    segment.hasAnsiC ||
-    normalized.opaque.size !== 0 ||
-    segment.words[0] !== normalized.words[0]
-  ) {
+  if (segment.hasAnsiC || segment.words[0] !== normalized.words[0]) {
     return false;
   }
 
@@ -892,10 +1110,29 @@ const structuralKnownAllow = (
   if (normalized.words[0] === "git") return false;
 
   if (normalized.words[0] === "rg") {
+    const onlyNullOutputRedirects =
+      !segment.hasInputRedirection &&
+      !segment.hasOutputRedirection &&
+      segment.redirectionTargets.length > 0 &&
+      segment.redirectionTargets.every((target) => target === "/dev/null");
+    if (segment.redirectionTargets.length > 0 && !onlyNullOutputRedirects) {
+      return false;
+    }
+    if (
+      segment.allowCandidate === undefined &&
+      normalized.literalGlobs.size === 0 &&
+      !onlyNullOutputRedirects
+    ) {
+      return false;
+    }
     return (
       !hasRgExecutionOption(normalized.words) &&
-      isProjectBoundedRgRead(normalized.words, trustedReadContext)
+      isProjectBoundedRgRead(normalized, trustedReadContext)
     );
+  }
+
+  if (segment.allowCandidate === undefined || normalized.opaque.size !== 0) {
+    return false;
   }
 
   // The legacy `head -N` form has no file operand and only bounds stdin from
@@ -918,13 +1155,18 @@ const evaluateNormalized = (
   rules: LoadedRules,
   allowCandidate: string | undefined,
   trustedLeadingCdTarget: string | undefined,
+  trustedGitCwdTarget: string | undefined,
   trustedReadContext: TrustedReadContext | undefined,
 ): Verdict => {
   if (normalized.words.length === 0) {
     // A parenthesized group can leave redirects in a wordless outer segment.
     // Apply every segment-wide floor before returning so a sensitive input
     // target or output write cannot disappear behind that shell shape.
-    const structuralAsk = structuralKnownAsk(segment, normalized);
+    const structuralAsk = structuralKnownAsk(
+      segment,
+      normalized,
+      trustedGitCwdTarget,
+    );
     return structuralAsk === undefined
       ? { verdict: "default-continue" }
       : { verdict: "ask", reason: structuralAsk };
@@ -942,9 +1184,19 @@ const evaluateNormalized = (
     return { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON };
   }
 
-  const structuralAsk = structuralKnownAsk(segment, normalized);
+  const structuralAsk = structuralKnownAsk(
+    segment,
+    normalized,
+    trustedGitCwdTarget,
+  );
   if (structuralAsk !== undefined) {
     return { verdict: "ask", reason: structuralAsk };
+  }
+  if (hasRgOptionLikeGlobExpansion(normalized, trustedReadContext)) {
+    return {
+      verdict: "ask",
+      reason: "rg のglob展開が実行オプションとして解釈される可能性があります",
+    };
   }
 
   // A same-repository leading cd is neutral only for explicit-allow
@@ -1038,6 +1290,7 @@ const evaluateCommandInner = (
         rules,
         segment.allowCandidate,
         depth === 0 && index === 0 ? options.trustedLeadingCdTarget : undefined,
+        depth === 0 && index === 0 ? options.trustedGitCwdTarget : undefined,
         depth === 0 ? options.trustedReadContext : undefined,
       ),
     );
@@ -1179,6 +1432,7 @@ const evaluateCommand = (
 
 export {
   evaluateCommand,
+  gitReadCwdTarget,
   hasProjectSensitiveMutation,
   hasUnverifiedProjectMutationNavigation,
   isSkillOverridableAsk,

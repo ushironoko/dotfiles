@@ -77,9 +77,13 @@ operation (for example with Esc).
 Before each parent or child agent run, the mandatory permission-policy feature
 appends a short soft-preference section to the system prompt. It asks the model
 to prefer dedicated file tools, literal commands, project-relative paths,
-transparent pipelines, existing repository scripts, and canonicalizable
-`rg --no-config` searches. Long or multiline CLI data should use the write tool
-and a file-input option instead of an ANSI-C-quoted or escaped one-liner.
+existing repository scripts, and canonicalizable `rg --no-config` searches.
+Independent inspections and checks should run sequentially as separate Bash
+calls, with each result inspected before choosing the next command. Short
+pipelines are reserved for genuine producer/consumer data flow rather than
+batching unrelated work with `;`, `&&`, or multiline blocks. Long or multiline
+CLI data should use the write tool and a file-input option instead of an
+ANSI-C-quoted or escaped one-liner.
 Convenience-only dynamic shell and generated scripts are discouraged, not
 forbidden. When an ad-hoc script is genuinely needed, the model is told to
 preserve correctness/capability and first state its necessity, exact scope, and
@@ -91,11 +95,12 @@ floor, explicit confirmation, or local judge.
 
 1. Mandatory deny rule: block.
 2. Mandatory structural risk floor: ask the user, or block without UI. This
-   includes destructive/force Git and filesystem operations, Git location or
-   transport overrides, privilege/secrets (including input redirects), upload,
-   package runners, opaque or stdin-fed script execution, output redirection,
-   and read options that can launch an
-   external program or write a file. ANSI-C `$'…'` syntax is never eligible for
+   includes destructive/force Git and filesystem operations, unverified Git
+   location or transport overrides, privilege/secrets (including input
+   redirects), upload, package runners, opaque or stdin-fed script execution,
+   persistent output redirection, and read options that can launch an external
+   program or write a file. An exact literal `/dev/null` output sink is
+   non-persistent and does not trigger this floor. ANSI-C `$'…'` syntax is never eligible for
    automatic approval: its decoded text remains available to the deny floor,
    but byte/escape semantics are conservatively fixed at `ASK`.
 3. For a project-sensitive Git mutation, defer even a matching configured or
@@ -111,40 +116,52 @@ floor, explicit confirmation, or local judge.
 5. Configured ask and speculative risk: ask the user before any built-in read
    optimization.
 6. Built-in literal project-bounded non-executing read: approve without Ollama.
-   This narrow class covers stdin-only `head -N` and `rg --no-config` only when
-   every omitted or explicit path operand canonicalizes inside a verified
-   registered worktree. Dynamic words, path-spelled/wrapped executables,
-   missing/absolute/home/traversing/symlink-escaping paths, `rg --pre`,
-   `rg --search-zip`, `rg --hostname-bin`, and `rg --follow` do not inherit it.
-   Git reads stay residual because repository/global fsmonitor, external-diff,
-   and textconv configuration can execute helpers even for read subcommands.
-7. For an otherwise unknown compound command, treat one leading top-level
+   This narrow class covers stdin-only `head -N` and `rg --no-config`. An rg path
+   may be relative or absolute inside any verified registered worktree, may be
+   missing when its nearest existing canonical ancestor stays inside one, and
+   may contain a basename-only literal `*` glob after the parent directory and
+   every current match are verified; an option-like match whose basename starts
+   with `-` requires confirmation. An exact `/dev/null` output sink remains
+   eligible. Home expansion, traversal, symlink escapes, dynamic expansion
+   (including a dynamic value mixed into a glob), directory-component or richer
+   glob syntax, path-spelled/wrapped executables, `rg --pre`, `rg --search-zip`,
+   `rg --hostname-bin`, and `rg --follow` do not inherit this allow.
+7. A literal single-command `git -C <path> status|diff|log|show` may leave the
+   structural location ASK only after `<path>` canonicalizes inside a registered
+   non-bare worktree with the same Git common directory as the tool cwd. The
+   verified `gitCwd.scope` then accompanies the command to Ollama; the Git read
+   is not mechanically allowed because repository/global fsmonitor,
+   external-diff, and textconv configuration can execute helpers. Tilde-prefixed
+   or `..`-containing targets, repeated or dynamic `-C`, other risky global
+   options, output/helper-execution options, compound commands, and non-read
+   subcommands receive no exception.
+8. For an otherwise unknown compound command, treat one leading top-level
    `cd <absolute-literal-path> &&` segment as neutral only when the canonical
    destination is contained by the complete registered non-bare worktree set
    and has the same canonical Git common directory as the tool cwd. Every
    remaining executable segment must be allowed; relative/dynamic paths,
    redirects, other connectors, multiple `cd` segments, missing paths, forged
    `.git` pointers, and unrelated or nested repositories receive no exception.
-8. Require confirmation before otherwise unresolved leading navigation that is
-   not a verified registered same-repository worktree. This outcome never
-   reaches Ollama.
-9. For a command that still reaches the judge, bind the raw current input and
-   authenticated current-run assistant evidence to its agent run, then discover
-   canonical cwd/project/worktree context locally. Async child-environment
-   sanitization, Git probes, cwd/worktree/leading-target canonicalization, and
-   common-directory checks share one cumulative 250 ms deadline and abort
-   signal.
-10. Reuse an unexpired completed `ALLOW` cache entry only when the command, raw
+9. Require confirmation before otherwise unresolved leading navigation or
+   `git -C` location that is not a verified registered same-repository worktree.
+   This outcome never reaches Ollama.
+10. For a command that still reaches the judge, bind the raw current input and
+    authenticated current-run assistant evidence to its agent run, then discover
+    canonical cwd/project/worktree context locally. Async child-environment
+    sanitization, Git probes, cwd/worktree/leading-target canonicalization, and
+    common-directory checks share one cumulative 250 ms deadline and abort
+    signal.
+11. Reuse an unexpired completed `ALLOW` cache entry only when the command, raw
     cwd, complete raw-task fingerprint, complete current-run-evidence
     fingerprint, and complete verified-project fingerprint match. A task-
     correlation failure disables cache reads and writes. Context discovery
     therefore precedes cache lookup.
-11. Before a cache-miss chat request, require `/api/status` to report
+12. Before a cache-miss chat request, require `/api/status` to report
     `cloud.disabled === true`.
-12. Require `/api/tags` to contain exactly one exact-name model entry whose
+13. Require `/api/tags` to contain exactly one exact-name model entry whose
     `name`, `model`, and pinned digest match and which has no `remote_host` or
     `remote_model` field.
-13. Query `/api/chat`, then require the exact configured response model, no
+14. Query `/api/chat`, then require the exact configured response model, no
     remote metadata, a completed non-truncated response, and an entire verdict
     of `ALLOW`. Every other result asks the user or blocks without UI.
 
@@ -175,7 +192,9 @@ Ollama only when every executable segment is explicitly allowed. An
 authenticated explicitly invoked skill grant also counts as user approval for
 an ordinary plain push or a `git -C` location after same-repository worktree
 validation; force/destructive, secret, opaque, helper-capable Git reads, and
-unverified `rg` reads remain above or outside that grant.
+unverified `rg` reads remain above or outside that grant. A helper-capable
+`git -C` read therefore follows the verified read-only route in step 7 rather
+than bypassing Ollama through the grant.
 
 When Ollama is unavailable or cannot be verified, TUI/RPC sessions show a
 confirmation and non-interactive/child sessions block unknown commands. A
@@ -201,7 +220,9 @@ The command-bearing `/api/chat` request receives only:
   and require every navigable root to resolve to the active Git common
   directory; bare Git database paths may identify the project locally but are
   never navigation scope;
-- computed leading-`cd` scope (`listed-worktree`, outside, or unverified).
+- computed leading-`cd` scope (`listed-worktree`, outside, or unverified);
+- for a narrow verified `git -C` read, computed effective-cwd scope with the
+  same three values. The internal same-repository boolean is not sent.
 
 Task context comes from pi's raw `input` event. Current-run evidence is accepted
 only from the active branch after an exact current Bash `toolCallId` match and a
@@ -248,9 +269,8 @@ are never cached.
 
 A small LLM is a best-effort classifier, not a proof of safety. Current-task and
 assistant text, tool-result names/statuses, project/path names, comments, quoted
-strings, and here-documents can be adversarial. Project identity and the
-leading-`cd` scope are computed locally,
-but they establish relevance/scope only and never prove command safety. The
+strings, and here-documents can be adversarial. Project identity plus leading-`cd` and narrow `git -C` scopes are computed
+locally, but they establish relevance/scope only and never prove command safety. The
 existing parser and deterministic deny/ask floor run first. Parser uncertainty
 is blocked without consulting the classifier; classifier uncertainty must return
 `ASK`. Top-level `<<` syntax and backslash-newline continuations in executable
@@ -298,23 +318,25 @@ outcome, route, and mechanical/model totals.
 
 ### Checked-in default qualification record
 
-- Qualified at: `2026-07-22T07:01:06.326Z`
+- Qualified at: `2026-07-22T10:43:42.355Z`
 - Ollama: `0.32.0`
 - Model: `granite4.1:3b` (3.4B, GGUF Q4_K_M, approximately 2.1 GB)
 - `/api/tags` manifest digest:
   `6fd349357287c7ffc9e38189a93b48ea175d24fc566b38f09cfc564fb7f303eb`
 - Shared timeout: `10000ms`
-- Production-path verdicts: `64/64`
-- Routing: `42 mechanical`, `22 live model`
-- Required-safe: `23/23 ALLOW` (read-only Git/plain `rg`, canonicalized
-  `rg --no-config`, HOME-based `find`, harness metadata/version inspection,
-  lint/test/typecheck/format, bounded local
-  Git mutations, fetch/pull, and verified linked-worktree navigation)
-- Required-confirmation: `41/41 ASK` (destructive Git/filesystem,
+- Production-path verdicts: `68/68`
+- Routing: `45 mechanical`, `23 live model`
+- Required-safe: `25/25 ALLOW` (read-only Git/plain `rg`, project-bounded
+  `rg --no-config` including a missing-path diagnostic, HOME-based `find`,
+  harness metadata/version inspection, lint/test/typecheck/format, bounded local
+  Git mutations, fetch/pull, verified linked-worktree navigation, and a verified
+  `git -C` status read)
+- Required-confirmation: `43/43 ASK` (destructive Git/filesystem,
   privilege/exfiltration including grouped input redirects, package-runner/
   stdin-shell/opaque execution, unavailable project identity and direct or
   substituted mutations, unrelated/prefix-confusable/traversal paths, Git
-  location/config/force/abbreviated-delete variants, external read helpers,
+  tilde/symlink-traversal location spellings plus config/force/
+  abbreviated-delete variants, external read helpers,
   output redirects including numeric-prefix or IFS-dynamic `>&file`, unverified
   relative/grouped/additional navigation before mutation, push/transport/
   curl-body upload, and prompt injection)

@@ -715,7 +715,7 @@ describe("active skill allowed-tools permission grants", () => {
         bashCall(`git -C ${repositories.root} status --short`, "git-read"),
       ),
     ).toMatchObject({ block: true });
-    expect(chatRequests(upstream)).toHaveLength(0);
+    expect(chatRequests(upstream)).toHaveLength(1);
   });
 
   test("limits git -C push skill grants to the active repository", async () => {

@@ -152,9 +152,7 @@ const taskContext = (
   fingerprint,
 });
 
-const runEvidence = (
-  fingerprint = "run:a",
-): PermissionRunEvidence => ({
+const runEvidence = (fingerprint = "run:a"): PermissionRunEvidence => ({
   assistantText: "Inspect the policy after the failed test.",
   priorToolResults: [
     { toolName: "bash", status: "error" },
@@ -311,6 +309,35 @@ describe("local Ollama permission judge", () => {
     ]);
     expect(bodies.join("\n")).not.toContain("project:a");
     expect(bodies.join("\n")).not.toContain("sameRepository");
+  });
+
+  test("copies only precomputed git -C scope into the model envelope", async () => {
+    const upstream = await start(() => validResponse());
+    const judge = createPermissionJudge(configFor(upstream));
+    const project = gitProject();
+
+    await judge.judge("git -C /private/project-worktree status --short", {
+      cwd: project.cwd,
+      project,
+      gitCwd: {
+        scope: "listed-worktree",
+        sameRepository: true,
+      },
+    });
+
+    const body = chatRequests(upstream)[0]?.body ?? "";
+    const payload = JSON.parse(body) as {
+      messages: { role: string; content: string }[];
+    };
+    const content = payload.messages.find(
+      (message) => message.role === "user",
+    )?.content;
+    if (content === undefined) throw new Error("missing classifier input");
+    const envelope = JSON.parse(content.slice(content.indexOf("\n") + 1)) as {
+      gitCwd?: { scope?: string };
+    };
+    expect(envelope.gitCwd?.scope).toBe("listed-worktree");
+    expect(body).not.toContain("sameRepository");
   });
 
   test("fails closed before chat when Ollama cloud is not disabled", async () => {

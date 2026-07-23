@@ -80,18 +80,30 @@ and keep only the safety layer (no recursion, no duplicate notifications).
 
 The safety layer also appends soft command-hygiene guidance to every parent and
 child system prompt: prefer dedicated file tools, literal project-bounded
-commands, transparent pipelines, existing repository scripts, and
-`rg --no-config`; pass long or multiline CLI data through a file-input option
-rather than shell-escaped one-liners; explain necessity and exact scope before
-genuinely required dynamic shell or ad-hoc scripts instead of sacrificing
-correctness. This generation preference does not relax any permission boundary.
+commands, existing repository scripts, and `rg --no-config`; run independent
+inspections and checks sequentially as separate Bash calls, inspect each result
+before choosing the next command, and reserve short pipelines for genuine
+producer/consumer data flow instead of batching with `;`, `&&`, or multiline
+blocks; pass long or multiline CLI data through a file-input option rather than
+shell-escaped one-liners; explain necessity and exact scope before genuinely
+required dynamic shell or ad-hoc scripts instead of sacrificing correctness.
+This generation preference does not relax any permission boundary.
 
 The safety layer includes a default-on local Ollama fallback for Bash commands
 that remain ambiguous after deterministic routing. Known risky shapes require
-confirmation before Ollama; stdin-only `head -N` and `rg --no-config` whose
-path operands canonicalize inside a verified worktree are approved mechanically.
-Git reads remain residual because repository/global helper configuration can
-execute programs. Residual commands use a bounded JSON envelope containing the command, raw current-turn
+confirmation before Ollama. Stdin-only `head -N` and project-bounded
+`rg --no-config` are approved mechanically; rg operands may be relative or
+absolute inside any verified worktree of the active repository, may be missing
+when their nearest existing ancestor remains inside one, and may use a narrow
+basename-only literal `*` glob after every current match is verified as both
+in-bounds and non-option-like. Exact `/dev/null` output sinks are non-persistent
+rather than file-write prompts.
+Other Git reads remain residual because repository/global helper configuration
+can execute programs. A literal single-command `git -C` status/diff/log/show
+reaches that same residual judge path only after the effective cwd is verified
+inside a listed same-repository worktree; tilde-prefixed and `..`-containing
+location spellings remain unverified, and unverified locations still ask before
+Ollama. Residual commands use a bounded JSON envelope containing the command, raw current-turn
 task text, authenticated same-turn assistant text, preceding tool names plus
 success/failure status, and locally verified cwd/project/worktree context. It
 never receives assistant thinking, tool arguments, tool output content/details,
@@ -120,9 +132,11 @@ including queued prompts, and clears them when the run settles. An authenticated
 grant may satisfy the ordinary plain-push confirmation or a `git -C` location
 confirmation; deny, force/destructive, secret, opaque, helper-capable Git reads,
 unverified `rg`, and other shell-structure floors still take precedence or stay
-on the judge route, and child profiles never inherit grants. A skill's
+on the judge route, and child profiles never inherit grants. A skill's mutating
 `git -C` grant is additionally limited to a canonical registered non-bare
-worktree that shares the active cwd's canonical Git common directory.
+worktree that shares the active cwd's canonical Git common directory. A
+helper-capable `git -C` read never bypasses the judge through a skill grant; it
+uses the verified read-only route described above.
 
 ## Codex web tools
 

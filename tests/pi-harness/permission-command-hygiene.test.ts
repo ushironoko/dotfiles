@@ -32,6 +32,12 @@ describe("permission command hygiene prompt", () => {
     expect(prompt).toContain("preference, not a hard constraint");
     expect(prompt).toContain("dedicated read, edit, and write tools");
     expect(prompt).toContain("directly executable literal commands");
+    expect(prompt).toContain("one independently verifiable step");
+    expect(prompt).toContain("sequentially as separate Bash calls");
+    expect(prompt).toContain("inspect each result");
+    expect(prompt).toContain("Do not batch unrelated work with ;, &&");
+    expect(prompt).toContain("stdout is genuinely the next command's input");
+    expect(prompt).toContain("pipeline is not a substitute");
     expect(prompt).toContain("long or multiline content passed to a CLI");
     expect(prompt).toContain("--body-file");
     expect(prompt).toContain("ANSI-C-quoted or escaped payload");
