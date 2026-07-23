@@ -4,8 +4,17 @@ import {
   readFocusedComponent,
   setFocusSafely,
 } from "../../pi/extensions/pi-harness/features/child-runs/focus-capability";
+import type {
+  BitIssueDetailResult,
+  BitIssueListResult,
+} from "../../pi/extensions/pi-harness/features/bit-issues/model";
+import {
+  BitIssueRegistry,
+  type BitIssueDataSource,
+} from "../../pi/extensions/pi-harness/features/bit-issues/registry";
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
 import {
+  BitIssueDetailComponent,
   ChildRunDetailComponent,
   ChildRunsBrowserComponent,
 } from "../../pi/extensions/pi-harness/features/child-runs/ui";
@@ -164,6 +173,8 @@ describe("child-session browser component", () => {
     const { component } = setup();
     const lines = component.render(24);
     expect(lines.join("\n")).toContain("No child runs");
+    expect(lines.join("\n")).not.toContain("Open bit issues");
+    expect(lines.at(-1)).not.toContain("r refresh");
     expect(lines.every((item) => visibleWidth(item) <= 24)).toBe(true);
   });
 
@@ -553,5 +564,242 @@ describe("child-session detail component", () => {
     detail.handleInput("left");
     detail.handleInput("b");
     expect(closes).toBe(3);
+  });
+});
+
+const bitList = (...ids: string[]): BitIssueListResult => ({
+  issues: ids.map((id, index) => ({
+    id,
+    title: index === 0 ? `[plan:test#1] ${id}` : `[task:test#2:1] ${id}`,
+    state: "open",
+    author: "Pi Tester",
+    createdAt: 10,
+    updatedAt: 100 - index,
+    labels: ["session:test"],
+  })),
+  truncated: false,
+});
+
+const bitDetail = (
+  id: string,
+  options: {
+    state?: "open" | "closed";
+    comments?: BitIssueDetailResult["comments"];
+  } = {},
+): BitIssueDetailResult => ({
+  issue: {
+    id,
+    title: `[plan:test#1] ${id}`,
+    state: options.state ?? "open",
+    author: "Pi Tester",
+    createdAt: 10,
+    updatedAt: 100,
+    labels: ["session:test"],
+    body: `Body for ${id}\nwith CJK 界 and emoji 😀`,
+  },
+  comments: options.comments ?? { status: "none" },
+});
+
+const setupCombined = async (issueIds: string[], childCount = 0) => {
+  const base = setup(40);
+  base.component.dispose();
+  if (childCount > 0) addRuns(base.registry, childCount);
+  let currentList = bitList(...issueIds);
+  const details = new Map(issueIds.map((id) => [id, bitDetail(id)] as const));
+  const source: BitIssueDataSource = {
+    listOpen: async () => currentList,
+    getDetail: async (_cwd, id) => details.get(id) ?? bitDetail(id),
+  };
+  const issues = new BitIssueRegistry({ cli: source, now: () => 200 });
+  issues.beginSession("/repo");
+  await issues.refresh("/repo");
+  const inspectedIssues: string[] = [];
+  let refreshes = 0;
+  const component = new ChildRunsBrowserComponent(
+    base.registry,
+    base.tui,
+    base.keybindings,
+    (runId) => base.inspected.push(runId),
+    () => {},
+    () => {},
+    {
+      registry: issues,
+      onInspect: (id) => inspectedIssues.push(id),
+      onRefresh: () => {
+        refreshes += 1;
+      },
+    },
+  );
+  return {
+    ...base,
+    component,
+    issues,
+    details,
+    inspectedIssues,
+    getRefreshes: () => refreshes,
+    setIssueIds(ids: string[]) {
+      currentList = bitList(...ids);
+    },
+  };
+};
+
+describe("combined coordination browser", () => {
+  test("renders issue-only and combined sections in the old height budget", async () => {
+    const issueOnly = await setupCombined(["issue-a", "issue-b"]);
+    const onlyLines = issueOnly.component.render(80);
+    expect(onlyLines[0]).toContain("Child sessions: 0 | Open bit issues: 2");
+    expect(onlyLines.join("\n")).toContain("Open bit issues");
+    expect(onlyLines.join("\n")).toContain("#issue-a");
+    expect(issueOnly.component.getSelectedIssueId()).toBe("issue-a");
+
+    const combined = await setupCombined(["issue-a"], 1);
+    const combinedLines = combined.component.render(80);
+    expect(combinedLines.length).toBeLessThanOrEqual(10);
+    expect(combinedLines.join("\n")).toContain("Child sessions");
+    expect(combinedLines.join("\n")).toContain("Open bit issues");
+    expect(combinedLines.indexOf("Child sessions")).toBeLessThan(
+      combinedLines.indexOf("Open bit issues"),
+    );
+    expect(combinedLines.every((item) => visibleWidth(item) <= 80)).toBe(true);
+  });
+
+  test("moves selection across child and issue rows and dispatches typed detail", async () => {
+    const combined = await setupCombined(["issue-a", "issue-b"], 1);
+    const [runId] = combined.registry.getSnapshots()[0]?.runs ?? [];
+    combined.component.render(80);
+    expect(combined.component.getSelectedRunId()).toBe(runId?.runId);
+
+    combined.component.handleInput("down");
+    combined.component.handleInput("enter");
+    expect(combined.inspectedIssues).toEqual(["issue-a"]);
+    expect(combined.inspected).toEqual([]);
+
+    combined.component.handleInput("up");
+    combined.component.handleInput("right");
+    expect(combined.inspected).toEqual([runId?.runId]);
+  });
+
+  test("keeps issue-id selection stable and chooses the nearby row after close", async () => {
+    const combined = await setupCombined(["issue-a", "issue-b"]);
+    combined.component.render(80);
+    combined.component.handleInput("down");
+    expect(combined.component.getSelectedIssueId()).toBe("issue-b");
+
+    combined.details.set("issue-b", bitDetail("issue-b", { state: "closed" }));
+    await combined.issues.loadDetail("issue-b");
+    combined.component.render(80);
+    expect(combined.component.getSelectedIssueId()).toBe("issue-a");
+    expect(combined.component.render(80).join("\n")).not.toContain("#issue-b");
+  });
+
+  test("supports immediate and pending source preference plus explicit r refresh", async () => {
+    const combined = await setupCombined(["issue-a"], 1);
+    combined.component.render(80);
+    combined.component.prefer("issue");
+    expect(combined.component.getSelectedIssueId()).toBe("issue-a");
+    combined.component.handleInput("r");
+    expect(combined.getRefreshes()).toBe(1);
+
+    const pending = await setupCombined(["issue-a"]);
+    pending.component.render(80);
+    pending.component.prefer("child");
+    const [runId] = addRuns(pending.registry, 1);
+    expect(pending.component.getSelectedRunId()).toBe(runId);
+  });
+});
+
+describe("bit issue detail component", () => {
+  test("renders loading, body, raw comments, sanitization, and scrolling", async () => {
+    const { tui, keybindings } = setup(16);
+    const source: BitIssueDataSource = {
+      listOpen: async () => bitList("issue-a"),
+      getDetail: async () =>
+        bitDetail("issue-a", {
+          comments: {
+            status: "ready",
+            text: `comment abc\n\n${"long comment 界😀 ".repeat(60)}\u001b]2;spoof\u0007`,
+            truncated: false,
+          },
+        }),
+    };
+    const registry = new BitIssueRegistry({ cli: source });
+    registry.beginSession("/repo");
+    registry.prepareDetail("issue-a");
+    const detail = new BitIssueDetailComponent(
+      registry,
+      "issue-a",
+      tui,
+      keybindings,
+      () => {},
+    );
+    expect(detail.render(32).join("\n")).toContain("Loading bit issue");
+
+    await registry.loadDetail("issue-a");
+    const lines = detail.render(32);
+    expect(lines.join("\n")).toContain("Body");
+    expect(lines.join("\n")).toContain("Comments");
+    expect(lines.join("\n")).not.toContain("spoof");
+    expect(lines.every((item) => visibleWidth(item) <= 32)).toBe(true);
+    detail.handleInput("end");
+    expect(detail.getOffset()).toBeGreaterThan(0);
+    detail.handleInput("home");
+    expect(detail.getOffset()).toBe(0);
+  });
+
+  test("keeps the final comment state reachable on tiny terminals", async () => {
+    for (const [rows, expectedHeight] of [
+      [4, 2],
+      [3, 1],
+    ] as const) {
+      const { tui, keybindings } = setup(rows);
+      const source: BitIssueDataSource = {
+        listOpen: async () => bitList("issue-a"),
+        getDetail: async () => bitDetail("issue-a"),
+      };
+      const registry = new BitIssueRegistry({ cli: source });
+      registry.beginSession("/repo");
+      await registry.loadDetail("issue-a");
+      const detail = new BitIssueDetailComponent(
+        registry,
+        "issue-a",
+        tui,
+        keybindings,
+        () => {},
+      );
+      detail.render(40);
+      detail.handleInput("end");
+      const lines = detail.render(40);
+      expect(lines).toHaveLength(expectedHeight);
+      expect(lines.join("\n")).toContain("(no comments)");
+    }
+  });
+
+  test("distinguishes no comments and detail errors", async () => {
+    const { tui, keybindings } = setup(24);
+    let fail = false;
+    const source: BitIssueDataSource = {
+      listOpen: async () => bitList("issue-a"),
+      getDetail: async () => {
+        if (fail) throw new Error("detail failed");
+        return bitDetail("issue-a");
+      },
+    };
+    const registry = new BitIssueRegistry({ cli: source });
+    registry.beginSession("/repo");
+    await registry.loadDetail("issue-a");
+    const detail = new BitIssueDetailComponent(
+      registry,
+      "issue-a",
+      tui,
+      keybindings,
+      () => {},
+    );
+    expect(detail.render(60).join("\n")).toContain("(no comments)");
+
+    fail = true;
+    await registry.loadDetail("issue-a");
+    expect(detail.render(60).join("\n")).toContain(
+      "Bit issue detail unavailable: detail failed",
+    );
   });
 });

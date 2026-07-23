@@ -1,4 +1,6 @@
 import type { CtxLike, PiLike } from "../../lib/pi-like";
+import { BitIssueCli } from "../bit-issues/cli";
+import { BitIssueRegistry } from "../bit-issues/registry";
 import {
   CHILD_RUN_COMPLETION_ENTRY,
   BackgroundInvocationManager,
@@ -93,8 +95,15 @@ const appendBackgroundAgentSystemPrompt = (systemPrompt: string): string =>
 
 export interface ChildRunsIntegration {
   registry: ChildRunRegistry;
+  bitIssues?: BitIssueRegistry;
   background?: BackgroundInvocationManager;
   ensureVisible(ctx: CtxLike): void;
+}
+
+export interface SetupChildRunsOptions {
+  readonly bitIssues?: boolean;
+  readonly bitIssueCli?: BitIssueCli;
+  readonly childExecution?: boolean;
 }
 
 const replayBranch = (
@@ -106,11 +115,48 @@ const replayBranch = (
   registry.replacePersistedHistory(extractPersistedChildRuns(branch));
 };
 
-const setupChildRuns = (pi: PiLike): ChildRunsIntegration => {
+const setupChildRuns = (
+  pi: PiLike,
+  options: SetupChildRunsOptions = {},
+): ChildRunsIntegration => {
   const runtime = pi as unknown as RuntimePiLike;
   const registry = new ChildRunRegistry();
-  const panel = new ChildRunsPanelController(registry);
+  const bitIssues = options.bitIssues
+    ? new BitIssueRegistry({ cli: options.bitIssueCli })
+    : undefined;
+  let activeContext: RuntimeContextLike | undefined;
+  let lastExplicitWarning: string | undefined;
+  const refreshBitIssues = async (
+    ctx: RuntimeContextLike,
+    explicit: boolean = false,
+  ): Promise<void> => {
+    if (bitIssues === undefined) return;
+    const cwd = ctx.cwd ?? process.cwd();
+    const outcome = await bitIssues.refresh(cwd);
+    if (outcome.ok) {
+      lastExplicitWarning = undefined;
+      if (outcome.count > 0) panel.ensureVisibleForIssues(ctx);
+      return;
+    }
+    if (explicit) {
+      const warning = `${outcome.kind}:${outcome.message}`;
+      if (warning !== lastExplicitWarning) {
+        lastExplicitWarning = warning;
+        ctx.ui.notify(
+          `Open bit issues unavailable: ${outcome.message}`,
+          "warning",
+        );
+      }
+    }
+  };
+  const panel = new ChildRunsPanelController(registry, {
+    bitIssues,
+    refreshBitIssues: async () => {
+      if (activeContext !== undefined) await refreshBitIssues(activeContext);
+    },
+  });
   const background =
+    options.childExecution !== false &&
     typeof runtime.appendEntry === "function" &&
     typeof runtime.sendMessage === "function"
       ? new BackgroundInvocationManager(registry, {
@@ -146,6 +192,7 @@ const setupChildRuns = (pi: PiLike): ChildRunsIntegration => {
   runtime.registerCommand("subagents", {
     description: "Show and focus the live child-session browser",
     handler: async (_args, ctx) => {
+      activeContext = ctx;
       if (ctx.mode !== "tui") {
         if (ctx.hasUI) {
           ctx.ui.notify(
@@ -155,16 +202,46 @@ const setupChildRuns = (pi: PiLike): ChildRunsIntegration => {
         }
         return;
       }
-      await panel.showAndFocus(ctx);
+      await panel.showAndFocus(ctx, "child");
     },
   });
 
   runtime.registerShortcut("ctrl+alt+s", {
     description: "Show and focus child sessions",
     handler: async (ctx) => {
-      await panel.showAndFocus(ctx);
+      activeContext = ctx;
+      await panel.showAndFocus(ctx, "child");
     },
   });
+
+  if (bitIssues !== undefined) {
+    runtime.registerCommand("bit-issues", {
+      description: "Refresh, show, and focus open local bit issues",
+      handler: async (_args, ctx) => {
+        activeContext = ctx;
+        if (ctx.mode !== "tui") {
+          if (ctx.hasUI) {
+            ctx.ui.notify(
+              "The bit issue browser requires TUI mode.",
+              "warning",
+            );
+          }
+          return;
+        }
+        await refreshBitIssues(ctx, true);
+        await panel.showAndFocus(ctx, "issue", false);
+      },
+    });
+
+    runtime.registerShortcut("ctrl+alt+i", {
+      description: "Refresh, show, and focus open local bit issues",
+      handler: async (ctx) => {
+        activeContext = ctx;
+        await refreshBitIssues(ctx, true);
+        await panel.showAndFocus(ctx, "issue", false);
+      },
+    });
+  }
 
   runtime.on("tool_result", (rawEvent) => {
     const event = rawEvent as RuntimeToolResultEvent;
@@ -224,12 +301,19 @@ const setupChildRuns = (pi: PiLike): ChildRunsIntegration => {
   });
   runtime.on("agent_start", () => background?.markAgentStarted());
   runtime.on("agent_settled", (_event, ctx) => {
+    activeContext = ctx;
     const idle = typeof ctx.isIdle !== "function" || ctx.isIdle();
     background?.markAgentSettled(idle);
+    void refreshBitIssues(ctx);
   });
   runtime.on("session_start", (_event, ctx) => {
+    activeContext = ctx;
     clearTreeTransitions();
     replayBranch(registry, ctx);
+    if (bitIssues !== undefined) {
+      bitIssues.beginSession(ctx.cwd ?? process.cwd());
+      void refreshBitIssues(ctx);
+    }
   });
   runtime.on("session_before_tree", async (rawEvent) => {
     // Serialize navigation boundaries. Pi does not correlate session_tree with
@@ -295,14 +379,17 @@ const setupChildRuns = (pi: PiLike): ChildRunsIntegration => {
     else background?.completeBranchTransition();
   });
   runtime.on("session_shutdown", async () => {
+    activeContext = undefined;
     clearTreeTransitions();
     await background?.shutdown();
     panel.dispose();
+    bitIssues?.dispose();
     registry.dispose();
   });
 
   return {
     registry,
+    bitIssues,
     background,
     ensureVisible(ctx) {
       panel.ensureVisible(ctx as RuntimeContextLike);

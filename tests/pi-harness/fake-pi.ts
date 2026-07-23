@@ -270,7 +270,12 @@ export function createFakePi(
 
   return {
     on<K extends PiEventName>(event: K, handler: PiEventHandler<K>) {
-      registrars[event](handler);
+      const registrar = (
+        registrars as Partial<
+          Record<string, (candidate: PiEventHandler<PiEventName>) => void>
+        >
+      )[event];
+      registrar?.(handler as unknown as PiEventHandler<PiEventName>);
     },
     registerTool(tool) {
       tools.push(tool);
