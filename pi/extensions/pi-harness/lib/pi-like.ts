@@ -222,6 +222,8 @@ export interface UiLike {
 export interface SessionManagerLike {
   /** Active branch in root-to-leaf order, synchronized through tool_call. */
   getBranch(): unknown[];
+  /** Stable Pi session identifier, including in-memory/no-session runtimes. */
+  getSessionId?(): string;
 }
 
 export interface CtxLike {
@@ -231,6 +233,7 @@ export interface CtxLike {
   cwd?: string;
   model?: ModelLike;
   sessionManager?: SessionManagerLike;
+  signal?: AbortSignal;
   getContextUsage?(): ContextUsageLike | undefined;
 }
 

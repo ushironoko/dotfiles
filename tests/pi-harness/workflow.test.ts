@@ -8,6 +8,7 @@ import {
   formatChildPermissionSignal,
 } from "../../pi/extensions/pi-harness/features/permission-policy/block";
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
+import type { PermissionAuditIntegration } from "../../pi/extensions/pi-harness/features/permission-audit/index";
 import setupWorkflow from "../../pi/extensions/pi-harness/features/workflow/index";
 import type {
   SpawnFunction,
@@ -277,8 +278,35 @@ describe("pi-harness workflow", () => {
         ? { text: "finding-one" }
         : { text: "finding-two" },
     );
-    const pi = createFakePi({ cwd: home });
-    setupWorkflow(pi, makeConfig(home), { spawnFn });
+    const pi = createFakePi({ cwd: home, sessionId: "workflow-parent" });
+    const registry = new ChildRunRegistry();
+    const childRuns = { registry, ensureVisible() {} };
+    const childCorrelations: Array<{
+      invocationId?: string;
+      runId?: string;
+    }> = [];
+    const permissionAudit = {
+      childEnvironment(
+        _ctx: CtxLike,
+        invocationId: string | undefined,
+        runId: string | undefined,
+      ) {
+        childCorrelations.push({ invocationId, runId });
+        return {
+          PI_HARNESS_AUDIT_LINEAGE_ID: "123e4567-e89b-42d3-a456-426614174000",
+          PI_HARNESS_AUDIT_PARENT_SESSION_ID: "workflow-parent",
+          ...(invocationId === undefined
+            ? {}
+            : { PI_HARNESS_AUDIT_INVOCATION_ID: invocationId }),
+          ...(runId === undefined ? {} : { PI_HARNESS_AUDIT_RUN_ID: runId }),
+        };
+      },
+    } as unknown as PermissionAuditIntegration;
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      childRuns,
+      permissionAudit,
+    });
 
     const result = await executeTool(
       findWorkflowTool(pi.tools),
@@ -302,6 +330,18 @@ describe("pi-harness workflow", () => {
     for (const record of records) {
       expect(record.command).toBe("pi");
       expect(record.options.env.PI_HARNESS_CHILD).toBe("1");
+      expect(record.options.env.PI_HARNESS_AUDIT_LINEAGE_ID).toBe(
+        "123e4567-e89b-42d3-a456-426614174000",
+      );
+      expect(record.options.env.PI_HARNESS_AUDIT_PARENT_SESSION_ID).toBe(
+        "workflow-parent",
+      );
+      expect(record.options.env.PI_HARNESS_AUDIT_INVOCATION_ID).toMatch(
+        /^[0-9a-f-]{36}$/,
+      );
+      expect(record.options.env.PI_HARNESS_AUDIT_RUN_ID).toMatch(
+        /^[0-9a-f-]{36}$/,
+      );
       expect(record.options.cwd).toBe(canonicalHome);
     }
     expect(text).toContain("2/2");
@@ -309,6 +349,12 @@ describe("pi-harness workflow", () => {
     expect(text).toContain("finding-two");
     expect(details.succeeded).toBe(2);
     expect(details.total).toBe(2);
+    expect(childCorrelations).toHaveLength(2);
+    expect(
+      new Set(childCorrelations.map((entry) => entry.invocationId)).size,
+    ).toBe(1);
+    expect(new Set(childCorrelations.map((entry) => entry.runId)).size).toBe(2);
+    registry.dispose();
   });
 
   test("enforces a read-only child tool profile", async () => {

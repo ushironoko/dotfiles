@@ -154,6 +154,7 @@ export function createFakePi(
     gitBranch?: string | null;
     model?: ModelLike;
     contextUsage?: ContextUsageLike;
+    sessionId?: string;
   } = {},
 ): FakePi {
   const store: HandlerStore = {
@@ -212,6 +213,7 @@ export function createFakePi(
     model: options.model,
     sessionManager: {
       getBranch: () => [...sessionBranch],
+      getSessionId: () => options.sessionId ?? "fake-session",
     },
     getContextUsage: () => contextUsage,
     ui: {

@@ -2,11 +2,11 @@ import { readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import type { BeforeAgentStartEvent } from "../../lib/pi-like";
 import {
-  evaluateCommand,
+  evaluateCommandWithAudit,
   type AllowRule,
+  type AuditedVerdict,
   isSkillOverridableAsk,
   type LoadedRules,
-  type Verdict,
 } from "./rules";
 import { normalizeSegment, scanCommand } from "./scan";
 
@@ -263,7 +263,9 @@ const resolveActiveSkillBashAllows = (
     : createActiveSkillBashAllowResolver(event)(event.prompt, invocation);
 };
 
-type SkillAwareVerdict = Verdict & { readonly grantedBySkill?: boolean };
+type SkillAwareVerdict = AuditedVerdict & {
+  readonly grantedBySkill?: boolean;
+};
 
 const matchingConcreteSkillAllow = (
   command: string,
@@ -288,7 +290,7 @@ const evaluateCommandWithSkillAllows = (
   rules: LoadedRules,
   skillAllows: readonly AllowRule[],
 ): SkillAwareVerdict => {
-  const base = evaluateCommand(command, rules);
+  const base = evaluateCommandWithAudit(command, rules);
   const matchingSkill = matchingConcreteSkillAllow(command, skillAllows);
   // An authenticated active-skill grant is itself explicit user approval for a
   // plain push or a verified git -C location. Force, destructive Git, secrets,
@@ -303,13 +305,20 @@ const evaluateCommandWithSkillAllows = (
       ...(matchingSkill.reason === undefined
         ? {}
         : { reason: matchingSkill.reason }),
+      audit: {
+        basis: "active-skill-allow",
+        reasonCode: "active-skill-allow",
+        ...(matchingSkill.source === undefined
+          ? {}
+          : { ruleSource: matchingSkill.source }),
+      },
       grantedBySkill: true,
     };
   }
   if (base.verdict !== "default-continue" || skillAllows.length === 0) {
     return base;
   }
-  const withSkill = evaluateCommand(command, {
+  const withSkill = evaluateCommandWithAudit(command, {
     ...rules,
     allow: [...rules.allow, ...skillAllows],
   });

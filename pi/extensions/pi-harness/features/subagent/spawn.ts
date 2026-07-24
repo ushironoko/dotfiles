@@ -87,6 +87,8 @@ type SpawnFunction = (
 interface SpawnAgentOptions {
   cwd: string;
   signal?: AbortSignal;
+  /** Harness-owned, non-secret correlation fields for child audit records. */
+  auditEnv?: Readonly<Record<string, string>>;
   spawnFn?: SpawnFunction;
   onUpdate?: (text: string) => void;
   observe?: (observation: ChildObservation) => void;
@@ -272,6 +274,7 @@ const spawnAgent = async (
             env: sanitizeChildEnv(
               process.env,
               {
+                ...options.auditEnv,
                 PI_HARNESS_CHILD: "1",
                 [CHILD_PERMISSION_SIGNAL_ENV]: permissionSignalToken,
               },

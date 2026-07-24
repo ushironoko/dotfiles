@@ -12,10 +12,11 @@ import {
   type PermissionLeadingNavigation,
   type PermissionProjectContext,
   type PermissionRunEvidence,
+  type PermissionTaskTracker,
 } from "./context";
 import { createPermissionJudge, type JudgeOutcome } from "./judge";
 import {
-  evaluateCommand,
+  evaluateCommandWithAudit,
   gitReadCwdTarget,
   hasProjectSensitiveMutation,
   hasUnverifiedProjectMutationNavigation,
@@ -32,6 +33,11 @@ import {
   type SkillInvocation,
 } from "./skill-allow";
 import { leadingTrustedCdTarget } from "./trusted-cd";
+import {
+  PERMISSION_AUDIT_UNAVAILABLE_REASON,
+  type PermissionAuditIntegration,
+} from "../permission-audit/index";
+import type { AuditedVerdict } from "./rules";
 
 const readPermissionRules = (): string | undefined => {
   try {
@@ -141,6 +147,8 @@ interface SetupPermissionPolicyOptions {
     signal?: AbortSignal,
     leadingCdTarget?: string,
   ) => Promise<PermissionProjectContext>;
+  taskTracker?: PermissionTaskTracker;
+  permissionAudit?: PermissionAuditIntegration;
 }
 
 const setupPermissionPolicy = (
@@ -154,7 +162,8 @@ const setupPermissionPolicy = (
     judgeConfig?.enabled === true
       ? createPermissionJudge(judgeConfig)
       : undefined;
-  const taskTracker = createPermissionTaskTracker();
+  const taskTracker = options.taskTracker ?? createPermissionTaskTracker();
+  const permissionAudit = options.permissionAudit;
   const discoverProject =
     options.discoverProject ??
     ((cwd: string, signal?: AbortSignal, leadingCdTarget?: string) =>
@@ -306,6 +315,37 @@ const setupPermissionPolicy = (
       permissionSignalToken: options.permissionSignalToken,
       writePermissionSignal: options.writePermissionSignal,
     });
+  const recordDeterministic = (
+    toolCallId: string,
+    phase: string,
+    result: AuditedVerdict & { readonly grantedBySkill?: boolean },
+  ): void => {
+    permissionAudit?.addStage(toolCallId, {
+      type: "deterministic",
+      phase,
+      verdict:
+        result.verdict === "default-continue" ? "continue" : result.verdict,
+      basis: result.audit.basis,
+      reasonCode: result.audit.reasonCode,
+      ...(result.verdict === "default-continue" || result.reason === undefined
+        ? {}
+        : { reason: result.reason }),
+      ...(result.audit.ruleSource === undefined
+        ? {}
+        : { ruleSource: result.audit.ruleSource }),
+      ...(result.grantedBySkill === true ? { grantedBySkill: true } : {}),
+    });
+  };
+  const finalizeBlocked = async (
+    toolCallId: string,
+    reasonCode: string,
+    reason: string,
+  ): Promise<PermissionBlockResult> => {
+    if (permissionAudit === undefined) return blocked(reason);
+    return (await permissionAudit.finalizeBlock(toolCallId, reasonCode))
+      ? blocked(reason)
+      : blocked(PERMISSION_AUDIT_UNAVAILABLE_REASON);
+  };
 
   pi.on("before_agent_start", (event) => {
     taskTracker.activate(event.prompt);
@@ -350,7 +390,19 @@ const setupPermissionPolicy = (
       // A bash call whose command is missing or not a string is malformed;
       // the safety floor blocks it instead of letting it through (fail-closed).
       if (typeof command !== "string") {
-        return blocked(MALFORMED_REASON);
+        permissionAudit?.addStage(event.toolCallId, {
+          type: "deterministic",
+          phase: "malformed-input",
+          verdict: "deny",
+          basis: "parse-error",
+          reasonCode: "malformed-input",
+          reason: MALFORMED_REASON,
+        });
+        return finalizeBlocked(
+          event.toolCallId,
+          "malformed-input",
+          MALFORMED_REASON,
+        );
       }
 
       const signal = (
@@ -369,41 +421,84 @@ const setupPermissionPolicy = (
         rules,
         activeSkillBashAllows,
       );
+      recordDeterministic(event.toolCallId, "initial", result);
       if (result.verdict === "allow" && result.grantedBySkill === true) {
         const gitCwd = skillGrantedGitCwd(command);
         if (
           gitCwd === undefined ||
           (gitCwd !== null && ctx.cwd === undefined)
         ) {
-          result = evaluateCommand(command, rules);
+          result = evaluateCommandWithAudit(command, rules);
+          recordDeterministic(event.toolCallId, "skill-fallback", result);
         } else if (gitCwd !== null && ctx.cwd !== undefined) {
           const candidate = resolve(ctx.cwd, gitCwd);
           projectDiscovery = await discoverProject(ctx.cwd, signal, candidate);
+          permissionAudit?.updateContext(event.toolCallId, {
+            project: projectDiscovery,
+            ...(projectDiscovery.leadingNavigation === undefined
+              ? {}
+              : { gitCwd: projectDiscovery.leadingNavigation }),
+          });
           if (
             projectDiscovery.leadingNavigation?.scope !== "listed-worktree" ||
             !projectDiscovery.leadingNavigation.sameRepository
           ) {
-            result = evaluateCommand(command, rules);
+            result = evaluateCommandWithAudit(command, rules);
+            recordDeterministic(event.toolCallId, "skill-fallback", result);
           }
         }
       }
       if (isAborted()) {
-        return blocked("the active pi operation was cancelled");
+        permissionAudit?.addStage(event.toolCallId, {
+          type: "error",
+          component: "permission-policy",
+          phase: "cancelled",
+          verdict: "error",
+          reasonCode: "parent-aborted",
+        });
+        return finalizeBlocked(
+          event.toolCallId,
+          "parent-aborted",
+          "the active pi operation was cancelled",
+        );
       }
       if (result.verdict === "deny") {
-        return blocked(result.reason);
+        return finalizeBlocked(
+          event.toolCallId,
+          result.audit.reasonCode,
+          result.reason,
+        );
       }
       const confirm = async (
         title: string,
         reason: string,
+        reasonCode: string,
+        challengeSource: string,
       ): Promise<{ block: true; reason: string } | undefined> => {
-        if (!ctx.hasUI || isAborted()) return blocked(reason);
-        const confirmed = await ctx.ui.confirm(
-          title,
-          `${reason}\n\n${command}`,
-          { signal },
-        );
-        return confirmed && !isAborted() ? undefined : blocked(reason);
+        const confirmed =
+          ctx.hasUI && !isAborted()
+            ? await ctx.ui.confirm(title, `${reason}\n\n${command}`, {
+                signal,
+              })
+            : false;
+        const status = !ctx.hasUI
+          ? ("not-shown" as const)
+          : isAborted()
+            ? ("aborted" as const)
+            : confirmed
+              ? ("accepted" as const)
+              : ("rejected" as const);
+        permissionAudit?.addStage(event.toolCallId, {
+          type: "confirmation",
+          phase: "permission-policy",
+          challengeSource,
+          status,
+          reasonCode,
+          reason,
+        });
+        return confirmed && !isAborted()
+          ? undefined
+          : finalizeBlocked(event.toolCallId, reasonCode, reason);
       };
 
       if (result.verdict === "ask") {
@@ -411,28 +506,77 @@ const setupPermissionPolicy = (
         if (readCwdTarget !== undefined && ctx.cwd !== undefined) {
           const candidate = resolve(ctx.cwd, readCwdTarget);
           projectDiscovery = await discoverProject(ctx.cwd, signal, candidate);
-          if (isAborted()) {
-            return blocked("the active pi operation was cancelled");
-          }
           gitCwdNavigation = projectDiscovery.leadingNavigation;
+          permissionAudit?.updateContext(event.toolCallId, {
+            project: projectDiscovery,
+            ...(gitCwdNavigation === undefined
+              ? {}
+              : { gitCwd: gitCwdNavigation }),
+          });
+          if (isAborted()) {
+            permissionAudit?.addStage(event.toolCallId, {
+              type: "error",
+              component: "permission-policy",
+              phase: "git-c-discovery",
+              verdict: "error",
+              reasonCode: "parent-aborted",
+            });
+            return finalizeBlocked(
+              event.toolCallId,
+              "parent-aborted",
+              "the active pi operation was cancelled",
+            );
+          }
           if (
             gitCwdNavigation?.scope !== "listed-worktree" ||
             !gitCwdNavigation.sameRepository
           ) {
+            permissionAudit?.addStage(event.toolCallId, {
+              type: "scope",
+              phase: "git-c",
+              verdict: "ask",
+              reasonCode: "git-c-unverified",
+              reason:
+                "git -C の対象を登録済みの同一リポジトリworktree内と確認できませんでした",
+              ...(gitCwdNavigation === undefined
+                ? {}
+                : { navigation: gitCwdNavigation }),
+            });
             return confirm(
               "検証できないGit作業場所を使用しますか？",
               "git -C の対象を登録済みの同一リポジトリworktree内と確認できませんでした",
+              "git-c-unverified",
+              "git-c-scope",
             );
           }
+          permissionAudit?.addStage(event.toolCallId, {
+            type: "scope",
+            phase: "git-c",
+            verdict: "allow",
+            reasonCode: "git-c-listed-worktree",
+            navigation: gitCwdNavigation,
+          });
           trustedGitReadCwdTarget = readCwdTarget;
-          result = evaluateCommand(command, rules, {
+          result = evaluateCommandWithAudit(command, rules, {
             trustedGitCwdTarget: readCwdTarget,
           });
+          recordDeterministic(event.toolCallId, "verified-git-c", result);
         }
       }
-      if (result.verdict === "deny") return blocked(result.reason);
+      if (result.verdict === "deny") {
+        return finalizeBlocked(
+          event.toolCallId,
+          result.audit.reasonCode,
+          result.reason,
+        );
+      }
       if (result.verdict === "ask") {
-        return confirm("危険なコマンドを実行しますか？", result.reason);
+        return confirm(
+          "危険なコマンドを実行しますか？",
+          result.reason,
+          result.audit.reasonCode,
+          "deterministic-policy",
+        );
       }
 
       const leadingCdTarget = leadingTrustedCdTarget(command);
@@ -443,9 +587,20 @@ const setupPermissionPolicy = (
           leadingCdTarget !== undefined,
         );
       if (unverifiedMutationNavigation) {
+        const reason =
+          "プロジェクト変更前の作業場所を検証できないため確認が必要です";
+        permissionAudit?.addStage(event.toolCallId, {
+          type: "scope",
+          phase: "mutation-navigation",
+          verdict: "ask",
+          reasonCode: "mutation-navigation-unverified",
+          reason,
+        });
         return confirm(
           "検証できない移動後のプロジェクト変更を実行しますか？",
-          "プロジェクト変更前の作業場所を検証できないため確認が必要です",
+          reason,
+          "mutation-navigation-unverified",
+          "mutation-navigation",
         );
       }
       // Context-free allows remain cheap, but an allow cannot bypass verified
@@ -469,28 +624,78 @@ const setupPermissionPolicy = (
           ? undefined
           : (projectDiscovery ??
             (await discoverProject(ctx.cwd, signal, leadingCdTarget)));
-      if (isAborted()) {
-        return blocked("the active pi operation was cancelled");
-      }
       const leadingNavigation =
         leadingCdTarget === undefined ? undefined : project?.leadingNavigation;
+      permissionAudit?.updateContext(event.toolCallId, {
+        ...(project === undefined ? {} : { project }),
+        ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
+        ...(gitCwdNavigation === undefined ? {} : { gitCwd: gitCwdNavigation }),
+      });
+      if (isAborted()) {
+        permissionAudit?.addStage(event.toolCallId, {
+          type: "error",
+          component: "permission-policy",
+          phase: "project-discovery",
+          verdict: "error",
+          reasonCode: "parent-aborted",
+        });
+        return finalizeBlocked(
+          event.toolCallId,
+          "parent-aborted",
+          "the active pi operation was cancelled",
+        );
+      }
       if (
         leadingCdTarget !== undefined &&
         (leadingNavigation?.scope !== "listed-worktree" ||
           !leadingNavigation.sameRepository)
       ) {
+        const reason =
+          "登録済みの同一リポジトリworktreeへの移動と確認できませんでした";
+        permissionAudit?.addStage(event.toolCallId, {
+          type: "scope",
+          phase: "leading-navigation",
+          verdict: "ask",
+          reasonCode: "leading-navigation-unverified",
+          reason,
+          ...(leadingNavigation === undefined
+            ? {}
+            : { navigation: leadingNavigation }),
+        });
         return confirm(
           "プロジェクト外へ移動するコマンドを実行しますか？",
-          "登録済みの同一リポジトリworktreeへの移動と確認できませんでした",
+          reason,
+          "leading-navigation-unverified",
+          "leading-navigation",
         );
+      }
+      if (leadingNavigation !== undefined) {
+        permissionAudit?.addStage(event.toolCallId, {
+          type: "scope",
+          phase: "leading-navigation",
+          verdict: "allow",
+          reasonCode: "leading-navigation-listed-worktree",
+          navigation: leadingNavigation,
+        });
       }
       if (
         projectSensitiveMutation &&
         (project === undefined || project.kind === "unavailable")
       ) {
+        const reason =
+          "プロジェクト境界を検証できないため変更コマンドには確認が必要です";
+        permissionAudit?.addStage(event.toolCallId, {
+          type: "scope",
+          phase: "project-mutation",
+          verdict: "ask",
+          reasonCode: "project-mutation-unverified",
+          reason,
+        });
         return confirm(
           "検証できないプロジェクト変更を実行しますか？",
-          "プロジェクト境界を検証できないため変更コマンドには確認が必要です",
+          reason,
+          "project-mutation-unverified",
+          "project-mutation",
         );
       }
       if (result.verdict === "allow") return undefined;
@@ -512,7 +717,7 @@ const setupPermissionPolicy = (
         trustedLeadingCdTarget !== undefined ||
         trustedReadContext !== undefined
       ) {
-        result = evaluateCommand(command, rules, {
+        result = evaluateCommandWithAudit(command, rules, {
           ...(trustedLeadingCdTarget === undefined
             ? {}
             : { trustedLeadingCdTarget }),
@@ -521,9 +726,21 @@ const setupPermissionPolicy = (
             : { trustedGitCwdTarget: trustedGitReadCwdTarget }),
           ...(trustedReadContext === undefined ? {} : { trustedReadContext }),
         });
-        if (result.verdict === "deny") return blocked(result.reason);
+        recordDeterministic(event.toolCallId, "verified-project", result);
+        if (result.verdict === "deny") {
+          return finalizeBlocked(
+            event.toolCallId,
+            result.audit.reasonCode,
+            result.reason,
+          );
+        }
         if (result.verdict === "ask") {
-          return confirm("危険なコマンドを実行しますか？", result.reason);
+          return confirm(
+            "危険なコマンドを実行しますか？",
+            result.reason,
+            result.audit.reasonCode,
+            "deterministic-policy",
+          );
         }
         if (result.verdict === "allow") return undefined;
       }
@@ -543,12 +760,38 @@ const setupPermissionPolicy = (
         ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
         ...(gitCwdNavigation === undefined ? {} : { gitCwd: gitCwdNavigation }),
       });
+      permissionAudit?.addStage(event.toolCallId, {
+        type: "judge",
+        phase: "fallback",
+        verdict:
+          outcome.kind === "allow"
+            ? "allow"
+            : outcome.kind === "ask"
+              ? "ask"
+              : "error",
+        reasonCode: `judge-${outcome.kind}`,
+        ...(outcome.kind === "allow" ? {} : { reason: outcome.reason }),
+        outcome: outcome.kind,
+        ...(outcome.audit === undefined
+          ? {}
+          : {
+              source: outcome.audit.source,
+              gates: outcome.audit.gates,
+              model: outcome.audit.model,
+              expectedDigest: outcome.audit.expectedDigest,
+              policyVersion: outcome.audit.policyVersion,
+            }),
+      });
       if (outcome.kind === "allow") {
         if (!outcome.cached) judgeWarningShown = false;
         return undefined;
       }
       if (outcome.kind === "parent-aborted") {
-        return blocked(outcome.reason);
+        return finalizeBlocked(
+          event.toolCallId,
+          "judge-parent-aborted",
+          outcome.reason,
+        );
       }
       if (outcome.kind === "ask" || outcome.kind === "invalid-response") {
         // A live backend response ends the previous unavailable period even
@@ -566,12 +809,24 @@ const setupPermissionPolicy = (
           "warning",
         );
       }
-      return confirm("ローカル判定器が自動承認しませんでした", outcome.reason);
-    } catch (error) {
-      // Any evaluation failure blocks rather than failing open.
-      return blocked(
-        `permission-policy: 評価中にエラーが発生したためブロックしました (${String(error)})`,
+      return confirm(
+        "ローカル判定器が自動承認しませんでした",
+        outcome.reason,
+        `judge-${outcome.kind}`,
+        "local-judge",
       );
+    } catch (error) {
+      // Any evaluation or audit-integration failure blocks rather than failing open.
+      const reason = `permission-policy: 評価中にエラーが発生したためブロックしました (${String(error)})`;
+      permissionAudit?.addStage(event.toolCallId, {
+        type: "error",
+        component: "permission-policy",
+        phase: "evaluation",
+        verdict: "error",
+        reasonCode: "policy-error",
+        message: String(error),
+      });
+      return finalizeBlocked(event.toolCallId, "policy-error", reason);
     }
   });
 };

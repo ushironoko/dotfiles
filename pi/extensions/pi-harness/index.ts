@@ -15,6 +15,8 @@ import { delimiter } from "node:path";
 import type { PiLike } from "./lib/pi-like";
 import { loadConfig, type HarnessConfig } from "./config";
 import setupPermissionPolicy from "./features/permission-policy/index";
+import { createPermissionTaskTracker } from "./features/permission-policy/context";
+import { setupPermissionAudit } from "./features/permission-audit/index";
 import {
   createPermissionBlocker,
   type PermissionBlockerOptions,
@@ -22,6 +24,7 @@ import {
 import setupHookBridge from "./features/hook-bridge/index";
 import setupGitHubCliReminder from "./features/github-cli-reminder/index";
 import setupProgressReminder from "./features/progress-reminder/index";
+import setupPermissionAskReminder from "./features/permission-ask-reminder/index";
 import {
   buildRegistry,
   partitionBridgeRegistry,
@@ -60,6 +63,16 @@ const setupHarness = (
   // This preserves the parent observer's failure classification even when a
   // bridge hook rejects before (or after) the mandatory policy handler.
   const blockToolCall = createPermissionBlocker(config.isChild, options);
+  const permissionTaskTracker = createPermissionTaskTracker();
+  const permissionAskReminder = config.isChild
+    ? undefined
+    : setupPermissionAskReminder(pi);
+  // The audit starter must be the first Bash tool_call observer. Every later
+  // permission handler enriches this transaction or block-finalizes it.
+  const permissionAudit = setupPermissionAudit(pi, config, {
+    taskTracker: permissionTaskTracker,
+    onDisplayedConfirmation: permissionAskReminder?.recordDisplayedConfirmation,
+  });
   const bridgeRegistry = config.features["hook-bridge"]
     ? partitionBridgeRegistry(buildRegistry(config.paths))
     : undefined;
@@ -92,20 +105,35 @@ const setupHarness = (
       registry: bridgeRegistry.permissionPreflight,
       env: { PATH: PERMISSION_PREFLIGHT_PATH },
       blockToolCall,
+      permissionAudit,
+      auditPhase: "preflight",
     });
   }
 
   // Safety floor before every path that can continue to tool execution.
-  setupPermissionPolicy(pi, config, { blockToolCall });
+  setupPermissionPolicy(pi, config, {
+    blockToolCall,
+    taskTracker: permissionTaskTracker,
+    permissionAudit,
+  });
 
   if (bridgeRegistry?.remaining.length) {
     setupHookBridge(pi, config, {
       registry: bridgeRegistry.remaining,
       blockToolCall,
+      permissionAudit,
+      auditPhase: "remaining",
     });
   }
-  if (config.features.subagent) setupSubagent(pi, config, { childRuns });
-  if (config.features.workflow) setupWorkflow(pi, config, { childRuns });
+  // This is the last pi-harness Bash permission handler. "release" here means
+  // only that pi-harness passed the call to any later third-party handlers.
+  permissionAudit.registerTail(pi, blockToolCall);
+  if (config.features.subagent) {
+    setupSubagent(pi, config, { childRuns, permissionAudit });
+  }
+  if (config.features.workflow) {
+    setupWorkflow(pi, config, { childRuns, permissionAudit });
+  }
   if (config.features["bit-task"]) setupBitTask(pi, config);
   if (config.features.statusline) setupStatusline(pi, config);
   if (config.features["provider-log"]) setupProviderLog(pi, config);

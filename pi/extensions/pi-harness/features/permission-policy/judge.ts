@@ -20,7 +20,8 @@ const MAX_RESPONSE_BYTES = 64 * 1024;
 const DEFAULT_CACHE_CAPACITY = 128;
 const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_CIRCUIT_MS = 5_000;
-const POLICY_VERSION = "permission-judge-v6-safety-relevance";
+export const PERMISSION_JUDGE_POLICY_VERSION =
+  "permission-judge-v6-safety-relevance";
 
 const VERDICT_SCHEMA = {
   type: "object",
@@ -57,8 +58,19 @@ Examples below apply only after checking every safety rule; => ALLOW means safet
 - task explicitly says do not inspect the repository; command git status --short => ASK
 When uncertain, set the uncertain gate to ASK.`;
 
+export interface JudgeDecisionAudit {
+  readonly source: "live" | "cache";
+  readonly gates: {
+    readonly safety: "ALLOW" | "ASK";
+    readonly relevance: "ALLOW" | "ASK";
+  };
+  readonly model: string;
+  readonly expectedDigest: string;
+  readonly policyVersion: typeof PERMISSION_JUDGE_POLICY_VERSION;
+}
+
 export type JudgeOutcome =
-  | { kind: "allow"; cached: boolean }
+  | { kind: "allow"; cached: boolean; audit?: JudgeDecisionAudit }
   | {
       kind:
         | "ask"
@@ -68,6 +80,7 @@ export type JudgeOutcome =
         | "parent-aborted"
         | "too-long";
       reason: string;
+      audit?: JudgeDecisionAudit;
     };
 
 export interface JudgeContext {
@@ -187,7 +200,7 @@ const cacheKey = (
   context: JudgeContext,
 ): string =>
   createHash("sha256")
-    .update(POLICY_VERSION)
+    .update(PERMISSION_JUDGE_POLICY_VERSION)
     .update("\0")
     .update(SYSTEM_PROMPT)
     .update("\0")
@@ -591,7 +604,11 @@ export const readLocalOllamaVersion = async (
   }
 };
 
-const parseResponse = (text: string, expectedModel: string): JudgeOutcome => {
+const parseResponse = (
+  text: string,
+  config: PermissionJudgeConfig,
+): JudgeOutcome => {
+  const expectedModel = config.model;
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -671,10 +688,21 @@ const parseResponse = (text: string, expectedModel: string): JudgeOutcome => {
       reason: "local judge did not return a valid structured decision",
     };
   }
+  const audit: JudgeDecisionAudit = {
+    source: "live",
+    gates: { safety, relevance },
+    model: config.model,
+    expectedDigest: config.expectedDigest,
+    policyVersion: PERMISSION_JUDGE_POLICY_VERSION,
+  };
   if (safety === "ALLOW" && relevance === "ALLOW") {
-    return { kind: "allow", cached: false };
+    return { kind: "allow", cached: false, audit };
   }
-  return { kind: "ask", reason: "local judge requested user confirmation" };
+  return {
+    kind: "ask",
+    reason: "local judge requested user confirmation",
+    audit,
+  };
 };
 
 export const createPermissionJudge = (
@@ -749,7 +777,19 @@ export const createPermissionJudge = (
 
       const key = cacheKey(config, userContent, context);
       const cacheEnabled = taskCorrelation(context) !== "uncorrelated";
-      if (cacheEnabled && cached(key)) return { kind: "allow", cached: true };
+      if (cacheEnabled && cached(key)) {
+        return {
+          kind: "allow",
+          cached: true,
+          audit: {
+            source: "cache",
+            gates: { safety: "ALLOW", relevance: "ALLOW" },
+            model: config.model,
+            expectedDigest: config.expectedDigest,
+            policyVersion: PERMISSION_JUDGE_POLICY_VERSION,
+          },
+        };
+      }
 
       if (config.configurationError !== undefined) {
         return {
@@ -934,7 +974,7 @@ export const createPermissionJudge = (
           };
         }
 
-        const outcome = parseResponse(body, config.model);
+        const outcome = parseResponse(body, config);
         if (parentSignal?.aborted) {
           return {
             kind: "parent-aborted",
