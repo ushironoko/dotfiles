@@ -11,12 +11,12 @@ child-process behavior): `tests/fixtures/pi-harness/raw/`.
 
 ## Layout
 
-| Repo path                  | Deployed to                         | Mechanism                  |
-| -------------------------- | ----------------------------------- | -------------------------- |
-| `pi/extensions/pi-harness` | `~/.pi/agent/extensions/pi-harness` | dotfiles directory symlink |
-| `pi/extensions/codex-web`  | `~/.pi/agent/extensions/codex-web`  | dotfiles directory symlink |
-| `claude/.claude/skills`    | `~/.agents/skills`                  | existing shared mapping    |
-| `pi/skills`                | `~/.pi/agent/skills`                | selective symlink (fork 6) |
+| Repo path                  | Deployed to                         | Mechanism                                     |
+| -------------------------- | ----------------------------------- | --------------------------------------------- |
+| `pi/extensions/pi-harness` | `~/.pi/agent/extensions/pi-harness` | dotfiles directory symlink                    |
+| `pi/extensions/codex-web`  | `~/.pi/agent/extensions/codex-web`  | dotfiles directory symlink                    |
+| `claude/.claude/skills`    | `~/.agents/skills`                  | existing shared mapping                       |
+| `pi/skills`                | `~/.pi/agent/skills`                | selective symlink (6 forks + 1 pi-only skill) |
 
 ## Install
 
@@ -288,13 +288,21 @@ hook is advisory):
 
 Templates: `pi/skills/start-work/references/multi-model-workflows.md`.
 
-## Skills (fork 6)
+## Skills (6 forks + 1 pi-only workflow)
 
 `start-work` / `write-session` / `restoring-session` / `plan-review` / `dig`
 / `smart-compact` are forked into `pi/skills/` with pi vocabulary
 (worktree_create / task_completed / subagent / workflow tools instead of
 Claude hooks and Task tools). The remaining shared skills arrive via
 `~/.agents/skills` unchanged.
+
+`permission-audit-analysis` is a pi-only workflow for body-free permission-log
+summary and top-ASK analysis, explicit sensitive inspection, private unlabeled
+candidate export, and private human-reviewed staging-corpus assembly. It never
+infers labels from observed approval or judge output and does not automatically
+edit rules or
+the checked-in qualification corpus. Invoke it with
+`/skill:permission-audit-analysis`.
 
 Collision behavior (pi 0.80.6, docs/skills.md): discovery scans
 `~/.pi/agent/skills` before `~/.agents/skills` and keeps the **first** skill

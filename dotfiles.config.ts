@@ -55,6 +55,9 @@ const piForkedSkills = [
   "write-session",
 ] as const;
 
+// Pi-only local workflows that do not shadow a shared harness skill.
+const piOnlySkills = ["permission-audit-analysis"] as const;
+
 export default defineConfig({
   mappings: [
     {
@@ -159,7 +162,7 @@ export default defineConfig({
       source: "./pi/skills",
       target: "~/.pi/agent/skills",
       type: "selective",
-      include: piForkedSkills,
+      include: [...piForkedSkills, ...piOnlySkills],
     },
     {
       source: "./config/git",
