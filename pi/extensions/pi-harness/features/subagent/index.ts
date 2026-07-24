@@ -2,6 +2,7 @@ import type { CtxLike, PiLike } from "../../lib/pi-like";
 import type { HarnessConfig } from "../../config";
 import { replacePrevious } from "../../lib/placeholder";
 import type { ChildRunsIntegration } from "../child-runs/index";
+import type { PermissionAuditIntegration } from "../permission-audit/index";
 import type { ChildObservation } from "../child-runs/model";
 import { renderChildRunsResult } from "../child-runs/presentation";
 import { findAgent, loadAgents } from "./loader";
@@ -34,6 +35,7 @@ interface SetupSubagentOptions {
   spawnFn?: SpawnFunction;
   termGraceMs?: number;
   childRuns?: ChildRunsIntegration;
+  permissionAudit?: PermissionAuditIntegration;
 }
 
 interface SubagentDetails {
@@ -396,6 +398,11 @@ const setupSubagent = (
               onUpdate: emitUpdate,
               observe: observeFor(runId),
               termGraceMs: options.termGraceMs,
+              auditEnv: options.permissionAudit?.childEnvironment(
+                ctx,
+                invocationId,
+                runId,
+              ),
             },
           );
           finishSpawnResult(runId, result);

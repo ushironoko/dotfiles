@@ -3,6 +3,8 @@ import {
   interpretPostToolUse,
   interpretPreToolUse,
   interpretUserPromptSubmit,
+  parseHookJson,
+  type RawHookResult,
   makePostToolUseStdin,
   makePreToolUseStdin,
   makeUserPromptSubmitStdin,
@@ -19,7 +21,24 @@ import {
   selectMatchingSpecs,
 } from "./mapping";
 import type { PermissionBlockResult } from "../permission-policy/block";
+import {
+  PERMISSION_AUDIT_UNAVAILABLE_REASON,
+  type PermissionAuditIntegration,
+} from "../permission-audit/index";
 import { buildRegistry, type BridgeHookSpec } from "./registry";
+
+const hookContinueReasonCode = (raw: RawHookResult): string => {
+  if (raw.timedOut) return "hook-timeout";
+  if (raw.exitCode !== 0) return "hook-nonzero-exit";
+  if (raw.stdout.trim() === "") return "hook-continue";
+  const output = parseHookJson(raw.stdout);
+  if (output === undefined) return "hook-malformed-output";
+  const permissionDecision = output.hookSpecificOutput?.permissionDecision;
+  return permissionDecision !== undefined &&
+    !["allow", "ask", "deny"].includes(permissionDecision)
+    ? "hook-unknown-permission-decision"
+    : "hook-continue";
+};
 
 export default function setupHookBridge(
   pi: PiLike,
@@ -29,6 +48,8 @@ export default function setupHookBridge(
     cwd?: string;
     env?: Record<string, string | undefined>;
     blockToolCall?: (reason: string) => PermissionBlockResult;
+    permissionAudit?: PermissionAuditIntegration;
+    auditPhase?: "preflight" | "remaining";
   },
 ): void {
   const fullRegistry = options?.registry ?? buildRegistry(config.paths);
@@ -46,47 +67,127 @@ export default function setupHookBridge(
     ctx.cwd ?? options?.cwd ?? process.cwd();
 
   pi.on("tool_call", async (event, ctx) => {
-    const cwd = resolveCwd(ctx);
-    const invocation = mapToolCall(event.toolName, event.input);
-    const specs = selectMatchingSpecs(
-      registry,
-      "tool_call",
-      invocation.toolName,
-    );
+    const audit =
+      event.toolName === "bash" ? options?.permissionAudit : undefined;
+    const auditPhase = options?.auditPhase ?? "remaining";
+    const signalAborted = (): boolean =>
+      ctx.signal !== undefined &&
+      "aborted" in ctx.signal &&
+      ctx.signal.aborted === true;
+    const block = (reason: string): PermissionBlockResult =>
+      options?.blockToolCall?.(reason) ?? { block: true, reason };
+    const finalizeBlock = async (
+      reasonCode: string,
+      reason: string,
+    ): Promise<PermissionBlockResult> => {
+      if (audit === undefined) return block(reason);
+      return (await audit.finalizeBlock(event.toolCallId, reasonCode))
+        ? block(reason)
+        : block(PERMISSION_AUDIT_UNAVAILABLE_REASON);
+    };
 
-    for (const spec of specs) {
-      const raw = await runHook(
-        spec.script,
-        JSON.stringify(makePreToolUseStdin(invocation, cwd)),
-        {
-          cwd,
-          env: options?.env,
-          timeoutMs: spec.timeoutMs,
-          maxOutputBytes: spec.maxOutputBytes,
-        },
+    try {
+      const cwd = resolveCwd(ctx);
+      const invocation = mapToolCall(event.toolName, event.input);
+      const specs = selectMatchingSpecs(
+        registry,
+        "tool_call",
+        invocation.toolName,
       );
-      const outcome = interpretPreToolUse(raw);
-      if (outcome.notify !== undefined) {
-        ctx.ui.notify(outcome.notify.message, outcome.notify.level);
-      }
-      if (outcome.kind === "block") {
-        const reason =
-          outcome.reason ?? "A PreToolUse hook blocked this tool call.";
-        return options?.blockToolCall?.(reason) ?? { block: true, reason };
-      }
-      if (outcome.kind === "ask") {
-        const reason =
-          outcome.reason ?? "A PreToolUse hook requires confirmation.";
-        const confirmed = ctx.hasUI
-          ? await ctx.ui.confirm("Hook permission request", reason)
-          : false;
-        if (!confirmed) {
-          return options?.blockToolCall?.(reason) ?? { block: true, reason };
-        }
-      }
-    }
 
-    return undefined;
+      for (const spec of specs) {
+        const raw = await runHook(
+          spec.script,
+          JSON.stringify(makePreToolUseStdin(invocation, cwd)),
+          {
+            cwd,
+            env: options?.env,
+            timeoutMs: spec.timeoutMs,
+            maxOutputBytes: spec.maxOutputBytes,
+          },
+        );
+        const outcome = interpretPreToolUse(raw);
+        if (outcome.notify !== undefined) {
+          ctx.ui.notify(outcome.notify.message, outcome.notify.level);
+        }
+        if (outcome.kind === "block") {
+          const reason =
+            outcome.reason ?? "A PreToolUse hook blocked this tool call.";
+          audit?.addStage(event.toolCallId, {
+            type: "hook",
+            phase: auditPhase,
+            hookId: spec.id,
+            verdict: "deny",
+            reasonCode: "hook-deny",
+            reason,
+          });
+          return finalizeBlock("hook-deny", reason);
+        }
+        if (outcome.kind === "ask") {
+          const reason =
+            outcome.reason ?? "A PreToolUse hook requires confirmation.";
+          audit?.addStage(event.toolCallId, {
+            type: "hook",
+            phase: auditPhase,
+            hookId: spec.id,
+            verdict: "ask",
+            reasonCode: "hook-ask",
+            reason,
+          });
+          const confirmed = ctx.hasUI
+            ? await ctx.ui.confirm("Hook permission request", reason, {
+                signal: ctx.signal,
+              })
+            : false;
+          const status = !ctx.hasUI
+            ? ("not-shown" as const)
+            : signalAborted()
+              ? ("aborted" as const)
+              : confirmed
+                ? ("accepted" as const)
+                : ("rejected" as const);
+          audit?.addStage(event.toolCallId, {
+            type: "confirmation",
+            phase: auditPhase,
+            challengeSource: `hook:${spec.id}`,
+            status,
+            reasonCode: "hook-ask",
+            reason,
+          });
+          if (!confirmed || signalAborted()) {
+            return finalizeBlock("hook-ask", reason);
+          }
+          continue;
+        }
+        const reasonCode = hookContinueReasonCode(raw);
+        const reason =
+          outcome.reason ??
+          (reasonCode === "hook-continue"
+            ? undefined
+            : outcome.notify?.message);
+        audit?.addStage(event.toolCallId, {
+          type: "hook",
+          phase: auditPhase,
+          hookId: spec.id,
+          verdict: "continue",
+          reasonCode,
+          ...(reason === undefined ? {} : { reason }),
+        });
+      }
+
+      return undefined;
+    } catch (error) {
+      const reason = `PreToolUse hook failed: ${String(error)}`;
+      audit?.addStage(event.toolCallId, {
+        type: "error",
+        component: "hook-bridge",
+        phase: auditPhase,
+        verdict: "error",
+        reasonCode: "hook-error",
+        message: String(error),
+      });
+      return finalizeBlock("hook-error", reason);
+    }
   });
 
   pi.on("tool_result", async (event, ctx) => {

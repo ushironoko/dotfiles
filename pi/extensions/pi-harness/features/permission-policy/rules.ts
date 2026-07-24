@@ -42,6 +42,47 @@ type Verdict =
   | { readonly verdict: "allow"; readonly reason?: string }
   | { readonly verdict: "default-continue" };
 
+export type PermissionVerdictBasis =
+  | "parse-error"
+  | "depth-limit"
+  | "configured-deny"
+  | "structural-deny"
+  | "speculative-deny"
+  | "structural-ask"
+  | "rg-option-glob-ask"
+  | "trusted-leading-cd"
+  | "configured-allow"
+  | "active-skill-allow"
+  | "configured-ask"
+  | "speculative-ask"
+  | "builtin-read-allow"
+  | "default-continue"
+  | "combined-allow"
+  | "combined-default";
+
+export interface PermissionVerdictAudit {
+  readonly basis: PermissionVerdictBasis;
+  readonly reasonCode: string;
+  readonly ruleSource?: string;
+}
+
+export type AuditedVerdict = Verdict & {
+  readonly audit: PermissionVerdictAudit;
+};
+
+const audited = <T extends Verdict>(
+  verdict: T,
+  basis: PermissionVerdictBasis,
+  ruleSource?: string,
+): T & { readonly audit: PermissionVerdictAudit } => ({
+  ...verdict,
+  audit: {
+    basis,
+    reasonCode: basis,
+    ...(ruleSource === undefined ? {} : { ruleSource }),
+  },
+});
+
 interface TrustedReadContext {
   /** Filesystem-verified effective cwd for the command. */
   readonly cwd: string;
@@ -1157,7 +1198,7 @@ const evaluateNormalized = (
   trustedLeadingCdTarget: string | undefined,
   trustedGitCwdTarget: string | undefined,
   trustedReadContext: TrustedReadContext | undefined,
-): Verdict => {
+): AuditedVerdict => {
   if (normalized.words.length === 0) {
     // A parenthesized group can leave redirects in a wordless outer segment.
     // Apply every segment-wide floor before returning so a sensitive input
@@ -1168,20 +1209,31 @@ const evaluateNormalized = (
       trustedGitCwdTarget,
     );
     return structuralAsk === undefined
-      ? { verdict: "default-continue" }
-      : { verdict: "ask", reason: structuralAsk };
+      ? audited({ verdict: "default-continue" }, "default-continue")
+      : audited({ verdict: "ask", reason: structuralAsk }, "structural-ask");
   }
   const command = normalized.words.join(" ");
   const potential = speculativeFloor(normalized);
 
   const denied = rules.deny.find((rule) => rule.pattern.test(command));
-  if (denied !== undefined) return { verdict: "deny", reason: denied.reason };
+  if (denied !== undefined) {
+    return audited(
+      { verdict: "deny", reason: denied.reason },
+      "configured-deny",
+      denied.source,
+    );
+  }
 
   const structural = structuralBitDeny(normalized);
-  if (structural !== undefined) return { verdict: "deny", reason: structural };
+  if (structural !== undefined) {
+    return audited({ verdict: "deny", reason: structural }, "structural-deny");
+  }
 
   if (potential === "deny") {
-    return { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON };
+    return audited(
+      { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON },
+      "speculative-deny",
+    );
   }
 
   const structuralAsk = structuralKnownAsk(
@@ -1190,13 +1242,16 @@ const evaluateNormalized = (
     trustedGitCwdTarget,
   );
   if (structuralAsk !== undefined) {
-    return { verdict: "ask", reason: structuralAsk };
+    return audited({ verdict: "ask", reason: structuralAsk }, "structural-ask");
   }
   if (hasRgOptionLikeGlobExpansion(normalized, trustedReadContext)) {
-    return {
-      verdict: "ask",
-      reason: "rg のglob展開が実行オプションとして解釈される可能性があります",
-    };
+    return audited(
+      {
+        verdict: "ask",
+        reason: "rg のglob展開が実行オプションとして解釈される可能性があります",
+      },
+      "rg-option-glob-ask",
+    );
   }
 
   // A same-repository leading cd is neutral only for explicit-allow
@@ -1206,7 +1261,7 @@ const evaluateNormalized = (
     trustedLeadingCdTarget !== undefined &&
     literalTrustedCdTarget(segment) === trustedLeadingCdTarget
   ) {
-    return { verdict: "allow" };
+    return audited({ verdict: "allow" }, "trusted-leading-cd");
   }
 
   // Git reads may invoke configured helpers, and rg requires no-config plus
@@ -1225,23 +1280,30 @@ const evaluateNormalized = (
       ? undefined
       : rules.allow.find((rule) => rule.pattern.test(allowCandidate));
   if (allowed !== undefined) {
-    return allowed.reason === undefined
-      ? { verdict: "allow" }
-      : { verdict: "allow", reason: allowed.reason };
+    const verdict =
+      allowed.reason === undefined
+        ? ({ verdict: "allow" } as const)
+        : ({ verdict: "allow", reason: allowed.reason } as const);
+    return audited(verdict, "configured-allow", allowed.source);
   }
 
   const asked = rules.ask.find((rule) => rule.pattern.test(command));
-  if (asked !== undefined) return { verdict: "ask", reason: asked.reason };
+  if (asked !== undefined) {
+    return audited({ verdict: "ask", reason: asked.reason }, "configured-ask");
+  }
 
   if (potential === "ask") {
-    return { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON };
+    return audited(
+      { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON },
+      "speculative-ask",
+    );
   }
 
   if (structuralKnownAllow(segment, normalized, trustedReadContext)) {
-    return { verdict: "allow" };
+    return audited({ verdict: "allow" }, "builtin-read-allow");
   }
 
-  return { verdict: "default-continue" };
+  return audited({ verdict: "default-continue" }, "default-continue");
 };
 
 const VERDICT_RANK: Readonly<Record<Verdict["verdict"], number>> = {
@@ -1254,8 +1316,13 @@ const VERDICT_RANK: Readonly<Record<Verdict["verdict"], number>> = {
 // Precedence deny > ask > allow > default-continue. `allow` only wins when
 // EVERY unit is explicitly allowed; a mix of allow + continue proceeds as the
 // default (both proceed, so the block outcome is identical either way).
-const combineVerdicts = (verdicts: readonly Verdict[]): Verdict => {
-  let best: Verdict = { verdict: "default-continue" };
+const combineVerdicts = (
+  verdicts: readonly AuditedVerdict[],
+): AuditedVerdict => {
+  let best: AuditedVerdict = audited(
+    { verdict: "default-continue" },
+    "default-continue",
+  );
   let allAllow = verdicts.length > 0;
   for (const verdict of verdicts) {
     if (verdict.verdict !== "allow") allAllow = false;
@@ -1264,7 +1331,10 @@ const combineVerdicts = (verdicts: readonly Verdict[]): Verdict => {
     }
   }
   if (best.verdict === "allow" && !allAllow) {
-    return { verdict: "default-continue" };
+    return audited({ verdict: "default-continue" }, "combined-default");
+  }
+  if (allAllow && verdicts.length > 1) {
+    return audited(best, "combined-allow");
   }
   return best;
 };
@@ -1274,13 +1344,21 @@ const evaluateCommandInner = (
   rules: LoadedRules,
   depth: number,
   options: EvaluationOptions,
-): Verdict => {
+): AuditedVerdict => {
   if (depth > MAX_SUBSTITUTION_DEPTH) {
-    return { verdict: "deny", reason: UNPARSEABLE_REASON };
+    return audited(
+      { verdict: "deny", reason: UNPARSEABLE_REASON },
+      "depth-limit",
+    );
   }
   const scanned = scanCommand(command);
-  if (!scanned.ok) return { verdict: "deny", reason: UNPARSEABLE_REASON };
-  const verdicts: Verdict[] = [];
+  if (!scanned.ok) {
+    return audited(
+      { verdict: "deny", reason: UNPARSEABLE_REASON },
+      "parse-error",
+    );
+  }
+  const verdicts: AuditedVerdict[] = [];
   for (const [index, segment] of scanned.segments.entries()) {
     const normalized = normalizeSegment(segment);
     verdicts.push(
@@ -1424,14 +1502,28 @@ const hasUnverifiedProjectMutationNavigation = (
 ): boolean =>
   hasUnverifiedProjectMutationNavigationInner(command, 0, allowLeadingCd);
 
+const evaluateCommandWithAudit = (
+  command: string,
+  rules: LoadedRules,
+  options: EvaluationOptions = {},
+): AuditedVerdict => evaluateCommandInner(command, rules, 0, options);
+
 const evaluateCommand = (
   command: string,
   rules: LoadedRules,
   options: EvaluationOptions = {},
-): Verdict => evaluateCommandInner(command, rules, 0, options);
+): Verdict => {
+  const { audit: _audit, ...verdict } = evaluateCommandWithAudit(
+    command,
+    rules,
+    options,
+  );
+  return verdict;
+};
 
 export {
   evaluateCommand,
+  evaluateCommandWithAudit,
   gitReadCwdTarget,
   hasProjectSensitiveMutation,
   hasUnverifiedProjectMutationNavigation,

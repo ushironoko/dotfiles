@@ -117,9 +117,19 @@ deterministic ask floor. An unavailable judge asks in interactive sessions and
 blocks in child/non-UI sessions; set `permissionJudge.enabled` to `false` for
 the previous rule-only behavior. Existing broad explicit grants still bypass
 the fallback by design except for helper-capable Git reads and `rg` reads that
-have not independently satisfied the no-config/canonical-path conditions. See
-[`LOCAL_PERMISSION_JUDGE.md`](./LOCAL_PERMISSION_JUDGE.md) for setup,
-configuration, data boundaries, and qualification steps.
+have not independently satisfied the no-config/canonical-path conditions.
+
+The safety layer also writes an always-on, versioned permission audit record for
+every Bash call it observes, in parent and pi-harness child processes. One JSONL
+record combines npm preflight, deterministic route/basis, verified project and
+worktree scope, local-judge safety/relevance gates and cache source, later hook
+stages, confirmation outcome, and the final pi-harness boundary disposition.
+ALLOW or an accepted ASK is not released unless that record append succeeds;
+an unavailable sink blocks the command. These records intentionally retain the
+raw shell command and bounded task/run/project context for corpus review, so
+they are sensitive local data. See
+[`LOCAL_PERMISSION_JUDGE.md`](./LOCAL_PERMISSION_JUDGE.md) for storage,
+retention, schema, analysis, limitations, judge setup, and qualification steps.
 
 An explicitly invoked `/skill:<name>` may pre-approve parent-session Bash
 commands through its `allowed-tools` frontmatter. The permission policy records
@@ -203,6 +213,7 @@ typebox baseline + acceptance/rejection through pi's real `validateToolArguments
 | AskUserQuestion                      | exact-name `AskUserQuestion` compatibility tool                              |
 | Notification (asuku)                 | asuku-notify feature (`agent_settled`, detached)                             |
 | permissions.deny / auto fallback     | permission-policy rules + local Ollama judge (fail-closed)                   |
+| permission decision corpus           | always-on private versioned JSONL audit (parent + child lineage)             |
 | statusLine                           | statusline feature (Claude-equivalent custom footer)                         |
 | logproxy                             | provider-log feature (opt-in, reduced scope)                                 |
 
@@ -289,6 +300,62 @@ Collision behavior (pi 0.80.6, docs/skills.md): discovery scans
 `~/.pi/agent/skills` before `~/.agents/skills` and keeps the **first** skill
 on a name collision, so the forks shadow the Claude versions for pi. pi may
 log a duplicate-name warning at startup — expected.
+
+## Permission audit log
+
+Permission decisions are stored under
+`~/.pi/agent/pi-harness/logs/permission-YYYY-MM-DD-<writer-uuid>.jsonl`.
+The directory is forced to `0700`; each per-writer file is created exclusively
+at `0600`. Parent and child processes never append to one shared file. Files
+older than 90 days are removed only when they are regular, owner-matching,
+single-link `0600` files; suspicious symlinks, FIFOs, hardlinks, ownership, or
+mode mismatches are skipped.
+
+The V1 schema is `pi-harness/bash-permission`. It records writer sequence,
+process/session/parent-child correlation, command text/hash/size, bounded task
+and authenticated same-run evidence, project/worktree/navigation context,
+ordered typed stages, `allow|ask|deny`, and the pi-harness boundary disposition
+`release|block`. `release` means later pi handlers may run; Pi exposes no final
+immutable pre-execution hook, so it is not proof that a later extension did not
+veto or mutate the call. Observed decisions are telemetry, not ground-truth
+labels. The analysis helper emits candidates without an `expected` verdict;
+manual review is required before adding one to the checked-in qualification
+corpus or deterministic ALLOW rules.
+
+Records retain commands and task text that may contain credentials, private
+paths, or other secrets. Do not publish or commit them without review. The
+serialized record ceiling is 1 MiB; oversized input is blocked and represented
+by a compact hash/size marker. A short/partial write is rolled back before the
+next append. If rollback or the current append fails, the affected call remains
+blocked and the UI receives one generic warning without record contents. A
+completed kernel write is the release boundary; no per-command filesystem sync
+is performed, so crash/power-loss durability is not guaranteed.
+
+Example local aggregation (treat output as sensitive):
+
+```bash
+jq -s '
+  group_by([.effectiveDecision, .boundaryDisposition]) |
+  map({decision: .[0].effectiveDecision,
+       disposition: .[0].boundaryDisposition,
+       count: length})
+' ~/.pi/agent/pi-harness/logs/permission-*.jsonl
+```
+
+Pure parsing, diagnostics, aggregation, and unlabeled candidate conversion live
+in `features/permission-audit/analysis.ts`. Malformed and truncated JSONL tails
+are reported rather than silently treated as valid records.
+
+### Repeated ASK reminder
+
+In a parent session, every third Bash confirmation that was actually displayed
+(`accepted`, `rejected`, or `aborted`) schedules one hidden transient system
+reminder for the next agent context. Intermediate ASK verdicts and headless
+`not-shown` outcomes are not counted. The reminder asks the agent to preserve
+intent while narrowing the next command, separating navigation from action,
+and avoiding unnecessary compound or indirect shell syntax. It never changes a
+permission decision, weakens policy, or promotes prior approval into an ALLOW
+rule or qualification label. The counter resets at the session boundary.
 
 ## provider-log scope (V10, measured 2026-07-11)
 

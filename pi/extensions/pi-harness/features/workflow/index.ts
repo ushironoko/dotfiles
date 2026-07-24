@@ -16,6 +16,7 @@ import { realpath, stat } from "node:fs/promises";
 import type { HarnessConfig } from "../../config";
 import { MAX_NOTIFICATION_RESULT_BYTES } from "../child-runs/background";
 import type { ChildRunsIntegration } from "../child-runs/index";
+import type { PermissionAuditIntegration } from "../permission-audit/index";
 import type { ChildObservation } from "../child-runs/model";
 import { renderChildRunsResult } from "../child-runs/presentation";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
@@ -59,6 +60,7 @@ interface SetupWorkflowOptions {
     rootCwd: string,
   ) => Promise<CwdBoundaryResult>;
   childRuns?: ChildRunsIntegration;
+  permissionAudit?: PermissionAuditIntegration;
 }
 
 interface SpawnFailure {
@@ -521,6 +523,11 @@ const setupWorkflow = (
                     onUpdate: emitUpdate,
                     observe: observeFor(runId),
                     termGraceMs: options.termGraceMs,
+                    auditEnv: options.permissionAudit?.childEnvironment(
+                      ctx,
+                      invocationId,
+                      runId,
+                    ),
                   },
                 );
                 if (runId !== undefined) {

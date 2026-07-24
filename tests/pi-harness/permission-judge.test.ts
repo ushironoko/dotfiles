@@ -225,7 +225,16 @@ describe("local Ollama permission judge", () => {
         runEvidence: runEvidence(),
         project: gitProject(),
       }),
-    ).toEqual({ kind: "allow", cached: false });
+    ).toMatchObject({
+      kind: "allow",
+      cached: false,
+      audit: {
+        source: "live",
+        gates: { safety: "ALLOW", relevance: "ALLOW" },
+        model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+        policyVersion: "permission-judge-v6-safety-relevance",
+      },
+    });
     expect(upstream.received.map((request) => request.path)).toEqual([
       "/api/status",
       "/api/tags",
@@ -315,7 +324,14 @@ describe("local Ollama permission judge", () => {
       },
     });
 
-    expect(outcome).toEqual({ kind: "allow", cached: false });
+    expect(outcome).toMatchObject({
+      kind: "allow",
+      cached: false,
+      audit: {
+        source: "live",
+        gates: { safety: "ALLOW", relevance: "ALLOW" },
+      },
+    });
     expect(chatRequests(upstream)).toHaveLength(1);
   });
 
@@ -753,7 +769,11 @@ describe("local Ollama permission judge", () => {
     );
     expect(
       await createPermissionJudge(configFor(lossyUpstream)).judge("git status"),
-    ).toEqual({ kind: "allow", cached: false });
+    ).toMatchObject({
+      kind: "allow",
+      cached: false,
+      audit: { source: "live" },
+    });
 
     const upstream = await startRaw((socket) => {
       socket.end(
@@ -810,9 +830,13 @@ describe("local Ollama permission judge", () => {
     ]);
 
     expect(exitCode, stderr).toBe(0);
-    expect(JSON.parse(stdout.trim())).toEqual({
+    expect(JSON.parse(stdout.trim())).toMatchObject({
       version: "0.test.0",
-      outcome: { kind: "allow", cached: false },
+      outcome: {
+        kind: "allow",
+        cached: false,
+        audit: { source: "live" },
+      },
     });
     expect(target.received.map((request) => request.path)).toContain(
       "/api/version",
@@ -934,7 +958,11 @@ describe("local Ollama permission judge", () => {
         cwd: "/a",
         project: unavailableProject,
       }),
-    ).toEqual({ kind: "allow", cached: true });
+    ).toMatchObject({
+      kind: "allow",
+      cached: true,
+      audit: { source: "cache" },
+    });
     const secondCwd = await judge.judge("git status", {
       cwd: "/b",
       project: unavailableProject,
@@ -961,7 +989,11 @@ describe("local Ollama permission judge", () => {
         runEvidence: runEvidence("complete-run-a"),
         project: gitProject("complete-project-a"),
       }),
-    ).toEqual({ kind: "allow", cached: true });
+    ).toMatchObject({
+      kind: "allow",
+      cached: true,
+      audit: { source: "cache" },
+    });
 
     await judge.judge(command, {
       cwd: "/private/project",
@@ -1004,9 +1036,10 @@ describe("local Ollama permission judge", () => {
       project: gitProject("complete-project-a"),
     };
     expect((await judge.judge("make check", noTaskContext)).kind).toBe("allow");
-    expect(await judge.judge("make check", noTaskContext)).toEqual({
+    expect(await judge.judge("make check", noTaskContext)).toMatchObject({
       kind: "allow",
       cached: true,
+      audit: { source: "cache" },
     });
     expect(chatRequests(upstream)).toHaveLength(3);
   });

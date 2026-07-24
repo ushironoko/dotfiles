@@ -10,6 +10,14 @@ import {
   setupHarness,
 } from "../../../pi/extensions/pi-harness/index";
 import setupHookBridge from "../../../pi/extensions/pi-harness/features/hook-bridge/index";
+import { parsePermissionAuditJsonl } from "../../../pi/extensions/pi-harness/features/permission-audit/analysis";
+import {
+  setupPermissionAudit,
+  type PermissionAuditIntegration,
+} from "../../../pi/extensions/pi-harness/features/permission-audit/index";
+import type { PermissionAuditStage } from "../../../pi/extensions/pi-harness/features/permission-audit/model";
+import { createPermissionTaskTracker } from "../../../pi/extensions/pi-harness/features/permission-policy/context";
+import setupPermissionPolicy from "../../../pi/extensions/pi-harness/features/permission-policy/index";
 import type { BridgeHookSpec } from "../../../pi/extensions/pi-harness/features/hook-bridge/registry";
 import {
   CHILD_PERMISSION_SIGNAL_ENV,
@@ -118,6 +126,123 @@ describe("pi-harness hook bridge", () => {
     });
     const nonInteractive = await nonInteractivePi.emitToolCall(event);
     expect(nonInteractive?.reason).toBe("confirm hook action");
+  });
+
+  test("a later policy denial outranks an accepted hook ASK", async () => {
+    const directory = await makeTempDirectory("pi-hook-ask-then-deny");
+    const script = join(directory, "ask.sh");
+    await fs.writeFile(
+      script,
+      [
+        "#!/bin/bash",
+        "cat >/dev/null",
+        `printf '%s' '{"hookSpecificOutput":{"permissionDecision":"ask","permissionDecisionReason":"confirm first"}}'`,
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const config = makeConfig(directory);
+    const pi = createFakePi({ cwd: directory });
+    const taskTracker = createPermissionTaskTracker();
+    const audit = setupPermissionAudit(pi, config, { taskTracker });
+    const blocker = (reason: string) => ({ block: true as const, reason });
+    setupHookBridge(pi, config, {
+      registry: [
+        makeSpec("ask-first", "tool_call", script, { matcher: /^Bash$/ }),
+      ],
+      permissionAudit: audit,
+      auditPhase: "preflight",
+      blockToolCall: blocker,
+    });
+    setupPermissionPolicy(pi, config, {
+      taskTracker,
+      permissionAudit: audit,
+      blockToolCall: blocker,
+    });
+    audit.registerTail(pi, blocker);
+    pi.queueConfirm(true);
+
+    expect(
+      await pi.emitToolCall({
+        type: "tool_call",
+        toolName: "bash",
+        toolCallId: "ask-then-deny",
+        input: { command: "bit relay serve" },
+      }),
+    ).toMatchObject({ block: true });
+    await pi.emitSessionShutdown();
+
+    const [file] = await fs.readdir(config.paths.logDir);
+    const parsed = parsePermissionAuditJsonl(
+      await fs.readFile(join(config.paths.logDir, file ?? ""), "utf8"),
+    );
+    expect(parsed.records[0]).toMatchObject({
+      effectiveDecision: "deny",
+      boundaryDisposition: "block",
+      stages: [
+        { type: "hook", verdict: "ask" },
+        { type: "confirmation", status: "accepted" },
+        { type: "deterministic", verdict: "deny" },
+      ],
+    });
+  });
+
+  test("records degraded hook continues with stable reason codes", async () => {
+    const directory = await makeTempDirectory("pi-hook-degraded");
+    const timeoutScript = join(directory, "timeout.sh");
+    const nonzeroScript = join(directory, "nonzero.sh");
+    const malformedScript = join(directory, "malformed.sh");
+    await fs.writeFile(
+      timeoutScript,
+      "#!/bin/bash\ncat >/dev/null\nsleep 1\n",
+      { mode: 0o755 },
+    );
+    await fs.writeFile(nonzeroScript, "#!/bin/bash\ncat >/dev/null\nexit 1\n", {
+      mode: 0o755,
+    });
+    await fs.writeFile(
+      malformedScript,
+      "#!/bin/bash\ncat >/dev/null\nprintf not-json\n",
+      { mode: 0o755 },
+    );
+    const stages: PermissionAuditStage[] = [];
+    const permissionAudit: PermissionAuditIntegration = {
+      lineageId: "123e4567-e89b-42d3-a456-426614174000",
+      addStage: (_toolCallId, stage) => stages.push(stage),
+      updateContext() {},
+      finalizeBlock: async () => true,
+      registerTail() {},
+      childEnvironment: () => ({}),
+    };
+    const timeoutSpec = makeSpec("timeout", "tool_call", timeoutScript, {
+      matcher: /^Bash$/,
+    });
+    const pi = createFakePi({ cwd: directory });
+    setupHookBridge(pi, makeConfig(directory), {
+      permissionAudit,
+      registry: [
+        { ...timeoutSpec, timeoutMs: 10 },
+        makeSpec("nonzero", "tool_call", nonzeroScript, {
+          matcher: /^Bash$/,
+        }),
+        makeSpec("malformed", "tool_call", malformedScript, {
+          matcher: /^Bash$/,
+        }),
+      ],
+    });
+
+    expect(
+      await pi.emitToolCall({
+        type: "tool_call",
+        toolName: "bash",
+        toolCallId: "degraded-hooks",
+        input: { command: "pwd" },
+      }),
+    ).toBeUndefined();
+    expect(
+      stages.map((stage) =>
+        stage.type === "hook" ? stage.reasonCode : stage.type,
+      ),
+    ).toEqual(["hook-timeout", "hook-nonzero-exit", "hook-malformed-output"]);
   });
 
   test("npm_script_preference blocks before later permission handlers", async () => {
@@ -237,6 +362,39 @@ describe("pi-harness hook bridge", () => {
     expect(permissionSignals).toEqual([
       `${formatChildPermissionSignal(permissionSignalToken)}\n`,
       `${formatChildPermissionSignal(permissionSignalToken)}\n`,
+    ]);
+
+    await pi.emitSessionShutdown();
+    const auditFiles = (await fs.readdir(config.paths.logDir)).filter((name) =>
+      name.startsWith("permission-"),
+    );
+    expect(auditFiles).toHaveLength(1);
+    const audit = parsePermissionAuditJsonl(
+      await fs.readFile(join(config.paths.logDir, auditFiles[0] ?? ""), "utf8"),
+    );
+    expect(audit.records).toHaveLength(2);
+    expect(audit.records[0]?.stages).toEqual([
+      expect.objectContaining({
+        type: "hook",
+        phase: "preflight",
+        hookId: "npm-script-preference",
+        verdict: "deny",
+      }),
+    ]);
+    expect(audit.records[1]?.stages).toEqual([
+      expect.objectContaining({
+        type: "hook",
+        phase: "preflight",
+        verdict: "continue",
+      }),
+      expect.objectContaining({
+        type: "deterministic",
+        verdict: "ask",
+      }),
+      expect.objectContaining({
+        type: "confirmation",
+        status: "not-shown",
+      }),
     ]);
   });
 

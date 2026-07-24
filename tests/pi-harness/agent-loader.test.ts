@@ -7,6 +7,8 @@ import {
   type HarnessConfig,
 } from "../../pi/extensions/pi-harness/config";
 import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
+import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
+import type { PermissionAuditIntegration } from "../../pi/extensions/pi-harness/features/permission-audit/index";
 import setupSubagent from "../../pi/extensions/pi-harness/features/subagent/index";
 import {
   CHILD_PERMISSION_SIGNAL_ENV,
@@ -324,11 +326,13 @@ describe("pi-harness subagent", () => {
     );
 
     let recordedArgs: string[] = [];
-    let recordedChildEnv: string | undefined;
+    let recordedEnv: NodeJS.ProcessEnv = {};
     let recordedPrompt = "";
+    let capturedInvocationId: string | undefined;
+    let capturedRunId: string | undefined;
     const spawnFn: SpawnFunction = (_command, args, options) => {
       recordedArgs = [...args];
-      recordedChildEnv = options.env.PI_HARNESS_CHILD;
+      recordedEnv = options.env;
       const promptFlag = args.indexOf("--append-system-prompt");
       recordedPrompt = readFileSync(args[promptFlag + 1] ?? "", "utf8");
       const controller = createFakeProcess();
@@ -338,8 +342,32 @@ describe("pi-harness subagent", () => {
       });
       return controller.process;
     };
-    const pi = createFakePi({ cwd: home });
-    setupSubagent(pi, makeConfig(home), { spawnFn });
+    const pi = createFakePi({ cwd: home, sessionId: "parent-session" });
+    const registry = new ChildRunRegistry();
+    const childRuns = { registry, ensureVisible() {} };
+    const permissionAudit = {
+      childEnvironment(
+        _ctx: CtxLike,
+        invocationId: string | undefined,
+        runId: string | undefined,
+      ) {
+        capturedInvocationId = invocationId;
+        capturedRunId = runId;
+        return {
+          PI_HARNESS_AUDIT_LINEAGE_ID: "123e4567-e89b-42d3-a456-426614174000",
+          PI_HARNESS_AUDIT_PARENT_SESSION_ID: "parent-session",
+          ...(invocationId === undefined
+            ? {}
+            : { PI_HARNESS_AUDIT_INVOCATION_ID: invocationId }),
+          ...(runId === undefined ? {} : { PI_HARNESS_AUDIT_RUN_ID: runId }),
+        };
+      },
+    } as unknown as PermissionAuditIntegration;
+    setupSubagent(pi, makeConfig(home), {
+      spawnFn,
+      childRuns,
+      permissionAudit,
+    });
 
     await executeTool(
       pi.tools[0],
@@ -352,8 +380,24 @@ describe("pi-harness subagent", () => {
     expect(recordedArgs).toContain("--append-system-prompt");
     expect(recordedArgs).toContain("openai-codex/gpt-5.4-mini");
     expect(recordedArgs).toContain("read,grep");
-    expect(recordedChildEnv).toBe("1");
+    expect(recordedEnv.PI_HARNESS_CHILD).toBe("1");
+    expect(recordedEnv.PI_HARNESS_AUDIT_LINEAGE_ID).toBe(
+      "123e4567-e89b-42d3-a456-426614174000",
+    );
+    expect(recordedEnv.PI_HARNESS_AUDIT_PARENT_SESSION_ID).toBe(
+      "parent-session",
+    );
+    if (capturedInvocationId === undefined || capturedRunId === undefined) {
+      throw new Error("expected child correlation ids");
+    }
+    expect(recordedEnv.PI_HARNESS_AUDIT_INVOCATION_ID).toBe(
+      capturedInvocationId,
+    );
+    expect(recordedEnv.PI_HARNESS_AUDIT_RUN_ID).toBe(capturedRunId);
+    expect(capturedInvocationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(capturedRunId).toMatch(/^[0-9a-f-]{36}$/);
     expect(recordedPrompt).toBe("Review carefully.");
+    registry.dispose();
   });
 
   test("runs at most four parallel child processes", async () => {

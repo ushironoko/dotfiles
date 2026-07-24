@@ -80,6 +80,12 @@ JSON require confirmation or block.
 Interactive permission confirmations have no countdown: they remain open until
 the user responds or aborts the active pi operation (for example with Esc).
 
+The permission audit is mandatory and has no feature toggle. Disabling the
+local judge changes residual command routing but does not disable deterministic,
+hook, confirmation, or final-boundary audit records. If the audit sink is not
+writable, pi-harness blocks Bash release rather than executing an unaudited
+ALLOW or accepted ASK.
+
 ## Command hygiene guidance
 
 Before each parent or child agent run, the mandatory permission-policy feature
@@ -184,6 +190,11 @@ deterministic floor, explicit confirmation, or local judge.
     response, and exactly one structured decision containing only `safety` and
     `relevance`. Both must be `ALLOW`; either `ASK` or any invalid response asks
     the user or blocks without UI.
+15. Append one terminal V1 audit record after every pi-harness permission stage
+    has passed, or at the exact stage that blocks. A successful ALLOW or accepted
+    ASK is released only after the append succeeds. `release` describes the
+    pi-harness boundary; a later third-party extension can still veto or mutate
+    the call because Pi exposes no final immutable pre-execution hook.
 
 Pi runs the shared `npm_script_preference` hook as a blocking preflight before
 this decision. Because it precedes permission-policy, pi launches it with
@@ -286,6 +297,78 @@ verified-project fingerprint, and bounded request envelope. Raw task, assistant
 text, command, and omitted worktree text is not retained in cache entries. ASK,
 timeout, malformed, aborted, unverified, unavailable, and uncorrelated outcomes
 are never cached.
+
+## Permission audit storage and analysis
+
+The cache privacy statement above does not apply to the separate corpus audit.
+The audit intentionally stores raw commands and the bounded task/run/project
+context used for classification, plus deterministic route basis, rule source,
+verified navigation, exact live judge gates, cache source, hook stages, and
+confirmation outcome. This makes the records useful for replay-free offline
+analysis, but it also means they may contain credentials, private paths, and
+other sensitive text.
+
+Records use schema `pi-harness/bash-permission`, version 1, and are written to:
+
+```text
+~/.pi/agent/pi-harness/logs/permission-YYYY-MM-DD-<writer-uuid>.jsonl
+```
+
+The directory is `0700`; files are exclusive-created at `0600`. Every extension
+instance uses a distinct writer UUID, so reloads and parent/child processes do
+not share an append target. Records contain writer sequence, Pi session ID, and
+non-secret parent lineage / invocation / run IDs. Those inherited IDs are join
+hints under the trusted-local-account model, not cryptographic identities. The
+authenticated child permission-signal token is consumed separately and never
+stored.
+
+A top-level writer removes records older than 90 days only after `lstat`
+confirms an owner-matching, single-link regular `0600` file. Symlinks, FIFOs,
+hardlinks, unexpected modes/owners, and malformed names are skipped. The
+serialized record limit is 1 MiB. An oversized call is blocked and represented
+by a compact hash/size marker. Short writes are retried; a failed partial write
+is truncated back to its original offset, and rollback failure poisons that
+writer. A complete kernel write is considered persisted for release; no
+per-command filesystem sync is performed, so crash/power-loss durability is not
+guaranteed. Node has no portable `openat` binding, leaving a documented
+same-user parent-directory replacement residual despite no-follow and directory
+identity checks.
+
+The pure helpers in `features/permission-audit/analysis.ts` validate V1 JSONL,
+report malformed/truncated tails, aggregate decisions/routes/reasons/gates/cache
+and confirmations, and emit qualification candidates. A confirmation stage
+normally makes the effective decision `ask`, including rejected, UI-less, and
+aborted challenges; however, a separate later explicit deny or internal error
+is terminal and takes precedence as `deny`. Candidates deliberately
+have no `expected` verdict: model output and user approval are observations, not
+ground truth. Review a candidate manually before adding it to the qualification
+corpus or deriving a deterministic ALLOW rule. Do not commit or publish raw logs
+or exports without secret review.
+
+A minimal local frequency summary is:
+
+```bash
+jq -s '
+  group_by([.effectiveDecision, .boundaryDisposition]) |
+  map({decision: .[0].effectiveDecision,
+       disposition: .[0].boundaryDisposition,
+       count: length})
+' ~/.pi/agent/pi-harness/logs/permission-*.jsonl
+```
+
+If directory/file verification, serialization, or append fails, pi-harness
+blocks the call and shows at most one generic UI warning per session. While the
+sink is healthy there is exactly one terminal record per observed Bash call;
+the impossible claim that an unavailable sink also contains its failed record
+is not made.
+
+Repeated confirmation is also used as bounded usability feedback, not as a
+safety label. After every three Bash confirmations actually displayed in one
+parent session (`accepted`, `rejected`, or `aborted`), pi-harness injects one
+hidden transient reminder asking the agent to narrow or split later command
+shapes without changing their intent. Intermediate ASK verdicts and UI-less
+`not-shown` outcomes do not count. This reminder cannot alter permission
+routing, update rules, or promote observed approval into qualification corpus.
 
 ## Security limitations
 
