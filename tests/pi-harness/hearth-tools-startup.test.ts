@@ -386,6 +386,17 @@ describe("hearth-tools startup", () => {
     expect(FakeEngine.clearCount).toBe(2);
 
     await fake.emit("session_shutdown");
+    // Register the next extension revision without starting its session. The
+    // old initialized broker must remain active throughout this reload gap.
+    await setupHearthTools(fake.pi, {
+      loadModule: async () => ({ HearthEngine: FakeEngine as never }),
+      getAgentDir: () => "/agent",
+      loadConfig: () => ({ ...DEFAULT_HEARTH_TOOLS_CONFIG }),
+      createSettings: (() => settings) as never,
+      fatal: (message) => {
+        throw new Error(message);
+      },
+    });
     const pending: Promise<void>[] = [];
     fake.pi.events.emit("pi-hearth-tools:invalidate-request:v1", {
       accept(operation: Promise<void>) {
@@ -394,5 +405,48 @@ describe("hearth-tools startup", () => {
     });
     await Promise.all(pending);
     expect(FakeEngine.clearCount).toBe(3);
+
+    let finishWriter = (): void => {};
+    const writerFinished = new Promise<void>((resolveWriter) => {
+      finishWriter = resolveWriter;
+    });
+    let lease: { ready: Promise<void>; complete: Promise<void> } | undefined;
+    fake.pi.events.emit("pi-hearth-tools:external-writer-request:v1", {
+      finished: writerFinished,
+      accept(value: { ready: Promise<void>; complete: Promise<void> }) {
+        lease = value;
+      },
+    });
+    expect(lease).toBeDefined();
+    await lease?.ready;
+
+    let finishSecondWriter = (): void => {};
+    const secondWriterFinished = new Promise<void>((resolveWriter) => {
+      finishSecondWriter = resolveWriter;
+    });
+    let secondLease:
+      | { ready: Promise<void>; complete: Promise<void> }
+      | undefined;
+    fake.pi.events.emit("pi-hearth-tools:external-writer-request:v1", {
+      finished: secondWriterFinished,
+      accept(value: { ready: Promise<void>; complete: Promise<void> }) {
+        secondLease = value;
+      },
+    });
+    expect(secondLease).toBeDefined();
+    await secondLease?.ready;
+
+    let leaseCompleted = false;
+    void lease?.complete.then(() => {
+      leaseCompleted = true;
+    });
+    finishWriter();
+    await Promise.resolve();
+    expect(leaseCompleted).toBe(false);
+
+    finishSecondWriter();
+    await Promise.all([lease?.complete, secondLease?.complete]);
+    expect(leaseCompleted).toBe(true);
+    expect(FakeEngine.clearCount).toBe(4);
   });
 });

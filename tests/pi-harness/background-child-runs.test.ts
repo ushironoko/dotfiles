@@ -30,6 +30,7 @@ const runtime = (
     failSends?: number;
     reentrantSend?: boolean;
     onWorkSettled?: BackgroundHost["onWorkSettled"];
+    runExternalWork?: BackgroundHost["runExternalWork"];
   } = {},
 ) => {
   let id = 0;
@@ -43,6 +44,7 @@ const runtime = (
   let manager!: BackgroundInvocationManager;
   const host: BackgroundHost = {
     onWorkSettled: options.onWorkSettled,
+    runExternalWork: options.runExternalWork,
     appendEntry(customType, data) {
       entries.push({ customType, data });
     },
@@ -221,11 +223,54 @@ describe("background child-run manager", () => {
     });
     await invalidationStarted.promise;
     expect(invalidationCalls).toBe(1);
+    expect(manager.hasActiveInvocations()).toBe(true);
     expect(shutdownFinished).toBe(false);
 
     invalidated.resolve();
     await shutdown;
     expect(shutdownFinished).toBe(true);
+  });
+
+  test("drain timeout retains the invocation and external-writer lease", async () => {
+    const childDone = deferred<{ text: string }>();
+    const leaseStarted = deferred<void>();
+    let externalLeaseActive = false;
+    let invalidationCalls = 0;
+    const { registry, manager } = runtime({
+      drainTimeoutMs: 1,
+      async runExternalWork(operation) {
+        externalLeaseActive = true;
+        leaseStarted.resolve();
+        try {
+          return await operation();
+        } finally {
+          externalLeaseActive = false;
+        }
+      },
+      onWorkSettled() {
+        invalidationCalls += 1;
+      },
+    });
+    const started = begin(registry);
+    manager.schedule({
+      invocationId: started.invocationId,
+      toolCallId: "tool-1",
+      source: "subagent",
+      run: () => childDone.promise,
+    });
+    manager.acknowledgeToolResult("tool-1");
+    await leaseStarted.promise;
+
+    await manager.shutdown();
+    expect(externalLeaseActive).toBe(true);
+    expect(manager.hasActiveInvocations()).toBe(true);
+    expect(invalidationCalls).toBe(0);
+
+    childDone.resolve({ text: "late completion" });
+    await manager.drain(started.invocationId);
+    expect(externalLeaseActive).toBe(false);
+    expect(invalidationCalls).toBe(1);
+    expect(manager.hasActiveInvocations()).toBe(false);
   });
 
   test("branch navigation aborts and persists without parent delivery", async () => {

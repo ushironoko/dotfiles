@@ -273,32 +273,34 @@ export const createHearthEditDefinition = (
 const normalizedGlobPath = (value: string): string =>
   value.replaceAll("\\", "/");
 
-const hearthGlobs = (
-  searchPath: string,
-  glob: string | undefined,
-): string[] => {
+const hearthGlobs = (cwd: string, glob: string | undefined): string[] => {
   if (glob === undefined || glob.startsWith("!")) return [];
   const normalized = normalizedGlobPath(glob);
   if (!normalized.includes("/")) return [normalized];
-  return [
-    normalizedGlobPath(resolve(searchPath, normalized.replace(/^\/+/, ""))),
-  ];
+  return [normalizedGlobPath(resolve(cwd, normalized.replace(/^\/+/, "")))];
 };
 
 const excludeNegativeGlob = (
   files: FileMatches[],
-  root: string,
+  cwd: string,
   glob: string | undefined,
+  rootIsDirectory: boolean,
 ): FileMatches[] => {
-  if (glob === undefined || !glob.startsWith("!")) return files;
-  const pattern = normalizedGlobPath(glob.slice(1)).replace(/^\/+/, "");
+  if (glob === undefined || !glob.startsWith("!") || !rootIsDirectory) {
+    return files;
+  }
+  const rawPattern = normalizedGlobPath(glob.slice(1));
+  const rooted = rawPattern.startsWith("/");
+  const pattern = rawPattern.replace(/^\/+/, "");
   const matcher = new Bun.Glob(pattern);
   return files.filter((file) => {
-    const relativePath = normalizedGlobPath(relative(root, file.path));
-    return !(
-      matcher.match(relativePath) ||
-      matcher.match(normalizedGlobPath(basename(file.path)))
-    );
+    const relativePath = normalizedGlobPath(relative(cwd, file.path));
+    const pathMatches = matcher.match(relativePath);
+    const basenameMatches =
+      !rooted &&
+      !pattern.includes("/") &&
+      matcher.match(normalizedGlobPath(basename(file.path)));
+    return !(pathMatches || basenameMatches);
   });
 };
 
@@ -359,7 +361,7 @@ export const createHearthGrepDefinition = (
               pattern: input.pattern,
               path: searchPath,
               mode: "content" as GrepMode,
-              globs: hearthGlobs(searchPath, input.glob),
+              globs: hearthGlobs(cwd, input.glob),
               caseInsensitive: input.ignoreCase ?? false,
               fixedStrings: input.literal ?? false,
               beforeContext: context,
@@ -376,8 +378,9 @@ export const createHearthGrepDefinition = (
 
         const filtered = excludeNegativeGlob(
           result.files,
-          result.root,
+          cwd,
           input.glob,
+          result.rootIsDir,
         );
         const totalMatches = filtered.reduce(
           (total, file) => total + file.matchCount,
@@ -405,14 +408,36 @@ export const createHearthGrepDefinition = (
             ? relative(result.root, file.path).replaceAll("\\", "/")
             : basename(file.path);
           const matches = file.lines.filter((line) => line.isMatch);
+          let fullLines: string[] | undefined;
+          if (context > 0) {
+            try {
+              const content = await engine.readBytesAsync(
+                { path: file.path },
+                signal,
+              );
+              fullLines = content
+                .toString("utf8")
+                .replace(/\r\n/g, "\n")
+                .replace(/\r/g, "\n")
+                .split("\n");
+            } catch (error) {
+              mapCancelled(error, "Operation aborted");
+            }
+          }
           for (const match of matches) {
+            const firstLine = Math.max(1, match.lineNumber - context);
             const block =
-              context === 0
+              context === 0 || fullLines === undefined
                 ? [match]
-                : file.lines.filter(
-                    (line) =>
-                      Math.abs(line.lineNumber - match.lineNumber) <= context,
-                  );
+                : fullLines
+                    .slice(
+                      firstLine - 1,
+                      Math.min(fullLines.length, match.lineNumber + context),
+                    )
+                    .map((text, index) => ({
+                      lineNumber: firstLine + index,
+                      text,
+                    }));
             for (const line of block) {
               const truncated = truncateLine(line.text.replaceAll("\r", ""));
               linesTruncated ||= truncated.wasTruncated;

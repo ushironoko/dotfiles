@@ -9,14 +9,30 @@ export const HEARTH_SERVICE_READY = "pi-hearth-tools:service-ready:v1";
 export const HEARTH_SERVICE_REQUEST = "pi-hearth-tools:service-request:v1";
 export const HEARTH_INVALIDATE_REQUEST =
   "pi-hearth-tools:invalidate-request:v1";
+export const HEARTH_EXTERNAL_WRITER_REQUEST =
+  "pi-hearth-tools:external-writer-request:v1";
 
 const INVALIDATION_BROKERS = Symbol.for(
-  "ushironoko.pi-hearth-tools.invalidation-brokers.v1",
+  "ushironoko.pi-hearth-tools.invalidation-brokers.v2",
 );
 
 export interface HearthReadService {
   generation: string;
   createReadTool(cwd: string): AgentTool<TSchema, unknown>;
+}
+
+export interface ExternalWriterLease {
+  ready: Promise<void>;
+  complete: Promise<void>;
+}
+
+export interface HearthInvalidationHandlers {
+  clearCaches(): Promise<void>;
+  protectExternalWriter(finished: Promise<void>): ExternalWriterLease;
+}
+
+export interface HearthInvalidationRegistration {
+  activate(handlers: HearthInvalidationHandlers): void;
 }
 
 interface ServiceRequest {
@@ -28,8 +44,13 @@ interface InvalidationRequest {
   accept(operation: Promise<void>): void;
 }
 
+interface ExternalWriterRequest {
+  finished: Promise<void>;
+  accept(lease: ExternalWriterLease): void;
+}
+
 interface InvalidationBroker {
-  current: () => Promise<void>;
+  current?: HearthInvalidationHandlers;
 }
 
 interface GlobalWithInvalidationBrokers {
@@ -52,26 +73,48 @@ const isInvalidationRequest = (
   return typeof (value as Partial<InvalidationRequest>).accept === "function";
 };
 
+const isExternalWriterRequest = (
+  value: unknown,
+): value is ExternalWriterRequest => {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Partial<ExternalWriterRequest>;
+  return (
+    candidate.finished instanceof Promise &&
+    typeof candidate.accept === "function"
+  );
+};
+
 export const registerHearthInvalidationService = (
   pi: ExtensionAPI,
-  clearCaches: () => Promise<void>,
-): void => {
+): HearthInvalidationRegistration => {
   const host = globalThis as GlobalWithInvalidationBrokers;
   const brokers =
     host[INVALIDATION_BROKERS] ?? new WeakMap<object, InvalidationBroker>();
   host[INVALIDATION_BROKERS] = brokers;
   const eventBus = pi.events as object;
-  const existing = brokers.get(eventBus);
-  if (existing !== undefined) {
-    existing.current = clearCaches;
-    return;
+  let broker = brokers.get(eventBus);
+  if (broker === undefined) {
+    broker = {};
+    brokers.set(eventBus, broker);
+    pi.events.on(HEARTH_INVALIDATE_REQUEST, (value) => {
+      const current = broker?.current;
+      if (current !== undefined && isInvalidationRequest(value)) {
+        value.accept(current.clearCaches());
+      }
+    });
+    pi.events.on(HEARTH_EXTERNAL_WRITER_REQUEST, (value) => {
+      const current = broker?.current;
+      if (current !== undefined && isExternalWriterRequest(value)) {
+        value.accept(current.protectExternalWriter(value.finished));
+      }
+    });
   }
 
-  const broker: InvalidationBroker = { current: clearCaches };
-  brokers.set(eventBus, broker);
-  pi.events.on(HEARTH_INVALIDATE_REQUEST, (value) => {
-    if (isInvalidationRequest(value)) value.accept(broker.current());
-  });
+  return {
+    activate(handlers) {
+      if (broker !== undefined) broker.current = handlers;
+    },
+  };
 };
 
 export const registerHearthReadService = (

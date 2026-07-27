@@ -17,6 +17,7 @@ export const MAX_NOTIFICATION_RESULT_BYTES = 32 * 1024;
 export interface BackgroundHost {
   appendEntry(customType: string, data?: unknown): void;
   onWorkSettled?(): Promise<void> | void;
+  runExternalWork?<T>(operation: () => Promise<T>): Promise<T>;
   sendMessage(
     message: {
       customType: string;
@@ -52,6 +53,7 @@ interface BackgroundRecord extends BackgroundSchedule {
   controller: AbortControllerLike;
   accepted: boolean;
   settled?: BackgroundWorkResult;
+  invalidationCompleted: boolean;
   archived: boolean;
   suppressNotification: boolean;
   abortReason?: ChildRunTerminalReason;
@@ -252,6 +254,7 @@ export class BackgroundInvocationManager {
       ...spec,
       controller,
       accepted: false,
+      invalidationCompleted: false,
       archived: false,
       suppressNotification: false,
       workPromise: Promise.resolve(),
@@ -267,7 +270,15 @@ export class BackgroundInvocationManager {
         if (isAborted(controller.signal)) {
           throw new Error("Background child run was aborted");
         }
-        return spec.run(controller.signal);
+        const run = () => {
+          if (isAborted(controller.signal)) {
+            throw new Error("Background child run was aborted");
+          }
+          return spec.run(controller.signal);
+        };
+        return this.host.runExternalWork === undefined
+          ? run()
+          : this.host.runExternalWork(run);
       })
       .then(
         (completion) => {
@@ -307,6 +318,7 @@ export class BackgroundInvocationManager {
           // Hearth extension is absent or shutting down. Child persistence and
           // lifecycle cleanup must still complete.
         }
+        record.invalidationCompleted = true;
         this.tryArchive(record);
       })
       .catch(() => {
@@ -536,7 +548,12 @@ export class BackgroundInvocationManager {
   }
 
   private tryArchive(record: BackgroundRecord): void {
-    if (record.archived || !record.accepted || record.settled === undefined) {
+    if (
+      record.archived ||
+      !record.accepted ||
+      record.settled === undefined ||
+      !record.invalidationCompleted
+    ) {
       return;
     }
 

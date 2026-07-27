@@ -188,20 +188,25 @@ after registration, and before each agent turn.
 gate; tool Bash and user Bash (`!`/`!!`) take it exclusively and clear all
 caches before another file operation can start, after every outcome including
 nonzero, timeout, abort, and indeterminate. Cache invalidation also runs after
-write/edit result hooks and through an awaitable settlement handshake for every
-managed subagent/workflow, including abort, branch navigation, reload, and
-shutdown paths where completion notification is suppressed. This covers
-formatters and child writers independently of parent-message delivery. External
-editors and unmanaged processes still require `/hearth-clear-cache`, a restart,
-or `trustCache: false`. An `indeterminate` command is never retried
+write/edit result hooks. Every managed subagent/workflow acquires an exclusive
+parent-Engine lease before child work begins, clears caches after settlement,
+and only then releases parent file tools. Concurrent managed children share one
+writer epoch so fan-out remains parallel. Abort, branch navigation, reload, and
+shutdown paths use the same lease even when completion notification is
+suppressed; after a bounded drain timeout, the lease remains held until the late
+child actually settles. This covers formatters and child writers independently
+of parent-message delivery. External editors and unmanaged processes still
+require `/hearth-clear-cache`, a restart, or `trustCache: false`. An `indeterminate` command is never retried
 automatically. In particular, a command that terminates its pooled warm shell
 may be indeterminate; set `warmShell: false` when exact signal-exit reporting is
 more important than shell reuse.
 
-Grep translates root-relative positive and negative globs to Hearth. Negative
-globs require post-filtering because Hearth 0.1.0 has no native exclusion glob;
-the adapter bounds native candidates and fails closed with a refinement error
-rather than returning an incomplete result if that bound is exhausted.
+Grep translates cwd-relative positive and negative ripgrep globs to Hearth,
+preserves root anchors, and ignores globs for an explicit file operand like
+ripgrep. Negative directory globs require post-filtering because Hearth 0.1.0
+has no native exclusion glob; the adapter bounds native candidates and fails
+closed with a refinement error rather than returning an incomplete result if
+that bound is exhausted.
 
 Bash streams once into pi's existing accumulator, preserving progress updates,
 tail truncation, and full-output files. Hearth 0.1.0 streams valid UTF-8 text,

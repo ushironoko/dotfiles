@@ -241,6 +241,18 @@ describe("Hearth-backed pi tool contracts", () => {
       text: "src/a.ts:1: needle",
     });
 
+    const cwdRelative = await grep.execute(
+      "grep-cwd-relative",
+      { pattern: "needle", path: "src", glob: "src/*.ts" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(cwdRelative.content[0]).toEqual({
+      type: "text",
+      text: "a.ts:1: needle",
+    });
+
     const negative = await grep.execute(
       "grep-negative",
       { pattern: "needle", path: ".", glob: "!*.md" },
@@ -268,6 +280,32 @@ describe("Hearth-backed pi tool contracts", () => {
     expect(rootedText).toContain("root.ts:1: needle");
     expect(rootedText).toContain("src/a.md:1: needle");
     expect(rootedText).not.toContain("src/a.ts");
+
+    const rootedFromSubdir = await grep.execute(
+      "grep-rooted-subdir",
+      { pattern: "needle", path: "src", glob: "!/a.ts" },
+      undefined,
+      undefined,
+      context,
+    );
+    const rootedFromSubdirText =
+      rootedFromSubdir.content[0]?.type === "text"
+        ? rootedFromSubdir.content[0].text
+        : "";
+    expect(rootedFromSubdirText).toContain("a.md:1: needle");
+    expect(rootedFromSubdirText).toContain("a.ts:1: needle");
+
+    const explicitFile = await grep.execute(
+      "grep-file-glob",
+      { pattern: "needle", path: "src/a.ts", glob: "!*.ts" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(explicitFile.content[0]).toEqual({
+      type: "text",
+      text: "a.ts:1: needle",
+    });
   });
 
   test("grep reproduces pi context blocks for adjacent matches", async () => {
@@ -296,6 +334,23 @@ describe("Hearth-backed pi tool contracts", () => {
         "adjacent.txt-4- last",
       ].join("\n"),
     });
+
+    const limited = await grep.execute(
+      "grep-adjacent-limit",
+      { pattern: "match", path: ".", context: 1, limit: 1 },
+      undefined,
+      undefined,
+      context,
+    );
+    const limitedText =
+      limited.content[0]?.type === "text" ? limited.content[0].text : "";
+    expect(limitedText).toContain(
+      [
+        "adjacent.txt-1- first",
+        "adjacent.txt:2: match one",
+        "adjacent.txt-3- match two",
+      ].join("\n"),
+    );
   });
 
   test("bounds negative-glob candidates and fails closed if underfilled", async () => {

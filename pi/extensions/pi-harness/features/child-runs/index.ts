@@ -88,6 +88,13 @@ const completionInvocationId = (details: unknown): string | undefined => {
 };
 
 const HEARTH_INVALIDATE_REQUEST = "pi-hearth-tools:invalidate-request:v1";
+const HEARTH_EXTERNAL_WRITER_REQUEST =
+  "pi-hearth-tools:external-writer-request:v1";
+
+interface ExternalWriterLease {
+  ready: Promise<void>;
+  complete: Promise<void>;
+}
 
 const BACKGROUND_AGENT_SYSTEM_PROMPT = `## Background agent completion
 
@@ -169,6 +176,30 @@ const setupChildRuns = (
     });
     await Promise.allSettled(pending);
   };
+  const runExternalWork = async <T>(
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    let finish = (): void => {};
+    const finished = new Promise<void>((resolveFinished) => {
+      finish = resolveFinished;
+    });
+    const leases: ExternalWriterLease[] = [];
+    runtime.events?.emit(HEARTH_EXTERNAL_WRITER_REQUEST, {
+      finished,
+      accept(lease: ExternalWriterLease) {
+        leases.push(lease);
+      },
+    });
+    try {
+      if (leases.length > 0) {
+        await Promise.all(leases.map((lease) => lease.ready));
+      }
+      return await operation();
+    } finally {
+      finish();
+      await Promise.allSettled(leases.map((lease) => lease.complete));
+    }
+  };
   const background =
     options.childExecution !== false &&
     typeof runtime.appendEntry === "function" &&
@@ -177,6 +208,7 @@ const setupChildRuns = (
           appendEntry: runtime.appendEntry.bind(runtime),
           sendMessage: runtime.sendMessage.bind(runtime),
           onWorkSettled: invalidateHearthCaches,
+          runExternalWork,
         })
       : undefined;
   const pendingTreeTransitions: PendingTreeTransition[] = [];
