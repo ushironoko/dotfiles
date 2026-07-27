@@ -154,6 +154,11 @@ export default defineConfig({
       type: "directory",
     },
     {
+      source: "./pi/extensions/hearth-tools",
+      target: "~/.pi/agent/extensions/hearth-tools",
+      type: "directory",
+    },
+    {
       source: "./pi/extensions/codex-web",
       target: "~/.pi/agent/extensions/codex-web",
       type: "directory",

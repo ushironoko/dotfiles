@@ -17,6 +17,7 @@
  * - Blocked tool calls fire NO tool_result event (V2 measurement: blocked
  *   bash produced no tool_result in fixtures).
  */
+import { createEventBus, type EventBus } from "@earendil-works/pi-coding-agent";
 import type {
   AgentStartInjection,
   BeforeAgentStartEvent,
@@ -86,6 +87,7 @@ interface HandlerStore {
 }
 
 export interface FakePi extends PiLike {
+  readonly events: EventBus;
   emitSessionStart(payload: SessionStartEvent): Promise<void>;
   emitInput(payload: InputEvent): Promise<void>;
   emitBeforeAgentStart(
@@ -173,6 +175,7 @@ export function createFakePi(
     after_provider_response: [],
   };
   const tools: ToolDefLike[] = [];
+  const events = createEventBus();
   const commands = new Set<string>();
   const shortcuts = new Set<string>();
   const entryRenderers = new Set<string>();
@@ -271,6 +274,7 @@ export function createFakePi(
   };
 
   return {
+    events,
     on<K extends PiEventName>(event: K, handler: PiEventHandler<K>) {
       const registrar = (
         registrars as Partial<

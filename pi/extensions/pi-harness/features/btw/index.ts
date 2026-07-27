@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AgentMessage,
+  AgentTool,
   ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import {
@@ -19,11 +20,14 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import type { TSchema } from "typebox";
 import type { PiLike } from "../../lib/pi-like";
 import { stripTerminalControls } from "../../lib/terminal-text";
 
 const HISTORY_TYPE = "pi-harness:btw";
 const STATUS_KEY = "pi-harness-btw";
+const HEARTH_SERVICE_READY = "pi-hearth-tools:service-ready:v1";
+const HEARTH_SERVICE_REQUEST = "pi-hearth-tools:service-request:v1";
 const QUESTION_MAX_BYTES = 16 * 1024;
 const ANSWER_MAX_BYTES = 64 * 1024;
 const ERROR_MAX_BYTES = 4 * 1024;
@@ -212,6 +216,7 @@ const answerFromReadOnlyFork = async (
   snapshot: BtwSnapshot,
   question: string,
   dependencies: BtwForkDependencies = defaultForkDependencies,
+  hearthReadTool?: AgentTool<TSchema, unknown>,
 ): Promise<string> => {
   assertQuestion(question);
   const agentDir = dependencies.getAgentDir();
@@ -249,6 +254,7 @@ const answerFromReadOnlyFork = async (
     thinkingLevel: snapshot.thinkingLevel,
     tools: [...BTW_READ_ONLY_TOOLS],
     excludeTools: [...BTW_DENIED_TOOLS],
+    ...(hearthReadTool === undefined ? {} : { customTools: [hearthReadTool] }),
     resourceLoader,
     sessionManager,
     settingsManager,
@@ -336,6 +342,20 @@ interface BtwFeatureDependencies {
   createId?: () => string;
 }
 
+interface HearthReadService {
+  generation: string;
+  createReadTool(cwd: string): AgentTool<TSchema, unknown>;
+}
+
+const isHearthReadService = (value: unknown): value is HearthReadService => {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Partial<HearthReadService>;
+  return (
+    typeof candidate.generation === "string" &&
+    typeof candidate.createReadTool === "function"
+  );
+};
+
 interface NativeAbortControllerLike {
   readonly signal: AbortSignal;
   abort(): void;
@@ -391,10 +411,40 @@ const setupBtw = (
   pi: PiLike,
   dependencies: BtwFeatureDependencies = {},
 ): void => {
-  const answerQuestion = dependencies.answerQuestion ?? answerFromReadOnlyFork;
   const now = dependencies.now ?? Date.now;
   const createId = dependencies.createId ?? randomUUID;
   const runtime = pi as unknown as ExtensionAPI;
+  let hearthService: HearthReadService | undefined;
+  const acceptHearthService = (value: unknown): void => {
+    if (isHearthReadService(value)) hearthService = value;
+  };
+  const unsubscribeHearthReady = runtime.events.on(
+    HEARTH_SERVICE_READY,
+    acceptHearthService,
+  );
+  const requestHearthService = (): void => {
+    const requestId = randomUUID();
+    runtime.events.emit(HEARTH_SERVICE_REQUEST, {
+      requestId,
+      accept(service: unknown, responseId: string) {
+        if (responseId === requestId) acceptHearthService(service);
+      },
+    });
+  };
+  requestHearthService();
+  const answerQuestion =
+    dependencies.answerQuestion ??
+    ((snapshot: BtwSnapshot, question: string) => {
+      if (hearthService === undefined) {
+        throw new Error("Hearth read service is unavailable");
+      }
+      return answerFromReadOnlyFork(
+        snapshot,
+        question,
+        defaultForkDependencies,
+        hearthService.createReadTool(snapshot.cwd),
+      );
+    });
   let running = false;
   let activeAbort: BtwCancellationController | undefined;
   let activeOperation: Promise<void> | undefined;
@@ -403,6 +453,7 @@ const setupBtw = (
 
   pi.on("session_start", () => {
     sessionGeneration += 1;
+    requestHearthService();
   });
   pi.on("session_before_tree", () => {
     // Invalidate before navigation changes the active leaf. Cancelling even if
@@ -416,6 +467,8 @@ const setupBtw = (
     activeAbort?.abort();
     const operation = activeOperation;
     await operation;
+    unsubscribeHearthReady();
+    hearthService = undefined;
   });
   runtime.on("session_compact", (_event, ctx) => {
     const visibleIds = new Set<string>();
