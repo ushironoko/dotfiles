@@ -116,6 +116,7 @@ export interface SetupChildRunsOptions {
   readonly bitIssues?: boolean;
   readonly bitIssueCli?: BitIssueCli;
   readonly childExecution?: boolean;
+  readonly backgroundDrainTimeoutMs?: number;
 }
 
 const replayBranch = (
@@ -204,12 +205,18 @@ const setupChildRuns = (
     options.childExecution !== false &&
     typeof runtime.appendEntry === "function" &&
     typeof runtime.sendMessage === "function"
-      ? new BackgroundInvocationManager(registry, {
-          appendEntry: runtime.appendEntry.bind(runtime),
-          sendMessage: runtime.sendMessage.bind(runtime),
-          onWorkSettled: invalidateHearthCaches,
-          runExternalWork,
-        })
+      ? new BackgroundInvocationManager(
+          registry,
+          {
+            appendEntry: runtime.appendEntry.bind(runtime),
+            sendMessage: runtime.sendMessage.bind(runtime),
+            onWorkSettled: invalidateHearthCaches,
+            runExternalWork,
+          },
+          options.backgroundDrainTimeoutMs === undefined
+            ? {}
+            : { drainTimeoutMs: options.backgroundDrainTimeoutMs },
+        )
       : undefined;
   const pendingTreeTransitions: PendingTreeTransition[] = [];
   const releaseTreeTransition = (entry: PendingTreeTransition): void => {
@@ -413,7 +420,10 @@ const setupChildRuns = (
       return { cancel: true };
     }
     if (pending?.released) return { cancel: true };
-    if (background?.shouldCancelBranchNavigation()) {
+    if (
+      background?.hasActiveInvocations() ||
+      background?.shouldCancelBranchNavigation()
+    ) {
       if (pending !== undefined) releaseTreeTransition(pending);
       return { cancel: true };
     }

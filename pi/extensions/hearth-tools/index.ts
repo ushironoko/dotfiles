@@ -51,6 +51,8 @@ const POST_TOOL_INVALIDATION = new Set([
   "bash",
   "subagent",
   "workflow",
+  "worktree_create",
+  "worktree_remove",
 ]);
 
 type Fatal = (message: string) => never;
@@ -213,6 +215,16 @@ const completedToolName = (event: unknown): string | undefined => {
     : undefined;
 };
 
+const isBackgroundAcceptance = (event: unknown): boolean => {
+  if (!isRecord(event) || !isRecord(event.message)) return false;
+  const { details } = event.message;
+  return (
+    isRecord(details) &&
+    isRecord(details.background) &&
+    details.background.status === "accepted"
+  );
+};
+
 export const setupHearthTools = async (
   pi: ExtensionAPI,
   dependencies: HearthSetupDependencies = {},
@@ -301,15 +313,16 @@ export const setupHearthTools = async (
     }
   });
 
-  pi.on("before_agent_start", () => {
-    if (registered) {
-      try {
-        assertHearthOwnership(pi);
-      } catch {
-        fatal(COLLISION_ERROR);
-      }
+  const verifyOwnership = (): void => {
+    if (!registered) return;
+    try {
+      assertHearthOwnership(pi);
+    } catch {
+      fatal(COLLISION_ERROR);
     }
-  });
+  };
+  pi.on("before_agent_start", verifyOwnership);
+  pi.on("tool_call", verifyOwnership);
 
   pi.on("message_start", async (event) => {
     if (isChildCompletion(event)) await clearCaches();
@@ -317,9 +330,14 @@ export const setupHearthTools = async (
 
   pi.on("message_end", async (event) => {
     const toolName = completedToolName(event);
-    if (toolName !== undefined && POST_TOOL_INVALIDATION.has(toolName)) {
-      await clearCaches();
+    if (toolName === undefined || !POST_TOOL_INVALIDATION.has(toolName)) return;
+    if (
+      (toolName === "subagent" || toolName === "workflow") &&
+      isBackgroundAcceptance(event)
+    ) {
+      return;
     }
+    await clearCaches();
   });
 
   pi.on("session_shutdown", () => service.dispose());

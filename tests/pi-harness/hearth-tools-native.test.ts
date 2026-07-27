@@ -223,9 +223,10 @@ describe("Hearth-backed pi tool contracts", () => {
 
   test("grep preserves root-relative and negative ripgrep globs", async () => {
     const cwd = await root();
-    await mkdir(join(cwd, "src"));
+    await mkdir(join(cwd, "src", "nested"), { recursive: true });
     await writeFile(join(cwd, "src", "a.ts"), "needle\n");
     await writeFile(join(cwd, "src", "a.md"), "needle\n");
+    await writeFile(join(cwd, "src", "nested", "deep.ts"), "needle\n");
     await writeFile(join(cwd, "root.ts"), "needle\n");
     const grep = createHearthGrepDefinition(cwd, engine(cwd));
 
@@ -237,6 +238,18 @@ describe("Hearth-backed pi tool contracts", () => {
       context,
     );
     expect(relative.content[0]).toEqual({
+      type: "text",
+      text: "src/a.ts:1: needle",
+    });
+
+    const rootedPositive = await grep.execute(
+      "grep-rooted-positive",
+      { pattern: "needle", path: ".", glob: "/src/*.ts" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(rootedPositive.content[0]).toEqual({
       type: "text",
       text: "src/a.ts:1: needle",
     });
@@ -279,7 +292,20 @@ describe("Hearth-backed pi tool contracts", () => {
         : "";
     expect(rootedText).toContain("root.ts:1: needle");
     expect(rootedText).toContain("src/a.md:1: needle");
+    expect(rootedText).toContain("src/nested/deep.ts:1: needle");
     expect(rootedText).not.toContain("src/a.ts");
+
+    const excludedDirectory = await grep.execute(
+      "grep-excluded-directory",
+      { pattern: "needle", path: ".", glob: "!src/*" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(excludedDirectory.content[0]).toEqual({
+      type: "text",
+      text: "root.ts:1: needle",
+    });
 
     const rootedFromSubdir = await grep.execute(
       "grep-rooted-subdir",
@@ -306,6 +332,16 @@ describe("Hearth-backed pi tool contracts", () => {
       type: "text",
       text: "a.ts:1: needle",
     });
+
+    await expect(
+      grep.execute(
+        "grep-invalid-file-glob",
+        { pattern: "needle", path: "src/a.ts", glob: "![" },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow("unclosed character class");
   });
 
   test("grep reproduces pi context blocks for adjacent matches", async () => {
@@ -353,7 +389,7 @@ describe("Hearth-backed pi tool contracts", () => {
     );
   });
 
-  test("bounds negative-glob candidates and fails closed if underfilled", async () => {
+  test("bounds post-filtered glob candidates and fails closed if underfilled", async () => {
     const cwd = await root();
     let maxTotalCount: number | undefined;
     const fakeEngine = {
@@ -381,6 +417,15 @@ describe("Hearth-backed pi tool contracts", () => {
         context,
       ),
     ).rejects.toThrow("Negative glob candidate scan limit reached");
+    await expect(
+      grep.execute(
+        "grep-positive-bound",
+        { pattern: ".", path: ".", glob: "src/*.ts", limit: 1 },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow("Positive glob candidate scan limit reached");
     expect(maxTotalCount).toBeGreaterThan(0);
     expect(maxTotalCount).toBeLessThanOrEqual(100_000);
   });

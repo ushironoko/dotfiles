@@ -50,6 +50,8 @@ const fakePi = (
   competingTool?: string,
   competingPath = "/project/extension/index.ts",
 ) => {
+  let competingName = competingTool;
+  let competingSourcePath = competingPath;
   const handlers = new Map<string, Function[]>();
   const sessionStart: Function[] = [];
   handlers.set("session_start", sessionStart);
@@ -75,11 +77,11 @@ const fakePi = (
     },
     getAllTools: () => {
       const winners = new Map<string, Record<string, unknown>>();
-      if (competingTool !== undefined) {
-        winners.set(competingTool, {
-          name: competingTool,
+      if (competingName !== undefined) {
+        winners.set(competingName, {
+          name: competingName,
           sourceInfo: {
-            path: competingPath,
+            path: competingSourcePath,
             source: "project-extension",
             scope: "project",
             origin: "top-level",
@@ -120,6 +122,10 @@ const fakePi = (
     tools,
     commands,
     active: () => active,
+    setCompetingTool(name: string, path = competingPath) {
+      competingName = name;
+      competingSourcePath = path;
+    },
   };
 };
 
@@ -340,6 +346,28 @@ describe("hearth-tools startup", () => {
     ).rejects.toThrow(COLLISION_ERROR);
   });
 
+  test("rechecks effective ownership at the tool-call boundary", async () => {
+    const fake = fakePi();
+    await setupHearthTools(fake.pi, {
+      loadModule: async () => ({ HearthEngine: FakeEngine as never }),
+      getAgentDir: () => "/agent",
+      loadConfig: () => ({ ...DEFAULT_HEARTH_TOOLS_CONFIG }),
+      createSettings: (() => settings) as never,
+      fatal: (message) => {
+        throw new Error(message);
+      },
+    });
+    await fake.emit("session_start", { reason: "startup" });
+    fake.pi.on("before_agent_start", () => {
+      fake.setCompetingTool("read");
+    });
+
+    await fake.emit("before_agent_start");
+    await expect(
+      fake.emit("tool_call", { toolName: "read", toolCallId: "late-read" }),
+    ).rejects.toThrow(COLLISION_ERROR);
+  });
+
   test("releases the legacy process slot before creating the gated runtime", async () => {
     const legacySlot = Symbol.for("ushironoko.pi-hearth-tools.engine.v1");
     Reflect.set(globalThis, legacySlot, { engine: {}, options: {} });
@@ -377,13 +405,18 @@ describe("hearth-tools startup", () => {
     });
     expect(FakeEngine.clearCount).toBe(1);
 
+    await fake.emit("message_end", {
+      message: { role: "toolResult", toolName: "worktree_create" },
+    });
+    expect(FakeEngine.clearCount).toBe(2);
+
     await fake.emit("message_start", {
       message: {
         role: "custom",
         customType: "pi-harness/child-run-completion",
       },
     });
-    expect(FakeEngine.clearCount).toBe(2);
+    expect(FakeEngine.clearCount).toBe(3);
 
     await fake.emit("session_shutdown");
     // Register the next extension revision without starting its session. The
@@ -404,7 +437,7 @@ describe("hearth-tools startup", () => {
       },
     });
     await Promise.all(pending);
-    expect(FakeEngine.clearCount).toBe(3);
+    expect(FakeEngine.clearCount).toBe(4);
 
     let finishWriter = (): void => {};
     const writerFinished = new Promise<void>((resolveWriter) => {
@@ -419,6 +452,22 @@ describe("hearth-tools startup", () => {
     });
     expect(lease).toBeDefined();
     await lease?.ready;
+
+    const acceptance = fake.emit("message_end", {
+      message: {
+        role: "toolResult",
+        toolName: "subagent",
+        details: { background: { status: "accepted" } },
+      },
+    });
+    const acceptanceSettled = await Promise.race([
+      acceptance.then(() => true),
+      new Promise<false>((resolveTimeout) => {
+        setTimeout(() => resolveTimeout(false), 25);
+      }),
+    ]);
+    expect(acceptanceSettled).toBe(true);
+    expect(FakeEngine.clearCount).toBe(4);
 
     let finishSecondWriter = (): void => {};
     const secondWriterFinished = new Promise<void>((resolveWriter) => {
@@ -447,6 +496,14 @@ describe("hearth-tools startup", () => {
     finishSecondWriter();
     await Promise.all([lease?.complete, secondLease?.complete]);
     expect(leaseCompleted).toBe(true);
-    expect(FakeEngine.clearCount).toBe(4);
+    expect(FakeEngine.clearCount).toBe(5);
+
+    await fake.emit("message_end", {
+      message: { role: "toolResult", toolName: "subagent" },
+    });
+    await fake.emit("message_end", {
+      message: { role: "toolResult", toolName: "worktree_remove" },
+    });
+    expect(FakeEngine.clearCount).toBe(7);
   });
 });

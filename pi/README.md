@@ -182,31 +182,36 @@ built-in fallback. Registration restores the prior active names, so replacing
 `grep` does not enable it. Pi 0.80.7 exposes only the first effective tool per
 name: a later inert losing registration cannot be enumerated, but it also cannot
 execute. Hearth checks effective ownership before registration, immediately
-after registration, and before each agent turn.
+after registration, before each agent turn, and again at the tool-call boundary.
 
 `trustCache` is a single-writer optimization. File-backed tools share an Engine
 gate; tool Bash and user Bash (`!`/`!!`) take it exclusively and clear all
 caches before another file operation can start, after every outcome including
 nonzero, timeout, abort, and indeterminate. Cache invalidation also runs after
-write/edit result hooks. Every managed subagent/workflow acquires an exclusive
-parent-Engine lease before child work begins, clears caches after settlement,
-and only then releases parent file tools. Concurrent managed children share one
-writer epoch so fan-out remains parallel. Abort, branch navigation, reload, and
-shutdown paths use the same lease even when completion notification is
-suppressed; after a bounded drain timeout, the lease remains held until the late
-child actually settles. This covers formatters and child writers independently
-of parent-message delivery. External editors and unmanaged processes still
-require `/hearth-clear-cache`, a restart, or `trustCache: false`. An `indeterminate` command is never retried
+write/edit and worktree create/remove result hooks. Every managed
+subagent/workflow acquires an exclusive parent-Engine lease before child work
+begins, clears caches after settlement, and only then releases parent file
+tools. Its background acceptance result does not queue a redundant clear behind
+the live lease. Concurrent managed children share one writer epoch so fan-out
+remains parallel. Abort, branch navigation, reload, and shutdown paths use the
+same lease even when completion notification is suppressed; after a bounded
+drain timeout, the lease remains held until the late child actually settles,
+and branch navigation is cancelled until that old-branch record archives. This
+covers formatters and child writers independently of parent-message delivery.
+External editors and unmanaged processes still require `/hearth-clear-cache`,
+a restart, or `trustCache: false`. An `indeterminate` command is never retried
 automatically. In particular, a command that terminates its pooled warm shell
 may be indeterminate; set `warmShell: false` when exact signal-exit reporting is
 more important than shell reuse.
 
 Grep translates cwd-relative positive and negative ripgrep globs to Hearth,
-preserves root anchors, and ignores globs for an explicit file operand like
-ripgrep. Negative directory globs require post-filtering because Hearth 0.1.0
-has no native exclusion glob; the adapter bounds native candidates and fails
-closed with a refinement error rather than returning an incomplete result if
-that bound is exhausted.
+preserves root anchors, ignores valid globs for an explicit file operand like
+ripgrep, and still validates malformed globs first. Negative globs and positive
+globs containing `/` use separator-aware post-filtering because Hearth 0.1.0
+has no native exclusion glob and lets `*` cross separators in path globs.
+Negative matching also filters matching ancestor directories like ripgrep's
+walker. The adapter bounds native candidates and fails closed with a refinement
+error rather than returning an incomplete result if that bound is exhausted.
 
 Bash streams once into pi's existing accumulator, preserving progress updates,
 tail truncation, and full-output files. Hearth 0.1.0 streams valid UTF-8 text,

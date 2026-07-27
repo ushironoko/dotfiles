@@ -31,9 +31,9 @@ import {
 } from "./engine";
 
 const DEFAULT_GREP_LIMIT = 100;
-const NEGATIVE_GLOB_SCAN_MIN = 1_000;
-const NEGATIVE_GLOB_SCAN_MAX = 100_000;
-const NEGATIVE_GLOB_SCAN_MULTIPLIER = 100;
+const GLOB_SCAN_MIN = 1_000;
+const GLOB_SCAN_MAX = 100_000;
+const GLOB_SCAN_MULTIPLIER = 100;
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
 const absolutePath = (cwd: string, input: string): string => {
@@ -273,41 +273,106 @@ export const createHearthEditDefinition = (
 const normalizedGlobPath = (value: string): string =>
   value.replaceAll("\\", "/");
 
-const hearthGlobs = (cwd: string, glob: string | undefined): string[] => {
-  if (glob === undefined || glob.startsWith("!")) return [];
-  const normalized = normalizedGlobPath(glob);
-  if (!normalized.includes("/")) return [normalized];
-  return [normalizedGlobPath(resolve(cwd, normalized.replace(/^\/+/, "")))];
+interface GrepGlob {
+  original: string;
+  negative: boolean;
+  rooted: boolean;
+  pattern: string;
+  hasSlash: boolean;
+  matcher: Bun.Glob;
+}
+
+const validateGrepGlob = (original: string, pattern: string): void => {
+  let inClass = false;
+  let classHasMember = false;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+    if (!inClass) {
+      if (character === "[") {
+        inClass = true;
+        classHasMember = false;
+      }
+      continue;
+    }
+    if (!classHasMember && (character === "!" || character === "^")) {
+      continue;
+    }
+    if (character === "]" && classHasMember) {
+      inClass = false;
+      continue;
+    }
+    classHasMember = true;
+  }
+  if (inClass) {
+    throw new Error(
+      `rg: error parsing glob '${original}': unclosed character class`,
+    );
+  }
 };
 
-const excludeNegativeGlob = (
-  files: FileMatches[],
-  cwd: string,
-  glob: string | undefined,
-  rootIsDirectory: boolean,
-): FileMatches[] => {
-  if (glob === undefined || !glob.startsWith("!") || !rootIsDirectory) {
-    return files;
-  }
-  const rawPattern = normalizedGlobPath(glob.slice(1));
+const parseGrepGlob = (glob: string | undefined): GrepGlob | undefined => {
+  if (glob === undefined) return undefined;
+  const negative = glob.startsWith("!");
+  const rawPattern = normalizedGlobPath(negative ? glob.slice(1) : glob);
   const rooted = rawPattern.startsWith("/");
   const pattern = rawPattern.replace(/^\/+/, "");
-  const matcher = new Bun.Glob(pattern);
+  validateGrepGlob(glob, pattern);
+  return {
+    original: glob,
+    negative,
+    rooted,
+    pattern,
+    hasSlash: pattern.includes("/"),
+    matcher: new Bun.Glob(pattern),
+  };
+};
+
+const hearthGlobs = (glob: GrepGlob | undefined): string[] => {
+  if (glob === undefined || glob.negative || glob.hasSlash) return [];
+  return [glob.pattern];
+};
+
+const ancestorPaths = (path: string): string[] => {
+  const segments = path.split("/");
+  return segments
+    .slice(0, -1)
+    .map((_segment, index) => segments.slice(0, index + 1).join("/"));
+};
+
+const matchesNegativeGlob = (path: string, glob: GrepGlob): boolean => {
+  if (!glob.rooted && !glob.hasSlash) {
+    return path.split("/").some((segment) => glob.matcher.match(segment));
+  }
+  return [...ancestorPaths(path), path].some((candidate) =>
+    glob.matcher.match(candidate),
+  );
+};
+
+const filterPostProcessedGlob = (
+  files: FileMatches[],
+  cwd: string,
+  glob: GrepGlob | undefined,
+  rootIsDirectory: boolean,
+): FileMatches[] => {
+  if (
+    glob === undefined ||
+    !rootIsDirectory ||
+    (!glob.negative && !glob.hasSlash)
+  ) {
+    return files;
+  }
   return files.filter((file) => {
     const relativePath = normalizedGlobPath(relative(cwd, file.path));
-    const pathMatches = matcher.match(relativePath);
-    const basenameMatches =
-      !rooted &&
-      !pattern.includes("/") &&
-      matcher.match(normalizedGlobPath(basename(file.path)));
-    return !(pathMatches || basenameMatches);
+    return glob.negative
+      ? !matchesNegativeGlob(relativePath, glob)
+      : glob.matcher.match(relativePath);
   });
 };
 
-const negativeGlobScanLimit = (limit: number): number =>
+const postFilterGlobScanLimit = (limit: number): number =>
   Math.min(
-    NEGATIVE_GLOB_SCAN_MAX,
-    Math.max(NEGATIVE_GLOB_SCAN_MIN, limit * NEGATIVE_GLOB_SCAN_MULTIPLIER),
+    GLOB_SCAN_MAX,
+    Math.max(GLOB_SCAN_MIN, limit * GLOB_SCAN_MULTIPLIER),
   );
 
 const limitFileMatches = (
@@ -354,20 +419,22 @@ export const createHearthGrepDefinition = (
         const searchPath = absolutePath(cwd, input.path || ".");
         const limit = Math.max(1, input.limit ?? DEFAULT_GREP_LIMIT);
         const context = input.context && input.context > 0 ? input.context : 0;
-        const negativeGlob = input.glob?.startsWith("!") === true;
+        const glob = parseGrepGlob(input.glob);
+        const postFilterGlob =
+          glob !== undefined && (glob.negative || glob.hasSlash);
         const result = await engine
           .grepAsync(
             {
               pattern: input.pattern,
               path: searchPath,
               mode: "content" as GrepMode,
-              globs: hearthGlobs(cwd, input.glob),
+              globs: hearthGlobs(glob),
               caseInsensitive: input.ignoreCase ?? false,
               fixedStrings: input.literal ?? false,
               beforeContext: context,
               afterContext: context,
-              maxTotalCount: negativeGlob
-                ? negativeGlobScanLimit(limit)
+              maxTotalCount: postFilterGlob
+                ? postFilterGlobScanLimit(limit)
                 : limit,
               hidden: true,
               respectGitignore: true,
@@ -376,19 +443,20 @@ export const createHearthGrepDefinition = (
           )
           .catch((error) => mapCancelled(error, "Operation aborted"));
 
-        const filtered = excludeNegativeGlob(
+        const filtered = filterPostProcessedGlob(
           result.files,
           cwd,
-          input.glob,
+          glob,
           result.rootIsDir,
         );
         const totalMatches = filtered.reduce(
           (total, file) => total + file.matchCount,
           0,
         );
-        if (negativeGlob && result.limitReached && totalMatches < limit) {
+        if (postFilterGlob && result.limitReached && totalMatches < limit) {
+          const kind = glob?.negative ? "Negative" : "Positive";
           throw new Error(
-            "Negative glob candidate scan limit reached before enough included matches; refine pattern or path",
+            `${kind} glob candidate scan limit reached before enough included matches; refine pattern or path`,
           );
         }
         if (totalMatches === 0) {
@@ -398,7 +466,7 @@ export const createHearthGrepDefinition = (
           };
         }
 
-        const files = negativeGlob
+        const files = postFilterGlob
           ? limitFileMatches(filtered, limit, context)
           : filtered;
         let linesTruncated = false;
@@ -452,7 +520,7 @@ export const createHearthGrepDefinition = (
         const truncation = truncateHead(lines.join("\n"), {
           maxLines: Number.MAX_SAFE_INTEGER,
         });
-        const limitReached = negativeGlob
+        const limitReached = postFilterGlob
           ? totalMatches >= limit
           : result.limitReached;
         const matchLimitReached = limitReached ? limit : undefined;
