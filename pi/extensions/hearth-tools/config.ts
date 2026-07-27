@@ -48,9 +48,21 @@ const boundedInteger = (
   return value;
 };
 
+const CONFIG_KEYS = new Set([
+  "trustCache",
+  "warmShell",
+  "enableOptimizer",
+  "maxCachedFiles",
+  "bashTimeoutMs",
+]);
+
 export const parseHearthToolsConfig = (value: unknown): HearthToolsConfig => {
   if (!isRecord(value))
     throw new Error("hearth-tools config must be an object");
+  for (const key of Object.keys(value)) {
+    if (!CONFIG_KEYS.has(key))
+      throw new Error(`unknown hearth-tools config key: ${key}`);
+  }
   const maxCachedFiles = boundedInteger(
     value.maxCachedFiles,
     "maxCachedFiles",

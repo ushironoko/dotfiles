@@ -157,9 +157,11 @@ uses the verified read-only route described above.
 `pi/extensions/hearth-tools` pins `@hearthdev/napi` exactly to `0.1.0` and
 constructs one in-process `HearthEngine` per pi process. Parent pi and every
 subagent/workflow child have separate resident caches and warm-shell pools;
-`/reload` reuses the process Engine. BTW keeps extension/package discovery off
-but receives a custom Hearth-backed `read`; its active tools remain `read` and
-`ls`.
+`/reload` reuses the process Engine when every Engine option is unchanged. A
+config, cwd, or inherited shell change during reload fails with a bounded
+restart-required diagnostic instead of silently retaining old settings. BTW
+keeps extension/package discovery off but receives a custom Hearth-backed
+`read`; its active tools remain `read` and `ls`.
 
 The checked-in maximum-speed defaults are:
 
@@ -173,15 +175,22 @@ The checked-in maximum-speed defaults are:
 ```
 
 Override these fields, plus optional `maxCachedFiles`, in
-`~/.pi/agent/hearth-tools.local.json`. Invalid config, a missing/incompatible
-native addon, or a competing override for one of the five names terminates pi
-at startup with exit code 1; there is no built-in fallback. Registration
-restores the prior active names, so replacing `grep` does not enable it.
+`~/.pi/agent/hearth-tools.local.json`; unknown keys are rejected. Invalid
+config, a missing/incompatible native addon, or an effective competing override
+for one of the five names terminates pi at startup with exit code 1; there is no
+built-in fallback. Registration restores the prior active names, so replacing
+`grep` does not enable it. Pi 0.80.7 exposes only the first effective tool per
+name: a later inert losing registration cannot be enumerated, but it also cannot
+execute. Hearth checks effective ownership before registration, immediately
+after registration, and before each agent turn.
 
-`trustCache` is a single-writer optimization. Hearth write/edit operations are
-cache-coherent. Tool Bash and user Bash (`!`/`!!`) clear all caches after every
-outcome, including nonzero, timeout, abort, and indeterminate. External editor
-or process changes still require `/hearth-clear-cache`, a restart, or
+`trustCache` is a single-writer optimization. File-backed tools share an Engine
+gate; tool Bash and user Bash (`!`/`!!`) take it exclusively and clear all
+caches before another file operation can start, after every outcome including
+nonzero, timeout, abort, and indeterminate. Cache invalidation also runs after
+write/edit result hooks and after managed subagent/workflow completion, covering
+formatters and child writers before the next parent turn. External editors and
+unmanaged processes still require `/hearth-clear-cache`, a restart, or
 `trustCache: false`. An `indeterminate` command is never retried automatically;
 inspect the workspace first.
 

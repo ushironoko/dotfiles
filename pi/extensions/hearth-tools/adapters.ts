@@ -9,13 +9,11 @@ import {
   formatSize,
   truncateHead,
   truncateLine,
-  withFileMutationQueue,
   type BashOperations,
-  type EditToolDetails,
 } from "@earendil-works/pi-coding-agent";
 import type {
   BashChunk,
-  DiffHunk,
+  FileMatches,
   GrepMode,
   HearthEngine,
   ShellSpec,
@@ -26,7 +24,11 @@ import { access, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { PiToolSettings } from "./engine";
+import {
+  IMMEDIATE_HEARTH_ACCESS_GATE,
+  type HearthAccessGate,
+  type PiToolSettings,
+} from "./engine";
 
 const DEFAULT_GREP_LIMIT = 100;
 const MAX_TIMEOUT_MS = 2_147_483_647;
@@ -48,6 +50,11 @@ const absolutePath = (cwd: string, input: string): string => {
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+const mapCancelled = (error: unknown, message: string): never => {
+  if (errorMessage(error).startsWith("cancelled:")) throw new Error(message);
+  throw error;
+};
 
 const PNG_SIGNATURE = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -134,6 +141,7 @@ export const createHearthReadDefinition = (
   cwd: string,
   engine: HearthEngine,
   settings: PiToolSettings,
+  gate: HearthAccessGate = IMMEDIATE_HEARTH_ACCESS_GATE,
 ) => {
   const base = createReadToolDefinition(cwd, {
     autoResizeImages: settings.imageAutoResize,
@@ -145,7 +153,9 @@ export const createHearthReadDefinition = (
         autoResizeImages: settings.imageAutoResize,
         operations: hearthReadOperations(engine, signal),
       });
-      return delegated.execute(id, params, signal, onUpdate, ctx);
+      return gate.shared(() =>
+        delegated.execute(id, params, signal, onUpdate, ctx),
+      );
     },
   };
   return definition;
@@ -155,6 +165,7 @@ export const createHearthReadTool = (
   cwd: string,
   engine: HearthEngine,
   settings: PiToolSettings,
+  gate: HearthAccessGate = IMMEDIATE_HEARTH_ACCESS_GATE,
 ) => {
   const base = createReadTool(cwd, {
     autoResizeImages: settings.imageAutoResize,
@@ -162,10 +173,12 @@ export const createHearthReadTool = (
   const tool: typeof base = {
     ...base,
     execute(id, params, signal, onUpdate) {
-      return createReadTool(cwd, {
-        autoResizeImages: settings.imageAutoResize,
-        operations: hearthReadOperations(engine, signal),
-      }).execute(id, params, signal, onUpdate);
+      return gate.shared(() =>
+        createReadTool(cwd, {
+          autoResizeImages: settings.imageAutoResize,
+          operations: hearthReadOperations(engine, signal),
+        }).execute(id, params, signal, onUpdate),
+      );
     },
   };
   return tool;
@@ -174,6 +187,7 @@ export const createHearthReadTool = (
 export const createHearthWriteDefinition = (
   cwd: string,
   engine: HearthEngine,
+  gate: HearthAccessGate = IMMEDIATE_HEARTH_ACCESS_GATE,
 ) => {
   const base = createWriteToolDefinition(cwd);
   const definition: typeof base = {
@@ -183,197 +197,244 @@ export const createHearthWriteDefinition = (
         operations: {
           mkdir: async () => {},
           writeFile: async (path, content) => {
-            await engine.writeAsync(
-              {
-                path,
-                content,
-                createDirs: true,
-                mode: "inPlace" as WriteMode,
-                followSymlinks: true,
-              },
-              signal,
-            );
+            try {
+              await engine.writeAsync(
+                {
+                  path,
+                  content,
+                  createDirs: true,
+                  mode: "inPlace" as WriteMode,
+                  followSymlinks: true,
+                },
+                signal,
+              );
+            } catch (error) {
+              mapCancelled(error, "Operation aborted");
+            }
           },
         },
       });
-      return delegated.execute(id, params, signal, onUpdate, ctx);
+      return gate.shared(() =>
+        delegated.execute(id, params, signal, onUpdate, ctx),
+      );
     },
   };
   return definition;
-};
-
-const displayDiff = (
-  hunks: DiffHunk[],
-  oldLines: number,
-  newLines: number,
-): string => {
-  const width = String(Math.max(oldLines, newLines)).length;
-  const output: string[] = [];
-  for (let index = 0; index < hunks.length; index += 1) {
-    if (index > 0) output.push(` ${"".padStart(width)} ...`);
-    for (const row of hunks[index]!.rows) {
-      if (row.op === "insert") {
-        output.push(`+${String(row.newLine).padStart(width)} ${row.text}`);
-      } else if (row.op === "delete") {
-        output.push(`-${String(row.oldLine).padStart(width)} ${row.text}`);
-      } else {
-        output.push(` ${String(row.oldLine).padStart(width)} ${row.text}`);
-      }
-    }
-  }
-  return output.join("\n");
-};
-
-const unifiedPatch = (path: string, hunks: DiffHunk[]): string => {
-  const lines = [`--- ${path}`, `+++ ${path}`];
-  for (const hunk of hunks) {
-    lines.push(
-      `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`,
-    );
-    for (const row of hunk.rows) {
-      const prefix =
-        row.op === "insert" ? "+" : row.op === "delete" ? "-" : " ";
-      lines.push(`${prefix}${row.text}`);
-    }
-  }
-  return `${lines.join("\n")}\n`;
 };
 
 export const createHearthEditDefinition = (
   cwd: string,
   engine: HearthEngine,
+  gate: HearthAccessGate = IMMEDIATE_HEARTH_ACCESS_GATE,
 ) => {
   const base = createEditToolDefinition(cwd);
   const definition: typeof base = {
     ...base,
-    async execute(_id, input, signal) {
-      if (!Array.isArray(input.edits) || input.edits.length === 0) {
-        throw new Error(
-          "Edit tool input is invalid. edits must contain at least one replacement.",
-        );
-      }
-      const path = absolutePath(cwd, input.path);
-      return withFileMutationQueue(path, async () => {
-        const result = await engine.editBatchAsync(
-          {
-            path,
-            edits: input.edits,
-            diffContext: 4,
-            mode: "inPlace" as WriteMode,
-            followSymlinks: true,
+    execute(id, input, signal, onUpdate, ctx) {
+      const delegated = createEditToolDefinition(cwd, {
+        operations: {
+          access: (path) =>
+            access(path, constants.R_OK | constants.W_OK).catch((error) =>
+              mapCancelled(error, "Operation aborted"),
+            ),
+          readFile: (path) =>
+            engine
+              .readBytesAsync({ path }, signal)
+              .catch((error) => mapCancelled(error, "Operation aborted")),
+          writeFile: async (path, content) => {
+            try {
+              await engine.writeAsync(
+                {
+                  path,
+                  content,
+                  createDirs: false,
+                  mode: "inPlace" as WriteMode,
+                  followSymlinks: true,
+                },
+                signal,
+              );
+            } catch (error) {
+              mapCancelled(error, "Operation aborted");
+            }
           },
-          signal,
-        );
-        const details: EditToolDetails = {
-          diff: displayDiff(
-            result.hunks,
-            result.oldLineCount,
-            result.newLineCount,
-          ),
-          patch: unifiedPatch(input.path, result.hunks),
-          ...(result.firstChangedLine === undefined
-            ? {}
-            : { firstChangedLine: result.firstChangedLine }),
-        };
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Successfully replaced ${input.edits.length} block(s) in ${input.path}.`,
-            },
-          ],
-          details,
-        };
+        },
       });
+      return gate.shared(() =>
+        delegated.execute(id, input, signal, onUpdate, ctx),
+      );
     },
   };
   return definition;
 };
 
+const normalizedGlobPath = (value: string): string =>
+  value.replaceAll("\\", "/");
+
+const hearthGlobs = (
+  searchPath: string,
+  glob: string | undefined,
+): string[] => {
+  if (glob === undefined || glob.startsWith("!")) return [];
+  const normalized = normalizedGlobPath(glob);
+  if (!normalized.includes("/")) return [normalized];
+  return [
+    normalizedGlobPath(resolve(searchPath, normalized.replace(/^\/+/, ""))),
+  ];
+};
+
+const excludeNegativeGlob = (
+  files: FileMatches[],
+  root: string,
+  glob: string | undefined,
+): FileMatches[] => {
+  if (glob === undefined || !glob.startsWith("!")) return files;
+  const matcher = new Bun.Glob(glob.slice(1));
+  return files.filter((file) => {
+    const relativePath = normalizedGlobPath(relative(root, file.path));
+    return !(
+      matcher.match(relativePath) ||
+      matcher.match(normalizedGlobPath(basename(file.path)))
+    );
+  });
+};
+
+const limitFileMatches = (
+  files: FileMatches[],
+  limit: number,
+  context: number,
+): FileMatches[] => {
+  let remaining = limit;
+  const limited: FileMatches[] = [];
+  for (const file of files) {
+    if (remaining === 0) break;
+    const matchLines = file.lines
+      .filter((line) => line.isMatch)
+      .slice(0, remaining)
+      .map((line) => line.lineNumber);
+    if (matchLines.length === 0) continue;
+    const kept = new Set(matchLines);
+    limited.push({
+      ...file,
+      matchCount: matchLines.length,
+      lines: file.lines.filter((line) =>
+        line.isMatch
+          ? kept.has(line.lineNumber)
+          : matchLines.some(
+              (matchLine) => Math.abs(matchLine - line.lineNumber) <= context,
+            ),
+      ),
+    });
+    remaining -= matchLines.length;
+  }
+  return limited;
+};
+
 export const createHearthGrepDefinition = (
   cwd: string,
   engine: HearthEngine,
+  gate: HearthAccessGate = IMMEDIATE_HEARTH_ACCESS_GATE,
 ) => {
   const base = createGrepToolDefinition(cwd);
   const definition: typeof base = {
     ...base,
-    async execute(_id, input, signal) {
-      const searchPath = absolutePath(cwd, input.path || ".");
-      const limit = Math.max(1, input.limit ?? DEFAULT_GREP_LIMIT);
-      const context = input.context && input.context > 0 ? input.context : 0;
-      const result = await engine.grepAsync(
-        {
-          pattern: input.pattern,
-          path: searchPath,
-          mode: "content" as GrepMode,
-          globs: input.glob ? [input.glob] : [],
-          caseInsensitive: input.ignoreCase ?? false,
-          fixedStrings: input.literal ?? false,
-          beforeContext: context,
-          afterContext: context,
-          maxTotalCount: limit,
-          hidden: true,
-          respectGitignore: true,
-        },
-        signal,
-      );
-      if (result.totalMatches === 0) {
-        return {
-          content: [{ type: "text" as const, text: "No matches found" }],
-          details: undefined,
-        };
-      }
+    execute(_id, input, signal) {
+      return gate.shared(async () => {
+        const searchPath = absolutePath(cwd, input.path || ".");
+        const limit = Math.max(1, input.limit ?? DEFAULT_GREP_LIMIT);
+        const context = input.context && input.context > 0 ? input.context : 0;
+        const negativeGlob = input.glob?.startsWith("!") === true;
+        const result = await engine
+          .grepAsync(
+            {
+              pattern: input.pattern,
+              path: searchPath,
+              mode: "content" as GrepMode,
+              globs: hearthGlobs(searchPath, input.glob),
+              caseInsensitive: input.ignoreCase ?? false,
+              fixedStrings: input.literal ?? false,
+              beforeContext: context,
+              afterContext: context,
+              ...(negativeGlob ? {} : { maxTotalCount: limit }),
+              hidden: true,
+              respectGitignore: true,
+            },
+            signal,
+          )
+          .catch((error) => mapCancelled(error, "Operation aborted"));
 
-      let linesTruncated = false;
-      const lines: string[] = [];
-      for (const file of result.files) {
-        const shownPath = result.rootIsDir
-          ? relative(result.root, file.path).replaceAll("\\", "/")
-          : basename(file.path);
-        for (const line of file.lines) {
-          const truncated = truncateLine(line.text.replaceAll("\r", ""));
-          linesTruncated ||= truncated.wasTruncated;
-          lines.push(
-            line.isMatch
-              ? `${shownPath}:${line.lineNumber}: ${truncated.text}`
-              : `${shownPath}-${line.lineNumber}- ${truncated.text}`,
+        const filtered = excludeNegativeGlob(
+          result.files,
+          result.root,
+          input.glob,
+        );
+        const totalMatches = filtered.reduce(
+          (total, file) => total + file.matchCount,
+          0,
+        );
+        if (totalMatches === 0) {
+          return {
+            content: [{ type: "text" as const, text: "No matches found" }],
+            details: undefined,
+          };
+        }
+
+        const files = negativeGlob
+          ? limitFileMatches(filtered, limit, context)
+          : filtered;
+        let linesTruncated = false;
+        const lines: string[] = [];
+        for (const file of files) {
+          const shownPath = result.rootIsDir
+            ? relative(result.root, file.path).replaceAll("\\", "/")
+            : basename(file.path);
+          for (const line of file.lines) {
+            const truncated = truncateLine(line.text.replaceAll("\r", ""));
+            linesTruncated ||= truncated.wasTruncated;
+            lines.push(
+              line.isMatch
+                ? `${shownPath}:${line.lineNumber}: ${truncated.text}`
+                : `${shownPath}-${line.lineNumber}- ${truncated.text}`,
+            );
+          }
+        }
+        const truncation = truncateHead(lines.join("\n"), {
+          maxLines: Number.MAX_SAFE_INTEGER,
+        });
+        const limitReached = negativeGlob
+          ? totalMatches >= limit
+          : result.limitReached;
+        const matchLimitReached = limitReached ? limit : undefined;
+        const notices: string[] = [];
+        if (matchLimitReached !== undefined) {
+          notices.push(
+            `${limit} matches limit reached. Use limit=${limit * 2} for more, or refine pattern`,
           );
         }
-      }
-      const truncation = truncateHead(lines.join("\n"), {
-        maxLines: Number.MAX_SAFE_INTEGER,
+        if (truncation.truncated)
+          notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+        if (linesTruncated)
+          notices.push(
+            "Some lines truncated to 500 chars. Use read tool to see full lines",
+          );
+        const output = `${truncation.content}${
+          notices.length === 0 ? "" : `\n\n[${notices.join(". ")}]`
+        }`;
+        return {
+          content: [{ type: "text" as const, text: output }],
+          details:
+            matchLimitReached === undefined &&
+            !truncation.truncated &&
+            !linesTruncated
+              ? undefined
+              : {
+                  ...(matchLimitReached === undefined
+                    ? {}
+                    : { matchLimitReached }),
+                  ...(truncation.truncated ? { truncation } : {}),
+                  ...(linesTruncated ? { linesTruncated: true } : {}),
+                },
+        };
       });
-      const matchLimitReached = result.limitReached ? limit : undefined;
-      const notices: string[] = [];
-      if (matchLimitReached !== undefined) {
-        notices.push(
-          `${limit} matches limit reached. Use limit=${limit * 2} for more, or refine pattern`,
-        );
-      }
-      if (truncation.truncated)
-        notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-      if (linesTruncated)
-        notices.push(
-          "Some lines truncated to 500 chars. Use read tool to see full lines",
-        );
-      const output = `${truncation.content}${
-        notices.length === 0 ? "" : `\n\n[${notices.join(". ")}]`
-      }`;
-      return {
-        content: [{ type: "text" as const, text: output }],
-        details:
-          matchLimitReached === undefined &&
-          !truncation.truncated &&
-          !linesTruncated
-            ? undefined
-            : {
-                ...(matchLimitReached === undefined
-                  ? {}
-                  : { matchLimitReached }),
-                ...(truncation.truncated ? { truncation } : {}),
-                ...(linesTruncated ? { linesTruncated: true } : {}),
-              },
-      };
     },
   };
   return definition;
@@ -402,37 +463,58 @@ const environment = (
     ),
   );
 
+export interface HearthBashAdapterOptions {
+  defaultTimeoutMs?: number;
+  gate?: HearthAccessGate;
+}
+
 export const createHearthBashOperations = (
   engine: HearthEngine,
   shell: ShellSpec,
+  adapterOptions: HearthBashAdapterOptions = {},
 ): BashOperations => ({
-  async exec(command, cwd, options) {
-    try {
-      const result = await engine.bashStream(
-        {
-          command,
-          cwd,
-          timeoutMs: timeoutMs(options.timeout),
-          env: environment(options.env),
-          shell,
-          collectOutput: false,
-        },
-        (chunk: BashChunk) => options.onData(Buffer.from(chunk.text, "utf8")),
-        options.signal,
-      );
-      if (result.aborted) throw new Error("aborted");
-      if (result.timedOut) throw new Error(`timeout:${options.timeout}`);
-      return { exitCode: result.exitCode };
-    } catch (error) {
-      if (errorMessage(error).startsWith("indeterminate:")) {
-        throw new Error(
-          "Hearth reported an indeterminate command outcome; inspect state before retrying",
+  exec(command, cwd, options) {
+    const gate = adapterOptions.gate ?? IMMEDIATE_HEARTH_ACCESS_GATE;
+    return gate.exclusive(async () => {
+      const effectiveTimeoutMs =
+        timeoutMs(options.timeout) ??
+        adapterOptions.defaultTimeoutMs ??
+        MAX_TIMEOUT_MS;
+      try {
+        const result = await engine.bashStream(
+          {
+            command,
+            cwd,
+            timeoutMs: effectiveTimeoutMs,
+            env: environment(options.env),
+            shell,
+            collectOutput: false,
+          },
+          (chunk: BashChunk) => options.onData(Buffer.from(chunk.text, "utf8")),
+          options.signal,
         );
+        if (result.aborted) throw new Error("aborted");
+        if (result.timedOut)
+          throw new Error(`timeout:${effectiveTimeoutMs / 1000}`);
+        return {
+          exitCode:
+            result.signal !== undefined && result.exitCode === -1
+              ? null
+              : result.exitCode,
+        };
+      } catch (error) {
+        const message = errorMessage(error);
+        if (message.startsWith("cancelled:")) throw new Error("aborted");
+        if (message.startsWith("indeterminate:")) {
+          throw new Error(
+            "Hearth reported an indeterminate command outcome; inspect state before retrying",
+          );
+        }
+        throw error;
+      } finally {
+        engine.clearCaches();
       }
-      throw error;
-    } finally {
-      engine.clearCaches();
-    }
+    });
   },
 });
 
@@ -440,9 +522,14 @@ export const createHearthBashDefinition = (
   cwd: string,
   engine: HearthEngine,
   settings: PiToolSettings,
+  adapterOptions: HearthBashAdapterOptions = {},
 ) =>
   createBashToolDefinition(cwd, {
     commandPrefix: settings.shellCommandPrefix,
     shellPath: settings.shellPath,
-    operations: createHearthBashOperations(engine, settings.shell),
+    operations: createHearthBashOperations(
+      engine,
+      settings.shell,
+      adapterOptions,
+    ),
   });

@@ -38,7 +38,12 @@ export const registerHearthReadService = (
       const current = state();
       if (current === undefined)
         throw new Error("Hearth Engine is not initialized");
-      return createHearthReadTool(cwd, current.engine, current.settings);
+      return createHearthReadTool(
+        cwd,
+        current.runtime.engine,
+        current.settings,
+        current.runtime.gate,
+      );
     },
   };
   const dispose = pi.events.on(HEARTH_SERVICE_REQUEST, (value) => {
