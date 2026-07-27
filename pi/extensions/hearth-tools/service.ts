@@ -7,6 +7,12 @@ import type { RuntimeState } from "./index";
 
 export const HEARTH_SERVICE_READY = "pi-hearth-tools:service-ready:v1";
 export const HEARTH_SERVICE_REQUEST = "pi-hearth-tools:service-request:v1";
+export const HEARTH_INVALIDATE_REQUEST =
+  "pi-hearth-tools:invalidate-request:v1";
+
+const INVALIDATION_BROKERS = Symbol.for(
+  "ushironoko.pi-hearth-tools.invalidation-brokers.v1",
+);
 
 export interface HearthReadService {
   generation: string;
@@ -18,6 +24,18 @@ interface ServiceRequest {
   accept(service: HearthReadService, requestId: string): void;
 }
 
+interface InvalidationRequest {
+  accept(operation: Promise<void>): void;
+}
+
+interface InvalidationBroker {
+  current: () => Promise<void>;
+}
+
+interface GlobalWithInvalidationBrokers {
+  [INVALIDATION_BROKERS]?: WeakMap<object, InvalidationBroker>;
+}
+
 const isRequest = (value: unknown): value is ServiceRequest => {
   if (value === null || typeof value !== "object") return false;
   const candidate = value as Partial<ServiceRequest>;
@@ -25,6 +43,35 @@ const isRequest = (value: unknown): value is ServiceRequest => {
     typeof candidate.requestId === "string" &&
     typeof candidate.accept === "function"
   );
+};
+
+const isInvalidationRequest = (
+  value: unknown,
+): value is InvalidationRequest => {
+  if (value === null || typeof value !== "object") return false;
+  return typeof (value as Partial<InvalidationRequest>).accept === "function";
+};
+
+export const registerHearthInvalidationService = (
+  pi: ExtensionAPI,
+  clearCaches: () => Promise<void>,
+): void => {
+  const host = globalThis as GlobalWithInvalidationBrokers;
+  const brokers =
+    host[INVALIDATION_BROKERS] ?? new WeakMap<object, InvalidationBroker>();
+  host[INVALIDATION_BROKERS] = brokers;
+  const eventBus = pi.events as object;
+  const existing = brokers.get(eventBus);
+  if (existing !== undefined) {
+    existing.current = clearCaches;
+    return;
+  }
+
+  const broker: InvalidationBroker = { current: clearCaches };
+  brokers.set(eventBus, broker);
+  pi.events.on(HEARTH_INVALIDATE_REQUEST, (value) => {
+    if (isInvalidationRequest(value)) value.accept(broker.current());
+  });
 };
 
 export const registerHearthReadService = (

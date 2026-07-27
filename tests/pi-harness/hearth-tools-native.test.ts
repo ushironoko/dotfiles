@@ -253,6 +253,81 @@ describe("Hearth-backed pi tool contracts", () => {
     expect(negativeText).toContain("root.ts:1: needle");
     expect(negativeText).toContain("src/a.ts:1: needle");
     expect(negativeText).not.toContain("a.md");
+
+    const rootedNegative = await grep.execute(
+      "grep-rooted-negative",
+      { pattern: "needle", path: ".", glob: "!/src/*.ts" },
+      undefined,
+      undefined,
+      context,
+    );
+    const rootedText =
+      rootedNegative.content[0]?.type === "text"
+        ? rootedNegative.content[0].text
+        : "";
+    expect(rootedText).toContain("root.ts:1: needle");
+    expect(rootedText).toContain("src/a.md:1: needle");
+    expect(rootedText).not.toContain("src/a.ts");
+  });
+
+  test("grep reproduces pi context blocks for adjacent matches", async () => {
+    const cwd = await root();
+    await writeFile(
+      join(cwd, "adjacent.txt"),
+      "first\nmatch one\nmatch two\nlast\n",
+    );
+    const grep = createHearthGrepDefinition(cwd, engine(cwd));
+
+    const result = await grep.execute(
+      "grep-adjacent",
+      { pattern: "match", path: ".", context: 1 },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: [
+        "adjacent.txt-1- first",
+        "adjacent.txt:2: match one",
+        "adjacent.txt-3- match two",
+        "adjacent.txt-2- match one",
+        "adjacent.txt:3: match two",
+        "adjacent.txt-4- last",
+      ].join("\n"),
+    });
+  });
+
+  test("bounds negative-glob candidates and fails closed if underfilled", async () => {
+    const cwd = await root();
+    let maxTotalCount: number | undefined;
+    const fakeEngine = {
+      async grepAsync(params: { maxTotalCount?: number }) {
+        maxTotalCount = params.maxTotalCount;
+        return {
+          files: [],
+          totalMatches: maxTotalCount ?? 0,
+          filesSearched: 1,
+          walkCacheHit: false,
+          limitReached: true,
+          root: cwd,
+          rootIsDir: true,
+        };
+      },
+    } as unknown as HearthEngine;
+    const grep = createHearthGrepDefinition(cwd, fakeEngine);
+
+    await expect(
+      grep.execute(
+        "grep-negative-bound",
+        { pattern: ".", path: ".", glob: "!*.md", limit: 1 },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow("Negative glob candidate scan limit reached");
+    expect(maxTotalCount).toBeGreaterThan(0);
+    expect(maxTotalCount).toBeLessThanOrEqual(100_000);
   });
 
   test("grep maps a pre-aborted request to pi's error", async () => {
@@ -331,7 +406,7 @@ describe("Hearth-backed pi tool contracts", () => {
     ).rejects.toThrow("Command aborted");
   });
 
-  test("bash treats a signal exit like pi's null exit code", async () => {
+  test("bash treats a fresh-shell signal exit like pi's null exit code", async () => {
     const cwd = await root();
     const hearth = new HearthEngine({
       cwd,
@@ -353,5 +428,22 @@ describe("Hearth-backed pi tool contracts", () => {
       type: "text",
       text: "(no output)",
     });
+  });
+
+  test("bash never retries an indeterminate warm-shell signal", async () => {
+    const cwd = await root();
+    const bash = createHearthBashDefinition(cwd, engine(cwd), settings);
+
+    await expect(
+      bash.execute(
+        "bash-warm-signal",
+        { command: "kill -TERM $$" },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow(
+      "Hearth reported an indeterminate command outcome; inspect state before retrying",
+    );
   });
 });

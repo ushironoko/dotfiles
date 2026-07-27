@@ -29,6 +29,7 @@ const runtime = (
     drainTimeoutMs?: number;
     failSends?: number;
     reentrantSend?: boolean;
+    onWorkSettled?: BackgroundHost["onWorkSettled"];
   } = {},
 ) => {
   let id = 0;
@@ -41,6 +42,7 @@ const runtime = (
   let sendCount = 0;
   let manager!: BackgroundInvocationManager;
   const host: BackgroundHost = {
+    onWorkSettled: options.onWorkSettled,
     appendEntry(customType, data) {
       entries.push({ customType, data });
     },
@@ -181,6 +183,49 @@ describe("background child-run manager", () => {
     expect(registry.getInvocation(started.invocationId)?.runs[0]).toMatchObject(
       { status: "aborted", terminalReason: "shutdown" },
     );
+  });
+
+  test("shutdown awaits settlement invalidation even when notification is suppressed", async () => {
+    const invalidationStarted = deferred<void>();
+    const invalidated = deferred<void>();
+    let invalidationCalls = 0;
+    const { registry, manager } = runtime({
+      onWorkSettled() {
+        invalidationCalls += 1;
+        invalidationStarted.resolve();
+        return invalidated.promise;
+      },
+    });
+    const started = begin(registry);
+    manager.schedule({
+      invocationId: started.invocationId,
+      toolCallId: "tool-1",
+      source: "subagent",
+      run(signal) {
+        return new Promise((_resolve, reject) => {
+          const abort = () => reject(new Error("aborted"));
+          if (
+            "addEventListener" in signal &&
+            typeof signal.addEventListener === "function"
+          ) {
+            signal.addEventListener("abort", abort, { once: true });
+          }
+        });
+      },
+    });
+    manager.acknowledgeToolResult("tool-1");
+
+    let shutdownFinished = false;
+    const shutdown = manager.shutdown().then(() => {
+      shutdownFinished = true;
+    });
+    await invalidationStarted.promise;
+    expect(invalidationCalls).toBe(1);
+    expect(shutdownFinished).toBe(false);
+
+    invalidated.resolve();
+    await shutdown;
+    expect(shutdownFinished).toBe(true);
   });
 
   test("branch navigation aborts and persists without parent delivery", async () => {

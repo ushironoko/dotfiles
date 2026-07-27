@@ -31,6 +31,9 @@ import {
 } from "./engine";
 
 const DEFAULT_GREP_LIMIT = 100;
+const NEGATIVE_GLOB_SCAN_MIN = 1_000;
+const NEGATIVE_GLOB_SCAN_MAX = 100_000;
+const NEGATIVE_GLOB_SCAN_MULTIPLIER = 100;
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
 const absolutePath = (cwd: string, input: string): string => {
@@ -288,7 +291,8 @@ const excludeNegativeGlob = (
   glob: string | undefined,
 ): FileMatches[] => {
   if (glob === undefined || !glob.startsWith("!")) return files;
-  const matcher = new Bun.Glob(glob.slice(1));
+  const pattern = normalizedGlobPath(glob.slice(1)).replace(/^\/+/, "");
+  const matcher = new Bun.Glob(pattern);
   return files.filter((file) => {
     const relativePath = normalizedGlobPath(relative(root, file.path));
     return !(
@@ -297,6 +301,12 @@ const excludeNegativeGlob = (
     );
   });
 };
+
+const negativeGlobScanLimit = (limit: number): number =>
+  Math.min(
+    NEGATIVE_GLOB_SCAN_MAX,
+    Math.max(NEGATIVE_GLOB_SCAN_MIN, limit * NEGATIVE_GLOB_SCAN_MULTIPLIER),
+  );
 
 const limitFileMatches = (
   files: FileMatches[],
@@ -354,7 +364,9 @@ export const createHearthGrepDefinition = (
               fixedStrings: input.literal ?? false,
               beforeContext: context,
               afterContext: context,
-              ...(negativeGlob ? {} : { maxTotalCount: limit }),
+              maxTotalCount: negativeGlob
+                ? negativeGlobScanLimit(limit)
+                : limit,
               hidden: true,
               respectGitignore: true,
             },
@@ -371,6 +383,11 @@ export const createHearthGrepDefinition = (
           (total, file) => total + file.matchCount,
           0,
         );
+        if (negativeGlob && result.limitReached && totalMatches < limit) {
+          throw new Error(
+            "Negative glob candidate scan limit reached before enough included matches; refine pattern or path",
+          );
+        }
         if (totalMatches === 0) {
           return {
             content: [{ type: "text" as const, text: "No matches found" }],
@@ -387,14 +404,24 @@ export const createHearthGrepDefinition = (
           const shownPath = result.rootIsDir
             ? relative(result.root, file.path).replaceAll("\\", "/")
             : basename(file.path);
-          for (const line of file.lines) {
-            const truncated = truncateLine(line.text.replaceAll("\r", ""));
-            linesTruncated ||= truncated.wasTruncated;
-            lines.push(
-              line.isMatch
-                ? `${shownPath}:${line.lineNumber}: ${truncated.text}`
-                : `${shownPath}-${line.lineNumber}- ${truncated.text}`,
-            );
+          const matches = file.lines.filter((line) => line.isMatch);
+          for (const match of matches) {
+            const block =
+              context === 0
+                ? [match]
+                : file.lines.filter(
+                    (line) =>
+                      Math.abs(line.lineNumber - match.lineNumber) <= context,
+                  );
+            for (const line of block) {
+              const truncated = truncateLine(line.text.replaceAll("\r", ""));
+              linesTruncated ||= truncated.wasTruncated;
+              lines.push(
+                line.lineNumber === match.lineNumber
+                  ? `${shownPath}:${line.lineNumber}: ${truncated.text}`
+                  : `${shownPath}-${line.lineNumber}- ${truncated.text}`,
+              );
+            }
           }
         }
         const truncation = truncateHead(lines.join("\n"), {

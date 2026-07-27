@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { resolve } from "node:path";
 import {
   createEventBus,
   type ExtensionAPI,
@@ -40,7 +41,15 @@ class FakeEngine {
   }
 }
 
-const fakePi = (competingTool?: string) => {
+const HEARTH_TEST_SOURCE = resolve(
+  import.meta.dir,
+  "../../pi/extensions/hearth-tools/index.ts",
+);
+
+const fakePi = (
+  competingTool?: string,
+  competingPath = "/project/extension/index.ts",
+) => {
   const handlers = new Map<string, Function[]>();
   const sessionStart: Function[] = [];
   handlers.set("session_start", sessionStart);
@@ -70,7 +79,7 @@ const fakePi = (competingTool?: string) => {
         winners.set(competingTool, {
           name: competingTool,
           sourceInfo: {
-            path: `/project/extension/${competingTool}.ts`,
+            path: competingPath,
             source: "project-extension",
             scope: "project",
             origin: "top-level",
@@ -85,7 +94,7 @@ const fakePi = (competingTool?: string) => {
           parameters: tool.parameters,
           promptGuidelines: tool.promptGuidelines,
           sourceInfo: {
-            path: `/repo/pi/extensions/hearth-tools/${tool.name}.ts`,
+            path: HEARTH_TEST_SOURCE,
             source: "extension",
             scope: "user",
             origin: "top-level",
@@ -315,6 +324,39 @@ describe("hearth-tools startup", () => {
     await expect(
       collision.emit("session_start", { reason: "startup" }),
     ).rejects.toThrow(COLLISION_ERROR);
+
+    const spoofed = fakePi("read", "/project/hearth-tools/index.ts");
+    await setupHearthTools(spoofed.pi, {
+      loadModule: async () => ({ HearthEngine: FakeEngine as never }),
+      getAgentDir: () => "/agent",
+      loadConfig: () => ({ ...DEFAULT_HEARTH_TOOLS_CONFIG }),
+      createSettings: (() => settings) as never,
+      fatal: (message) => {
+        throw new Error(message);
+      },
+    });
+    await expect(
+      spoofed.emit("session_start", { reason: "startup" }),
+    ).rejects.toThrow(COLLISION_ERROR);
+  });
+
+  test("releases the legacy process slot before creating the gated runtime", async () => {
+    const legacySlot = Symbol.for("ushironoko.pi-hearth-tools.engine.v1");
+    Reflect.set(globalThis, legacySlot, { engine: {}, options: {} });
+    const fake = fakePi();
+    await setupHearthTools(fake.pi, {
+      loadModule: async () => ({ HearthEngine: FakeEngine as never }),
+      getAgentDir: () => "/agent",
+      loadConfig: () => ({ ...DEFAULT_HEARTH_TOOLS_CONFIG }),
+      createSettings: (() => settings) as never,
+      fatal: (message) => {
+        throw new Error(message);
+      },
+    });
+    await fake.emit("session_start", { reason: "reload" });
+
+    expect(Reflect.has(globalThis, legacySlot)).toBe(false);
+    expect(FakeEngine.constructed).toHaveLength(1);
   });
 
   test("clears caches after mutation hooks and child completion", async () => {
@@ -342,5 +384,15 @@ describe("hearth-tools startup", () => {
       },
     });
     expect(FakeEngine.clearCount).toBe(2);
+
+    await fake.emit("session_shutdown");
+    const pending: Promise<void>[] = [];
+    fake.pi.events.emit("pi-hearth-tools:invalidate-request:v1", {
+      accept(operation: Promise<void>) {
+        pending.push(operation);
+      },
+    });
+    await Promise.all(pending);
+    expect(FakeEngine.clearCount).toBe(3);
   });
 });

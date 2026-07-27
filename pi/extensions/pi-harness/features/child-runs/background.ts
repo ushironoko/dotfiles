@@ -16,6 +16,7 @@ export const MAX_NOTIFICATION_RESULT_BYTES = 32 * 1024;
 
 export interface BackgroundHost {
   appendEntry(customType: string, data?: unknown): void;
+  onWorkSettled?(): Promise<void> | void;
   sendMessage(
     message: {
       customType: string;
@@ -298,7 +299,14 @@ export class BackgroundInvocationManager {
           }
         },
       )
-      .then(() => {
+      .then(async () => {
+        try {
+          await this.host.onWorkSettled?.();
+        } catch {
+          // Cache invalidation is a best-effort integration boundary when the
+          // Hearth extension is absent or shutting down. Child persistence and
+          // lifecycle cleanup must still complete.
+        }
         this.tryArchive(record);
       })
       .catch(() => {

@@ -33,6 +33,9 @@ interface RuntimeBeforeAgentStartEvent {
 }
 
 interface RuntimePiLike {
+  events?: {
+    emit(event: string, value: unknown): void;
+  };
   on(
     event: string,
     handler: (event: unknown, ctx: RuntimeContextLike) => unknown,
@@ -83,6 +86,8 @@ const completionInvocationId = (details: unknown): string | undefined => {
   const invocationId = (details as { invocationId?: unknown }).invocationId;
   return typeof invocationId === "string" ? invocationId : undefined;
 };
+
+const HEARTH_INVALIDATE_REQUEST = "pi-hearth-tools:invalidate-request:v1";
 
 const BACKGROUND_AGENT_SYSTEM_PROMPT = `## Background agent completion
 
@@ -155,6 +160,15 @@ const setupChildRuns = (
       if (activeContext !== undefined) await refreshBitIssues(activeContext);
     },
   });
+  const invalidateHearthCaches = async (): Promise<void> => {
+    const pending: Promise<void>[] = [];
+    runtime.events?.emit(HEARTH_INVALIDATE_REQUEST, {
+      accept(operation: Promise<void>) {
+        pending.push(Promise.resolve(operation));
+      },
+    });
+    await Promise.allSettled(pending);
+  };
   const background =
     options.childExecution !== false &&
     typeof runtime.appendEntry === "function" &&
@@ -162,6 +176,7 @@ const setupChildRuns = (
       ? new BackgroundInvocationManager(registry, {
           appendEntry: runtime.appendEntry.bind(runtime),
           sendMessage: runtime.sendMessage.bind(runtime),
+          onWorkSettled: invalidateHearthCaches,
         })
       : undefined;
   const pendingTreeTransitions: PendingTreeTransition[] = [];

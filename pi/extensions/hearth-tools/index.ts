@@ -1,3 +1,6 @@
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   getAgentDir,
   getShellConfig,
@@ -22,7 +25,10 @@ import {
   type HearthModule,
   type PiToolSettings,
 } from "./engine";
-import { registerHearthReadService } from "./service";
+import {
+  registerHearthInvalidationService,
+  registerHearthReadService,
+} from "./service";
 
 export const HEARTH_TOOL_NAMES = [
   "read",
@@ -38,6 +44,7 @@ const COLLISION_ERROR = "pi-hearth-tools: competing tool override detected";
 const RESTART_ERROR =
   "pi-hearth-tools: Engine settings changed; restart pi to apply them";
 const CHILD_RUN_COMPLETION_ENTRY = "pi-harness/child-run-completion";
+const HEARTH_ENTRY_PATH = fileURLToPath(import.meta.url);
 const POST_TOOL_INVALIDATION = new Set([
   "write",
   "edit",
@@ -96,8 +103,16 @@ const definitions = (
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object";
 
+const canonicalSourcePath = (path: string): string => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+};
+
 const isHearthSource = (path: string): boolean =>
-  /(?:^|[/\\])hearth-tools(?:[/\\]|$)/.test(path);
+  canonicalSourcePath(path) === canonicalSourcePath(HEARTH_ENTRY_PATH);
 
 const effectiveTools = (pi: ExtensionAPI) =>
   new Map(pi.getAllTools().map((tool) => [tool.name, tool]));
@@ -164,6 +179,7 @@ export const setupHearthTools = async (
       current.runtime.engine.clearCaches();
     });
   };
+  registerHearthInvalidationService(pi, clearCaches);
 
   pi.on("session_start", (_event, ctx) => {
     if (registered) return;
