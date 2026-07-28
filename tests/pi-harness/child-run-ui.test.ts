@@ -192,6 +192,25 @@ describe("child-session browser component", () => {
     }
   });
 
+  test("shows the selection cursor only while the browser is focused", () => {
+    const { registry, component } = setup();
+    addRuns(registry, 1);
+
+    expect(component.render(80).some((item) => item.startsWith("> "))).toBe(
+      false,
+    );
+
+    component.focused = true;
+    expect(component.render(80).some((item) => item.startsWith("> "))).toBe(
+      true,
+    );
+
+    component.focused = false;
+    expect(component.render(80).some((item) => item.startsWith("> "))).toBe(
+      false,
+    );
+  });
+
   test("routes raw Enter to the selected run", () => {
     const { registry, component, inspected } = setup();
     const runIds = addRuns(registry, 2);

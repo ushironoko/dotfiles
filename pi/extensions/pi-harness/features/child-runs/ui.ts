@@ -3,6 +3,7 @@ import {
   Box,
   Container,
   Text,
+  type Focusable,
   truncateToWidth as truncateStyledToWidth,
 } from "@earendil-works/pi-tui";
 import type { CtxLike } from "../../lib/pi-like";
@@ -204,7 +205,8 @@ const issueIcon = (issue: BitIssueSummary): string => {
   return "○";
 };
 
-export class ChildRunsBrowserComponent implements ComponentLike {
+export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
+  focused = false;
   private selection: BrowserSelection | undefined;
   private pendingPreference: BrowserSelection["kind"] | undefined;
   private selectedIndexHint = 0;
@@ -447,7 +449,7 @@ export class ChildRunsBrowserComponent implements ComponentLike {
           };
           rendered.push({
             selection,
-            text: `${this.isSelected(selection) ? ">" : " "} ${statusIcon(run.status)} ${stage} ${run.agent} — ${taskOneLine(run.task)}`,
+            text: `${this.isCursorVisible(selection) ? ">" : " "} ${statusIcon(run.status)} ${stage} ${run.agent} — ${taskOneLine(run.task)}`,
           });
         }
       }
@@ -458,7 +460,7 @@ export class ChildRunsBrowserComponent implements ComponentLike {
         const selection: BrowserSelection = { kind: "issue", id: issue.id };
         rendered.push({
           selection,
-          text: `${this.isSelected(selection) ? ">" : " "} ${issueIcon(issue)} #${issue.id.slice(0, 8)} ${taskOneLine(issue.title)}`,
+          text: `${this.isCursorVisible(selection) ? ">" : " "} ${issueIcon(issue)} #${issue.id.slice(0, 8)} ${taskOneLine(issue.title)}`,
         });
       }
       if (issueSnapshot?.truncated === true) {
@@ -496,8 +498,9 @@ export class ChildRunsBrowserComponent implements ComponentLike {
       .map((item) => line(item.text, width));
   }
 
-  private isSelected(selection: BrowserSelection): boolean {
+  private isCursorVisible(selection: BrowserSelection): boolean {
     return (
+      this.focused &&
       this.selection !== undefined &&
       selectionToken(this.selection) === selectionToken(selection)
     );
