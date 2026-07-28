@@ -304,12 +304,7 @@ const parseGrepGlob = (glob: string | undefined): GrepGlob | undefined => {
 
 const hearthGlobs = (glob: GrepGlob | undefined): string[] => {
   if (glob === undefined) return [];
-  if (
-    glob.negative ||
-    glob.rooted ||
-    glob.directoryOnly ||
-    glob.hasSlash
-  ) {
+  if (glob.negative || glob.rooted || glob.directoryOnly || glob.hasSlash) {
     // Hearth's native globset is the same strict parser family as ripgrep.
     // `**` keeps the candidate walk unfiltered while the second entry validates
     // malformed classes, ranges, alternates, and escapes before JS post-filtering.
@@ -345,10 +340,7 @@ const filterPostProcessedGlob = (
   if (
     glob === undefined ||
     !rootIsDirectory ||
-    (!glob.negative &&
-      !glob.rooted &&
-      !glob.directoryOnly &&
-      !glob.hasSlash)
+    (!glob.negative && !glob.rooted && !glob.directoryOnly && !glob.hasSlash)
   ) {
     return files;
   }
@@ -413,10 +405,7 @@ export const createHearthGrepDefinition = (
         const glob = parseGrepGlob(input.glob);
         const postFilterGlob =
           glob !== undefined &&
-          (glob.negative ||
-            glob.rooted ||
-            glob.directoryOnly ||
-            glob.hasSlash);
+          (glob.negative || glob.rooted || glob.directoryOnly || glob.hasSlash);
         const result = await engine
           .grepAsync(
             {
