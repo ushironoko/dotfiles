@@ -1178,7 +1178,8 @@ describe("pi-harness statusline lifecycle", () => {
         return false;
       }
     });
-    expect((await fs.readFile(captureFile, "utf8")).trim()).toBe(project);
+    const captured = await fs.readFile(captureFile, "utf8");
+    expect(captured.trim()).toBe(project);
   });
 
   test("passes the canonical trusted root to the runner as a boundary", async () => {
@@ -1221,11 +1222,8 @@ describe("pi-harness statusline lifecycle", () => {
         return false;
       }
     });
-    const [cwdArgument, boundaryArgument] = (
-      await fs.readFile(captureFile, "utf8")
-    )
-      .trim()
-      .split("\n");
+    const captured = await fs.readFile(captureFile, "utf8");
+    const [cwdArgument, boundaryArgument] = captured.trim().split("\n");
     expect(cwdArgument).toBe(project);
     expect(await fs.realpath(boundaryArgument ?? "")).toBe(
       await fs.realpath(project),

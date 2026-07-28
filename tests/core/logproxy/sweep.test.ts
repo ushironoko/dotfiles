@@ -104,9 +104,9 @@ describe("runSweep（executor, 実FS）", () => {
     const gz = entries.find(
       (e) => e.startsWith("sess.") && e.endsWith(".jsonl.gz"),
     );
-    expect(gz).toBeTruthy();
+    if (!gz) throw new Error("expected a sess.*.jsonl.gz segment file");
     const restored = Buffer.from(
-      Bun.gunzipSync(new Uint8Array(await fs.readFile(join(dir, gz!)))),
+      Bun.gunzipSync(new Uint8Array(await fs.readFile(join(dir, gz)))),
     ).toString();
     expect(restored).toBe(original);
   });

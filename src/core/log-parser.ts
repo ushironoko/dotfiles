@@ -191,7 +191,7 @@ export const parseToolUsage = (sessionPath: string): ToolUsage[] => {
             // Bashコマンドのコンテキスト情報を抽出
             let bashCommand: string | undefined;
             let bashCategory: BashCommandCategory | undefined;
-            const command = toolInput.command;
+            const { command } = toolInput;
             if (toolName === "Bash" && typeof command === "string") {
               bashCommand = command;
               bashCategory = categorizeBashCommand(command);

@@ -50,7 +50,7 @@ const createTerminal = (columns: number, rows: number): Terminal => ({
 const createLayout = async (
   rows: number,
   columns: number,
-  includeIssues: boolean = false,
+  includeIssues = false,
 ) => {
   let id = 0;
   const registry = new ChildRunRegistry({

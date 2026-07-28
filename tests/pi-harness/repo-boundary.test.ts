@@ -301,7 +301,8 @@ describe("validateCwdWithinRepo (real git)", () => {
 
     const sub = join(root, "packages", "a");
     await mkdir(sub, { recursive: true });
-    expect((await validateCwdWithinRepo(sub, root)).ok).toBe(true);
+    const subResult = await validateCwdWithinRepo(sub, root);
+    expect(subResult.ok).toBe(true);
 
     const nested = join(root, "vendor", "other");
     await mkdir(nested, { recursive: true });
@@ -312,7 +313,8 @@ describe("validateCwdWithinRepo (real git)", () => {
 
     const outside = await tempRoot("rb-real-out-");
     gitInit(outside);
-    expect((await validateCwdWithinRepo(outside, root)).ok).toBe(false);
+    const outsideResult = await validateCwdWithinRepo(outside, root);
+    expect(outsideResult.ok).toBe(false);
   });
 
   test("a non-repo root falls back to containment (real git returns no common-dir)", async () => {
@@ -321,6 +323,7 @@ describe("validateCwdWithinRepo (real git)", () => {
     const root = await tempRoot("rb-nonrepo-");
     const sub = join(root, "packages", "a");
     await mkdir(sub, { recursive: true });
-    expect((await validateCwdWithinRepo(sub, root)).ok).toBe(true);
+    const subResult = await validateCwdWithinRepo(sub, root);
+    expect(subResult.ok).toBe(true);
   });
 });

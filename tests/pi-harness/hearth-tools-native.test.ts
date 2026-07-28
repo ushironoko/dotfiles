@@ -441,7 +441,7 @@ describe("Hearth-backed pi tool contracts", () => {
     let maxTotalCount: number | undefined;
     const fakeEngine = {
       async grepAsync(params: { maxTotalCount?: number }) {
-        maxTotalCount = params.maxTotalCount;
+        ({ maxTotalCount } = params);
         return {
           files: [],
           totalMatches: maxTotalCount ?? 0,
@@ -513,14 +513,15 @@ describe("Hearth-backed pi tool contracts", () => {
       },
       undefined,
       (update) => {
-        const block = update.content[0];
+        const [block] = update.content;
         if (block?.type === "text") updates.push(block.text);
       },
       context,
     );
     expect(result.content[0]).toEqual({ type: "text", text: "yes" });
     expect(updates.join("\n")).toContain("yes");
-    expect((await hearth.readAsync({ path })).content).toBe("new\n");
+    const reread = await hearth.readAsync({ path });
+    expect(reread.content).toBe("new\n");
   });
 
   test("bash reports the effective Engine timeout and maps aborts", async () => {

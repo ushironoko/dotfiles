@@ -69,8 +69,10 @@ describe("createLogWriter — 基本", () => {
     await w.writeRequest(mkReq("s1"));
     await w.writeRequest(mkReq("s2"));
     await w.close();
-    expect((await readLines("s1")).length).toBe(1);
-    expect((await readLines("s2")).length).toBe(1);
+    const s1Lines = await readLines("s1");
+    expect(s1Lines.length).toBe(1);
+    const s2Lines = await readLines("s2");
+    expect(s2Lines.length).toBe(1);
   });
 
   it("request と response が record_id で相関できる", async () => {
@@ -121,8 +123,10 @@ describe("createLogWriter — 並行/堅牢性", () => {
       ...Array.from({ length: 7 }, () => w.writeRequest(mkReq("b"))),
     ]);
     await w.close();
-    expect((await readLines("a")).length).toBe(5);
-    expect((await readLines("b")).length).toBe(7);
+    const aLines = await readLines("a");
+    expect(aLines.length).toBe(5);
+    const bLines = await readLines("b");
+    expect(bLines.length).toBe(7);
   });
 
   it("書込不能ディレクトリでも throw せず（fail-open）", async () => {

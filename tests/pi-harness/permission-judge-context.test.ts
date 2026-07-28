@@ -424,11 +424,13 @@ describe("current permission run evidence", () => {
     expect(first?.priorToolResults).toHaveLength(16);
     expect(first?.priorToolResults[0]?.toolName).toBe("tool-4");
 
-    const changed = structuredClone(entries) as Array<Record<string, unknown>>;
+    const changed = structuredClone(entries) as Record<string, unknown>[];
     const assistantEntry = changed[1] as {
-      message: { content: Array<{ text: string }> };
+      message: { content: { text: string }[] };
     };
-    assistantEntry.message.content[0]!.text = `${"b".repeat(3_000)}TAIL`;
+    const [assistantBlock] = assistantEntry.message.content;
+    if (!assistantBlock) throw new Error("missing assistant content block");
+    assistantBlock.text = `${"b".repeat(3_000)}TAIL`;
     expect(
       derivePermissionRunEvidence(changed, "current")?.fingerprint,
     ).not.toBe(first?.fingerprint);
@@ -534,9 +536,7 @@ describe("permission judge project context", () => {
     ["missing empty-record separator", Buffer.from("worktree /tmp/repo\0")],
     [
       "invalid UTF-8",
-      Buffer.from([
-        0x77, 0x6f, 0x72, 0x6b, 0x74, 0x72, 0x65, 0x65, 0x20, 0xff, 0,
-      ]),
+      Buffer.from([119, 111, 114, 107, 116, 114, 101, 101, 32, 255, 0]),
     ],
     [
       "control character in path",
@@ -733,8 +733,8 @@ describe("permission judge project context", () => {
       join(parent, `project-${String(index).padStart(2, "0")}`),
     );
     await Promise.all(roots.map((root) => mkdir(root)));
-    const active = roots[0];
-    const target = roots[17];
+    const [active] = roots;
+    const target = roots.at(17);
     if (active === undefined || target === undefined) {
       throw new Error("missing test roots");
     }

@@ -16,8 +16,10 @@ const sourceOf = (
   let i = 0;
   return new ReadableStream<Uint8Array>({
     pull(controller) {
-      if (i < chunks.length) {
-        controller.enqueue(enc.encode(chunks[i++]!));
+      const chunk = chunks[i];
+      if (chunk !== undefined) {
+        i += 1;
+        controller.enqueue(enc.encode(chunk));
         return;
       }
       if (errorAtEnd) controller.error(new Error("boom"));

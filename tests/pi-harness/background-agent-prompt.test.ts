@@ -48,7 +48,7 @@ describe("background-agent system prompt", () => {
       systemPrompt: "Base system prompt.",
     });
 
-    const systemPrompt = (result as { systemPrompt?: unknown }).systemPrompt;
+    const { systemPrompt } = result as { systemPrompt?: unknown };
     expect(typeof systemPrompt).toBe("string");
     if (typeof systemPrompt !== "string") {
       throw new Error("background guidance did not return a system prompt");

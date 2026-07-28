@@ -504,7 +504,7 @@ describe("explicit allow matching", () => {
     String.raw`b\un test`,
     'bun "$task"',
     "bun $IFS#x; /tmp/evil",
-    "bun ${IFS}#x; /tmp/evil",
+    `bun \${IFS}#x; /tmp/evil`,
     "bun\r#x; /tmp/evil",
     "bun test &",
   ])(
@@ -628,7 +628,7 @@ describe("explicit allow matching", () => {
     String.raw`bun $'run' tsc`,
     String.raw`bun $'$(bit issue claim)'`,
     String.raw`codex $'login status' --foo`,
-    "bun ${x:-$'run'} tsc",
+    `bun \${x:-$'run'} tsc`,
     String.raw`bun test > $'/tmp/result\q'`,
     String.raw`cd $'/repo/worktree\q' && bun run tsc`,
     String.raw`cd $'/repo/\xC3\xA9' && bun run tsc`,
@@ -1061,7 +1061,7 @@ describe("evaluateCommand compound-command scanning", () => {
   test.each([
     'echo "a; bit issue claim"',
     "echo 'a; bit issue claim'",
-    "echo ok\\; bit_issue_claim",
+    String.raw`echo ok\; bit_issue_claim`,
     'git commit -m "wip; bit issue claim later"',
     "echo ok # ; bit issue claim",
     "echo ok # bit relay serve",
@@ -1071,9 +1071,9 @@ describe("evaluateCommand compound-command scanning", () => {
 
   // Separator obfuscation via $IFS still resolves to the denied command.
   test.each([
-    "bit${IFS}issue${IFS}claim",
+    `bit\${IFS}issue\${IFS}claim`,
     "bit$IFS issue claim",
-    "echo ok; bit${IFS}relay${IFS}serve",
+    `echo ok; bit\${IFS}relay\${IFS}serve`,
   ])("normalizes $IFS separators: %s", (command) => {
     expect(verdictOf(command)).toBe("deny");
   });
@@ -1204,8 +1204,8 @@ describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", ()
     'bit issue "$op"',
     "bit issue $(printf claim)",
     "bit issue `printf claim`",
-    'bit issue "${SUB}"',
-    "bit issue ${x:-claim}",
+    `bit issue "\${SUB}"`,
+    `bit issue \${x:-claim}`,
     'bit pr "$sub"',
     'bit "$x"',
     'bit clone "$target"',
@@ -1239,12 +1239,12 @@ describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", ()
     "then bit issue claim",
     "if bit issue claim; then :; fi",
     "echo ok\nbit issue claim",
-    'echo "${x:-$(bit issue claim)}"',
+    `echo "\${x:-$(bit issue claim)}"`,
     "echo $(( $(bit issue claim) + 0 ))",
     "bit issue $(bit issue claim)",
     // backslash / ANSI-C obfuscation decodes to the literal keyword
-    "b\\it issue claim",
-    "bit issue cl\\aim",
+    String.raw`b\it issue claim`,
+    String.raw`bit issue cl\aim`,
     "bit issue $'claim'",
   ])("denies after normalization/recursion: %s", (command) => {
     expect(verdictOf(command)).toBe("deny");
@@ -1380,7 +1380,7 @@ describe("evaluateCommand fail-closed for dynamic/unsupported syntax (#6:1)", ()
   });
 
   test("IFS separators combine with a trailing opaque subcommand", () => {
-    expect(verdictOf('bit${IFS}issue${IFS}"$op"')).toBe("ask");
+    expect(verdictOf(`bit\${IFS}issue\${IFS}"$op"`)).toBe("ask");
   });
 
   test("empty quoted redirect target does not swallow the command", () => {

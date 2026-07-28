@@ -50,7 +50,7 @@ const readCache = async (
   }
   const json = files.find((f) => f.endsWith(".json"));
   if (!json) return null;
-  const content = await fs.readFile(join(cacheDir, json), "utf-8");
+  const content = await fs.readFile(join(cacheDir, json), "utf8");
   return JSON.parse(content);
 };
 
@@ -73,10 +73,10 @@ describe("runner: TS bun all-pass fixture", () => {
     expect(r.exitCode).toBe(0);
 
     const cache = await readCache(cacheDir);
-    expect(cache).not.toBeNull();
-    expect(cache!.language).toBe("ts");
-    expect(cache!.label).toBe("TS");
-    const checks = cache!.checks as Record<string, { status: string }>;
+    if (!cache) throw new Error("expected cache to be written");
+    expect(cache.language).toBe("ts");
+    expect(cache.label).toBe("TS");
+    const checks = cache.checks as Record<string, { status: string }>;
     expect(checks.lint.status).toBe("ok");
     expect(checks.typecheck.status).toBe("ok");
     expect(checks.test.status).toBe("ok");
@@ -102,7 +102,8 @@ describe("runner: TS pnpm typecheck-fail fixture", () => {
     expect(r.exitCode).toBe(0);
 
     const cache = await readCache(cacheDir);
-    const checks = cache!.checks as Record<string, { status: string }>;
+    if (!cache) throw new Error("expected cache to be written");
+    const checks = cache.checks as Record<string, { status: string }>;
     expect(checks.lint.status).toBe("ok");
     expect(checks.typecheck.status).toBe("fail");
     expect(checks.test.status).toBe("ok");
@@ -128,7 +129,8 @@ describe("runner: TS without lint script", () => {
     expect(r.exitCode).toBe(0);
 
     const cache = await readCache(cacheDir);
-    const checks = cache!.checks as Record<string, { status: string }>;
+    if (!cache) throw new Error("expected cache to be written");
+    const checks = cache.checks as Record<string, { status: string }>;
     expect(checks.lint.status).toBe("skipped");
     expect(checks.typecheck.status).toBe("ok");
     expect(checks.test.status).toBe("ok");
@@ -175,8 +177,9 @@ describe("runner: TTL behavior", () => {
       STATUSLINE_NOW_OVERRIDE: "10000",
     });
     const first = await readCache(cacheDir);
+    if (!first) throw new Error("expected cache to be written");
     const firstLint = (
-      first!.checks as Record<string, { last_completed_at: number }>
+      first.checks as Record<string, { last_completed_at: number }>
     ).lint.last_completed_at;
 
     // 5 seconds later, well within 30s lint TTL
@@ -185,8 +188,9 @@ describe("runner: TTL behavior", () => {
       STATUSLINE_NOW_OVERRIDE: "10005",
     });
     const second = await readCache(cacheDir);
+    if (!second) throw new Error("expected cache to be written");
     const secondLint = (
-      second!.checks as Record<string, { last_completed_at: number }>
+      second.checks as Record<string, { last_completed_at: number }>
     ).lint.last_completed_at;
 
     expect(secondLint).toBe(firstLint);
@@ -203,8 +207,9 @@ describe("runner: TTL behavior", () => {
       STATUSLINE_NOW_OVERRIDE: "20000",
     });
     const first = await readCache(cacheDir);
+    if (!first) throw new Error("expected cache to be written");
     const firstLint = (
-      first!.checks as Record<string, { last_completed_at: number }>
+      first.checks as Record<string, { last_completed_at: number }>
     ).lint.last_completed_at;
 
     // 100s later, way past lint TTL (30s)
@@ -213,8 +218,9 @@ describe("runner: TTL behavior", () => {
       STATUSLINE_NOW_OVERRIDE: "20100",
     });
     const second = await readCache(cacheDir);
+    if (!second) throw new Error("expected cache to be written");
     const secondLint = (
-      second!.checks as Record<string, { last_completed_at: number }>
+      second.checks as Record<string, { last_completed_at: number }>
     ).lint.last_completed_at;
 
     expect(secondLint).toBe(20100);
@@ -243,7 +249,8 @@ describe("runner: TTL behavior", () => {
     });
 
     const cache = await readCache(cacheDir);
-    const checks = cache!.checks as Record<
+    if (!cache) throw new Error("expected cache to be written");
+    const checks = cache.checks as Record<
       string,
       { status: string; last_completed_at: number | null }
     >;
@@ -268,9 +275,9 @@ describe("runner: TTL behavior", () => {
     await runRunner(project, { ...env, STATUSLINE_NOW_OVERRIDE: "30001" });
 
     const cache = await readCache(cacheDir);
-    const lint = (
-      cache!.checks as Record<string, { last_completed_at: number }>
-    ).lint.last_completed_at;
+    if (!cache) throw new Error("expected cache to be written");
+    const lint = (cache.checks as Record<string, { last_completed_at: number }>)
+      .lint.last_completed_at;
     expect(lint).toBe(30001);
   });
 });
@@ -295,8 +302,9 @@ describe.skipIf(!e2eRust)("runner: rust fixture (gated)", () => {
     expect(r.exitCode).toBe(0);
 
     const cache = await readCache(cacheDir);
-    expect(cache!.label).toBe("RS");
-    const checks = cache!.checks as Record<string, { status: string }>;
+    if (!cache) throw new Error("expected cache to be written");
+    expect(cache.label).toBe("RS");
+    const checks = cache.checks as Record<string, { status: string }>;
     expect(checks.lint.status).toBe("ok");
     expect(checks.typecheck.status).toBe("ok");
     expect(checks.test.status).toBe("ok");
@@ -323,7 +331,8 @@ describe.skipIf(!e2eMoonbit)("runner: moonbit fixture (gated)", () => {
     expect(r.exitCode).toBe(0);
 
     const cache = await readCache(cacheDir);
-    expect(cache!.label).toBe("MB");
+    if (!cache) throw new Error("expected cache to be written");
+    expect(cache.label).toBe("MB");
   }, 60000);
 });
 
@@ -469,7 +478,7 @@ describe("runner: pinned worktree identity", () => {
         "status=$?",
         '[ "$status" -eq 0 ] || exit "$status"',
         String.raw`printf '%s\n' "$output"`,
-        "last=${!#}",
+        `last=\${!#}`,
         'if [ "$last" = "." ] && [ ! -e "$SWAPPED" ]; then',
         '  : > "$SWAPPED"',
         '  "$REAL_MV" -- "$PROJECT" "$MOVED"',
@@ -551,7 +560,7 @@ describe("runner: trust boundary", () => {
     });
     expect(r.exitCode).toBe(0);
     const cache = await readCache(cacheDir);
-    expect(cache).not.toBeNull();
-    expect(cache!.project_root).toBe(parent);
+    if (!cache) throw new Error("expected cache to be written");
+    expect(cache.project_root).toBe(parent);
   });
 });

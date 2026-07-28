@@ -1,12 +1,20 @@
 import {
   createGrepToolDefinition,
   createReadToolDefinition,
+  generateDiffString,
+  generateUnifiedPatch,
 } from "@earendil-works/pi-coding-agent";
-import { HearthEngine, type GrepMode, type ShellSpec } from "@hearthdev/napi";
+import {
+  HearthEngine,
+  type GrepMode,
+  type ShellSpec,
+  type WriteMode,
+} from "@hearthdev/napi";
 import { cpus, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import {
+  createHearthEditDefinition,
   createHearthGrepDefinition,
   createHearthReadDefinition,
 } from "../pi/extensions/hearth-tools/adapters";
@@ -18,6 +26,7 @@ import {
 const DEFAULT_WARMUP_ITERATIONS = 8;
 const DEFAULT_READ_ITERATIONS = 200;
 const DEFAULT_GREP_ITERATIONS = 30;
+const DEFAULT_EDIT_ITERATIONS = 60;
 const DEFAULT_SYNTHETIC_FILES = 512;
 const DEFAULT_SYNTHETIC_FILE_BYTES = 16 * 1024;
 const SYNTHETIC_READ_BYTES = 8 * 1024 * 1024;
@@ -32,6 +41,7 @@ interface BenchmarkOptions {
   warmupIterations: number;
   readIterations: number;
   grepIterations: number;
+  editIterations: number;
   syntheticFiles: number;
   syntheticFileBytes: number;
   json: boolean;
@@ -56,8 +66,8 @@ interface SampleStats {
 }
 
 interface Comparison {
-  dataset: Workload["name"];
-  tool: "read" | "grep";
+  dataset: string;
+  tool: "read" | "grep" | "edit";
   layer: "end-to-end" | "raw";
   baseline: SampleStats;
   hearth: SampleStats;
@@ -88,6 +98,7 @@ Options:
   --warmup <n>               Warm-up calls per implementation (default: ${DEFAULT_WARMUP_ITERATIONS})
   --read-iterations <n>       Timed read calls per implementation (default: ${DEFAULT_READ_ITERATIONS})
   --grep-iterations <n>       Timed grep calls per implementation (default: ${DEFAULT_GREP_ITERATIONS})
+  --edit-iterations <n>       Timed edit round trips per implementation (default: ${DEFAULT_EDIT_ITERATIONS})
   --synthetic-files <n>       Synthetic grep corpus file count (default: ${DEFAULT_SYNTHETIC_FILES})
   --synthetic-file-bytes <n>  Approximate bytes per synthetic grep file (default: ${DEFAULT_SYNTHETIC_FILE_BYTES})
   --json                     Emit machine-readable JSON only
@@ -107,6 +118,7 @@ const parseOptions = (argv: string[]): BenchmarkOptions => {
     warmupIterations: DEFAULT_WARMUP_ITERATIONS,
     readIterations: DEFAULT_READ_ITERATIONS,
     grepIterations: DEFAULT_GREP_ITERATIONS,
+    editIterations: DEFAULT_EDIT_ITERATIONS,
     syntheticFiles: DEFAULT_SYNTHETIC_FILES,
     syntheticFileBytes: DEFAULT_SYNTHETIC_FILE_BYTES,
     json: false,
@@ -133,6 +145,10 @@ const parseOptions = (argv: string[]): BenchmarkOptions => {
       }
       case "--grep-iterations": {
         options.grepIterations = positiveInteger(value, argument);
+        break;
+      }
+      case "--edit-iterations": {
+        options.editIterations = positiveInteger(value, argument);
         break;
       }
       case "--synthetic-files": {
@@ -198,7 +214,7 @@ const measure = async (operation: () => Promise<unknown>): Promise<number> => {
 };
 
 const compare = async (
-  workload: Workload,
+  dataset: string,
   tool: Comparison["tool"],
   layer: Comparison["layer"],
   baselineOperation: () => Promise<unknown>,
@@ -225,7 +241,7 @@ const compare = async (
   const baseline = summarize(baselineSamples);
   const hearth = summarize(hearthSamples);
   return {
-    dataset: workload.name,
+    dataset,
     tool,
     layer,
     baseline,
@@ -460,7 +476,7 @@ const benchmarkWorkload = async (
 
   return [
     await compare(
-      workload,
+      workload.name,
       "read",
       "end-to-end",
       builtinReadOperation,
@@ -469,7 +485,7 @@ const benchmarkWorkload = async (
       options.readIterations,
     ),
     await compare(
-      workload,
+      workload.name,
       "read",
       "raw",
       rawFsReadOperation,
@@ -478,7 +494,7 @@ const benchmarkWorkload = async (
       options.readIterations,
     ),
     await compare(
-      workload,
+      workload.name,
       "grep",
       "end-to-end",
       builtinGrepOperation,
@@ -487,7 +503,7 @@ const benchmarkWorkload = async (
       options.grepIterations,
     ),
     await compare(
-      workload,
+      workload.name,
       "grep",
       "raw",
       rawRgOperation,
@@ -496,6 +512,339 @@ const benchmarkWorkload = async (
       options.grepIterations,
     ),
   ];
+};
+
+// ---------------------------------------------------------------------------
+// edit benchmark: the current pi-orchestrated adapter vs the native editBatch
+// proxy — the decision gate for hearth#3's API additions. The candidate uses
+// ONLY the already-published @hearthdev/napi API: `editBatchAsync` with
+// `skipDiff` + `returnContent` does the matching and mutation natively, a
+// cached pre-read stands in for the gated `returnOriginalContent`, and the
+// persisted bytes are reconstructed from `content + hadBom + crlf`. Full
+// ToolResult parity (diff, patch, firstChangedLine, message, disk bytes) with
+// the baseline is enforced before anything is timed.
+
+interface EditReplacementInput {
+  oldText: string;
+  newText: string;
+}
+
+interface EditFixture {
+  name: string;
+  fileName: string;
+  seedContent: string;
+  forward: EditReplacementInput[];
+  /** Absent: parity-only fixture, checked for equivalence but never timed. */
+  reverse?: EditReplacementInput[];
+  iterations?: (options: BenchmarkOptions) => number;
+}
+
+/** pi's stripBom, verbatim (dist/core/tools/edit-diff.js). */
+const stripBomLikePi = (content: string): { bom: string; text: string } =>
+  content.startsWith("﻿")
+    ? { bom: "﻿", text: content.slice(1) }
+    : { bom: "", text: content };
+
+/** pi's normalizeToLF, verbatim (dist/core/tools/edit-diff.js). */
+const normalizeToLFLikePi = (text: string): string =>
+  text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+/**
+ * The persisted bytes, rebuilt from what editBatch already returns. This is
+ * the exact inverse of Hearth's write path (edit.rs: BOM re-attached, LF
+ * restored to CRLF only when the source was CRLF), so `returnPersistedContent`
+ * would be redundant — proven per fixture below by comparing against the disk.
+ */
+const reconstructPersisted = (
+  content: string,
+  hadBom: boolean,
+  crlf: boolean,
+): string =>
+  (hadBom ? "﻿" : "") + (crlf ? content.replace(/\n/g, "\r\n") : content);
+
+const editSourceLine = (index: number): string =>
+  `const value_${index} = compute(${index}) + "alpha beta gamma";`;
+
+const buildEditSeed = (lines: number): string =>
+  `${Array.from({ length: lines }, (_value, index) => editSourceLine(index)).join("\n")}\n`;
+
+const buildEditPairs = (
+  lines: number,
+  count: number,
+): { forward: EditReplacementInput[]; reverse: EditReplacementInput[] } => {
+  const forward: EditReplacementInput[] = [];
+  const reverse: EditReplacementInput[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const line = Math.floor((lines * (index + 1)) / (count + 1));
+    const oldText = editSourceLine(line);
+    const newText = `const value_${line} = edited(${line}) + "delta";`;
+    forward.push({ oldText, newText });
+    reverse.push({ oldText: newText, newText: oldText });
+  }
+  return { forward, reverse };
+};
+
+const createEditFixtures = (): EditFixture[] => {
+  const fixtures: EditFixture[] = [];
+  for (const size of [
+    { label: "2k", lines: 2_000 },
+    { label: "20k", lines: 20_000 },
+  ]) {
+    for (const editCount of [1, 8]) {
+      const pairs = buildEditPairs(size.lines, editCount);
+      fixtures.push({
+        name: `edit-${size.label}-${editCount}`,
+        fileName: `edit-${size.label}-${editCount}.ts`,
+        seedContent: buildEditSeed(size.lines),
+        forward: pairs.forward,
+        reverse: pairs.reverse,
+        ...(size.lines >= 20_000
+          ? {
+              iterations: (options: BenchmarkOptions) =>
+                Math.max(10, Math.floor(options.editIterations / 2)),
+            }
+          : {}),
+      });
+    }
+  }
+  // Normalized-fallback reference: the target uses straight quotes while the
+  // file has smart quotes, so the forward leg matches only through the fuzzy
+  // pass (pi's in JS, Hearth's faithful port of it natively).
+  const fuzzyLines = buildEditSeed(2_000).split("\n");
+  fuzzyLines[1_000] = "const label_1000 = “fancy quote”;";
+  fixtures.push({
+    name: "edit-2k-fuzzy",
+    fileName: "edit-fuzzy.ts",
+    seedContent: fuzzyLines.join("\n"),
+    forward: [
+      {
+        oldText: 'const label_1000 = "fancy quote";',
+        newText: 'const label_1000 = "plain";',
+      },
+    ],
+    reverse: [
+      {
+        oldText: 'const label_1000 = "plain";',
+        newText: "const label_1000 = “fancy quote”;",
+      },
+    ],
+  });
+  // Parity-only pi edge cases — exactly the ones hearth#3 calls out. Never
+  // timed; they exist so the equivalence the gate rests on is proven where
+  // reconstruction is hardest.
+  fixtures.push(
+    {
+      name: "parity-final-line-deletion",
+      fileName: "parity-final-line.txt",
+      seedContent: "alpha\nbeta\ngamma\n",
+      forward: [{ oldText: "\ngamma\n", newText: "\n" }],
+    },
+    {
+      name: "parity-no-trailing-newline",
+      fileName: "parity-no-newline.txt",
+      seedContent: "alpha\nbeta",
+      forward: [{ oldText: "beta", newText: "BETA" }],
+    },
+    {
+      name: "parity-empty-result",
+      fileName: "parity-empty.txt",
+      seedContent: "only line\n",
+      forward: [{ oldText: "only line\n", newText: "" }],
+    },
+    {
+      name: "parity-crlf",
+      fileName: "parity-crlf.txt",
+      seedContent: "one\r\ntwo\r\nthree\r\n",
+      forward: [{ oldText: "two", newText: "TWO" }],
+    },
+    {
+      name: "parity-bom",
+      fileName: "parity-bom.txt",
+      seedContent: "﻿alpha\nbeta\n",
+      forward: [{ oldText: "alpha", newText: "ALPHA" }],
+    },
+    {
+      name: "parity-bom-crlf",
+      fileName: "parity-bom-crlf.txt",
+      seedContent: "﻿one\r\ntwo\r\n",
+      forward: [{ oldText: "two", newText: "TWO" }],
+    },
+    {
+      name: "parity-lone-cr",
+      fileName: "parity-lone-cr.txt",
+      seedContent: "one\rtwo\rthree\r",
+      forward: [{ oldText: "two", newText: "TWO" }],
+    },
+  );
+  return fixtures;
+};
+
+const benchmarkEdits = async (
+  options: BenchmarkOptions,
+): Promise<Comparison[]> => {
+  const root = await mkdtemp(join(tmpdir(), "hearth-edit-benchmark-"));
+  try {
+    const engine = createEngine(root);
+    const gate = new HearthEngineGate();
+    const baselineDefinition = createHearthEditDefinition(root, engine, gate);
+
+    let lastNative:
+      | { content?: string; hadBom: boolean; crlf: boolean }
+      | undefined;
+
+    const nativeEditOnce = async (
+      relativePath: string,
+      edits: EditReplacementInput[],
+    ): Promise<ToolResultLike> => {
+      const absolutePath = resolve(root, relativePath);
+      // Stand-in for the gated returnOriginalContent: a warm-cache pre-read.
+      // The real API would hand this back from inside the mutation lock.
+      const rawBytes = await engine.readBytesAsync({ path: absolutePath });
+      const rawContent = rawBytes.toString("utf8");
+      const result = await engine.editBatchAsync({
+        path: absolutePath,
+        edits,
+        skipDiff: true,
+        returnContent: true,
+        mode: "inPlace" as WriteMode,
+        followSymlinks: true,
+      });
+      lastNative = result;
+      // pi always diffs normalized-original against normalized-new
+      // (applyEditsToNormalizedContent returns baseContent = normalizedContent
+      // even on the fuzzy path), so the canonical pair is derivable without
+      // any new API surface.
+      const baseContent = normalizeToLFLikePi(stripBomLikePi(rawContent).text);
+      const newContent = result.content ?? "";
+      const diffResult = generateDiffString(baseContent, newContent);
+      const patch = generateUnifiedPatch(relativePath, baseContent, newContent);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Successfully replaced ${edits.length} block(s) in ${relativePath}.`,
+          },
+        ],
+        details: {
+          diff: diffResult.diff,
+          patch,
+          firstChangedLine: diffResult.firstChangedLine,
+        },
+      };
+    };
+
+    const comparisons: Comparison[] = [];
+    for (const fixture of createEditFixtures()) {
+      const absolutePath = join(root, fixture.fileName);
+      const seedBytes = Buffer.from(fixture.seedContent, "utf8");
+      const seed = async (): Promise<void> => {
+        await writeFile(absolutePath, fixture.seedContent);
+        engine.invalidatePath(absolutePath);
+      };
+      const baselineOnce = (
+        edits: EditReplacementInput[],
+      ): Promise<ToolResultLike> =>
+        baselineDefinition.execute(
+          `edit-baseline-${fixture.name}`,
+          { path: fixture.fileName, edits },
+          undefined,
+          undefined,
+          TOOL_CONTEXT,
+        );
+      const candidateOnce = (
+        edits: EditReplacementInput[],
+      ): Promise<ToolResultLike> =>
+        gate.shared(() => nativeEditOnce(fixture.fileName, edits));
+
+      // Parity gate on the forward leg: identical ToolResult, identical disk
+      // bytes, and the content+hadBom+crlf reconstruction matching the disk.
+      await seed();
+      const baselineResult = await baselineOnce(fixture.forward);
+      const baselineBytes = await readFile(absolutePath);
+      await seed();
+      const candidateResult = await candidateOnce(fixture.forward);
+      const candidateBytes = await readFile(absolutePath);
+      assertEquivalent(
+        `${fixture.name} tool result`,
+        baselineResult,
+        candidateResult,
+      );
+      if (!baselineBytes.equals(candidateBytes)) {
+        throw new Error(
+          `${fixture.name}: persisted bytes differ between the baseline and the native path`,
+        );
+      }
+      const reconstructed = Buffer.from(
+        reconstructPersisted(
+          lastNative?.content ?? "",
+          lastNative?.hadBom ?? false,
+          lastNative?.crlf ?? false,
+        ),
+        "utf8",
+      );
+      if (!reconstructed.equals(candidateBytes)) {
+        throw new Error(
+          `${fixture.name}: content+hadBom+crlf reconstruction does not match the persisted bytes`,
+        );
+      }
+
+      const { reverse } = fixture;
+      if (!reverse) continue;
+
+      // Reverse-leg parity: the A→B→A round trip must restore the seed
+      // exactly, for both contenders, with equivalent ToolResults.
+      await seed();
+      await baselineOnce(fixture.forward);
+      const baselineReverseResult = await baselineOnce(reverse);
+      const baselineRestored = await readFile(absolutePath);
+      await seed();
+      await candidateOnce(fixture.forward);
+      const candidateReverseResult = await candidateOnce(reverse);
+      const candidateRestored = await readFile(absolutePath);
+      assertEquivalent(
+        `${fixture.name} reverse tool result`,
+        baselineReverseResult,
+        candidateReverseResult,
+      );
+      if (
+        !baselineRestored.equals(seedBytes) ||
+        !candidateRestored.equals(seedBytes)
+      ) {
+        throw new Error(
+          `${fixture.name}: the A→B→A round trip did not restore the seed content`,
+        );
+      }
+
+      // Timed region: each sample is one full A→B→A round trip, so state
+      // resets inside the measurement and both contenders do identical work.
+      // `compare` already alternates measurement order per iteration.
+      await seed();
+      const baselineRoundTrip = async (): Promise<unknown> => {
+        const forward = await baselineOnce(fixture.forward);
+        const back = await baselineOnce(reverse);
+        return [forward, back];
+      };
+      const candidateRoundTrip = async (): Promise<unknown> => {
+        const forward = await candidateOnce(fixture.forward);
+        const back = await candidateOnce(reverse);
+        return [forward, back];
+      };
+      comparisons.push(
+        await compare(
+          fixture.name,
+          "edit",
+          "end-to-end",
+          baselineRoundTrip,
+          candidateRoundTrip,
+          options.warmupIterations,
+          fixture.iterations?.(options) ?? options.editIterations,
+        ),
+      );
+    }
+    return comparisons;
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 };
 
 const formatMs = (value: number): string => value.toFixed(3);
@@ -532,6 +881,7 @@ const main = async (): Promise<void> => {
     const comparisons = [
       ...(await benchmarkWorkload(repositoryWorkload, options, rg)),
       ...(await benchmarkWorkload(synthetic.workload, options, rg)),
+      ...(await benchmarkEdits(options)),
     ];
     const report = {
       environment: {
@@ -555,11 +905,14 @@ const main = async (): Promise<void> => {
       `Environment: ${report.environment.cpu}; ${report.environment.platform}/${report.environment.arch}; Bun ${report.environment.bun}`,
     );
     console.log(
-      `Warm-up: ${options.warmupIterations}; read iterations: ${options.readIterations}; grep iterations: ${options.grepIterations}; trustCache: true\n`,
+      `Warm-up: ${options.warmupIterations}; read iterations: ${options.readIterations}; grep iterations: ${options.grepIterations}; edit round trips: ${options.editIterations}; trustCache: true\n`,
     );
     printTable(comparisons);
     console.log(
       "\nMedian speedup is baseline median / Hearth median. Setup, corpus generation, and equivalence checks are outside timed regions.",
+    );
+    console.log(
+      "Edit rows are the hearth#3 gate: baseline = current pi-orchestrated adapter, Hearth = native editBatchAsync proxy (skipDiff + returnContent + reconstruction); each sample is one A→B→A round trip with ToolResult parity enforced beforehand.",
     );
   } finally {
     await rm(synthetic.root, { recursive: true, force: true });

@@ -133,7 +133,7 @@ const validateTask = (
   ) {
     errors.push(`${label}.agentType: must be a non-empty string`);
   } else {
-    agentType = value.agentType;
+    ({ agentType } = value);
   }
 
   let cwd: string | undefined;
@@ -141,7 +141,7 @@ const validateTask = (
     if (typeof value.cwd !== "string" || value.cwd === "") {
       errors.push(`${label}.cwd: must be a non-empty string`);
     } else {
-      cwd = value.cwd;
+      ({ cwd } = value);
     }
   }
 
@@ -159,7 +159,7 @@ const validateTask = (
     if (typeof value.readOnly !== "boolean") {
       errors.push(`${label}.readOnly: must be a boolean when present`);
     } else {
-      readOnly = value.readOnly;
+      ({ readOnly } = value);
     }
   }
 
@@ -175,7 +175,7 @@ const validateTask = (
         `${label}.writeScope: entries must not contain ".." segments`,
       );
     } else {
-      writeScope = value.writeScope;
+      ({ writeScope } = value);
     }
   }
 
@@ -285,7 +285,7 @@ export const validateWorkflowPlan = (
       return;
     }
 
-    const mode = stageValue.mode;
+    const { mode } = stageValue;
     if (mode !== "fanout" && mode !== "single") {
       errors.push(`${label}.mode: must be "fanout" or "single"`);
       return;
@@ -296,7 +296,7 @@ export const validateWorkflowPlan = (
       if (typeof stageValue.name !== "string") {
         errors.push(`${label}.name: must be a string`);
       } else {
-        name = stageValue.name;
+        ({ name } = stageValue);
       }
     }
 

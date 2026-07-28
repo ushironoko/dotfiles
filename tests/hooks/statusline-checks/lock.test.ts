@@ -39,7 +39,8 @@ const lockDirFor = async (
       stdout: "pipe",
     },
   );
-  const out = (await new Response(proc.stdout).text()).trim();
+  const raw = await new Response(proc.stdout).text();
+  const out = raw.trim();
   await proc.exited;
   return out;
 };
@@ -72,7 +73,7 @@ describe("runner: concurrency", () => {
 
     await Promise.all(procs.map((p) => p.exited));
 
-    const contents = await fs.readFile(counter, "utf-8").catch(() => "");
+    const contents = await fs.readFile(counter, "utf8").catch(() => "");
     const lines = contents.split("\n").filter((l) => l.length > 0);
     expect(lines.length).toBe(1);
   });
@@ -169,7 +170,7 @@ describe("runner: stale lock recovery", () => {
     expect(await proc.exited).toBe(0);
 
     // Counter must NOT have an entry (runner aborted at lock acquisition).
-    const contents = await fs.readFile(counter, "utf-8").catch(() => "");
+    const contents = await fs.readFile(counter, "utf8").catch(() => "");
     expect(contents).toBe("");
   });
 });

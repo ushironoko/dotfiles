@@ -69,7 +69,8 @@ export const acquireUpdateLock = async (
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       let owner = Number.NaN;
       try {
-        owner = Number((await readFile(path, "utf8")).trim());
+        const raw = await readFile(path, "utf8");
+        owner = Number(raw.trim());
       } catch {
         // Treat an unreadable lock as active rather than deleting blindly.
       }

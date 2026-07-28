@@ -14,13 +14,11 @@ export interface HarnessPaths {
   logDir: string;
 }
 
-export function resolvePaths(home: string = homedir()): HarnessPaths {
-  return {
-    home,
-    claudeHooksDir: join(home, ".claude", "hooks"),
-    claudeAgentsDir: join(home, ".claude", "agents"),
-    codexHooksDir: join(home, ".codex", "hooks"),
-    localConfigFile: join(home, ".pi", "agent", "pi-harness.local.json"),
-    logDir: join(home, ".pi", "agent", "pi-harness", "logs"),
-  };
-}
+export const resolvePaths = (home: string = homedir()): HarnessPaths => ({
+  home,
+  claudeHooksDir: join(home, ".claude", "hooks"),
+  claudeAgentsDir: join(home, ".claude", "agents"),
+  codexHooksDir: join(home, ".codex", "hooks"),
+  localConfigFile: join(home, ".pi", "agent", "pi-harness.local.json"),
+  logDir: join(home, ".pi", "agent", "pi-harness", "logs"),
+});

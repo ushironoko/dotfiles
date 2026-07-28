@@ -167,16 +167,18 @@ export class ChildRunRegistry {
     if (run === undefined || isTerminalStatus(run.status)) return;
 
     switch (observation.type) {
-      case "process_started":
+      case "process_started": {
         if (run.status === "queued") {
           run.status = "running";
           run.startedAt = observation.at;
         }
         break;
-      case "assistant_draft":
+      }
+      case "assistant_draft": {
         run.liveDraft = capUtf8(observation.text, MAX_LIVE_DRAFT_BYTES);
         break;
-      case "assistant_final":
+      }
+      case "assistant_final": {
         run.liveDraft = undefined;
         run.model = observation.model;
         run.stopReason = observation.stopReason;
@@ -185,7 +187,8 @@ export class ChildRunRegistry {
           text: capUtf8(observation.text, MAX_ASSISTANT_ITEM_BYTES),
         });
         break;
-      case "tool_started":
+      }
+      case "tool_started": {
         this.appendTranscript(run, {
           type: "tool",
           localId: observation.localId,
@@ -193,6 +196,7 @@ export class ChildRunRegistry {
           status: "running",
         });
         break;
+      }
       case "tool_finished": {
         const existingIndex = run.transcript.findIndex(
           (item) =>
@@ -224,14 +228,16 @@ export class ChildRunRegistry {
         }
         break;
       }
-      case "protocol_warning":
+      case "protocol_warning": {
         run.protocolWarnings += 1;
         break;
-      case "process_exit":
+      }
+      case "process_exit": {
         run.exitCode = observation.exitCode;
         run.signal = observation.signal;
         run.endedAt = observation.at;
         break;
+      }
     }
     this.publish();
   }
@@ -629,23 +635,25 @@ export class ChildRunRegistry {
     let omittedItems = 0;
     let omittedBytes = 0;
     for (const item of run.transcript) {
-      const safeItem: TranscriptItem =
-        item.type === "assistant"
-          ? {
-              type: "assistant",
-              text: capUtf8(
-                stripTerminalControls(item.text),
-                MAX_ASSISTANT_ITEM_BYTES,
-              ),
-            }
-          : item.type === "tool"
-            ? {
-                type: "tool",
-                localId: item.localId,
-                name: persistedAgent(item.name),
-                status: item.status,
-              }
-            : { ...item };
+      let safeItem: TranscriptItem;
+      if (item.type === "assistant") {
+        safeItem = {
+          type: "assistant",
+          text: capUtf8(
+            stripTerminalControls(item.text),
+            MAX_ASSISTANT_ITEM_BYTES,
+          ),
+        };
+      } else if (item.type === "tool") {
+        safeItem = {
+          type: "tool",
+          localId: item.localId,
+          name: persistedAgent(item.name),
+          status: item.status,
+        };
+      } else {
+        safeItem = { ...item };
+      }
       persisted.transcript.push(safeItem);
       if (byteLength(persisted) > budget) {
         persisted.transcript.pop();
@@ -663,10 +671,7 @@ export class ChildRunRegistry {
         byteLength(persisted) > budget &&
         persisted.transcript.length > 1
       ) {
-        const removed = persisted.transcript.splice(
-          persisted.transcript.length - 2,
-          1,
-        )[0];
+        const [removed] = persisted.transcript.splice(-2, 1);
         if (removed === undefined) break;
         const marker = persisted.transcript.at(-1);
         if (marker?.type === "truncated") {

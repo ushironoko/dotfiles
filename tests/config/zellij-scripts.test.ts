@@ -72,16 +72,17 @@ describe("copy-capture.sh", () => {
     });
     expect(r.exitCode).toBe(0);
 
-    const captured = await fs.readFile(captureFile(tmp), "utf-8");
+    const captured = await fs.readFile(captureFile(tmp), "utf8");
     expect(captured).toBe("hello world");
 
-    const fileMode = (await fs.stat(captureFile(tmp))).mode & 0o777;
+    const fileStat = await fs.stat(captureFile(tmp));
+    const fileMode = fileStat.mode & 0o777;
     expect(fileMode).toBe(0o600);
-    const dirMode =
-      (await fs.stat(join(tmp, `zellij-translate-${USER}`))).mode & 0o777;
+    const dirStat = await fs.stat(join(tmp, `zellij-translate-${USER}`));
+    const dirMode = dirStat.mode & 0o777;
     expect(dirMode).toBe(0o700);
 
-    const clip = await fs.readFile(join(tmp, "clip.txt"), "utf-8");
+    const clip = await fs.readFile(join(tmp, "clip.txt"), "utf8");
     expect(clip).toBe("hello world");
   });
 
@@ -100,7 +101,7 @@ describe("copy-capture.sh", () => {
     });
     expect(r.exitCode).toBe(0);
 
-    const captured = await fs.readFile(captureFile(tmp), "utf-8");
+    const captured = await fs.readFile(captureFile(tmp), "utf8");
     expect(captured).toBe("previous selection");
 
     // pbcopy must not fire for an empty selection
@@ -135,9 +136,9 @@ describe("translate-popup.sh", () => {
     const r = await runScript(TRANSLATE_POPUP, { stdin: "\n", env });
     expect(r.exitCode).toBe(0);
 
-    const plamoStdin = await fs.readFile(join(tmp, "plamo-stdin.txt"), "utf-8");
+    const plamoStdin = await fs.readFile(join(tmp, "plamo-stdin.txt"), "utf8");
     expect(plamoStdin).toBe("Hello, world\n");
-    const uvxArgs = await fs.readFile(join(tmp, "uvx-args.txt"), "utf-8");
+    const uvxArgs = await fs.readFile(join(tmp, "uvx-args.txt"), "utf8");
     expect(uvxArgs).toBe(
       "--no-config --from plamo-translate==1.0.5 --python 3.14 --with transformers==4.57.6 plamo-translate --from English --to Japanese\n",
     );
@@ -171,7 +172,7 @@ describe("translate-popup.sh", () => {
     });
     expect(r.exitCode).toBe(0);
 
-    const plamoStdin = await fs.readFile(join(tmp, "plamo-stdin.txt"), "utf-8");
+    const plamoStdin = await fs.readFile(join(tmp, "plamo-stdin.txt"), "utf8");
     expect(plamoStdin).toBe("fallback text\n");
     expect(
       fs.access(join(tmp, `zellij-translate-${USER}`, "default.txt")),
@@ -226,11 +227,11 @@ describe("config.kdl copy_command contract", () => {
 
     const kdl = await fs.readFile(
       resolve(import.meta.dir, "../../config/zellij/config.kdl"),
-      "utf-8",
+      "utf8",
     );
     const match = kdl.match(/^copy_command "(.+)"$/m);
-    expect(match).not.toBeNull();
-    const argv = match![1].split(" ");
+    if (!match) throw new Error("expected copy_command in config.kdl");
+    const argv = match[1].split(" ");
 
     const { ZELLIJ_SESSION_NAME: _inherited, ...cleanEnv } = process.env;
     const proc = Bun.spawn(argv, {
@@ -250,10 +251,10 @@ describe("config.kdl copy_command contract", () => {
     // No ZELLIJ_SESSION_NAME in the server env → shared default.txt
     const captured = await fs.readFile(
       join(tmp, `zellij-translate-${USER}`, "default.txt"),
-      "utf-8",
+      "utf8",
     );
     expect(captured).toBe("split-contract");
-    const clip = await fs.readFile(join(tmp, "clip.txt"), "utf-8");
+    const clip = await fs.readFile(join(tmp, "clip.txt"), "utf8");
     expect(clip).toBe("split-contract");
   });
 });

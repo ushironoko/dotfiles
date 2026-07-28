@@ -219,9 +219,8 @@ const runStatus = async (o: CommonOpts, logger: Logger): Promise<void> => {
   );
 
   try {
-    const files = (await fs.readdir(o.logDir)).filter((f) =>
-      f.endsWith(".jsonl"),
-    );
+    const names = await fs.readdir(o.logDir);
+    const files = names.filter((f) => f.endsWith(".jsonl"));
     logger.info(`logs: ${o.logDir} (${files.length} active session file(s))`);
   } catch {
     logger.info(`logs: ${o.logDir} (none yet)`);
@@ -244,7 +243,8 @@ const newestSessionFile = async (
 ): Promise<string | undefined> => {
   let entries: string[];
   try {
-    entries = (await fs.readdir(logDir)).filter((f) => f.endsWith(".jsonl"));
+    const names = await fs.readdir(logDir);
+    entries = names.filter((f) => f.endsWith(".jsonl"));
   } catch {
     return undefined;
   }
@@ -327,7 +327,8 @@ const runShow = async (
   }
   let records: LogRecord[];
   try {
-    records = (await fs.readFile(join(o.logDir, file), "utf8"))
+    const raw = await fs.readFile(join(o.logDir, file), "utf8");
+    records = raw
       .split("\n")
       .filter(Boolean)
       .map((l) => JSON.parse(l) as LogRecord);
@@ -417,8 +418,7 @@ export const logproxyCommand = define({
   },
   run: async (ctx) => {
     const logger = createLogger(ctx.values.verbose);
-    const candidates = ctx.positionals.filter((p) => p !== "logproxy");
-    const sub = candidates[0] ?? "status";
+    const sub = ctx.positionals.find((p) => p !== "logproxy") ?? "status";
     if (!KNOWN_SUBCOMMANDS.has(sub)) {
       logger.error(`unknown subcommand: ${sub}`);
       logger.info(
@@ -437,27 +437,34 @@ export const logproxyCommand = define({
     const fmt = ctx.values.format as RenderFormat;
     const format: RenderFormat = VALID_FORMATS.has(fmt) ? fmt : "text";
     switch (sub) {
-      case "start":
+      case "start": {
         await runStart(o, logger);
         break;
-      case "status":
+      }
+      case "status": {
         await runStatus(o, logger);
         break;
-      case "tail":
+      }
+      case "tail": {
         await runTail(o, logger, ctx.values.session, ctx.values.full, format);
         break;
-      case "prune":
+      }
+      case "prune": {
         await runPrune(o, logger);
         break;
-      case "show":
+      }
+      case "show": {
         await runShow(o, logger, ctx.values.session, ctx.values.turn, format);
         break;
-      case "install":
+      }
+      case "install": {
         await runInstallCmd(o, logger);
         break;
-      case "uninstall":
+      }
+      case "uninstall": {
         await runUninstallCmd(logger);
         break;
+      }
     }
   },
 });

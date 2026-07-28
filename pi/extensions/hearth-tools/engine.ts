@@ -63,7 +63,7 @@ export class HearthEngineGate implements HearthAccessGate {
 
   private drain(): void {
     if (this.activeWriter) return;
-    const first = this.waiters[0];
+    const [first] = this.waiters;
     if (first === undefined) return;
 
     if (first.mode === "exclusive") {

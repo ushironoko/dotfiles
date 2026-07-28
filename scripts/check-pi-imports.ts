@@ -144,7 +144,7 @@ const findNonLiteralDynamicCalls = (source: string): string[] => {
     }
     const match = /^(import|require|createRequire)/.exec(source.slice(i));
     if (match) {
-      const keyword = match[1];
+      const [, keyword] = match;
       // `foo.import`/`foo.require` are property accesses, not the keyword — but
       // `Module.createRequire` IS the escape hatch, so it skips the dot guard.
       const dotOk = keyword === "createRequire" || source[i - 1] !== ".";

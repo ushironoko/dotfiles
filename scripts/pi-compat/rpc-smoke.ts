@@ -171,7 +171,7 @@ export const smokeGlobalPiRpc = async (
       try {
         for (const raw of decoder.push(chunk)) {
           if (!isRecord(raw)) continue;
-          const type = raw.type;
+          const { type } = raw;
           if (type === "extension_error") {
             setFailure(new Error(`pi extension error: ${JSON.stringify(raw)}`));
           }
@@ -193,7 +193,7 @@ export const smokeGlobalPiRpc = async (
           }
           if (type !== "response") continue;
           if (raw.id === "commands") {
-            const data = raw.data;
+            const { data } = raw;
             const commands =
               isRecord(data) && Array.isArray(data.commands)
                 ? data.commands

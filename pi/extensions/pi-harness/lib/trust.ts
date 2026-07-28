@@ -15,7 +15,7 @@ export interface TrustConfig {
   trustedRoots: string[];
 }
 
-export function parseTrustConfig(json: string): TrustConfig {
+export const parseTrustConfig = (json: string): TrustConfig => {
   try {
     const parsed: unknown = JSON.parse(json);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -31,24 +31,24 @@ export function parseTrustConfig(json: string): TrustConfig {
   } catch {
     return { trustedRoots: [] };
   }
-}
+};
 
-export function loadTrustConfig(localConfigFile: string): TrustConfig {
+export const loadTrustConfig = (localConfigFile: string): TrustConfig => {
   try {
     return parseTrustConfig(readFileSync(localConfigFile, "utf8"));
   } catch {
     return { trustedRoots: [] };
   }
-}
+};
 
 /**
  * Pure containment check on already-canonicalized paths.
  */
-export function isPathWithin(candidate: string, root: string): boolean {
+export const isPathWithin = (candidate: string, root: string): boolean => {
   if (candidate === root) return true;
   const prefix = root.endsWith(sep) ? root : root + sep;
   return candidate.startsWith(prefix);
-}
+};
 
 /**
  * Returns the CANONICAL trusted root that contains `cwd` (symlinks resolved on
@@ -58,10 +58,10 @@ export function isPathWithin(candidate: string, root: string): boolean {
  * an untrusted parent (statusline TOCTOU fix). Any resolution failure is
  * treated as untrusted.
  */
-export function matchedTrustedRoot(
+export const matchedTrustedRoot = (
   cwd: string,
   config: TrustConfig,
-): string | undefined {
+): string | undefined => {
   let realCwd: string;
   try {
     realCwd = realpathSync(cwd);
@@ -77,13 +77,12 @@ export function matchedTrustedRoot(
     }
   }
   return undefined;
-}
+};
 
 /**
  * Resolves symlinks on both sides before comparing so a symlinked cwd cannot
  * escape into (or fake membership of) a trusted root. Any resolution failure
  * is treated as untrusted.
  */
-export function isTrustedRoot(cwd: string, config: TrustConfig): boolean {
-  return matchedTrustedRoot(cwd, config) !== undefined;
-}
+export const isTrustedRoot = (cwd: string, config: TrustConfig): boolean =>
+  matchedTrustedRoot(cwd, config) !== undefined;

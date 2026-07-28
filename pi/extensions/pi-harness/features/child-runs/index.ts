@@ -83,7 +83,7 @@ interface PendingTreeTransition {
 
 const completionInvocationId = (details: unknown): string | undefined => {
   if (typeof details !== "object" || details === null) return undefined;
-  const invocationId = (details as { invocationId?: unknown }).invocationId;
+  const { invocationId } = details as { invocationId?: unknown };
   return typeof invocationId === "string" ? invocationId : undefined;
 };
 
@@ -141,7 +141,7 @@ const setupChildRuns = (
   let lastExplicitWarning: string | undefined;
   const refreshBitIssues = async (
     ctx: RuntimeContextLike,
-    explicit: boolean = false,
+    explicit = false,
   ): Promise<void> => {
     if (bitIssues === undefined) return;
     const cwd = ctx.cwd ?? process.cwd();

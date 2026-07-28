@@ -162,7 +162,7 @@ const truncateUtf8 = (
 
   let end = low;
   const last = value.charCodeAt(end - 1);
-  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  if (last >= 55_296 && last <= 56_319) end -= 1;
   return {
     text: `${value.slice(0, Math.max(0, end))}${retainedMarker}`,
     truncated: true,
@@ -548,9 +548,7 @@ const setupBtw = (
     description:
       "Ask a read-only side question without changing parent context",
     handler: async (args, ctx) => {
-      const hasUI = ctx.hasUI;
-      const ui = ctx.ui;
-      const mode = ctx.mode;
+      const { hasUI, ui, mode } = ctx;
       if (running) {
         if (hasUI) ui.notify("A BTW question is already running", "warning");
         return;

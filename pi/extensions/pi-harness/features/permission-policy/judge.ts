@@ -111,7 +111,7 @@ interface CacheEntry {
   expiresAt: number;
 }
 
-type ActiveAbortSignal = {
+interface ActiveAbortSignal {
   readonly aborted: boolean;
   addEventListener(
     type: "abort",
@@ -119,7 +119,7 @@ type ActiveAbortSignal = {
     options?: { once?: boolean },
   ): void;
   removeEventListener(type: "abort", listener: () => void): void;
-};
+}
 
 interface AbortControllerLike {
   readonly signal: ActiveAbortSignal;
@@ -306,10 +306,10 @@ const decodeChunkedBody = (encoded: Buffer): Buffer | undefined => {
   while (offset < encoded.byteLength) {
     const lineEnd = encoded.indexOf("\r\n", offset);
     if (lineEnd === -1) return undefined;
-    const sizeText = encoded
+    const [sizeText] = encoded
       .subarray(offset, lineEnd)
       .toString("ascii")
-      .split(";", 1)[0];
+      .split(";", 1);
     if (sizeText === undefined || !/^[0-9A-Fa-f]+$/.test(sizeText)) {
       return undefined;
     }
@@ -536,7 +536,7 @@ const verifyModelTags = (
       "local Ollama did not return exactly one configured model",
     );
   }
-  const candidate = candidates[0];
+  const [candidate] = candidates;
   if (
     candidate?.name !== expectedModel ||
     candidate.model !== expectedModel ||
@@ -636,7 +636,7 @@ const parseResponse = (
       reason: "local judge response came from a remote model",
     };
   }
-  const message = value.message;
+  const { message } = value;
   if (!isRecord(message) || message.role !== "assistant") {
     return {
       kind: "invalid-response",

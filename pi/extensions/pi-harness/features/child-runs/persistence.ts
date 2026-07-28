@@ -38,7 +38,7 @@ const finiteTimestamp = (value: unknown): number | undefined =>
 const optionalText = (
   value: unknown,
   maxBytes: number,
-  lineFeedReplacement: string = "\n",
+  lineFeedReplacement = "\n",
 ): string | undefined =>
   typeof value === "string"
     ? capUtf8(stripTerminalControls(value, lineFeedReplacement), maxBytes)

@@ -648,7 +648,7 @@ describe("pi-harness subagent", () => {
         "#!/bin/bash",
         "set -euo pipefail",
         'cat > "$MOCK_CODEX_STDIN"',
-        "printf '%s\\n' 'mock codex reached'",
+        String.raw`printf '%s\n' 'mock codex reached'`,
       ].join("\n"),
       { mode: 0o755 },
     );
@@ -955,7 +955,8 @@ describe("pi-harness subagent", () => {
     );
 
     await waitFor(() => existsSync(pidFile));
-    const grandchildPid = Number((await fs.readFile(pidFile, "utf8")).trim());
+    const pidText = await fs.readFile(pidFile, "utf8");
+    const grandchildPid = Number(pidText.trim());
     try {
       expect(grandchildPid).toBeGreaterThan(0);
       expect(isProcessAlive(grandchildPid)).toBe(true);

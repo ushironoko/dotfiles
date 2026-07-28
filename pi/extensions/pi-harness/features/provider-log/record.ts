@@ -55,19 +55,16 @@ const stringField = (
   typeof source[key] === "string" ? source[key] : undefined;
 
 const systemLength = (source: Record<string, unknown>): number | undefined => {
-  const system = source.system;
+  const { system } = source;
   if (typeof system === "string") return system.length;
   if (Array.isArray(system)) {
-    return system.reduce<number>(
-      (total, part) =>
-        total +
-        (typeof part === "string"
-          ? part.length
-          : isRecord(part) && typeof part.text === "string"
-            ? part.text.length
-            : 0),
-      0,
-    );
+    return system.reduce<number>((total, part) => {
+      if (typeof part === "string") return total + part.length;
+      if (isRecord(part) && typeof part.text === "string") {
+        return total + part.text.length;
+      }
+      return total;
+    }, 0);
   }
   return undefined;
 };
@@ -102,7 +99,7 @@ export const buildResponseRecord = (
     headers: {},
   };
   if (typeof container.status === "number") record.status = container.status;
-  const headers = container.headers;
+  const { headers } = container;
   if (isRecord(headers)) {
     for (const [name, value] of Object.entries(headers)) {
       const lowered = name.toLowerCase();

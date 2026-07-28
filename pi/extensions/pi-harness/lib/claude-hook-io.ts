@@ -52,45 +52,39 @@ export interface ClaudeToolInvocation {
   toolInput: Record<string, unknown>;
 }
 
-export function makePreToolUseStdin(
+export const makePreToolUseStdin = (
   invocation: ClaudeToolInvocation,
   cwd: string,
-): PreToolUseStdin {
-  return {
-    hook_event_name: "PreToolUse",
-    session_id: SESSION_ID,
-    cwd,
-    tool_name: invocation.toolName,
-    tool_input: invocation.toolInput,
-  };
-}
+): PreToolUseStdin => ({
+  hook_event_name: "PreToolUse",
+  session_id: SESSION_ID,
+  cwd,
+  tool_name: invocation.toolName,
+  tool_input: invocation.toolInput,
+});
 
-export function makePostToolUseStdin(
+export const makePostToolUseStdin = (
   invocation: ClaudeToolInvocation,
   cwd: string,
   response: { content: string; isError: boolean },
-): PostToolUseStdin {
-  return {
-    hook_event_name: "PostToolUse",
-    session_id: SESSION_ID,
-    cwd,
-    tool_name: invocation.toolName,
-    tool_input: invocation.toolInput,
-    tool_response: response,
-  };
-}
+): PostToolUseStdin => ({
+  hook_event_name: "PostToolUse",
+  session_id: SESSION_ID,
+  cwd,
+  tool_name: invocation.toolName,
+  tool_input: invocation.toolInput,
+  tool_response: response,
+});
 
-export function makeUserPromptSubmitStdin(
+export const makeUserPromptSubmitStdin = (
   prompt: string,
   cwd: string,
-): UserPromptSubmitStdin {
-  return {
-    hook_event_name: "UserPromptSubmit",
-    session_id: SESSION_ID,
-    cwd,
-    prompt,
-  };
-}
+): UserPromptSubmitStdin => ({
+  hook_event_name: "UserPromptSubmit",
+  session_id: SESSION_ID,
+  cwd,
+  prompt,
+});
 
 /** Raw observable outcome of running a hook script (input to interpretation). */
 export interface RawHookResult {
@@ -113,7 +107,7 @@ export interface HookJsonOutput {
   };
 }
 
-export function parseHookJson(stdout: string): HookJsonOutput | undefined {
+export const parseHookJson = (stdout: string): HookJsonOutput | undefined => {
   const trimmed = stdout.trim();
   if (trimmed === "") return undefined;
   try {
@@ -125,7 +119,7 @@ export function parseHookJson(stdout: string): HookJsonOutput | undefined {
   } catch {
     return undefined;
   }
-}
+};
 
 interface HookNotification {
   message: string;

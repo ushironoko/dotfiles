@@ -22,7 +22,9 @@ const callShellFn = async (
   args: string[] = [],
   env: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
-  const quotedArgs = args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
+  const quotedArgs = args
+    .map((a) => `'${a.replace(/'/g, String.raw`'\''`)}'`)
+    .join(" ");
   const proc = Bun.spawn(
     ["bash", "-c", `source "${LIB}" && ${fn} ${quotedArgs}`],
     {
@@ -318,11 +320,12 @@ describe("statusline_now / statusline_ttl / statusline_cache_dir", () => {
   });
 
   test("statusline_ttl defaults", async () => {
-    expect((await callShellFn("statusline_ttl", ["lint"])).stdout).toBe("30");
-    expect((await callShellFn("statusline_ttl", ["typecheck"])).stdout).toBe(
-      "30",
-    );
-    expect((await callShellFn("statusline_ttl", ["test"])).stdout).toBe("300");
+    const lintTtl = await callShellFn("statusline_ttl", ["lint"]);
+    expect(lintTtl.stdout).toBe("30");
+    const typecheckTtl = await callShellFn("statusline_ttl", ["typecheck"]);
+    expect(typecheckTtl.stdout).toBe("30");
+    const testTtl = await callShellFn("statusline_ttl", ["test"]);
+    expect(testTtl.stdout).toBe("300");
   });
 
   test("statusline_ttl honors env overrides", async () => {

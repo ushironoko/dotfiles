@@ -26,7 +26,7 @@ const truncateUtf8 = (value: string, maxBytes: number): string => {
   if (encoded.byteLength <= maxBytes) return value;
   const marker = Buffer.from("…", "utf8");
   let end = Math.max(0, maxBytes - marker.byteLength);
-  while (end > 0 && (encoded[end] ?? 0) >= 0x80 && (encoded[end] ?? 0) < 0xc0) {
+  while (end > 0 && (encoded[end] ?? 0) >= 128 && (encoded[end] ?? 0) < 192) {
     end -= 1;
   }
   return `${encoded.subarray(0, end).toString("utf8")}${marker.toString("utf8")}`;
@@ -36,15 +36,15 @@ const isControlCharacter = (character: string): boolean => {
   const codePoint = character.codePointAt(0);
   return (
     codePoint !== undefined &&
-    ((codePoint <= 0x1f && codePoint !== 0x09 && codePoint !== 0x0a) ||
-      codePoint === 0x7f)
+    ((codePoint <= 31 && codePoint !== 9 && codePoint !== 10) ||
+      codePoint === 127)
   );
 };
 
 const hasControlCharacter = (value: string): boolean =>
   [...value].some((character) => {
     const codePoint = character.codePointAt(0);
-    return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+    return codePoint !== undefined && (codePoint <= 31 || codePoint === 127);
   });
 
 const sanitizeTaskText = (text: string): string =>
@@ -341,7 +341,7 @@ const truncateUtf8Tail = (value: string, maxBytes: number): string => {
   while (
     start < encoded.byteLength &&
     (encoded[start] ?? 0) >= 0x80 &&
-    (encoded[start] ?? 0) < 0xc0
+    (encoded[start] ?? 0) < 192
   ) {
     start += 1;
   }
@@ -784,7 +784,7 @@ const parseWorktreeRecords = (
     seenPaths.add(path);
     const seenKinds = new Set<string>();
     for (const field of fields.slice(1)) {
-      const kind = field.split(" ", 1)[0];
+      const [kind] = field.split(" ", 1);
       if (
         kind === undefined ||
         !["HEAD", "branch", "detached", "bare", "locked", "prunable"].includes(
@@ -1054,14 +1054,11 @@ const discoverProjectContextUnbounded = async (
         cwdCommon !== undefined &&
         targetCommon === cwdCommon;
     }
-    leadingNavigation = {
-      scope: !insideRegisteredRoot
-        ? "outside-listed-worktrees"
-        : sameRepository
-          ? "listed-worktree"
-          : "unverified",
-      sameRepository,
-    };
+    let scope: "outside-listed-worktrees" | "listed-worktree" | "unverified";
+    if (!insideRegisteredRoot) scope = "outside-listed-worktrees";
+    else if (sameRepository) scope = "listed-worktree";
+    else scope = "unverified";
+    leadingNavigation = { scope, sameRepository };
   }
 
   const projectName = truncateUtf8(basename(canonicalProjectRoot), 128);

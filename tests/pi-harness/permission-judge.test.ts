@@ -70,9 +70,9 @@ const startRaw = async (
   const server = createServer((socket) => {
     socket.on("error", () => {});
     socket.once("data", (data) => {
-      const requestLine = Buffer.from(data)
+      const [requestLine] = Buffer.from(data)
         .toString("latin1")
-        .split("\r\n", 1)[0];
+        .split("\r\n", 1);
       if (requestLine === "GET /api/status HTTP/1.1") {
         rawJsonResponse(socket, {
           cloud: { disabled: true, source: "test" },
@@ -243,7 +243,7 @@ describe("local Ollama permission judge", () => {
     expect(upstream.received[0]?.body).toBe("");
     expect(upstream.received[1]?.body).toBe("");
 
-    const request = chatRequests(upstream)[0];
+    const [request] = chatRequests(upstream);
     expect(request?.method).toBe("POST");
     expect(request?.path).toBe("/api/chat");
     const body = JSON.parse(request?.body ?? "") as Record<string, unknown>;
@@ -277,10 +277,10 @@ describe("local Ollama permission judge", () => {
       "Inspect the policy after the failed test.",
     );
     expect(request?.body).toContain(
-      '\\"toolName\\":\\"bash\\",\\"status\\":\\"error\\"',
+      String.raw`\"toolName\":\"bash\",\"status\":\"error\"`,
     );
     expect(request?.body).toContain(
-      '\\"toolName\\":\\"read\\",\\"status\\":\\"ok\\"',
+      String.raw`\"toolName\":\"read\",\"status\":\"ok\"`,
     );
     expect(request?.body).toContain("/private/project-worktree");
     expect(request?.body).toContain("/private/project");
@@ -512,7 +512,8 @@ describe("local Ollama permission judge", () => {
       },
     );
 
-    expect((await judge.judge("git status")).kind).toBe("timeout");
+    const outcome = await judge.judge("git status");
+    expect(outcome.kind).toBe("timeout");
     expect(upstream.received.map((request) => request.path)).toEqual([
       "/api/status",
       "/api/tags",
@@ -529,7 +530,8 @@ describe("local Ollama permission judge", () => {
       },
     );
 
-    expect((await judge.judge("git status")).kind).toBe("timeout");
+    const outcome = await judge.judge("git status");
+    expect(outcome.kind).toBe("timeout");
     expect(chatRequests(upstream)).toHaveLength(1);
   });
 
@@ -756,11 +758,7 @@ describe("local Ollama permission judge", () => {
         ignored: "",
       }).replace('"ignored":""', '"ignored":"'),
     );
-    const body = Buffer.concat([
-      prefix,
-      Buffer.from([0xff]),
-      Buffer.from('"}'),
-    ]);
+    const body = Buffer.concat([prefix, Buffer.from([255]), Buffer.from('"}')]);
     expect(JSON.parse(body.toString("utf8"))).toMatchObject({
       message: { content: allowContent },
     });
@@ -1026,8 +1024,10 @@ describe("local Ollama permission judge", () => {
       project: gitProject("complete-project-a"),
     };
 
-    expect((await judge.judge("make check", context)).kind).toBe("allow");
-    expect((await judge.judge("make check", context)).kind).toBe("allow");
+    const firstOutcome = await judge.judge("make check", context);
+    expect(firstOutcome.kind).toBe("allow");
+    const secondOutcome = await judge.judge("make check", context);
+    expect(secondOutcome.kind).toBe("allow");
     expect(chatRequests(upstream)).toHaveLength(2);
 
     const noTaskContext = {
@@ -1035,7 +1035,8 @@ describe("local Ollama permission judge", () => {
       taskCorrelation: "none" as const,
       project: gitProject("complete-project-a"),
     };
-    expect((await judge.judge("make check", noTaskContext)).kind).toBe("allow");
+    const noTaskOutcome = await judge.judge("make check", noTaskContext);
+    expect(noTaskOutcome.kind).toBe("allow");
     expect(await judge.judge("make check", noTaskContext)).toMatchObject({
       kind: "allow",
       cached: true,
@@ -1049,8 +1050,10 @@ describe("local Ollama permission judge", () => {
     const first = createPermissionJudge(configFor(upstream));
     const second = createPermissionJudge(configFor(upstream));
 
-    expect((await first.judge("git status")).kind).toBe("allow");
-    expect((await second.judge("git status")).kind).toBe("allow");
+    const firstOutcome = await first.judge("git status");
+    expect(firstOutcome.kind).toBe("allow");
+    const secondOutcome = await second.judge("git status");
+    expect(secondOutcome.kind).toBe("allow");
     expect(chatRequests(upstream)).toHaveLength(2);
   });
 
@@ -1079,8 +1082,10 @@ describe("local Ollama permission judge", () => {
     const upstream = await start(() => new Response("down", { status: 503 }));
     const judge = createPermissionJudge(configFor(upstream));
 
-    expect((await judge.judge("git status")).kind).toBe("unavailable");
-    expect((await judge.judge("git log -1")).kind).toBe("unavailable");
+    const firstOutcome = await judge.judge("git status");
+    expect(firstOutcome.kind).toBe("unavailable");
+    const secondOutcome = await judge.judge("git log -1");
+    expect(secondOutcome.kind).toBe("unavailable");
     expect(chatRequests(upstream)).toHaveLength(1);
   });
 

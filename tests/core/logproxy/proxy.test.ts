@@ -143,7 +143,9 @@ describe("proxy — 透過フォワード", () => {
         connection: "x-hop-demo",
       },
     });
-    const h = upstream.received.at(-1)!.headers;
+    const last = upstream.received.at(-1);
+    if (!last) throw new Error("expected upstream to have received a request");
+    const { headers: h } = last;
     expect(h["authorization"]).toBe("Bearer secret-token");
     expect(h["x-api-key"]).toBe("sk-xxx");
     expect(h["x-hop-demo"]).toBeUndefined();

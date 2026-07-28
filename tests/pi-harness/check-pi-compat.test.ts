@@ -98,11 +98,11 @@ describe("pi compatibility policy", () => {
 describe("strict pi RPC JSONL framing", () => {
   test("handles fragmented UTF-8 and keeps Unicode line separators inside JSON", () => {
     const decoder = new StrictJsonlDecoder();
-    const bytes = Buffer.from('{"text":"a b😀"}\n{"ok":true}\r\n');
+    const bytes = Buffer.from('{"text":"a\u2028b😀"}\n{"ok":true}\r\n');
     const split = bytes.indexOf(Buffer.from("😀")) + 1;
     expect(decoder.push(bytes.subarray(0, split))).toEqual([]);
     expect(decoder.push(bytes.subarray(split))).toEqual([
-      { text: "a b😀" },
+      { text: "a\u2028b😀" },
       { ok: true },
     ]);
     expect(decoder.finish()).toEqual([]);
@@ -135,7 +135,8 @@ describe("bounded compatibility subprocesses", () => {
         timeoutMs: 20,
       });
       expect(commandResult.timedOut).toBe(true);
-      const pid = Number((await readFile(pidFile, "utf8")).trim());
+      const pidText = await readFile(pidFile, "utf8");
+      const pid = Number(pidText.trim());
       expect(() => process.kill(pid, 0)).toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });

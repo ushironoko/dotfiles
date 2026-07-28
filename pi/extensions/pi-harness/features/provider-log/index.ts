@@ -45,7 +45,7 @@ export default function setupProviderLog(
   deps: ProviderLogDeps = {},
 ): void {
   const now = deps.now ?? (() => new Date());
-  const logDir = config.paths.logDir;
+  const { logDir } = config.paths;
   const queue: string[] = [];
   let dropped = 0;
   let retentionDone = false;

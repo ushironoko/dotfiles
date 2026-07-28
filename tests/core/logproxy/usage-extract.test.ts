@@ -22,7 +22,7 @@ const MESSAGE_START = {
     },
   },
 };
-const DELTA = (output: number, stop: string | null) => ({
+const delta = (output: number, stop: string | null) => ({
   event: "message_delta",
   data: {
     type: "message_delta",
@@ -60,7 +60,7 @@ describe("createUsageExtractor — SSE", () => {
               delta: { type: "text_delta", text: "hi" },
             },
           },
-          DELTA(510, "end_turn"),
+          delta(510, "end_turn"),
           { event: "message_stop", data: { type: "message_stop" } },
         ]),
       ),
@@ -81,7 +81,7 @@ describe("createUsageExtractor — SSE", () => {
     const ex = createUsageExtractor(ct);
     ex.feed(
       enc.encode(
-        sse([MESSAGE_START, DELTA(100, null), DELTA(510, "end_turn")]),
+        sse([MESSAGE_START, delta(100, null), delta(510, "end_turn")]),
       ),
     );
     ex.end();
@@ -90,7 +90,7 @@ describe("createUsageExtractor — SSE", () => {
 
   it("data 行の途中で分割されても parse できる（1バイトずつ）", () => {
     const ex = createUsageExtractor(ct);
-    feedSplit(ex, sse([MESSAGE_START, DELTA(510, "end_turn")]), 1);
+    feedSplit(ex, sse([MESSAGE_START, delta(510, "end_turn")]), 1);
     ex.end();
     expect(ex.result().usage?.output_tokens).toBe(510);
     expect(ex.result().usage?.input_tokens).toBe(2679);
@@ -107,7 +107,7 @@ describe("createUsageExtractor — SSE", () => {
           delta: { type: "text_delta", text: "宇宙🚀テスト" },
         },
       },
-      DELTA(510, "end_turn"),
+      delta(510, "end_turn"),
     ]);
     feedSplit(ex, text, 3); // マルチバイト境界をまたぐ
     ex.end();
@@ -141,7 +141,7 @@ describe("createUsageExtractor — SSE", () => {
             event: "error",
             data: { type: "error", error: { type: "overloaded_error" } },
           },
-          DELTA(7, "end_turn"),
+          delta(7, "end_turn"),
         ]),
       ),
     );

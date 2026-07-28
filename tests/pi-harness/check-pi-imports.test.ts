@@ -221,7 +221,8 @@ describe("check-pi-imports scanExtension enumeration", () => {
     await symlink(join(outside, "evil"), join(root, "linkeddir"));
     await writeFile(join(root, "normal.ts"), 'import { x } from "node:fs";\n');
 
-    const joined = (await scanExtension(root)).join("\n");
+    const findings = await scanExtension(root);
+    const joined = findings.join("\n");
     expect(joined).toContain("linkeddir");
     expect(joined).toContain("escapes the extension root");
     // followSymlinks:false → the external tree is flagged, not descended/analyzed.

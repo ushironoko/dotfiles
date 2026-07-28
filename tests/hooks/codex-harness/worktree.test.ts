@@ -393,7 +393,7 @@ describe("Codex worktree removal safety", () => {
         "status=$?",
         '[ "$status" -eq 0 ] || exit "$status"',
         String.raw`printf '%s\n' "$output"`,
-        "last=$" + "{!#}",
+        `last=\${!#}`,
         'if [ "$last" = "$GWQ_WORKTREE" ] || [ "$last" = "$GWQ_WORKTREE/.git" ]; then',
         '  count=$(cat "$STAT_COUNT" 2>/dev/null || printf 0)',
         "  count=$((count + 1))",
@@ -461,7 +461,7 @@ describe("Codex worktree removal safety", () => {
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        "last=${!#}",
+        `last=\${!#}`,
         'if [[ "$last" == *.lock ]] && [ ! -e "$SIGNAL_SENT" ]; then',
         '  "$REAL_MKDIR" "$@"',
         '  : > "$SIGNAL_SENT"',
@@ -494,14 +494,11 @@ describe("Codex worktree removal safety", () => {
     expect(await pathExists(signalSent)).toBe(true);
     expect(await pathExists(lockPath)).toBe(false);
     expect(await pathExists(gwqCalls)).toBe(false);
-    expect(
-      (
-        await runCommand(
-          ["git", "show-ref", "--verify", `refs/heads/${branch}`],
-          { cwd: value.repository },
-        )
-      ).exitCode,
-    ).not.toBe(0);
+    const branchLookup = await runCommand(
+      ["git", "show-ref", "--verify", `refs/heads/${branch}`],
+      { cwd: value.repository },
+    );
+    expect(branchLookup.exitCode).not.toBe(0);
 
     const retry = await runHook(CREATE_HOOK, JSON.stringify({ name: branch }), {
       cwd: value.repository,
@@ -531,7 +528,7 @@ describe("Codex worktree removal safety", () => {
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        'if [[ "${!#}" == *.lock/owner.* ]] && [ ! -e "$FAIL_ONCE" ]; then',
+        `if [[ "\${!#}" == *.lock/owner.* ]] && [ ! -e "$FAIL_ONCE" ]; then`,
         '  : > "$FAIL_ONCE"',
         "  exit 1",
         "fi",
@@ -595,7 +592,7 @@ describe("Codex worktree removal safety", () => {
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        "last=${!#}",
+        `last=\${!#}`,
         'if [[ "$last" == *.lock ]] && [ ! -e "$SABOTAGED" ]; then',
         '  "$REAL_MKDIR" "$@"',
         '  "$REAL_CHMOD" 500 "$last"',
@@ -611,7 +608,7 @@ describe("Codex worktree removal safety", () => {
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        "last=${!#}",
+        `last=\${!#}`,
         'if [[ "$last" == *.lock.releasing.owner.* ]] && [ ! -e "$RMDIR_FAILED" ]; then',
         '  : > "$RMDIR_FAILED"',
         "  exit 1",
@@ -648,11 +645,8 @@ describe("Codex worktree removal safety", () => {
       "could not initialize worktree create lock",
     );
     expect(await pathExists(rmdirFailed)).toBe(true);
-    expect(
-      (await fs.readdir(lockParent)).filter((name) =>
-        name.startsWith(lockName),
-      ),
-    ).toEqual([]);
+    const lockEntries = await fs.readdir(lockParent);
+    expect(lockEntries.filter((name) => name.startsWith(lockName))).toEqual([]);
 
     const retry = await runHook(CREATE_HOOK, JSON.stringify({ name: branch }), {
       cwd: value.repository,
@@ -717,14 +711,11 @@ describe("Codex worktree removal safety", () => {
       ? await fs.readFile(gwqCalls, "utf8")
       : "";
     expect(gwqCallLog).not.toContain("add");
-    expect(
-      (
-        await runCommand(
-          [value.realGit, "show-ref", "--verify", `refs/heads/${branch}`],
-          { cwd: value.repository },
-        )
-      ).exitCode,
-    ).not.toBe(0);
+    const branchLookup = await runCommand(
+      [value.realGit, "show-ref", "--verify", `refs/heads/${branch}`],
+      { cwd: value.repository },
+    );
+    expect(branchLookup.exitCode).not.toBe(0);
     const lockPath = join(
       await fs.realpath(join(value.repository, ".git")),
       "codex-harness-worktree-create-locks",
@@ -751,12 +742,10 @@ describe("Codex worktree removal safety", () => {
     const value = await createCreateHookFixture("codex-worktree-moved-ref");
     temporaryDirectories.push(value.root);
     const branch = "harness-moved-ref-test";
-    const otherCommit = (
-      await runGit(
-        ["commit-tree", "HEAD^{tree}", "-m", "other"],
-        value.repository,
-      )
-    ).stdout;
+    const { stdout: otherCommit } = await runGit(
+      ["commit-tree", "HEAD^{tree}", "-m", "other"],
+      value.repository,
+    );
     await fs.writeFile(
       join(value.binDirectory, "gwq"),
       [
@@ -789,10 +778,11 @@ describe("Codex worktree removal safety", () => {
 
     expect(result.exitCode).toBe(130);
     expect(result.timedOut).toBe(false);
-    expect(
-      (await runGit(["rev-parse", `refs/heads/${branch}`], value.repository))
-        .stdout,
-    ).toBe(otherCommit);
+    const movedRef = await runGit(
+      ["rev-parse", `refs/heads/${branch}`],
+      value.repository,
+    );
+    expect(movedRef.stdout).toBe(otherCommit);
     const lockPath = join(
       await fs.realpath(join(value.repository, ".git")),
       "codex-harness-worktree-create-locks",
@@ -826,7 +816,7 @@ describe("Codex worktree removal safety", () => {
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        "last=${!#}",
+        `last=\${!#}`,
         'if [[ "$last" == *.lock.releasing.owner.* ]] && [ ! -e "$SIGNAL_SENT" ]; then',
         '  "$REAL_RMDIR" "$@"',
         '  "$REAL_MKDIR" "$SUCCESSOR_LOCK"',
@@ -920,7 +910,7 @@ describe("Codex worktree removal safety", () => {
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        "last=${!#}",
+        `last=\${!#}`,
         'if [[ "$last" == *.lock.releasing.owner.* ]]; then',
         '  failures=$(cat "$FAIL_ONCE" 2>/dev/null || printf 0)',
         '  if [ "$failures" -lt 2 ]; then',
@@ -965,11 +955,8 @@ describe("Codex worktree removal safety", () => {
     expect(result.stderr).toContain("could not release worktree create lock");
     expect(parseCreateOutput(result.stdout).path).toBe(worktree);
     expect(await pathExists(markerPath)).toBe(true);
-    expect(
-      (await fs.readdir(lockParent)).filter((name) =>
-        name.startsWith(lockName),
-      ),
-    ).toEqual([]);
+    const lockEntries = await fs.readdir(lockParent);
+    expect(lockEntries.filter((name) => name.startsWith(lockName))).toEqual([]);
 
     const removed = await runRemoveHook(
       {
@@ -1014,7 +1001,10 @@ describe("Codex worktree removal safety", () => {
     expect(await fs.readFile(foreignOwner, "utf8")).toBe("foreign\n");
 
     await fs.rm(lockPath, { recursive: true });
-    const head = (await runGit(["rev-parse", "HEAD"], value.repository)).stdout;
+    const { stdout: head } = await runGit(
+      ["rev-parse", "HEAD"],
+      value.repository,
+    );
     await runGit(["branch", branch, head], value.repository);
     const branchExists = await runHook(
       CREATE_HOOK,
@@ -1029,10 +1019,11 @@ describe("Codex worktree removal safety", () => {
       },
     );
     expect(branchExists.stderr).toContain("branch already exists");
-    expect(
-      (await runGit(["rev-parse", `refs/heads/${branch}`], value.repository))
-        .stdout,
-    ).toBe(head);
+    const refAfter = await runGit(
+      ["rev-parse", `refs/heads/${branch}`],
+      value.repository,
+    );
+    expect(refAfter.stdout).toBe(head);
   });
 
   test("cancellation retains an unmarked worktree created mid-hook", async () => {

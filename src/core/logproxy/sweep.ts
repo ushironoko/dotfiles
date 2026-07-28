@@ -33,7 +33,7 @@ export const sessionOf = (name: string): string => {
   if (name.endsWith(GZ_SUFFIX)) {
     const base = name.slice(0, -GZ_SUFFIX.length);
     const dot = base.lastIndexOf(".");
-    return dot >= 0 ? base.slice(0, dot) : base;
+    return dot !== -1 ? base.slice(0, dot) : base;
   }
   if (name.endsWith(LIVE_SUFFIX)) return name.slice(0, -LIVE_SUFFIX.length);
   return name;

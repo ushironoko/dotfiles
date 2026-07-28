@@ -69,29 +69,34 @@ describe("child-run registry", () => {
   test("tracks stable declaration order and monotonic terminal states", () => {
     const store = registry();
     const { invocationId, runIds } = begin(store);
-    store.observe(runIds[0]!, { type: "process_started", at: 10 });
-    store.observe(runIds[0]!, {
+    const [firstRunId, secondRunId] = runIds;
+    if (firstRunId === undefined || secondRunId === undefined) {
+      throw new Error("expected two run ids");
+    }
+    store.observe(firstRunId, { type: "process_started", at: 10 });
+    store.observe(firstRunId, {
       type: "assistant_final",
       text: "done",
       at: 11,
       model: "model",
       stopReason: "stop",
     });
-    store.finishRun(runIds[0]!, {
+    store.finishRun(firstRunId, {
       status: "succeeded",
       reason: "completed",
       endedAt: 12,
     });
-    store.finishRun(runIds[0]!, {
+    store.finishRun(firstRunId, {
       status: "failed",
       reason: "model-error",
     });
-    store.finishRun(runIds[1]!, {
+    store.finishRun(secondRunId, {
       status: "skipped",
       reason: "fail-fast",
     });
 
-    const snapshot = store.getInvocation(invocationId)!;
+    const snapshot = store.getInvocation(invocationId);
+    if (snapshot === undefined) throw new Error("invocation was not tracked");
     expect(snapshot.runs.map((run) => run.runId)).toEqual(runIds);
     expect(snapshot.runs.map((run) => run.status)).toEqual([
       "succeeded",
@@ -106,7 +111,8 @@ describe("child-run registry", () => {
   test("updates tool markers without retaining payloads or raw ids", () => {
     const store = registry();
     const { invocationId, runIds } = begin(store, 1);
-    const runId = runIds[0]!;
+    const [runId] = runIds;
+    if (runId === undefined) throw new Error("expected one run id");
     store.observe(runId, { type: "process_started", at: 1 });
     store.observe(runId, {
       type: "tool_started",
@@ -134,7 +140,8 @@ describe("child-run registry", () => {
   test("marks a tool without an end event interrupted when its run terminates", () => {
     const store = registry();
     const { invocationId, runIds } = begin(store, 1);
-    const runId = runIds[0]!;
+    const [runId] = runIds;
+    if (runId === undefined) throw new Error("expected one run id");
     store.observe(runId, { type: "process_started", at: 1 });
     store.observe(runId, {
       type: "tool_started",
@@ -155,7 +162,9 @@ describe("child-run registry", () => {
   test("terminalizes every queued and running child with distinct reasons", () => {
     const store = registry();
     const { invocationId, runIds } = begin(store, 3);
-    store.observe(runIds[0]!, { type: "process_started", at: 1 });
+    const [firstRunId] = runIds;
+    if (firstRunId === undefined) throw new Error("expected a first run id");
+    store.observe(firstRunId, { type: "process_started", at: 1 });
     store.terminalizeInvocation(
       invocationId,
       { status: "skipped", reason: "dependency-failed" },
@@ -176,17 +185,20 @@ describe("child-run registry", () => {
   test("refuses to archive active runs and persists worktree identity once terminal", () => {
     const store = registry();
     const started = begin(store, 1);
-    store.setRunWorktree(started.runIds[0]!, "/tmp/review-tree");
+    const [startedRunId] = started.runIds;
+    if (startedRunId === undefined) throw new Error("expected one run id");
+    store.setRunWorktree(startedRunId, "/tmp/review-tree");
     expect(store.isInvocationTerminal(started.invocationId)).toBe(false);
     expect(store.completeToolCall("parent-tool-call")).toBeUndefined();
 
-    store.finishRun(started.runIds[0]!, {
+    store.finishRun(startedRunId, {
       status: "aborted",
       reason: "parent-abort",
     });
     store.retagAbortedRuns(started.runIds, "branch-change");
     expect(store.isInvocationTerminal(started.invocationId)).toBe(true);
-    const persisted = store.completeToolCall("parent-tool-call")!;
+    const persisted = store.completeToolCall("parent-tool-call");
+    if (persisted === undefined) throw new Error("history was not archived");
     expect(persisted.runs[0]).toMatchObject({
       worktree: "/tmp/review-tree",
       status: "aborted",
@@ -197,11 +209,15 @@ describe("child-run registry", () => {
   test("retags only runs that were nonterminal when lifecycle cancellation began", () => {
     const store = registry();
     const started = begin(store, 2);
-    store.finishRun(started.runIds[0]!, {
+    const [firstRunId, secondRunId] = started.runIds;
+    if (firstRunId === undefined || secondRunId === undefined) {
+      throw new Error("expected two run ids");
+    }
+    store.finishRun(firstRunId, {
       status: "aborted",
       reason: "model-aborted",
     });
-    store.observe(started.runIds[1]!, { type: "process_started", at: 1 });
+    store.observe(secondRunId, { type: "process_started", at: 1 });
     const affected = store.getNonTerminalRunIds(started.invocationId);
     store.terminalizeInvocation(
       started.invocationId,
@@ -246,7 +262,8 @@ describe("child-run registry", () => {
       });
     }
 
-    const live = store.getInvocation(invocationId)!;
+    const live = store.getInvocation(invocationId);
+    if (live === undefined) throw new Error("invocation was not tracked");
     expect(
       live.runs.every(
         (run) =>
@@ -254,7 +271,8 @@ describe("child-run registry", () => {
           run.transcriptBytes <= MAX_RUN_TRANSCRIPT_BYTES,
       ),
     ).toBe(true);
-    const persisted = store.toPersisted(invocationId)!;
+    const persisted = store.toPersisted(invocationId);
+    if (persisted === undefined) throw new Error("invocation did not persist");
     expect(
       Buffer.byteLength(JSON.stringify(persisted), "utf8"),
     ).toBeLessThanOrEqual(MAX_PERSISTED_INVOCATION_BYTES);
@@ -269,7 +287,8 @@ describe("child-run registry", () => {
   test("enforces the serialized per-run byte cap during persistence", () => {
     const store = registry();
     const { invocationId, runIds } = begin(store, 1);
-    const runId = runIds[0]!;
+    const [runId] = runIds;
+    if (runId === undefined) throw new Error("expected one run id");
     store.observe(runId, { type: "process_started", at: 1 });
     for (let index = 0; index < 400; index++) {
       store.observe(runId, {
@@ -283,13 +302,19 @@ describe("child-run registry", () => {
       reason: "completed",
     });
 
-    const liveTranscript =
-      store.getInvocation(invocationId)!.runs[0]!.transcript;
+    const live = store.getInvocation(invocationId);
+    if (live === undefined) throw new Error("invocation was not tracked");
+    const [liveRun] = live.runs;
+    if (liveRun === undefined) throw new Error("expected one live run");
+    const { transcript: liveTranscript } = liveRun;
     expect(
       Buffer.byteLength(JSON.stringify(liveTranscript), "utf8"),
     ).toBeGreaterThan(MAX_RUN_TRANSCRIPT_BYTES);
 
-    const persistedRun = store.toPersisted(invocationId)!.runs[0]!;
+    const persisted = store.toPersisted(invocationId);
+    if (persisted === undefined) throw new Error("invocation did not persist");
+    const [persistedRun] = persisted.runs;
+    if (persistedRun === undefined) throw new Error("expected one run");
     expect(
       Buffer.byteLength(JSON.stringify(persistedRun), "utf8"),
     ).toBeLessThanOrEqual(MAX_RUN_TRANSCRIPT_BYTES);
@@ -301,21 +326,27 @@ describe("child-run registry", () => {
   test("retains the newest completed histories and never prunes active work", () => {
     const store = registry();
     const active = begin(store, 1, "active");
-    const completed: Array<{
+    const [activeRunId] = active.runIds;
+    if (activeRunId === undefined) throw new Error("expected one run id");
+    const completed: {
       invocationId: string;
       payload: PersistedChildRunsV1;
-    }> = [];
+    }[] = [];
 
     for (let index = 0; index < MAX_REPLAY_INVOCATIONS; index++) {
       const toolCallId = `completed-${index}`;
       const invocation = begin(store, 1, toolCallId);
-      store.finishRun(invocation.runIds[0]!, {
+      const [runId] = invocation.runIds;
+      if (runId === undefined) throw new Error("expected one run id");
+      store.finishRun(runId, {
         status: "succeeded",
         reason: "completed",
       });
+      const payload = store.completeToolCall(toolCallId);
+      if (payload === undefined) throw new Error("history was not archived");
       completed.push({
         invocationId: invocation.invocationId,
-        payload: store.completeToolCall(toolCallId)!,
+        payload,
       });
     }
 
@@ -326,7 +357,7 @@ describe("child-run registry", () => {
       ...completed.map(({ invocationId }) => invocationId),
     ]);
 
-    store.finishRun(active.runIds[0]!, {
+    store.finishRun(activeRunId, {
       status: "succeeded",
       reason: "completed",
     });
@@ -338,7 +369,10 @@ describe("child-run registry", () => {
         .getSnapshots()
         .map(({ invocationId }) => invocationId);
     });
-    const activePayload = store.completeToolCall("active")!;
+    const activePayload = store.completeToolCall("active");
+    if (activePayload === undefined) {
+      throw new Error("history was not archived");
+    }
     const expectedIds = [
       ...completed.slice(1).map(({ invocationId }) => invocationId),
       active.invocationId,
@@ -362,11 +396,11 @@ describe("child-run registry", () => {
 
   test("compacts oversized live data and enforces the completed byte cap", () => {
     const store = registry();
-    const completed: Array<{
+    const completed: {
       invocationId: string;
       payload: PersistedChildRunsV1;
       bytes: number;
-    }> = [];
+    }[] = [];
 
     for (let invocationIndex = 0; invocationIndex < 6; invocationIndex++) {
       const toolCallId = `large-${invocationIndex}`;
@@ -383,7 +417,8 @@ describe("child-run registry", () => {
           reason: "completed",
         });
       }
-      const payload = store.completeToolCall(toolCallId)!;
+      const payload = store.completeToolCall(toolCallId);
+      if (payload === undefined) throw new Error("history was not archived");
       expect(
         payload.runs.every((run) =>
           run.transcript.some((item) => item.type === "assistant"),
@@ -432,7 +467,8 @@ describe("child-run registry", () => {
       oversized.getInvocation(invocation.invocationId),
     );
     expect(beforeBytes).toBeGreaterThan(MAX_REPLAY_BYTES);
-    const compacted = oversized.completeToolCall("single-oversized")!;
+    const compacted = oversized.completeToolCall("single-oversized");
+    if (compacted === undefined) throw new Error("history was not archived");
     expect(serializedBytes(compacted)).toBeLessThanOrEqual(
       MAX_PERSISTED_INVOCATION_BYTES,
     );
@@ -447,11 +483,13 @@ describe("child-run registry", () => {
   test("rejects replay identities that collide with active or accepted history", () => {
     const store = registry();
     const active = begin(store, 1, "active");
+    const [activeRunId] = active.runIds;
+    if (activeRunId === undefined) throw new Error("expected one run id");
     const accepted = persistedHistory("history-1", "history-run-1");
 
     store.replacePersistedHistory([
       persistedHistory(active.invocationId, "other-run"),
-      persistedHistory("active-run-collision", active.runIds[0]!),
+      persistedHistory("active-run-collision", activeRunId),
       accepted,
       persistedHistory("history-1", "history-run-2"),
       persistedHistory("history-2", "history-run-1"),
@@ -460,7 +498,7 @@ describe("child-run registry", () => {
     expect(
       store.getSnapshots().map(({ invocationId }) => invocationId),
     ).toEqual([active.invocationId, accepted.invocationId]);
-    expect(store.getRunStatus(active.runIds[0]!)).toBe("queued");
+    expect(store.getRunStatus(activeRunId)).toBe("queued");
     expect(store.getRunStatus("history-run-1")).toBe("succeeded");
     expect(store.getRunStatus("history-run-2")).toBeUndefined();
   });
@@ -468,12 +506,15 @@ describe("child-run registry", () => {
   test("exposes compact summaries without transcript text", () => {
     const store = registry();
     const { invocationId, runIds } = begin(store, 1);
-    store.observe(runIds[0]!, { type: "process_started", at: 1 });
-    store.observe(runIds[0]!, {
+    const [runId] = runIds;
+    if (runId === undefined) throw new Error("expected one run id");
+    store.observe(runId, { type: "process_started", at: 1 });
+    store.observe(runId, {
       type: "assistant_draft",
       text: "SECRET_DRAFT",
     });
-    const details = store.getUpdateDetails(invocationId)!;
+    const details = store.getUpdateDetails(invocationId);
+    if (details === undefined) throw new Error("update details missing");
     expect(details.childRuns.runs[0]?.status).toBe("running");
     expect(JSON.stringify(details)).not.toContain("SECRET_DRAFT");
   });

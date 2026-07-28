@@ -96,7 +96,7 @@ export const createUsageExtractor = (
       jsonChunks.length = 0;
       return;
     }
-    jsonChunks.push(bytes.slice());
+    jsonChunks.push(new Uint8Array(bytes));
     jsonBytes += bytes.byteLength;
   };
 

@@ -29,7 +29,7 @@ export type CwdBoundaryResult =
 const hasControlCharacter = (value: string): boolean =>
   [...value].some((character) => {
     const codePoint = character.codePointAt(0);
-    return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+    return codePoint !== undefined && (codePoint <= 31 || codePoint === 127);
   });
 
 // Absolute, realpath'd git common-dir of `cwd`, or undefined when `cwd` is not
@@ -107,7 +107,7 @@ const parseWorktreeRoots = async (
     }
     const seenKinds = new Set<string>();
     for (const field of fields.slice(1)) {
-      const kind = field.split(" ", 1)[0];
+      const [kind] = field.split(" ", 1);
       if (
         kind === undefined ||
         !["HEAD", "branch", "detached", "bare", "locked", "prunable"].includes(
@@ -149,7 +149,8 @@ const parseWorktreeRoots = async (
     let root: string;
     try {
       root = await realpath(record.path);
-      if (!(await stat(root)).isDirectory()) return undefined;
+      const rootStat = await stat(root);
+      if (!rootStat.isDirectory()) return undefined;
     } catch {
       return undefined;
     }
@@ -258,7 +259,8 @@ export const validateCwdWithinRepo = async (
     return { ok: false, reason: `cwd does not resolve: ${candidateCwd}` };
   }
   try {
-    if (!(await stat(realCandidate)).isDirectory()) {
+    const candidateStat = await stat(realCandidate);
+    if (!candidateStat.isDirectory()) {
       return { ok: false, reason: `cwd is not a directory: ${candidateCwd}` };
     }
   } catch {
@@ -268,7 +270,8 @@ export const validateCwdWithinRepo = async (
   let realRoot: string;
   try {
     realRoot = await realpath(rootCwd);
-    if (!(await stat(realRoot)).isDirectory()) {
+    const rootStat = await stat(realRoot);
+    if (!rootStat.isDirectory()) {
       return {
         ok: false,
         reason: `workflow root is not a directory: ${rootCwd}`,

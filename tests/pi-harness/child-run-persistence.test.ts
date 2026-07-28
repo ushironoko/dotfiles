@@ -74,6 +74,12 @@ const largePayload = (invocationId: string): PersistedChildRunsV1 =>
     })),
   });
 
+const firstRun = (value: PersistedChildRunsV1) => {
+  const [run] = value.runs;
+  if (run === undefined) throw new Error("payload had no runs");
+  return run;
+};
+
 describe("child-run persisted details", () => {
   test("preserves existing tool details under a namespaced childRuns key", () => {
     const childRuns = payload();
@@ -86,11 +92,13 @@ describe("child-run persisted details", () => {
   test("decodes an allowlisted payload and strips terminal controls", () => {
     const hostile = payload();
     hostile.label = "work\u001b]2;spoof\u0007flow";
-    hostile.runs[0]!.transcript[0] = {
+    firstRun(hostile).transcript[0] = {
       type: "assistant",
       text: "safe\u001b[31m answer\u001b[0m",
     };
-    const decoded = decodePersistedChildRuns(hostile)!;
+    const decoded = decodePersistedChildRuns(hostile);
+    if (decoded === undefined)
+      throw new Error("hostile payload did not decode");
     expect(decoded.label).toBe("workflow");
     expect(decoded.runs[0]?.transcript[0]).toEqual({
       type: "assistant",
@@ -100,8 +108,9 @@ describe("child-run persisted details", () => {
 
   test("preserves the permission-blocked terminal reason", () => {
     const blocked = payload();
-    blocked.runs[0]!.status = "failed";
-    blocked.runs[0]!.terminalReason = "permission-blocked";
+    const blockedRun = firstRun(blocked);
+    blockedRun.status = "failed";
+    blockedRun.terminalReason = "permission-blocked";
 
     expect(decodePersistedChildRuns(blocked)?.runs[0]).toMatchObject({
       status: "failed",
@@ -131,11 +140,13 @@ describe("child-run persisted details", () => {
 
   test("re-caps a hostile replay payload to the per-run byte limit", () => {
     const hostile = payload();
-    hostile.runs[0]!.transcript = Array.from({ length: 20 }, (_, index) => ({
+    firstRun(hostile).transcript = Array.from({ length: 20 }, (_, index) => ({
       type: "assistant" as const,
       text: `${index}:${"x".repeat(10_000)}`,
     }));
-    const decoded = decodePersistedChildRuns(hostile)!;
+    const decoded = decodePersistedChildRuns(hostile);
+    if (decoded === undefined)
+      throw new Error("hostile payload did not decode");
     expect(
       Buffer.byteLength(JSON.stringify(decoded.runs[0]), "utf8"),
     ).toBeLessThanOrEqual(MAX_RUN_TRANSCRIPT_BYTES);
@@ -146,7 +157,7 @@ describe("child-run persisted details", () => {
 
   test("keeps replay transcripts within the item cap including truncation", () => {
     const hostile = payload();
-    hostile.runs[0]!.transcript = Array.from(
+    firstRun(hostile).transcript = Array.from(
       { length: MAX_RUN_TRANSCRIPT_ITEMS + 1 },
       (_, index) => ({
         type: "assistant" as const,
@@ -154,7 +165,10 @@ describe("child-run persisted details", () => {
       }),
     );
 
-    const transcript = decodePersistedChildRuns(hostile)!.runs[0]!.transcript;
+    const decoded = decodePersistedChildRuns(hostile);
+    if (decoded === undefined)
+      throw new Error("hostile payload did not decode");
+    const { transcript } = firstRun(decoded);
     expect(transcript).toHaveLength(MAX_RUN_TRANSCRIPT_ITEMS);
     expect(transcript.at(-1)).toMatchObject({
       type: "truncated",
@@ -186,7 +200,7 @@ describe("child-run persisted details", () => {
   test("replays dedicated completion entries and lets the newest source win", () => {
     const legacy = payload({ label: "legacy" });
     const completed = payload({ label: "background-completion" });
-    completed.runs[0]!.worktree = "/tmp/review-worktree";
+    firstRun(completed).worktree = "/tmp/review-worktree";
     const selected = extractPersistedChildRuns([
       toolResult(legacy),
       {
@@ -207,11 +221,13 @@ describe("child-run persisted details", () => {
     const largeBytes = newest.map((item) =>
       serializedBytes(decodePersistedChildRuns(item)),
     );
+    const [firstLargeBytes] = largeBytes;
+    if (firstLargeBytes === undefined) throw new Error("no payload sizes");
     expect(
       largeBytes.reduce((total, bytes) => total + bytes, 0),
     ).toBeLessThanOrEqual(MAX_REPLAY_BYTES);
     expect(
-      largeBytes.reduce((total, bytes) => total + bytes, 0) + largeBytes[0]!,
+      largeBytes.reduce((total, bytes) => total + bytes, 0) + firstLargeBytes,
     ).toBeGreaterThan(MAX_REPLAY_BYTES);
     expect(newest.length + 2).toBeLessThan(MAX_REPLAY_INVOCATIONS);
 
@@ -230,13 +246,15 @@ describe("child-run persisted details", () => {
     raw.stderr = "SECRET_STDERR";
     raw.cwd = "/SECRET_CWD";
     raw.provider = "SECRET_PROVIDER";
-    const run = (raw.runs as Record<string, unknown>[])[0]!;
+    const [run] = raw.runs as Record<string, unknown>[];
+    if (run === undefined) throw new Error("payload had no runs");
     run.liveDraft = "SECRET_DRAFT";
     run.arguments = { command: "SECRET_ARGUMENT" };
     run.result = "SECRET_RESULT";
     run.thinking = "SECRET_THINKING";
     run.rawToolCallId = "SECRET_TOOL_ID";
-    const decoded = decodePersistedChildRuns(raw)!;
+    const decoded = decodePersistedChildRuns(raw);
+    if (decoded === undefined) throw new Error("payload did not decode");
     const serialized = JSON.stringify(decoded);
     for (const secret of [
       "SECRET_STDERR",

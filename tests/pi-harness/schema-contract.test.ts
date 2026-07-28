@@ -113,7 +113,7 @@ describe("schema contract: equivalence to typebox baseline", () => {
         const source = value as Record<string, unknown>;
         const here =
           typeof source.description === "string" ? [source.description] : [];
-        return here.concat(Object.values(source).flatMap(descriptions));
+        return [...here, ...Object.values(source).flatMap(descriptions)];
       }
       return [];
     };
@@ -226,7 +226,7 @@ describe("schema contract: registered shape (snapshot)", () => {
     const stages = (params.properties as Record<string, unknown>)
       .stages as Record<string, unknown>;
     const items = stages.items as Record<string, unknown>;
-    const mode = (items.properties as Record<string, unknown>).mode;
+    const { mode } = items.properties as Record<string, unknown>;
     expect(mode).toMatchInlineSnapshot(`
       {
         "anyOf": [

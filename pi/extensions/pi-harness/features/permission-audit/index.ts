@@ -200,7 +200,7 @@ export const setupPermissionAudit = (
   }
   let writer: PermissionAuditWriter;
   if (options.writer !== undefined) {
-    writer = options.writer;
+    ({ writer } = options);
   } else {
     try {
       writer = createPermissionAuditWriter(config.paths.logDir, {

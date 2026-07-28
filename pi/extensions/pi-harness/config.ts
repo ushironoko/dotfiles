@@ -75,13 +75,13 @@ export interface HarnessConfig {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
-function readLocalToggles(
+const readLocalToggles = (
   localConfigFile: string,
-): Partial<Record<ToggleableFeature, boolean>> {
+): Partial<Record<ToggleableFeature, boolean>> => {
   try {
     const parsed: unknown = JSON.parse(readFileSync(localConfigFile, "utf8"));
     if (!isRecord(parsed)) return {};
-    const features = parsed.features;
+    const { features } = parsed;
     if (!isRecord(features)) return {};
     const overrides: Partial<Record<ToggleableFeature, boolean>> = {};
     for (const name of TOGGLEABLE_FEATURES) {
@@ -92,7 +92,7 @@ function readLocalToggles(
   } catch {
     return {};
   }
-}
+};
 
 const validJudgeUrl = (value: string): boolean => {
   try {
@@ -248,10 +248,10 @@ const readPermissionJudgeConfig = (
   };
 };
 
-export function loadConfig(
+export const loadConfig = (
   env: Record<string, string | undefined> = process.env,
   paths: HarnessPaths = resolvePaths(),
-): HarnessConfig {
+): HarnessConfig => {
   const isChild = env.PI_HARNESS_CHILD === "1";
   const overrides = readLocalToggles(paths.localConfigFile);
 
@@ -270,4 +270,4 @@ export function loadConfig(
     paths,
     permissionJudge: readPermissionJudgeConfig(paths.localConfigFile),
   };
-}
+};

@@ -35,6 +35,7 @@
     "import/no-cycle": "error",
     "import/prefer-default-export": "off",
     "import/group-exports": "off",
+    "import/exports-last": "off",
     "import/consistent-type-specifier-style": "off",
 
     "unicorn/filename-case": ["error", { "case": "kebabCase" }]

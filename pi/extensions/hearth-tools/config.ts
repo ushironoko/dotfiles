@@ -91,13 +91,14 @@ export const parseHearthToolsConfig = (value: unknown): HearthToolsConfig => {
       DEFAULT_HEARTH_TOOLS_CONFIG.enableOptimizer,
     ),
     ...(maxCachedFiles === undefined ? {} : { maxCachedFiles }),
-    bashTimeoutMs: boundedInteger(
-      value.bashTimeoutMs,
-      "bashTimeoutMs",
-      MIN_TIMEOUT_MS,
-      MAX_TIMEOUT_MS,
-      DEFAULT_HEARTH_TOOLS_CONFIG.bashTimeoutMs,
-    )!,
+    bashTimeoutMs:
+      boundedInteger(
+        value.bashTimeoutMs,
+        "bashTimeoutMs",
+        MIN_TIMEOUT_MS,
+        MAX_TIMEOUT_MS,
+        DEFAULT_HEARTH_TOOLS_CONFIG.bashTimeoutMs,
+      ) ?? DEFAULT_HEARTH_TOOLS_CONFIG.bashTimeoutMs,
   };
 };
 

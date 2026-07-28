@@ -22,6 +22,7 @@ import {
   hasUnverifiedProjectMutationNavigation,
   loadRules,
   type AllowRule,
+  type AuditedVerdict,
   type LoadedRules,
 } from "./rules";
 import {
@@ -37,7 +38,6 @@ import {
   PERMISSION_AUDIT_UNAVAILABLE_REASON,
   type PermissionAuditIntegration,
 } from "../permission-audit/index";
-import type { AuditedVerdict } from "./rules";
 
 const readPermissionRules = (): string | undefined => {
   try {
@@ -163,7 +163,7 @@ const setupPermissionPolicy = (
       ? createPermissionJudge(judgeConfig)
       : undefined;
   const taskTracker = options.taskTracker ?? createPermissionTaskTracker();
-  const permissionAudit = options.permissionAudit;
+  const { permissionAudit } = options;
   const discoverProject =
     options.discoverProject ??
     ((cwd: string, signal?: AbortSignal, leadingCdTarget?: string) =>
@@ -385,7 +385,7 @@ const setupPermissionPolicy = (
     if (event.toolName !== "bash") return undefined;
 
     try {
-      const input: unknown = event.input;
+      const { input } = event;
       const command = isRecord(input) ? input.command : undefined;
       // A bash call whose command is missing or not a string is malformed;
       // the safety floor blocks it instead of letting it through (fail-closed).
@@ -405,11 +405,9 @@ const setupPermissionPolicy = (
         );
       }
 
-      const signal = (
-        ctx as typeof ctx & {
-          signal?: AbortSignal;
-        }
-      ).signal;
+      const { signal } = ctx as typeof ctx & {
+        signal?: AbortSignal;
+      };
       const isAborted = (): boolean =>
         signal !== undefined && "aborted" in signal && signal.aborted === true;
 
@@ -481,13 +479,11 @@ const setupPermissionPolicy = (
                 signal,
               })
             : false;
-        const status = !ctx.hasUI
-          ? ("not-shown" as const)
-          : isAborted()
-            ? ("aborted" as const)
-            : confirmed
-              ? ("accepted" as const)
-              : ("rejected" as const);
+        let status: "not-shown" | "aborted" | "accepted" | "rejected";
+        if (!ctx.hasUI) status = "not-shown";
+        else if (isAborted()) status = "aborted";
+        else if (confirmed) status = "accepted";
+        else status = "rejected";
         permissionAudit?.addStage(event.toolCallId, {
           type: "confirmation",
           phase: "permission-policy",
@@ -760,15 +756,13 @@ const setupPermissionPolicy = (
         ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
         ...(gitCwdNavigation === undefined ? {} : { gitCwd: gitCwdNavigation }),
       });
+      let verdict: "allow" | "ask" | "error" = "error";
+      if (outcome.kind === "allow") verdict = "allow";
+      else if (outcome.kind === "ask") verdict = "ask";
       permissionAudit?.addStage(event.toolCallId, {
         type: "judge",
         phase: "fallback",
-        verdict:
-          outcome.kind === "allow"
-            ? "allow"
-            : outcome.kind === "ask"
-              ? "ask"
-              : "error",
+        verdict,
         reasonCode: `judge-${outcome.kind}`,
         ...(outcome.kind === "allow" ? {} : { reason: outcome.reason }),
         outcome: outcome.kind,

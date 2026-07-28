@@ -139,13 +139,11 @@ export default function setupHookBridge(
                 signal: ctx.signal,
               })
             : false;
-          const status = !ctx.hasUI
-            ? ("not-shown" as const)
-            : signalAborted()
-              ? ("aborted" as const)
-              : confirmed
-                ? ("accepted" as const)
-                : ("rejected" as const);
+          let status: "not-shown" | "aborted" | "accepted" | "rejected";
+          if (!ctx.hasUI) status = "not-shown";
+          else if (signalAborted()) status = "aborted";
+          else if (confirmed) status = "accepted";
+          else status = "rejected";
           audit?.addStage(event.toolCallId, {
             type: "confirmation",
             phase: auditPhase,

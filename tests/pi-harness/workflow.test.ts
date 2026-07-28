@@ -220,7 +220,7 @@ const getStageTaskReports = (
   details: Record<string, unknown>,
   stageIndex: number,
 ): Record<string, unknown>[] => {
-  const stages = details.stages;
+  const { stages } = details;
   if (!Array.isArray(stages)) throw new Error("Expected details.stages");
   const stage = stages[stageIndex];
   if (!isRecord(stage) || !Array.isArray(stage.tasks)) {
@@ -281,10 +281,10 @@ describe("pi-harness workflow", () => {
     const pi = createFakePi({ cwd: home, sessionId: "workflow-parent" });
     const registry = new ChildRunRegistry();
     const childRuns = { registry, ensureVisible() {} };
-    const childCorrelations: Array<{
+    const childCorrelations: {
       invocationId?: string;
       runId?: string;
-    }> = [];
+    }[] = [];
     const permissionAudit = {
       childEnvironment(
         _ctx: CtxLike,
@@ -936,7 +936,7 @@ describe("pi-harness workflow {previous} injection", () => {
         taskArg.includes("IMPL") ? { text: "STAGE1_OUT" } : { text: "ok" },
       { createWorktree: async () => worktreePath },
     );
-    const taskArg = review(records).taskArg;
+    const { taskArg } = review(records);
     expect(taskArg).toContain("## Stage 1 (fanout)");
     expect(taskArg).toContain(worktreePath);
     expect(taskArg).toContain("STAGE1_OUT");
@@ -1007,7 +1007,7 @@ describe("pi-harness workflow {previous} injection", () => {
       (taskArg) =>
         taskArg.includes("IMPL") ? { text: "STAGE1_OUT" } : { text: "ok" },
     );
-    const taskArg = review(records).taskArg;
+    const { taskArg } = review(records);
     expect(taskArg.match(/## Stage 1 \(fanout\)/g)).toHaveLength(2);
     expect(taskArg).not.toContain("{previous}");
   });
@@ -1030,7 +1030,7 @@ describe("pi-harness workflow {previous} injection", () => {
       (taskArg) =>
         taskArg.includes("IMPL") ? { text: "STAGE1_OUT" } : { text: "ok" },
     );
-    const taskArg = review(records).taskArg;
+    const { taskArg } = review(records);
     expect(taskArg).toContain("REVIEW plain");
     expect(taskArg).not.toContain("## Stage 1");
     expect(taskArg).not.toContain("prior-stage-results");
@@ -1061,7 +1061,7 @@ describe("pi-harness workflow {previous} injection", () => {
         return { text: "ok" };
       },
     );
-    const taskArg = review(records).taskArg;
+    const { taskArg } = review(records);
     expect(taskArg).toContain("## Stage 1 (fanout)");
     expect(taskArg).toContain("## Stage 2 (fanout)");
     expect(taskArg.indexOf("## Stage 1")).toBeLessThan(
@@ -1089,7 +1089,7 @@ describe("pi-harness workflow {previous} injection", () => {
           ? { stderr: "boom", code: 15 }
           : { text: "ok" },
     );
-    const taskArg = review(records).taskArg;
+    const { taskArg } = review(records);
     expect(taskArg).toContain("FAILED");
     expect(taskArg).toContain("boom");
   });
@@ -1158,7 +1158,7 @@ describe("pi-harness workflow {previous} injection", () => {
       (taskArg) => (taskArg.includes("IMPL") ? { text: huge } : { text: "ok" }),
       { createWorktree: async () => worktreePath },
     );
-    const taskArg = review(records).taskArg;
+    const { taskArg } = review(records);
     expect(taskArg).toContain("[Output truncated.]");
     expect(taskArg).toContain(worktreePath);
     expect(taskArg).toContain("TRAILER");
@@ -1301,7 +1301,7 @@ describe("pi-harness workflow cwd boundary (#7:3)", () => {
       if (!isRecord(backgroundDetails)) {
         throw new Error("Expected background acceptance details");
       }
-      const invocationId = backgroundDetails.invocationId;
+      const { invocationId } = backgroundDetails;
       if (typeof invocationId !== "string") {
         throw new Error("Expected background invocation id");
       }

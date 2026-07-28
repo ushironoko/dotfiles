@@ -139,7 +139,8 @@ describe("pi-harness provider-log feature", () => {
     await pi.emitSessionShutdown();
 
     const logFile = join(config.paths.logDir, "provider-2026-07-11.jsonl");
-    const lines = (await fs.readFile(logFile, "utf8"))
+    const written = await fs.readFile(logFile, "utf8");
+    const lines = written
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
@@ -148,8 +149,10 @@ describe("pi-harness provider-log feature", () => {
     expect(lines[1].kind).toBe("response");
     expect(lines[1].headers["request-id"]).toBe("req_9");
 
-    const dirMode = (await fs.stat(config.paths.logDir)).mode & 0o777;
-    const fileMode = (await fs.stat(logFile)).mode & 0o777;
+    const dirStat = await fs.stat(config.paths.logDir);
+    const fileStat = await fs.stat(logFile);
+    const dirMode = dirStat.mode & 0o777;
+    const fileMode = fileStat.mode & 0o777;
     expect(dirMode).toBe(0o700);
     expect(fileMode).toBe(0o600);
   });
@@ -184,7 +187,8 @@ describe("pi-harness provider-log feature", () => {
     await pi.emitBeforeProviderRequest({ type: "before_provider_request" });
     await pi.emitSessionShutdown();
 
-    expect((await fs.stat(config.paths.logDir)).mode & 0o777).toBe(0o700);
+    const dirStat = await fs.stat(config.paths.logDir);
+    expect(dirStat.mode & 0o777).toBe(0o700);
   });
 
   test("enforces 0600 on a pre-existing loose log file", async () => {
@@ -200,7 +204,8 @@ describe("pi-harness provider-log feature", () => {
     await pi.emitBeforeProviderRequest({ type: "before_provider_request" });
     await pi.emitSessionShutdown();
 
-    expect((await fs.stat(logFile)).mode & 0o777).toBe(0o600);
+    const fileStat = await fs.stat(logFile);
+    expect(fileStat.mode & 0o777).toBe(0o600);
   });
 
   test("refuses to follow a symlinked log file and never touches its target", async () => {

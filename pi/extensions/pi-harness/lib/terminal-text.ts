@@ -30,7 +30,7 @@ const consumeControlString = (value: string, start: number): number => {
 /** Remove terminal control sequences before model-produced text reaches TUI. */
 export const stripTerminalControls = (
   value: string,
-  lineFeedReplacement: string = "\n",
+  lineFeedReplacement = "\n",
 ): string => {
   let output = "";
   let index = 0;
@@ -103,7 +103,7 @@ export const capUtf8 = (value: string, maxBytes: number): string => {
   }
   let end = low;
   const last = value.charCodeAt(end - 1);
-  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  if (last >= 55_296 && last <= 56_319) end -= 1;
   return `${value.slice(0, end)}${includeSuffix ? TRUNCATION_SUFFIX : ""}`;
 };
 
@@ -115,7 +115,7 @@ export { visibleWidth };
 export const truncateToWidth = (
   value: string,
   width: number,
-  suffix: string = "…",
+  suffix = "…",
 ): string => {
   if (width <= 0) return "";
   return stripTerminalControls(piTruncateToWidth(value, width, suffix));

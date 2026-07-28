@@ -32,9 +32,7 @@ export const computeStats = (
   body: Record<string, unknown>,
   byteLength: number,
 ): RecordStats => {
-  const tools = body["tools"];
-  const messages = body["messages"];
-  const system = body["system"];
+  const { tools, messages, system } = body;
   let system_chars = 0;
   if (typeof system === "string") {
     system_chars = system.length;

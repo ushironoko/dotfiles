@@ -201,7 +201,7 @@ describe("permission policy local judge routing", () => {
     expect(discoveredTarget).toBe(linked);
     expect(chatRequests(upstream)).toHaveLength(1);
     expect(chatRequests(upstream)[0]?.body).toContain(
-      '\\"gitCwd\\":{\\"scope\\":\\"listed-worktree\\"}',
+      String.raw`\"gitCwd\":{\"scope\":\"listed-worktree\"}`,
     );
   });
 

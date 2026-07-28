@@ -96,10 +96,10 @@ export const wrapWithUsage = (
           // usage 採取失敗は転送に影響させない
         }
         controller.enqueue(value);
-      } catch (err) {
+      } catch (error) {
         aborted = true;
         try {
-          controller.error(err);
+          controller.error(error);
         } catch {
           // ignore
         }
@@ -140,7 +140,7 @@ export const createProxyServer = (opts: ProxyOptions): ProxyServer => {
       // 長い無音 SSE を切らないよう proxied request の idle タイムアウトを無効化
       srv.timeout(request, 0);
 
-      const pathname = url.pathname;
+      const { pathname } = url;
       const isMessages = pathname === MESSAGES_PATH;
       const isCount = pathname === COUNT_TOKENS_PATH;
       const isLogged = isMessages || isCount;
@@ -193,7 +193,7 @@ export const createProxyServer = (opts: ProxyOptions): ProxyServer => {
         const isStream = contentType.includes("text/event-stream");
         const { stream, done } = wrapWithUsage(upstreamRes.body, contentType);
         const rec = record;
-        const status = upstreamRes.status;
+        const { status } = upstreamRes;
         const requestId =
           upstreamRes.headers.get("request-id") ??
           upstreamRes.headers.get("anthropic-request-id") ??

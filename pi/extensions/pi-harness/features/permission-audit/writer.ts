@@ -5,7 +5,6 @@ import {
   open,
   readdir,
   rm,
-  type FileHandle,
   type FileHandle as NodeFileHandle,
 } from "node:fs/promises";
 import { randomUUID } from "node:crypto";

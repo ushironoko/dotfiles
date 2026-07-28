@@ -885,7 +885,7 @@ const simpleStarPattern = (value: string): RegExp | undefined => {
   if (!value.includes("*") || /[?[\]{}]/.test(value)) return undefined;
   const source = value
     .split("*")
-    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`))
     // Shell `*` may match newlines, and dotfiles can become eligible when the
     // caller environment enables dotglob (directly or through GLOBIGNORE).
     // Validate that conservative superset; basenames cannot contain `/`.

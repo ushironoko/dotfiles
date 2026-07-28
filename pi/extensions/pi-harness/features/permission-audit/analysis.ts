@@ -101,7 +101,7 @@ const validStage = (value: unknown): value is PermissionAuditStage => {
     );
   }
   if (value.type === "judge") {
-    const gates = value.gates;
+    const { gates } = value;
     return (
       typeof value.phase === "string" &&
       typeof value.reasonCode === "string" &&

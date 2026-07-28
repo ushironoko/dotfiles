@@ -380,7 +380,7 @@ const readDollar = (
   }
   const nameMatch = /^[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(index + 1));
   if (nameMatch) {
-    const name = nameMatch[0];
+    const [name] = nameMatch;
     if (name === "IFS") {
       return {
         append: "",
@@ -1101,7 +1101,7 @@ export const normalizeSegment = (segment: Segment): NormalizedSegment => {
 
   // Basename-normalize a concrete path-form head (opaque heads are left for
   // speculativeFloor). Length is unchanged, so opaque indices stay valid.
-  const rawHead = words[0];
+  const [rawHead] = words;
   if (rawHead !== undefined && !opaque.has(0) && isPathHead(rawHead)) {
     words = [basenameOf(rawHead), ...words.slice(1)];
   }
@@ -1116,14 +1116,10 @@ export const normalizeSegment = (segment: Segment): NormalizedSegment => {
       literalGlobs,
       ansiC,
     );
-    words = folded.words;
-    opaque = folded.opaque;
-    opaqueUnquoted = folded.opaqueUnquoted;
-    literalGlobs = folded.literalGlobs;
-    ansiC = folded.ansiC;
+    ({ words, opaque, opaqueUnquoted, literalGlobs, ansiC } = folded);
   }
 
-  const head = words[0];
+  const [head] = words;
   const headOpaque =
     words.length > 0 &&
     (opaque.has(0) || (head !== undefined && head.startsWith("-")));
@@ -1261,7 +1257,7 @@ export const speculativeFloor = (
   if (seg.headOpaque) return "deny"; // unknown head could be any floor command
   if (seg.hasAnsiC) return "ask";
   if (seg.opaque.size === 0) return null;
-  const head = seg.words[0];
+  const [head] = seg.words;
   if (head === undefined || !SENSITIVE_HEADS.has(head)) return null;
   let ask = false;
   for (const shape of FLOOR_SHAPES) {
@@ -1273,7 +1269,7 @@ export const speculativeFloor = (
 };
 
 export const isOpaqueExecutor = (words: readonly string[]): boolean => {
-  const head = words[0];
+  const [head] = words;
   if (head === undefined) return false;
   if (OPAQUE_HEAD_WORDS.has(head)) return true;
   // A shell interpreter can always execute script text from stdin, including
@@ -1292,7 +1288,7 @@ export const isOpaqueExecutor = (words: readonly string[]): boolean => {
 export const interpreterConcreteArg = (
   seg: NormalizedSegment,
 ): string | undefined => {
-  const head = seg.words[0];
+  const [head] = seg.words;
   if (head === undefined || !SHELL_INTERPRETERS.has(head)) return undefined;
   for (let i = 1; i < seg.words.length; i += 1) {
     if (seg.opaque.has(i)) continue;

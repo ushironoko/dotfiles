@@ -308,7 +308,7 @@ const compactIdentifier = (value: string): string => {
 export const buildOversizedPermissionRecord = (
   input: PermissionDecisionRecordInput,
 ): PermissionDecisionRecordV1 => {
-  const command = input.command;
+  const { command } = input;
   const compactCommand: PermissionCommandRecord = {
     kind: "omitted",
     reason: "record-too-large",

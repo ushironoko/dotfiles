@@ -365,7 +365,8 @@ describe("pi-harness hook bridge", () => {
     ]);
 
     await pi.emitSessionShutdown();
-    const auditFiles = (await fs.readdir(config.paths.logDir)).filter((name) =>
+    const logEntries = await fs.readdir(config.paths.logDir);
+    const auditFiles = logEntries.filter((name) =>
       name.startsWith("permission-"),
     );
     expect(auditFiles).toHaveLength(1);

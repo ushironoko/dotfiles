@@ -65,7 +65,7 @@ interface SpawnLaunchOptions {
 // direct child when the pid is unavailable (e.g. a test double). ESRCH means
 // the group is already gone — treat as success.
 const killGroup = (child: SpawnedProcess, signal: NodeJS.Signals): boolean => {
-  const pid = child.pid;
+  const { pid } = child;
   if (typeof pid === "number" && pid > 0) {
     try {
       process.kill(-pid, signal);

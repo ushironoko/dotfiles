@@ -21,16 +21,15 @@ interface PiEditEntry {
   newText?: string;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-}
 
-export function mapToolCall(
+export const mapToolCall = (
   toolName: string,
   input: Record<string, unknown>,
-): ClaudeToolInvocation {
+): ClaudeToolInvocation => {
   switch (toolName) {
     case "bash": {
       const toolInput: Record<string, unknown> = { command: input.command };
@@ -39,11 +38,12 @@ export function mapToolCall(
       }
       return { toolName: "Bash", toolInput };
     }
-    case "write":
+    case "write": {
       return {
         toolName: "Write",
         toolInput: { file_path: input.path, content: input.content },
       };
+    }
     case "edit": {
       const edits = Array.isArray(input.edits)
         ? (input.edits as PiEditEntry[])
@@ -77,7 +77,7 @@ export function mapToolCall(
         },
       };
     }
-    case "read":
+    case "read": {
       return {
         toolName: "Read",
         toolInput: {
@@ -86,7 +86,9 @@ export function mapToolCall(
           limit: input.limit,
         },
       };
-    default:
+    }
+    default: {
       return { toolName, toolInput: input };
+    }
   }
-}
+};

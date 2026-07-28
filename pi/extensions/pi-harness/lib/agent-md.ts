@@ -20,7 +20,7 @@ interface Frontmatter {
   body: string;
 }
 
-function splitFrontmatter(markdown: string): Frontmatter | undefined {
+const splitFrontmatter = (markdown: string): Frontmatter | undefined => {
   const normalized = markdown.replace(/\r\n/g, "\n");
   if (!normalized.startsWith("---\n")) return undefined;
   const end = normalized.indexOf("\n---", 4);
@@ -38,11 +38,11 @@ function splitFrontmatter(markdown: string): Frontmatter | undefined {
   const bodyStart = normalized.indexOf("\n", end + 4);
   const body = bodyStart === -1 ? "" : normalized.slice(bodyStart + 1);
   return { fields, body };
-}
+};
 
-export function parseAgentMarkdown(
+export const parseAgentMarkdown = (
   markdown: string,
-): AgentDefinition | undefined {
+): AgentDefinition | undefined => {
   const frontmatter = splitFrontmatter(markdown);
   if (frontmatter === undefined) return undefined;
 
@@ -66,4 +66,4 @@ export function parseAgentMarkdown(
     definition.model = fields.model;
   }
   return definition;
-}
+};

@@ -89,7 +89,8 @@ const guiTarget = (): string => `gui/${process.getuid?.() ?? 0}`;
 
 /** mise 経由で bun の実体パスを解決（launchd の最小環境で PATH 非依存にするため）。 */
 export const resolveBunPath = async (): Promise<string> => {
-  const p = (await Bun.$`mise which bun`.text()).trim();
+  const raw = await Bun.$`mise which bun`.text();
+  const p = raw.trim();
   if (!p) throw new Error("could not resolve bun path via `mise which bun`");
   return p;
 };

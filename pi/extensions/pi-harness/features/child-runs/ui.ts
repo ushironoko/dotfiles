@@ -81,10 +81,10 @@ interface WidgetUiLike {
 
 export type BrowserContextLike = CtxLike;
 
-type FlatRun = {
+interface FlatRun {
   invocation: ChildInvocationSnapshot;
   run: LiveChildRun;
-};
+}
 
 const flattenRuns = (snapshots: ChildInvocationSnapshot[]): FlatRun[] =>
   snapshots.flatMap((invocation) =>

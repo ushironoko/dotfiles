@@ -169,7 +169,7 @@ export const runBoundedCommand: RunBoundedCommand = (command, args, options) =>
       settled = true;
       cleanup();
       if (failure !== undefined) {
-        reject(failure);
+        reject(failure instanceof Error ? failure : new Error(String(failure)));
         return;
       }
       resolve({
@@ -339,7 +339,7 @@ const mapCommandError = (
 const hasControlCharacter = (value: string): boolean =>
   [...value].some((character) => {
     const code = character.codePointAt(0);
-    return code !== undefined && (code <= 0x1f || code === 0x7f);
+    return code !== undefined && (code <= 31 || code === 127);
   });
 
 export class BitIssueCli {

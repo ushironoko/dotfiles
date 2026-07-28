@@ -270,7 +270,7 @@ describe("child JSON protocol normalization", () => {
         },
       }),
     );
-    const final = observations[0];
+    const [final] = observations;
     expect(final?.type).toBe("assistant_final");
     if (final?.type === "assistant_final") {
       expect(Buffer.byteLength(final.text, "utf8")).toBeLessThanOrEqual(

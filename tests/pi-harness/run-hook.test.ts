@@ -10,13 +10,13 @@ import {
 
 const cleanups: string[] = [];
 
-async function makeScript(content: string): Promise<string> {
+const makeScript = async (content: string): Promise<string> => {
   const dir = await mkdtemp(join(tmpdir(), "pi-run-hook-"));
   cleanups.push(dir);
   const path = join(dir, "hook.sh");
   await writeFile(path, content, { mode: 0o755 });
   return path;
-}
+};
 
 afterEach(async () => {
   await Promise.all(

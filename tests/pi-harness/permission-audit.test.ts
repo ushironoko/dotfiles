@@ -297,11 +297,12 @@ describe("permission audit writer", () => {
     await writer.close();
 
     const path = join(logDir, permissionAuditLogFileName(NOW, WRITER_ID));
-    expect(JSON.parse((await fs.readFile(path, "utf8")).trim())).toEqual(
-      record,
-    );
-    expect((await fs.stat(logDir)).mode & 0o777).toBe(0o700);
-    expect((await fs.stat(path)).mode & 0o777).toBe(0o600);
+    const written = await fs.readFile(path, "utf8");
+    expect(JSON.parse(written.trim())).toEqual(record);
+    const dirStat = await fs.stat(logDir);
+    const fileStat = await fs.stat(path);
+    expect(dirStat.mode & 0o777).toBe(0o700);
+    expect(fileStat.mode & 0o777).toBe(0o600);
   });
 
   test("drains an already queued append before close", async () => {
@@ -388,7 +389,8 @@ describe("permission audit writer", () => {
     await writer.close();
 
     const path = join(logDir, permissionAuditLogFileName(NOW, WRITER_ID));
-    const lines = (await fs.readFile(path, "utf8")).trim().split("\n");
+    const written = await fs.readFile(path, "utf8");
+    const lines = written.trim().split("\n");
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0] ?? "")).toEqual(second);
     expect(second.sequence).toBe(2);
@@ -567,9 +569,8 @@ describe("permission audit writer", () => {
     await writer.close();
 
     await fs.access(expired);
-    expect(
-      (await fs.readdir(logDir)).filter((name) => name.includes(WRITER_ID)),
-    ).toHaveLength(2);
+    const entries = await fs.readdir(logDir);
+    expect(entries.filter((name) => name.includes(WRITER_ID))).toHaveLength(2);
   });
 });
 
@@ -649,9 +650,8 @@ describe("permission audit policy lifecycle", () => {
     ).toMatchObject({ block: true });
     await pi.emitSessionShutdown();
 
-    const files = (await fs.readdir(config.paths.logDir)).filter((name) =>
-      name.startsWith("permission-"),
-    );
+    const entries = await fs.readdir(config.paths.logDir);
+    const files = entries.filter((name) => name.startsWith("permission-"));
     expect(files).toHaveLength(1);
     const parsed = parsePermissionAuditJsonl(
       await fs.readFile(join(config.paths.logDir, files[0] ?? ""), "utf8"),

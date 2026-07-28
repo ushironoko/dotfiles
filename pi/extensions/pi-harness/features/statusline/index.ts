@@ -79,7 +79,7 @@ const toolInputString = (
   event: ToolResultEvent,
   key: string,
 ): string | undefined => {
-  const input = event.input;
+  const { input } = event;
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
     return undefined;
   }
@@ -471,12 +471,12 @@ export default function setupStatusline(
 
     // RPC supports widgets but intentionally ignores component factories.
     // Git subprocesses remain trust-gated in this fallback too.
-    const branch =
-      activeWorktree === undefined
-        ? allowGit
-          ? await getBranch(ctx.cwd ?? process.cwd())
-          : undefined
-        : activeWorktree.branch;
+    let branch: string | undefined;
+    if (activeWorktree !== undefined) {
+      ({ branch } = activeWorktree);
+    } else if (allowGit) {
+      branch = await getBranch(ctx.cwd ?? process.cwd());
+    }
     ctx.ui.setWidget?.(
       STATUSLINE_WIDGET_KEY,
       renderStatusline(

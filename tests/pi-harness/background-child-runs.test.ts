@@ -72,14 +72,18 @@ const runtime = (
   return { registry, manager, entries, messages };
 };
 
-const begin = (registry: ChildRunRegistry, toolCallId = "tool-1") =>
-  registry.beginInvocation({
+const begin = (registry: ChildRunRegistry, toolCallId = "tool-1") => {
+  const started = registry.beginInvocation({
     toolCallId,
     source: "subagent",
     mode: "single",
     label: "subagent single",
     runs: [{ agent: "worker", task: "inspect", taskIndex: 0 }],
   });
+  const [runId] = started.runIds;
+  if (runId === undefined) throw new Error("invocation started without a run");
+  return { ...started, runId };
+};
 
 const finishSucceeded = (registry: ChildRunRegistry, runId: string): void => {
   registry.observe(runId, { type: "process_started", at: 1 });
@@ -101,7 +105,7 @@ describe("background child-run manager", () => {
       toolCallId: "tool-1",
       source: "subagent",
       async run() {
-        finishSucceeded(registry, started.runIds[0]!);
+        finishSucceeded(registry, started.runId);
         return { text: "all done" };
       },
     });
@@ -139,7 +143,7 @@ describe("background child-run manager", () => {
       source: "subagent",
       async run() {
         await gate.promise;
-        finishSucceeded(registry, started.runIds[0]!);
+        finishSucceeded(registry, started.runId);
         return { text: "done later" };
       },
     });
@@ -323,7 +327,7 @@ describe("background child-run manager", () => {
         toolCallId,
         source: "subagent",
         async run() {
-          finishSucceeded(registry, started.runIds[0]!);
+          finishSucceeded(registry, started.runId);
           return { text: `${toolCallId} done` };
         },
       });
@@ -357,7 +361,7 @@ describe("background child-run manager", () => {
       toolCallId: "tool-1",
       source: "subagent",
       async run() {
-        finishSucceeded(registry, started.runIds[0]!);
+        finishSucceeded(registry, started.runId);
         return { text: "wait for true idle" };
       },
     });
@@ -382,7 +386,7 @@ describe("background child-run manager", () => {
         toolCallId,
         source: "subagent",
         async run() {
-          finishSucceeded(registry, started.runIds[0]!);
+          finishSucceeded(registry, started.runId);
           return { text: `${toolCallId} old branch` };
         },
       });
@@ -414,7 +418,7 @@ describe("background child-run manager", () => {
       toolCallId: "tool-1",
       source: "subagent",
       async run() {
-        finishSucceeded(registry, started.runIds[0]!);
+        finishSucceeded(registry, started.runId);
         return { text: "old branch result" };
       },
     });
@@ -453,7 +457,7 @@ describe("background child-run manager", () => {
       toolCallId: "tool-1",
       source: "subagent",
       async run() {
-        finishSucceeded(registry, first.runIds[0]!);
+        finishSucceeded(registry, first.runId);
         return { text: "waiting for parent" };
       },
     });
@@ -488,7 +492,7 @@ describe("background child-run manager", () => {
       toolCallId: "tool-1",
       source: "subagent",
       async run() {
-        finishSucceeded(registry, started.runIds[0]!);
+        finishSucceeded(registry, started.runId);
         return { text: "delivery fails before custom message" };
       },
     });
@@ -512,7 +516,7 @@ describe("background child-run manager", () => {
         toolCallId,
         source: "subagent",
         async run() {
-          finishSucceeded(registry, started.runIds[0]!);
+          finishSucceeded(registry, started.runId);
           return { text: `${toolCallId} result` };
         },
       });
@@ -535,7 +539,7 @@ describe("background child-run manager", () => {
         toolCallId,
         source: "subagent",
         async run() {
-          finishSucceeded(registry, started.runIds[0]!);
+          finishSucceeded(registry, started.runId);
           return { text: `${toolCallId} reentrant` };
         },
       });
@@ -575,10 +579,7 @@ describe("background child-run manager", () => {
             "abort",
             () => {
               setTimeout(() => {
-                registry.setRunWorktree(
-                  started.runIds[0]!,
-                  "/tmp/delayed-worktree",
-                );
+                registry.setRunWorktree(started.runId, "/tmp/delayed-worktree");
                 reject(new Error("cancelled after publishing worktree"));
               }, 20);
             },
@@ -689,7 +690,8 @@ describe("background child-run manager", () => {
       ),
     ).toBe(true);
     expect(framed.match(/END_UNTRUSTED_CHILD_RESULT_JSON/g)).toHaveLength(1);
-    const jsonLine = framed.split("\n")[4]!;
+    const jsonLine = framed.split("\n").at(4);
+    if (jsonLine === undefined) throw new Error("framing lost the JSON line");
     expect(() => JSON.parse(jsonLine)).not.toThrow();
   });
 });

@@ -273,21 +273,25 @@ const setupSubagent = (
       if (isAborted(signal)) throw new Error("Subagent was aborted");
 
       const defaultCwd = ctx.cwd ?? process.cwd();
-      const declaredItems: TaskItem[] =
-        params.chain && params.chain.length > 0
-          ? params.chain
-          : params.tasks && params.tasks.length > 0
-            ? params.tasks
-            : params.agent !== undefined && params.task !== undefined
-              ? [{ agent: params.agent, task: params.task, cwd: params.cwd }]
-              : [];
+      let declaredItems: TaskItem[] = [];
+      if (params.chain && params.chain.length > 0) {
+        declaredItems = params.chain;
+      } else if (params.tasks && params.tasks.length > 0) {
+        declaredItems = params.tasks;
+      } else if (params.agent !== undefined && params.task !== undefined) {
+        declaredItems = [
+          { agent: params.agent, task: params.task, cwd: params.cwd },
+        ];
+      }
       // Resolve every agent before registering or scheduling any background
       // work. Single/chain used to defer this lookup until execution, which
       // would turn an input error into a late completion failure.
       for (const item of declaredItems) findAgent(agents, item.agent);
 
-      const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
-      const childRuns = options.childRuns;
+      let mode: "chain" | "parallel" | "single" = "single";
+      if (hasChain) mode = "chain";
+      else if (hasTasks) mode = "parallel";
+      const { childRuns } = options;
       const background = childRuns?.background;
       if (
         background !== undefined &&
@@ -358,13 +362,11 @@ const setupSubagent = (
         else if (result.stopReason === "aborted") reason = "model-aborted";
         else if (result.stopReason === "error") reason = "model-error";
         else if (result.failed) reason = "spawn-error";
+        let status: "aborted" | "failed" | "succeeded" = "succeeded";
+        if (result.stopReason === "aborted") status = "aborted";
+        else if (result.failed) status = "failed";
         childRuns.registry.finishRun(runId, {
-          status:
-            result.stopReason === "aborted"
-              ? "aborted"
-              : result.failed
-                ? "failed"
-                : "succeeded",
+          status,
           reason,
           exitCode: result.exitCode,
           signal: result.signal,

@@ -247,7 +247,7 @@ const setupWorkflow = (
     ) {
       if (isAborted(signal)) throw new Error("Workflow was aborted");
 
-      const childRuns = options.childRuns;
+      const { childRuns } = options;
       const background = childRuns?.background;
       if (
         background !== undefined &&
@@ -278,7 +278,8 @@ const setupWorkflow = (
       let workflowRoot: string;
       try {
         workflowRoot = await realpath(defaultCwd);
-        if (!(await stat(workflowRoot)).isDirectory()) {
+        const rootStat = await stat(workflowRoot);
+        if (!rootStat.isDirectory()) {
           throw new Error("not a directory");
         }
       } catch {
@@ -546,13 +547,11 @@ const setupWorkflow = (
                   } else if (result.stopReason === "error") {
                     reason = "model-error";
                   } else if (result.failed) reason = "spawn-error";
+                  let status: "aborted" | "failed" | "succeeded" = "succeeded";
+                  if (result.stopReason === "aborted") status = "aborted";
+                  else if (result.failed) status = "failed";
                   childRuns?.registry.finishRun(runId, {
-                    status:
-                      result.stopReason === "aborted"
-                        ? "aborted"
-                        : result.failed
-                          ? "failed"
-                          : "succeeded",
+                    status,
                     reason,
                     exitCode: result.exitCode,
                     signal: result.signal,

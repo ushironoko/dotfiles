@@ -153,7 +153,7 @@ export const createChildProtocolParser = (
       const parts = textParts(message);
       if (parts.length > 0) {
         // Preserve the legacy contract: latest assistant message, first block.
-        projection.text = parts[0];
+        [projection.text] = parts;
         const transcriptText = stripTerminalControls(parts.join("\n"));
         if (transcriptText !== "") {
           observe({

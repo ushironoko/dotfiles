@@ -296,7 +296,7 @@ type RuntimeContext = CtxLike & {
 };
 
 const scriptedSpawn =
-  (text: string, stopReason: string = "stop"): SpawnFunction =>
+  (text: string, stopReason = "stop"): SpawnFunction =>
   (_command, _args, _options) => {
     const stdout: ((chunk: string | Uint8Array) => void)[] = [];
     const stderr: ((chunk: string | Uint8Array) => void)[] = [];
@@ -515,6 +515,12 @@ const writeAgent = async (
   }
 };
 
+const findTool = (tools: ToolDefLike[], name: string): ToolDefLike => {
+  const tool = tools.find((item) => item.name === name);
+  if (tool === undefined) throw new Error(`${name} tool is not registered`);
+  return tool;
+};
+
 describe("child-run subagent integration", () => {
   test("mounts one full-width below-editor panel, streams summaries, and persists a safe transcript", async () => {
     const home = await setupTestDirectory("pi-child-integration");
@@ -526,7 +532,7 @@ describe("child-run subagent integration", () => {
       childRuns,
       spawnFn: scriptedSpawn("hello 界"),
     });
-    const tool = runtime.tools.find((item) => item.name === "subagent")!;
+    const tool = findTool(runtime.tools, "subagent");
     const updates: unknown[] = [];
     const result = await Reflect.apply(tool.execute, undefined, [
       "parent-call",
@@ -593,6 +599,8 @@ describe("child-run subagent integration", () => {
     tempDirectories.push(home);
     const runtime = createRuntime(home, { background: true });
     const childRuns = setupChildRuns(runtime.pi);
+    const { background } = childRuns;
+    if (background === undefined) throw new Error("background unavailable");
     let releasePreflight!: () => void;
     const preflightGate = new Promise<void>((resolve) => {
       releasePreflight = resolve;
@@ -618,7 +626,7 @@ describe("child-run subagent integration", () => {
       label: "preflight child",
       runs: [{ agent: "worker", task: "finish in preflight", taskIndex: 0 }],
     });
-    childRuns.background!.schedule({
+    background.schedule({
       invocationId: started.invocationId,
       toolCallId: "preflight-parent",
       source: "subagent",
@@ -633,8 +641,8 @@ describe("child-run subagent integration", () => {
         return { text: "completed during preflight" };
       },
     });
-    childRuns.background!.acknowledgeToolResult("preflight-parent");
-    await childRuns.background!.drain(started.invocationId);
+    background.acknowledgeToolResult("preflight-parent");
+    await background.drain(started.invocationId);
     expect(runtime.getSentMessages()).toEqual([]);
 
     releasePreflight();
@@ -656,7 +664,9 @@ describe("child-run subagent integration", () => {
       childRuns,
       spawnFn: controlled.spawnFn,
     });
-    const tool = runtime.tools.find((item) => item.name === "subagent")!;
+    const { background } = childRuns;
+    if (background === undefined) throw new Error("background unavailable");
+    const tool = findTool(runtime.tools, "subagent");
     const updates: unknown[] = [];
     await runtime.emit("agent_start", { type: "agent_start" });
 
@@ -691,7 +701,7 @@ describe("child-run subagent integration", () => {
     await controlled.started;
     controlled.finish("background answer 界");
 
-    await childRuns.background!.drain(invocationId);
+    await background.drain(invocationId);
     expect(updates).toHaveLength(updateCountAtReturn);
     expect(runtime.getAppendedEntries()).toEqual([]);
     expect(runtime.getSentMessages()).toEqual([]);
@@ -742,7 +752,9 @@ describe("child-run subagent integration", () => {
       childRuns,
       spawnFn: scriptedSpawn("old branch completion"),
     });
-    const tool = runtime.tools.find((item) => item.name === "subagent")!;
+    const { background } = childRuns;
+    if (background === undefined) throw new Error("background unavailable");
+    const tool = findTool(runtime.tools, "subagent");
     await runtime.emit("agent_start", { type: "agent_start" });
     const accepted = (await Reflect.apply(tool.execute, undefined, [
       "tree-handoff-parent",
@@ -756,7 +768,7 @@ describe("child-run subagent integration", () => {
       type: "message_end",
       message: { role: "toolResult", toolCallId: "tree-handoff-parent" },
     });
-    await childRuns.background!.drain(invocationId);
+    await background.drain(invocationId);
     await runtime.emit("agent_settled", { type: "agent_settled" });
     expect(runtime.getSentMessages()).toHaveLength(1);
 
@@ -903,6 +915,8 @@ describe("child-run subagent integration", () => {
     tempDirectories.push(home);
     const runtime = createRuntime(home, { background: true });
     const childRuns = setupChildRuns(runtime.pi);
+    const { background } = childRuns;
+    if (background === undefined) throw new Error("background unavailable");
     const started = childRuns.registry.beginInvocation({
       toolCallId: "tree-abort-drain-parent",
       source: "workflow",
@@ -917,7 +931,7 @@ describe("child-run subagent integration", () => {
     const cleanupGate = new Promise<void>((resolve) => {
       releaseCleanup = resolve;
     });
-    childRuns.background!.schedule({
+    background.schedule({
       invocationId: started.invocationId,
       toolCallId: "tree-abort-drain-parent",
       source: "workflow",
@@ -941,7 +955,7 @@ describe("child-run subagent integration", () => {
         });
       },
     });
-    childRuns.background!.acknowledgeToolResult("tree-abort-drain-parent");
+    background.acknowledgeToolResult("tree-abort-drain-parent");
     await Promise.resolve();
     const controller = new AbortController() as unknown as {
       signal: AbortSignal;
@@ -981,6 +995,8 @@ describe("child-run subagent integration", () => {
     const childRuns = setupChildRuns(runtime.pi, {
       backgroundDrainTimeoutMs: 1,
     });
+    const { background } = childRuns;
+    if (background === undefined) throw new Error("background unavailable");
     const started = childRuns.registry.beginInvocation({
       toolCallId: "tree-timeout-parent",
       source: "workflow",
@@ -991,13 +1007,13 @@ describe("child-run subagent integration", () => {
     const childDone = new Promise<{ text: string }>((resolve) => {
       finishChild = resolve;
     });
-    childRuns.background!.schedule({
+    background.schedule({
       invocationId: started.invocationId,
       toolCallId: "tree-timeout-parent",
       source: "workflow",
       run: () => childDone,
     });
-    childRuns.background!.acknowledgeToolResult("tree-timeout-parent");
+    background.acknowledgeToolResult("tree-timeout-parent");
     await Promise.resolve();
 
     expect(
@@ -1034,7 +1050,7 @@ describe("child-run subagent integration", () => {
       spawnFn: controlled.spawnFn,
       termGraceMs: 0,
     });
-    const tool = runtime.tools.find((item) => item.name === "subagent")!;
+    const tool = findTool(runtime.tools, "subagent");
     await runtime.emit("agent_start", { type: "agent_start" });
     const accepted = (await Reflect.apply(tool.execute, undefined, [
       "tree-parent",
@@ -1094,7 +1110,7 @@ describe("child-run subagent integration", () => {
         return { ok: true, canonicalCwd: candidate };
       },
     });
-    const tool = runtime.tools.find((item) => item.name === "workflow")!;
+    const tool = findTool(runtime.tools, "workflow");
     await runtime.emit("agent_start", { type: "agent_start" });
     const execution = Reflect.apply(tool.execute, undefined, [
       "tree-admission-parent",
@@ -1133,6 +1149,8 @@ describe("child-run subagent integration", () => {
     await writeAgent(home);
     const runtime = createRuntime(home, { background: true });
     const childRuns = setupChildRuns(runtime.pi);
+    const { background } = childRuns;
+    if (background === undefined) throw new Error("background unavailable");
     setupWorkflow(runtime.pi, makeConfig(home), {
       childRuns,
       spawnFn: scriptedSpawn("workflow background answer"),
@@ -1141,7 +1159,7 @@ describe("child-run subagent integration", () => {
         canonicalCwd: candidate,
       }),
     });
-    const tool = runtime.tools.find((item) => item.name === "workflow")!;
+    const tool = findTool(runtime.tools, "workflow");
     await runtime.emit("agent_start", { type: "agent_start" });
 
     const accepted = (await Reflect.apply(tool.execute, undefined, [
@@ -1161,10 +1179,10 @@ describe("child-run subagent integration", () => {
       content: { text: string }[];
       details: { background: { invocationId: string } };
     };
-    const invocationId = accepted.details.background.invocationId;
+    const { invocationId } = accepted.details.background;
     expect(accepted.content[0]?.text).toContain("Background workflow accepted");
 
-    await childRuns.background!.drain(invocationId);
+    await background.drain(invocationId);
     expect(runtime.getAppendedEntries()).toEqual([]);
     await runtime.emit("message_end", {
       type: "message_end",
@@ -1191,6 +1209,8 @@ describe("child-run subagent integration", () => {
     await writeAgent(home, reviewers);
     const runtime = createRuntime(home, { background: true });
     const childRuns = setupChildRuns(runtime.pi);
+    const { background } = childRuns;
+    if (background === undefined) throw new Error("background unavailable");
     const spawnFn: SpawnFunction = (...args) => {
       const task = args[1].at(-1) ?? "";
       const reviewer = task.replace(/^Task: lens /, "");
@@ -1208,7 +1228,7 @@ describe("child-run subagent integration", () => {
         canonicalCwd: candidate,
       }),
     });
-    const tool = runtime.tools.find((item) => item.name === "workflow")!;
+    const tool = findTool(runtime.tools, "workflow");
     await runtime.emit("agent_start", { type: "agent_start" });
 
     const accepted = (await Reflect.apply(tool.execute, undefined, [
@@ -1228,7 +1248,7 @@ describe("child-run subagent integration", () => {
       undefined,
       runtime.ctx,
     ])) as { details: { background: { invocationId: string } } };
-    await childRuns.background!.drain(accepted.details.background.invocationId);
+    await background.drain(accepted.details.background.invocationId);
     await runtime.emit("message_end", {
       type: "message_end",
       message: { role: "toolResult", toolCallId: "workflow-budget-parent" },
@@ -1269,6 +1289,8 @@ describe("child-run subagent integration", () => {
     await writeAgent(home);
     const runtime = createRuntime(home, { background: true });
     const childRuns = setupChildRuns(runtime.pi);
+    const { background } = childRuns;
+    if (background === undefined) throw new Error("background unavailable");
     const pool = pooledSpawn();
     setupSubagent(runtime.pi, makeConfig(home), {
       childRuns,
@@ -1282,8 +1304,8 @@ describe("child-run subagent integration", () => {
         canonicalCwd: candidate,
       }),
     });
-    const subagent = runtime.tools.find((item) => item.name === "subagent")!;
-    const workflow = runtime.tools.find((item) => item.name === "workflow")!;
+    const subagent = findTool(runtime.tools, "subagent");
+    const workflow = findTool(runtime.tools, "workflow");
     await runtime.emit("agent_start", { type: "agent_start" });
 
     const subagentAccepted = (await Reflect.apply(subagent.execute, undefined, [
@@ -1334,7 +1356,7 @@ describe("child-run subagent integration", () => {
       expect(pool.getMaximumActive()).toBe(4);
     }
     for (let remaining = 0; remaining < 4; remaining++) pool.finishOne();
-    await childRuns.background!.drain();
+    await background.drain();
     expect(pool.getMaximumActive()).toBe(4);
     expect(runtime.getAppendedEntries()).toHaveLength(2);
     expect(subagentAccepted.details.background.invocationId).not.toBe(
@@ -1348,6 +1370,8 @@ describe("child-run subagent integration", () => {
     await writeAgent(home);
     const runtime = createRuntime(home, { background: true });
     const childRuns = setupChildRuns(runtime.pi);
+    const { background } = childRuns;
+    if (background === undefined) throw new Error("background unavailable");
     let createCalls = 0;
     let spawnCalls = 0;
     setupWorkflow(runtime.pi, makeConfig(home), {
@@ -1367,7 +1391,7 @@ describe("child-run subagent integration", () => {
         canonicalCwd: candidate,
       }),
     });
-    const tool = runtime.tools.find((item) => item.name === "workflow")!;
+    const tool = findTool(runtime.tools, "workflow");
     await runtime.emit("agent_start", { type: "agent_start" });
     const accepted = (await Reflect.apply(tool.execute, undefined, [
       "worktree-parent",
@@ -1399,7 +1423,7 @@ describe("child-run subagent integration", () => {
       type: "message_end",
       message: { role: "toolResult", toolCallId: "worktree-parent" },
     });
-    await childRuns.background!.drain(accepted.details.background.invocationId);
+    await background.drain(accepted.details.background.invocationId);
     expect(spawnCalls).toBe(0);
     expect(JSON.stringify(runtime.getAppendedEntries())).toContain(
       "/tmp/kept-worktree",
@@ -1433,7 +1457,7 @@ describe("child-run subagent integration", () => {
         return scriptedSpawn("never")(...args);
       },
     });
-    const tool = runtime.tools.find((item) => item.name === "subagent")!;
+    const tool = findTool(runtime.tools, "subagent");
     await expect(
       Reflect.apply(tool.execute, undefined, [
         "print-parent",
@@ -1457,7 +1481,7 @@ describe("child-run subagent integration", () => {
       childRuns,
       spawnFn: scriptedSpawn("provider failed", "error"),
     });
-    const tool = runtime.tools.find((item) => item.name === "subagent")!;
+    const tool = findTool(runtime.tools, "subagent");
 
     await expect(
       Reflect.apply(tool.execute, undefined, [
@@ -1489,7 +1513,7 @@ describe("child-run subagent integration", () => {
       childRuns,
       spawnFn: scriptedSpawn("child aborted", "aborted"),
     });
-    const tool = runtime.tools.find((item) => item.name === "subagent")!;
+    const tool = findTool(runtime.tools, "subagent");
     await expect(
       Reflect.apply(tool.execute, undefined, [
         "parent-call",
@@ -1516,7 +1540,7 @@ describe("child-run subagent integration", () => {
       childRuns,
       spawnFn: scriptedSpawn("first failed", "error"),
     });
-    const tool = runtime.tools.find((item) => item.name === "subagent")!;
+    const tool = findTool(runtime.tools, "subagent");
 
     await expect(
       Reflect.apply(tool.execute, undefined, [
@@ -1803,7 +1827,9 @@ describe("child-run subagent integration", () => {
     };
     runtime.tui.setFocus(customEditor);
 
-    await runtime.commands.get("subagents")!.handler("", runtime.ctx);
+    const command = runtime.commands.get("subagents");
+    if (command === undefined) throw new Error("subagents command missing");
+    await command.handler("", runtime.ctx);
     const panel = runtime.getComponent();
     if (panel === undefined) throw new Error("child-run panel did not mount");
     expect(runtime.getWidgetPlacement()).toBe("belowEditor");
@@ -1812,7 +1838,7 @@ describe("child-run subagent integration", () => {
     expect(runtime.tui.focusedComponent).toBe(customEditor);
     expect(runtime.getComponent()).toBeDefined();
 
-    await runtime.commands.get("subagents")!.handler("", runtime.ctx);
+    await command.handler("", runtime.ctx);
     runtime.getComponent()?.handleInput?.("q");
     expect(runtime.tui.focusedComponent).toBe(customEditor);
     expect(runtime.getComponent()).toBeUndefined();
@@ -1854,7 +1880,9 @@ describe("child-run subagent integration", () => {
     childRuns.ensureVisible(runtime.ctx);
 
     runtime.tui.setFocus(runtime.editor);
-    await runtime.commands.get("subagents")!.handler("", runtime.ctx);
+    const command = runtime.commands.get("subagents");
+    if (command === undefined) throw new Error("subagents command missing");
+    await command.handler("", runtime.ctx);
     const panel = runtime.getComponent();
     if (panel === undefined) throw new Error("child-run panel did not mount");
     panel.handleInput?.("\u001b");

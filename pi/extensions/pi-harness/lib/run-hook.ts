@@ -26,19 +26,19 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
 const DEFAULT_TERM_GRACE_MS = 2_000;
 
-function killGroup(pid: number, signal: NodeJS.Signals): void {
+const killGroup = (pid: number, signal: NodeJS.Signals): void => {
   try {
     process.kill(-pid, signal);
   } catch {
     // Group already gone; nothing to clean up.
   }
-}
+};
 
-export function runHook(
+export const runHook = (
   scriptPath: string,
   stdinJson: string,
   options: RunHookOptions = {},
-): Promise<RawHookResult> {
+): Promise<RawHookResult> => {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const termGraceMs = options.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
@@ -163,17 +163,17 @@ export function runHook(
     child.stdin.write(stdinJson);
     child.stdin.end();
   });
-}
+};
 
 /**
  * Fire-and-forget variant for async hooks (statusline, notifications).
  * Output is discarded; the caller never waits.
  */
-export function fireDetachedHook(
+export const fireDetachedHook = (
   scriptPath: string,
   stdinJson: string,
   options: Pick<RunHookOptions, "cwd" | "env"> = {},
-): void {
+): void => {
   const child = spawn(BASH_PATH, [scriptPath], {
     cwd: options.cwd,
     env: sanitizeChildEnv(process.env, options.env, { cwd: options.cwd }),
@@ -189,4 +189,4 @@ export function fireDetachedHook(
   child.stdin.write(stdinJson);
   child.stdin.end();
   child.unref();
-}
+};

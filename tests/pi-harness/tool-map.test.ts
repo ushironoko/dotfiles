@@ -16,7 +16,7 @@ describe("mapToolCall workflow", () => {
     const invocation = mapToolCall("workflow", input);
     expect(invocation.toolName).toBe("Workflow");
     expect(invocation.toolInput.stages).toEqual(input.stages);
-    const script = invocation.toolInput.script;
+    const { script } = invocation.toolInput;
     if (typeof script !== "string") throw new Error("Expected script string");
     expect(script).toContain("codex-reviewer");
   });
@@ -31,7 +31,7 @@ describe("mapToolCall workflow", () => {
         },
       ],
     });
-    const script = invocation.toolInput.script;
+    const { script } = invocation.toolInput;
     if (typeof script !== "string") throw new Error("Expected script string");
     expect(script).not.toMatch(/codex-(reviewer|runner|poc|skip|stage)/);
   });
@@ -46,7 +46,7 @@ describe("mapToolCall workflow", () => {
         },
       ],
     });
-    const script = invocation.toolInput.script;
+    const { script } = invocation.toolInput;
     if (typeof script !== "string") throw new Error("Expected script string");
     expect(script).toContain("codex-skip");
   });

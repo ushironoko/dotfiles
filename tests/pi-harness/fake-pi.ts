@@ -148,7 +148,7 @@ export interface FakePi extends PiLike {
   readonly ctx: CtxLike & { hasUI: boolean };
 }
 
-export function createFakePi(
+export const createFakePi = (
   options: {
     hasUI?: boolean;
     mode?: PiModeLike;
@@ -158,7 +158,7 @@ export function createFakePi(
     contextUsage?: ContextUsageLike;
     sessionId?: string;
   } = {},
-): FakePi {
+): FakePi => {
   const store: HandlerStore = {
     session_start: [],
     input: [],
@@ -425,4 +425,4 @@ export function createFakePi(
     confirmDialogs,
     ctx,
   };
-}
+};

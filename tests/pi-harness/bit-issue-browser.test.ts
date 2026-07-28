@@ -242,7 +242,7 @@ describe("bit issue CLI adapter", () => {
       [
         "#!/bin/sh",
         "current=$(pwd -P)",
-        'printf \'%s|%s|%s\\n\' "$GIT_DIR" "$current" "$*" >> "$BIT_RECORD"',
+        String.raw`printf '%s|%s|%s\n' "$GIT_DIR" "$current" "$*" >> "$BIT_RECORD"`,
         `printf '%s\\n' '${payload}'`,
       ].join("\n"),
       { mode: 0o755 },
@@ -257,7 +257,8 @@ describe("bit issue CLI adapter", () => {
     await cli.listOpen(repository);
     await cli.listOpen(linked);
 
-    const calls = (await fs.readFile(record, "utf8")).trim().split("\n");
+    const recorded = await fs.readFile(record, "utf8");
+    const calls = recorded.trim().split("\n");
     expect(calls).toHaveLength(2);
     const expectedCommonDir = await fs.realpath(join(repository, ".git"));
     expect(calls.map((call) => call.split("|")[0])).toEqual([
@@ -378,7 +379,7 @@ describe("bit issue CLI adapter", () => {
     const invalidComment = queuedRunner([
       result("/repo/.git\n"),
       result(JSON.stringify(rawIssue("invalid-comment"))),
-      result("", { stdout: Buffer.from([0xff]) }),
+      result("", { stdout: Buffer.from([255]) }),
     ]);
     const detail = await new BitIssueCli({
       runCommand: invalidComment.run,

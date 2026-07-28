@@ -283,7 +283,7 @@ describe("pi-harness bit-task integration", () => {
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         'output=$(bash "$REAL_CREATE_HOOK")',
-        "path=$" + String.raw`{output%%$'\n'*}`,
+        `path=\${output%%$'\\n'*}`,
         'dot_git=$(cat "$path/.git")',
         'rm -rf -- "$path"',
         'mkdir -- "$path"',
