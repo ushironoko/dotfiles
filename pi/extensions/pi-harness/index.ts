@@ -14,6 +14,7 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { delimiter } from "node:path";
 import type { PiLike } from "./lib/pi-like";
 import { loadConfig, type HarnessConfig } from "./config";
+import setupBashSandbox from "./features/bash-sandbox/index";
 import setupPermissionPolicy from "./features/permission-policy/index";
 import { createPermissionTaskTracker } from "./features/permission-policy/context";
 import { setupPermissionAudit } from "./features/permission-audit/index";
@@ -73,6 +74,7 @@ const setupHarness = (
     taskTracker: permissionTaskTracker,
     onDisplayedConfirmation: permissionAskReminder?.recordDisplayedConfirmation,
   });
+  const bashSandbox = setupBashSandbox(pi, config);
   const bridgeRegistry = config.features["hook-bridge"]
     ? partitionBridgeRegistry(buildRegistry(config.paths))
     : undefined;
@@ -115,6 +117,7 @@ const setupHarness = (
     blockToolCall,
     taskTracker: permissionTaskTracker,
     permissionAudit,
+    executionBoundary: (toolName) => bashSandbox.boundaryFor(toolName),
   });
 
   if (bridgeRegistry?.remaining.length) {
@@ -125,8 +128,10 @@ const setupHarness = (
       auditPhase: "remaining",
     });
   }
-  // This is the last pi-harness Bash permission handler. "release" here means
-  // only that pi-harness passed the call to any later third-party handlers.
+  // Every policy/hook above inspected the original command. Only now replace
+  // ordinary Bash with the OS-sandbox wrapper; audit release is recorded after
+  // successful readiness/wrapping and immediately before controlled execution.
+  bashSandbox.registerExecutionBoundary({ blockToolCall, permissionAudit });
   permissionAudit.registerTail(pi, blockToolCall);
   if (config.features.subagent) {
     setupSubagent(pi, config, { childRuns, permissionAudit });

@@ -169,6 +169,41 @@ export default defineConfig({
       type: "directory",
     },
     {
+      // pi-harness lazy-loads Sandbox Runtime from the same symlink-preserving
+      // module path. Publish only the pinned runtime package and its production
+      // dependency closure; never expose the repository's whole node_modules.
+      source: "./node_modules/@anthropic-ai",
+      target: "~/.pi/agent/node_modules/@anthropic-ai",
+      type: "selective",
+      include: ["sandbox-runtime"],
+    },
+    {
+      source: "./node_modules/@pondwader",
+      target: "~/.pi/agent/node_modules/@pondwader",
+      type: "selective",
+      include: ["socks5-server"],
+    },
+    {
+      source: "./node_modules/commander",
+      target: "~/.pi/agent/node_modules/commander",
+      type: "directory",
+    },
+    {
+      source: "./node_modules/lodash-es",
+      target: "~/.pi/agent/node_modules/lodash-es",
+      type: "directory",
+    },
+    {
+      source: "./node_modules/shell-quote",
+      target: "~/.pi/agent/node_modules/shell-quote",
+      type: "directory",
+    },
+    {
+      source: "./node_modules/zod",
+      target: "~/.pi/agent/node_modules/zod",
+      type: "directory",
+    },
+    {
       source: "./pi/extensions/codex-web",
       target: "~/.pi/agent/extensions/codex-web",
       type: "directory",

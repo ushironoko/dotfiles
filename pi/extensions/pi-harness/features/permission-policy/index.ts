@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { InputEvent, PiLike } from "../../lib/pi-like";
 import type { HarnessConfig } from "../../config";
+import type { BashExecutionBoundary } from "../bash-sandbox";
 import { createPermissionBlocker, type PermissionBlockResult } from "./block";
 import { appendCommandHygiene } from "./command-hygiene";
 import {
@@ -149,6 +150,7 @@ interface SetupPermissionPolicyOptions {
   ) => Promise<PermissionProjectContext>;
   taskTracker?: PermissionTaskTracker;
   permissionAudit?: PermissionAuditIntegration;
+  executionBoundary?: (toolName: string) => BashExecutionBoundary | undefined;
 }
 
 const setupPermissionPolicy = (
@@ -382,7 +384,18 @@ const setupPermissionPolicy = (
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName !== "bash") return undefined;
+    if (event.toolName !== "bash" && event.toolName !== "bash_escalated") {
+      return undefined;
+    }
+    const executionBoundary = options.executionBoundary?.(event.toolName);
+    // Narrow tests and older adapters without the execution layer retain the
+    // original strict Bash policy. Production always supplies a boundary.
+    if (event.toolName === "bash_escalated" && executionBoundary === undefined) {
+      return blocked("bash_escalated is unavailable without an execution boundary");
+    }
+    const effectSandboxed = executionBoundary?.mode === "sandboxed";
+    const isEscalated = executionBoundary?.mode === "escalated";
+    const evaluationRules = isEscalated ? { ...rules, allow: [] } : rules;
 
     try {
       const { input } = event;
@@ -416,8 +429,9 @@ const setupPermissionPolicy = (
       let trustedGitReadCwdTarget: string | undefined;
       let result = evaluateCommandWithSkillAllows(
         command,
-        rules,
-        activeSkillBashAllows,
+        evaluationRules,
+        isEscalated ? [] : activeSkillBashAllows,
+        { effectSandboxed },
       );
       recordDeterministic(event.toolCallId, "initial", result);
       if (result.verdict === "allow" && result.grantedBySkill === true) {
@@ -426,7 +440,9 @@ const setupPermissionPolicy = (
           gitCwd === undefined ||
           (gitCwd !== null && ctx.cwd === undefined)
         ) {
-          result = evaluateCommandWithAudit(command, rules);
+          result = evaluateCommandWithAudit(command, evaluationRules, {
+            effectSandboxed,
+          });
           recordDeterministic(event.toolCallId, "skill-fallback", result);
         } else if (gitCwd !== null && ctx.cwd !== undefined) {
           const candidate = resolve(ctx.cwd, gitCwd);
@@ -441,7 +457,9 @@ const setupPermissionPolicy = (
             projectDiscovery.leadingNavigation?.scope !== "listed-worktree" ||
             !projectDiscovery.leadingNavigation.sameRepository
           ) {
-            result = evaluateCommandWithAudit(command, rules);
+            result = evaluateCommandWithAudit(command, evaluationRules, {
+              effectSandboxed,
+            });
             recordDeterministic(event.toolCallId, "skill-fallback", result);
           }
         }
@@ -553,7 +571,8 @@ const setupPermissionPolicy = (
             navigation: gitCwdNavigation,
           });
           trustedGitReadCwdTarget = readCwdTarget;
-          result = evaluateCommandWithAudit(command, rules, {
+          result = evaluateCommandWithAudit(command, evaluationRules, {
+            effectSandboxed,
             trustedGitCwdTarget: readCwdTarget,
           });
           recordDeterministic(event.toolCallId, "verified-git-c", result);
@@ -576,8 +595,14 @@ const setupPermissionPolicy = (
       }
 
       const leadingCdTarget = leadingTrustedCdTarget(command);
-      const projectSensitiveMutation = hasProjectSensitiveMutation(command);
+      const parserUnverified =
+        effectSandboxed &&
+        (result.audit.basis === "parse-error" ||
+          result.audit.basis === "depth-limit");
+      const projectSensitiveMutation =
+        !parserUnverified && hasProjectSensitiveMutation(command);
       const unverifiedMutationNavigation =
+        !parserUnverified &&
         hasUnverifiedProjectMutationNavigation(
           command,
           leadingCdTarget !== undefined,
@@ -604,14 +629,16 @@ const setupPermissionPolicy = (
       if (
         result.verdict === "allow" &&
         leadingCdTarget === undefined &&
-        !projectSensitiveMutation
+        !projectSensitiveMutation &&
+        !isEscalated
       ) {
         return undefined;
       }
       if (
         judge === undefined &&
         leadingCdTarget === undefined &&
-        !projectSensitiveMutation
+        !projectSensitiveMutation &&
+        !isEscalated
       ) {
         return undefined;
       }
@@ -694,7 +721,7 @@ const setupPermissionPolicy = (
           "project-mutation",
         );
       }
-      if (result.verdict === "allow") return undefined;
+      if (result.verdict === "allow" && !isEscalated) return undefined;
 
       const trustedLeadingCdTarget =
         leadingCdTarget !== undefined &&
@@ -713,7 +740,8 @@ const setupPermissionPolicy = (
         trustedLeadingCdTarget !== undefined ||
         trustedReadContext !== undefined
       ) {
-        result = evaluateCommandWithAudit(command, rules, {
+        result = evaluateCommandWithAudit(command, evaluationRules, {
+          effectSandboxed,
           ...(trustedLeadingCdTarget === undefined
             ? {}
             : { trustedLeadingCdTarget }),
@@ -738,9 +766,18 @@ const setupPermissionPolicy = (
             "deterministic-policy",
           );
         }
-        if (result.verdict === "allow") return undefined;
+        if (result.verdict === "allow" && !isEscalated) return undefined;
       }
-      if (judge === undefined) return undefined;
+      if (judge === undefined) {
+        return isEscalated
+          ? confirm(
+              "Sandbox外実行を確認しますか？",
+              "ローカル判定器が無効なため自動承認できません",
+              "judge-disabled",
+              "local-judge",
+            )
+          : undefined;
+      }
 
       const trackedTask = taskTracker.current();
       const runEvidence = currentRunEvidence(ctx, event.toolCallId);
@@ -755,6 +792,16 @@ const setupPermissionPolicy = (
         project,
         ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
         ...(gitCwdNavigation === undefined ? {} : { gitCwd: gitCwdNavigation }),
+        ...(executionBoundary === undefined
+          ? {}
+          : {
+              executionBoundary: {
+                mode: executionBoundary.mode,
+                network: executionBoundary.network,
+                profileFingerprint: executionBoundary.profileFingerprint,
+              },
+            }),
+        cacheAllowed: !isEscalated,
       });
       let verdict: "allow" | "ask" | "error" = "error";
       if (outcome.kind === "allow") verdict = "allow";

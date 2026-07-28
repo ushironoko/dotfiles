@@ -91,6 +91,8 @@ interface TrustedReadContext {
 }
 
 interface EvaluationOptions {
+  /** Parser-only uncertainty is residual when OS effects are sandboxed. */
+  readonly effectSandboxed?: boolean;
   /** Filesystem-verified target of a leading same-repository cd segment. */
   readonly trustedLeadingCdTarget?: string;
   /** Literal git -C target verified as a same-repository listed worktree path. */
@@ -997,45 +999,75 @@ const isProjectBoundedRgRead = (
   });
 };
 
-const structuralKnownAsk = (
+interface StructuralRisk {
+  readonly kind: "semantic" | "parser-only";
+  readonly reason: string;
+}
+
+const structuralKnownRisk = (
   segment: Segment,
   normalized: NormalizedSegment,
   trustedGitCwdTarget?: string,
-): string | undefined => {
-  if (normalized.privileged) return "sudo 経由の実行には確認が必要です";
-  if (segment.hasOutputRedirection) {
-    return "ファイルへの出力リダイレクトには確認が必要です";
-  }
+): StructuralRisk | undefined => {
   if (
     containsSensitivePath([...normalized.words, ...segment.redirectionTargets])
   ) {
-    return "認証情報または機密設定へのアクセスには確認が必要です";
-  }
-  if (isPackageRunnerInvocation(normalized.words)) {
-    return "パッケージランナーによるコード実行には確認が必要です";
+    return {
+      kind: "semantic",
+      reason: "認証情報または機密設定へのアクセスには確認が必要です",
+    };
   }
   if (
     normalized.words[0] === "find" &&
     normalized.words.some((word) => FIND_RISK_TOKENS.has(word))
   ) {
-    return "find による削除・コマンド実行・ファイル出力には確認が必要です";
+    return {
+      kind: "semantic",
+      reason: "find による削除・コマンド実行・ファイル出力には確認が必要です",
+    };
   }
   if (isUploadCommand(normalized.words)) {
-    return "remote 実行またはデータ送信には確認が必要です";
+    return {
+      kind: "semantic",
+      reason: "remote 実行またはデータ送信には確認が必要です",
+    };
+  }
+  const gitRisk = structuralGitAsk(normalized, trustedGitCwdTarget);
+  if (gitRisk !== undefined) return { kind: "semantic", reason: gitRisk };
+  if (normalized.privileged) {
+    return { kind: "parser-only", reason: "sudo 経由の実行には確認が必要です" };
+  }
+  if (segment.hasOutputRedirection) {
+    return {
+      kind: "parser-only",
+      reason: "ファイルへの出力リダイレクトには確認が必要です",
+    };
+  }
+  if (isPackageRunnerInvocation(normalized.words)) {
+    return {
+      kind: "parser-only",
+      reason: "パッケージランナーによるコード実行には確認が必要です",
+    };
   }
   if (normalized.words[0] === "rg" && hasRgExecutionOption(normalized.words)) {
-    return "rg の外部preprocessor・archive展開・symlink追跡には確認が必要です";
+    return {
+      kind: "parser-only",
+      reason: "rg の外部preprocessor・archive展開・symlink追跡には確認が必要です",
+    };
   }
   if (
     normalized.words[0] === "git" &&
     hasGitReadExecutionOption(normalized.words)
   ) {
-    return "Git の外部diff・textconv実行またはファイル出力には確認が必要です";
+    return {
+      kind: "parser-only",
+      reason: "Git の外部diff・textconv実行またはファイル出力には確認が必要です",
+    };
   }
   if (isOpaqueExecutor(normalized.words)) {
-    return OPAQUE_EXECUTOR_REASON;
+    return { kind: "parser-only", reason: OPAQUE_EXECUTOR_REASON };
   }
-  return structuralGitAsk(normalized, trustedGitCwdTarget);
+  return undefined;
 };
 
 const HELPER_CAPABLE_GIT_READS: ReadonlySet<string> = new Set([
@@ -1064,7 +1096,7 @@ const isSkillOverridableAsk = (command: string): boolean => {
   const gitAsk = structuralGitAsk(normalized);
   if (
     gitAsk === undefined ||
-    structuralKnownAsk(segment, normalized) !== gitAsk
+    structuralKnownRisk(segment, normalized)?.reason !== gitAsk
   ) {
     return false;
   }
@@ -1117,6 +1149,8 @@ const gitReadCwdTarget = (command: string): string | undefined => {
   if (
     segment === undefined ||
     segment.allowCandidate === undefined ||
+    segment.hasInputRedirection ||
+    segment.hasOutputRedirection ||
     segment.redirectionTargets.length !== 0
   ) {
     return undefined;
@@ -1126,8 +1160,9 @@ const gitReadCwdTarget = (command: string): string | undefined => {
     normalized.hasAnsiC ||
     normalized.opaque.size !== 0 ||
     segment.words[0] !== normalized.words[0] ||
+    hasGitReadExecutionOption(normalized.words) ||
     !isHelperCapableGitRead(normalized) ||
-    structuralKnownAsk(segment, normalized) !== GIT_GLOBAL_OPTION_REASON
+    structuralKnownRisk(segment, normalized)?.reason !== GIT_GLOBAL_OPTION_REASON
   ) {
     return undefined;
   }
@@ -1198,19 +1233,24 @@ const evaluateNormalized = (
   trustedLeadingCdTarget: string | undefined,
   trustedGitCwdTarget: string | undefined,
   trustedReadContext: TrustedReadContext | undefined,
+  effectSandboxed: boolean,
 ): AuditedVerdict => {
   if (normalized.words.length === 0) {
     // A parenthesized group can leave redirects in a wordless outer segment.
     // Apply every segment-wide floor before returning so a sensitive input
     // target or output write cannot disappear behind that shell shape.
-    const structuralAsk = structuralKnownAsk(
+    const structuralRisk = structuralKnownRisk(
       segment,
       normalized,
       trustedGitCwdTarget,
     );
-    return structuralAsk === undefined
+    return structuralRisk === undefined ||
+      (effectSandboxed && structuralRisk.kind === "parser-only")
       ? audited({ verdict: "default-continue" }, "default-continue")
-      : audited({ verdict: "ask", reason: structuralAsk }, "structural-ask");
+      : audited(
+          { verdict: "ask", reason: structuralRisk.reason },
+          "structural-ask",
+        );
   }
   const command = normalized.words.join(" ");
   const potential = speculativeFloor(normalized);
@@ -1229,22 +1269,31 @@ const evaluateNormalized = (
     return audited({ verdict: "deny", reason: structural }, "structural-deny");
   }
 
-  if (potential === "deny") {
+  if (potential === "deny" && !effectSandboxed) {
     return audited(
       { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON },
       "speculative-deny",
     );
   }
 
-  const structuralAsk = structuralKnownAsk(
+  const structuralRisk = structuralKnownRisk(
     segment,
     normalized,
     trustedGitCwdTarget,
   );
-  if (structuralAsk !== undefined) {
-    return audited({ verdict: "ask", reason: structuralAsk }, "structural-ask");
+  if (
+    structuralRisk !== undefined &&
+    (!effectSandboxed || structuralRisk.kind === "semantic")
+  ) {
+    return audited(
+      { verdict: "ask", reason: structuralRisk.reason },
+      "structural-ask",
+    );
   }
-  if (hasRgOptionLikeGlobExpansion(normalized, trustedReadContext)) {
+  if (
+    !effectSandboxed &&
+    hasRgOptionLikeGlobExpansion(normalized, trustedReadContext)
+  ) {
     return audited(
       {
         verdict: "ask",
@@ -1292,7 +1341,7 @@ const evaluateNormalized = (
     return audited({ verdict: "ask", reason: asked.reason }, "configured-ask");
   }
 
-  if (potential === "ask") {
+  if (potential === "ask" && !effectSandboxed) {
     return audited(
       { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON },
       "speculative-ask",
@@ -1346,17 +1395,21 @@ const evaluateCommandInner = (
   options: EvaluationOptions,
 ): AuditedVerdict => {
   if (depth > MAX_SUBSTITUTION_DEPTH) {
-    return audited(
-      { verdict: "deny", reason: UNPARSEABLE_REASON },
-      "depth-limit",
-    );
+    return options.effectSandboxed === true
+      ? audited({ verdict: "default-continue" }, "depth-limit")
+      : audited(
+          { verdict: "deny", reason: UNPARSEABLE_REASON },
+          "depth-limit",
+        );
   }
   const scanned = scanCommand(command);
   if (!scanned.ok) {
-    return audited(
-      { verdict: "deny", reason: UNPARSEABLE_REASON },
-      "parse-error",
-    );
+    return options.effectSandboxed === true
+      ? audited({ verdict: "default-continue" }, "parse-error")
+      : audited(
+          { verdict: "deny", reason: UNPARSEABLE_REASON },
+          "parse-error",
+        );
   }
   const verdicts: AuditedVerdict[] = [];
   for (const [index, segment] of scanned.segments.entries()) {
@@ -1370,17 +1423,26 @@ const evaluateCommandInner = (
         depth === 0 && index === 0 ? options.trustedLeadingCdTarget : undefined,
         depth === 0 && index === 0 ? options.trustedGitCwdTarget : undefined,
         depth === 0 ? options.trustedReadContext : undefined,
+        options.effectSandboxed === true,
       ),
     );
     // `sh -c '<script>'` runs exactly <script>; evaluate it so a denied body
     // (e.g. `bit relay sync`) is denied instead of downgraded to an opaque ask.
     const inner = interpreterConcreteArg(normalized);
     if (inner !== undefined) {
-      verdicts.push(evaluateCommandInner(inner, rules, depth + 1, {}));
+      verdicts.push(
+        evaluateCommandInner(inner, rules, depth + 1, {
+          effectSandboxed: options.effectSandboxed,
+        }),
+      );
     }
   }
   for (const sub of scanned.subs) {
-    verdicts.push(evaluateCommandInner(sub, rules, depth + 1, {}));
+    verdicts.push(
+      evaluateCommandInner(sub, rules, depth + 1, {
+        effectSandboxed: options.effectSandboxed,
+      }),
+    );
   }
   return combineVerdicts(verdicts);
 };

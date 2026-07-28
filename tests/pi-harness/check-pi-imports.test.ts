@@ -42,6 +42,7 @@ describe("check-pi-imports self-containment analysis", () => {
 
   test("allows only documented root runtime imports in pi-harness", () => {
     for (const specifier of [
+      "@anthropic-ai/sandbox-runtime",
       "@earendil-works/pi-coding-agent",
       "@earendil-works/pi-tui",
     ]) {
@@ -60,6 +61,14 @@ describe("check-pi-imports self-containment analysis", () => {
       expect(
         check(`import { x } from ${JSON.stringify(specifier)};`)[0],
       ).toContain(`runtime import of ${specifier}`);
+    }
+    for (const specifier of [
+      "@anthropic-ai/sandbox-runtime/dist/index.js",
+      "@anthropic-ai/sandbox-runtime-evil",
+    ]) {
+      expect(
+        check(`import { x } from ${JSON.stringify(specifier)};`)[0],
+      ).toContain(`disallowed bare import ${specifier}`);
     }
   });
 

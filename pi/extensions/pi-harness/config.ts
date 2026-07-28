@@ -63,6 +63,46 @@ export const DEFAULT_PERMISSION_JUDGE_CONFIG: Readonly<PermissionJudgeConfig> =
     keepAlive: "30m",
   };
 
+export interface BashSandboxConfig {
+  network: {
+    allowedDomains: string[];
+    deniedDomains: string[];
+  };
+  filesystem: {
+    denyRead: string[];
+    allowWrite: string[];
+    denyWrite: string[];
+  };
+  configurationError?: string;
+}
+
+export const DEFAULT_BASH_SANDBOX_CONFIG: Readonly<BashSandboxConfig> = {
+  network: { allowedDomains: [], deniedDomains: [] },
+  filesystem: {
+    denyRead: [
+      "~/.ssh",
+      "~/.aws",
+      "~/.gnupg",
+      "~/.kube",
+      "~/.config/gcloud",
+      "~/.netrc",
+      "~/.npmrc",
+      "~/.pypirc",
+    ],
+    allowWrite: [],
+    denyWrite: [
+      "~/.pi/agent/settings.json",
+      "~/.pi/agent/pi-harness.local.json",
+      "~/.pi/agent/extensions",
+      "~/.claude/settings.json",
+      "~/.claude/settings.local.json",
+      "~/.claude/hooks",
+      "~/.codex/config.toml",
+      "~/.codex/hooks",
+    ],
+  },
+};
+
 export interface HarnessConfig {
   isChild: boolean;
   features: Record<ToggleableFeature, boolean>;
@@ -70,6 +110,8 @@ export interface HarnessConfig {
   paths: HarnessPaths;
   /** Always materialized by loadConfig; optional for narrow test adapters. */
   permissionJudge?: PermissionJudgeConfig;
+  /** Always materialized by loadConfig; optional for narrow test adapters. */
+  bashSandbox?: BashSandboxConfig;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -248,9 +290,195 @@ const readPermissionJudgeConfig = (
   };
 };
 
+const MAX_SANDBOX_LIST_ENTRIES = 256;
+const MAX_SANDBOX_VALUE_BYTES = 4_096;
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+const LINUX_GLOB_CHARACTER = /[*?[]/;
+
+const cloneBashSandboxDefaults = (): BashSandboxConfig => ({
+  network: {
+    allowedDomains: [...DEFAULT_BASH_SANDBOX_CONFIG.network.allowedDomains],
+    deniedDomains: [...DEFAULT_BASH_SANDBOX_CONFIG.network.deniedDomains],
+  },
+  filesystem: {
+    denyRead: [...DEFAULT_BASH_SANDBOX_CONFIG.filesystem.denyRead],
+    allowWrite: [...DEFAULT_BASH_SANDBOX_CONFIG.filesystem.allowWrite],
+    denyWrite: [...DEFAULT_BASH_SANDBOX_CONFIG.filesystem.denyWrite],
+  },
+});
+
+const validSandboxDomain = (value: string): boolean => {
+  if (
+    value.length === 0 ||
+    value.length > 253 ||
+    value.includes("://") ||
+    value.includes("/") ||
+    value.includes(":") ||
+    CONTROL_CHARACTER.test(value)
+  ) {
+    return false;
+  }
+  if (value === "localhost") return true;
+  const domain = value.startsWith("*.") ? value.slice(2) : value;
+  if (value.includes("*") && !value.startsWith("*.")) return false;
+  const labels = domain.split(".");
+  return (
+    labels.length >= 2 &&
+    labels.every(
+      (label) =>
+        label.length > 0 &&
+        label.length <= 63 &&
+        /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label),
+    )
+  );
+};
+
+const validSandboxPath = (
+  value: string,
+  platform: NodeJS.Platform,
+): boolean =>
+  value.length > 0 &&
+  Buffer.byteLength(value, "utf8") <= MAX_SANDBOX_VALUE_BYTES &&
+  !CONTROL_CHARACTER.test(value) &&
+  (value.startsWith("/") || value.startsWith("~/")) &&
+  (platform !== "linux" || !LINUX_GLOB_CHARACTER.test(value));
+
+const sandboxStringArray = (
+  container: Record<string, unknown> | undefined,
+  key: string,
+  validate: (value: string) => boolean,
+): string[] | undefined => {
+  const value = container?.[key];
+  if (value === undefined) return [];
+  if (
+    !Array.isArray(value) ||
+    value.length > MAX_SANDBOX_LIST_ENTRIES ||
+    value.some((entry) => typeof entry !== "string" || !validate(entry))
+  ) {
+    return undefined;
+  }
+  return [...new Set(value)];
+};
+
+const readBashSandboxConfig = (
+  localConfigFile: string,
+  platform: NodeJS.Platform,
+): BashSandboxConfig => {
+  let root: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(localConfigFile, "utf8"));
+    if (!isRecord(parsed)) {
+      return {
+        ...cloneBashSandboxDefaults(),
+        configurationError: "pi-harness.local.json must contain an object",
+      };
+    }
+    root = parsed;
+  } catch (error) {
+    if (
+      isRecord(error) &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      return cloneBashSandboxDefaults();
+    }
+    return {
+      ...cloneBashSandboxDefaults(),
+      configurationError: "pi-harness.local.json could not be parsed",
+    };
+  }
+
+  const value = root.bashSandbox;
+  if (value === undefined) return cloneBashSandboxDefaults();
+  if (!isRecord(value)) {
+    return {
+      ...cloneBashSandboxDefaults(),
+      configurationError: "bashSandbox must contain an object",
+    };
+  }
+  const network = isRecord(value.network) ? value.network : undefined;
+  const filesystem = isRecord(value.filesystem) ? value.filesystem : undefined;
+  const errors: string[] = [];
+  if (value.network !== undefined && network === undefined) {
+    errors.push("network");
+  }
+  if (value.filesystem !== undefined && filesystem === undefined) {
+    errors.push("filesystem");
+  }
+
+  const allowedDomains = sandboxStringArray(
+    network,
+    "allowedDomains",
+    validSandboxDomain,
+  );
+  const deniedDomains = sandboxStringArray(
+    network,
+    "deniedDomains",
+    validSandboxDomain,
+  );
+  const validatePath = (path: string): boolean =>
+    validSandboxPath(path, platform);
+  const denyRead = sandboxStringArray(filesystem, "denyRead", validatePath);
+  const allowWrite = sandboxStringArray(filesystem, "allowWrite", validatePath);
+  const denyWrite = sandboxStringArray(filesystem, "denyWrite", validatePath);
+  for (const [name, parsed] of [
+    ["network.allowedDomains", allowedDomains],
+    ["network.deniedDomains", deniedDomains],
+    ["filesystem.denyRead", denyRead],
+    ["filesystem.allowWrite", allowWrite],
+    ["filesystem.denyWrite", denyWrite],
+  ] as const) {
+    if (parsed === undefined) errors.push(name);
+  }
+
+  const defaults = cloneBashSandboxDefaults();
+  return {
+    network: {
+      allowedDomains: [
+        ...new Set([
+          ...defaults.network.allowedDomains,
+          ...(allowedDomains ?? []),
+        ]),
+      ],
+      deniedDomains: [
+        ...new Set([
+          ...defaults.network.deniedDomains,
+          ...(deniedDomains ?? []),
+        ]),
+      ],
+    },
+    filesystem: {
+      denyRead: [
+        ...new Set([
+          ...defaults.filesystem.denyRead,
+          ...(denyRead ?? []),
+        ]),
+      ],
+      allowWrite: [
+        ...new Set([
+          ...defaults.filesystem.allowWrite,
+          ...(allowWrite ?? []),
+        ]),
+      ],
+      denyWrite: [
+        ...new Set([
+          ...defaults.filesystem.denyWrite,
+          ...(denyWrite ?? []),
+        ]),
+      ],
+    },
+    ...(errors.length === 0
+      ? {}
+      : {
+          configurationError: `invalid bashSandbox fields: ${errors.join(", ")}`,
+        }),
+  };
+};
+
 export const loadConfig = (
   env: Record<string, string | undefined> = process.env,
   paths: HarnessPaths = resolvePaths(),
+  platform: NodeJS.Platform = process.platform,
 ): HarnessConfig => {
   const isChild = env.PI_HARNESS_CHILD === "1";
   const overrides = readLocalToggles(paths.localConfigFile);
@@ -269,5 +497,6 @@ export const loadConfig = (
     trust: loadTrustConfig(paths.localConfigFile),
     paths,
     permissionJudge: readPermissionJudgeConfig(paths.localConfigFile),
+    bashSandbox: readBashSandboxConfig(paths.localConfigFile, platform),
   };
 };

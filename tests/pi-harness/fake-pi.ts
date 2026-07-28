@@ -45,6 +45,8 @@ import type {
   ToolResultEvent,
   ToolResultPatch,
   TurnEndEvent,
+  UserBashEvent,
+  UserBashResult,
 } from "../../pi/extensions/pi-harness/lib/pi-like";
 
 interface Notification {
@@ -77,6 +79,7 @@ interface HandlerStore {
   context: PiEventHandler<"context">[];
   turn_end: PiEventHandler<"turn_end">[];
   tool_call: PiEventHandler<"tool_call">[];
+  user_bash: PiEventHandler<"user_bash">[];
   tool_result: PiEventHandler<"tool_result">[];
   agent_settled: PiEventHandler<"agent_settled">[];
   session_before_tree: PiEventHandler<"session_before_tree">[];
@@ -98,6 +101,7 @@ export interface FakePi extends PiLike {
   emitToolCall(
     payload: ToolCallEvent,
   ): Promise<ToolCallBlockResult | undefined>;
+  emitUserBash(payload: UserBashEvent): Promise<UserBashResult | undefined>;
   emitToolResult(
     payload: ToolResultEvent,
   ): Promise<ToolResultPatch | undefined>;
@@ -166,6 +170,7 @@ export const createFakePi = (
     context: [],
     turn_end: [],
     tool_call: [],
+    user_bash: [],
     tool_result: [],
     agent_settled: [],
     session_before_tree: [],
@@ -262,6 +267,7 @@ export const createFakePi = (
     context: (handler) => store.context.push(handler),
     turn_end: (handler) => store.turn_end.push(handler),
     tool_call: (handler) => store.tool_call.push(handler),
+    user_bash: (handler) => store.user_bash.push(handler),
     tool_result: (handler) => store.tool_result.push(handler),
     agent_settled: (handler) => store.agent_settled.push(handler),
     session_before_tree: (handler) => store.session_before_tree.push(handler),
@@ -349,6 +355,13 @@ export const createFakePi = (
       for (const handler of store.tool_call) {
         const result = await handler(payload, ctx);
         if (result !== undefined && result.block === true) return result;
+      }
+      return undefined;
+    },
+    async emitUserBash(payload) {
+      for (const handler of store.user_bash) {
+        const result = await handler(payload, ctx);
+        if (result !== undefined) return result;
       }
       return undefined;
     },
