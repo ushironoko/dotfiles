@@ -30,6 +30,7 @@ import {
   type HearthAccessGate,
   type PiToolSettings,
 } from "./engine";
+import { withStatusTitle } from "./status-title";
 
 const FILE_REFERENCE_PREFIX = "@";
 const HOME_DIRECTORY_TOKEN = "~";
@@ -257,9 +258,12 @@ export const createHearthReadDefinition = (
   settings: PiToolSettings,
   gate: HearthAccessGate = IMMEDIATE_HEARTH_ACCESS_GATE,
 ) => {
-  const base = createReadToolDefinition(cwd, {
-    autoResizeImages: settings.imageAutoResize,
-  });
+  const base = withStatusTitle(
+    createReadToolDefinition(cwd, {
+      autoResizeImages: settings.imageAutoResize,
+    }),
+    "all-content",
+  );
   const definition: typeof base = {
     ...base,
     execute(id, params, signal, onUpdate, ctx) {
@@ -303,7 +307,7 @@ export const createHearthWriteDefinition = (
   engine: HearthEngine,
   gate: HearthAccessGate = IMMEDIATE_HEARTH_ACCESS_GATE,
 ) => {
-  const base = createWriteToolDefinition(cwd);
+  const base = withStatusTitle(createWriteToolDefinition(cwd));
   const definition: typeof base = {
     ...base,
     execute(id, params, signal, onUpdate, ctx) {
@@ -341,7 +345,7 @@ export const createHearthEditDefinition = (
   engine: HearthEngine,
   gate: HearthAccessGate = IMMEDIATE_HEARTH_ACCESS_GATE,
 ) => {
-  const base = createEditToolDefinition(cwd);
+  const base = withStatusTitle(createEditToolDefinition(cwd));
   const definition: typeof base = {
     ...base,
     execute(id, input, signal, onUpdate, ctx) {
@@ -505,7 +509,7 @@ export const createHearthGrepDefinition = (
   engine: HearthEngine,
   gate: HearthAccessGate = IMMEDIATE_HEARTH_ACCESS_GATE,
 ) => {
-  const base = createGrepToolDefinition(cwd);
+  const base = withStatusTitle(createGrepToolDefinition(cwd), "all-content");
   const definition: typeof base = {
     ...base,
     execute(_id, input, signal) {
@@ -752,10 +756,13 @@ export const createHearthBashDefinition = (
   settings: PiToolSettings,
   adapterOptions: HearthBashAdapterOptions = {},
 ) =>
-  createBashToolDefinition(cwd, {
-    commandPrefix: settings.shellCommandPrefix,
-    shellPath: settings.shellPath,
-    operations:
-      adapterOptions.operations ??
-      createHearthBashOperations(engine, settings.shell, adapterOptions),
-  });
+  withStatusTitle(
+    createBashToolDefinition(cwd, {
+      commandPrefix: settings.shellCommandPrefix,
+      shellPath: settings.shellPath,
+      operations:
+        adapterOptions.operations ??
+        createHearthBashOperations(engine, settings.shell, adapterOptions),
+    }),
+    "all-content",
+  );

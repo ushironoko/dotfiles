@@ -189,6 +189,13 @@ name: a later inert losing registration cannot be enumerated, but it also cannot
 execute. Hearth checks effective ownership before registration, immediately
 after registration, before each agent turn, and again at the tool-call boundary.
 
+Hearth decorates the inherited call renderers for those five tools because pi's
+standard tool shell applies completion state only through background tokens.
+Pending titles stay unchanged. A settled title receives a `✓` in the theme's
+`success` foreground or a `✗` in its `error` foreground, and the title uses the
+same status color. Result renderers remain untouched, preserving output, diff,
+and syntax-highlight colors.
+
 `trustCache` is a single-writer optimization. File-backed tools share an Engine
 gate; tool Bash and user Bash (`!`/`!!`) take it exclusively and clear all
 caches before another file operation can start, after every outcome including
