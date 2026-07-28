@@ -24,28 +24,108 @@ import { access, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MAX_TIMEOUT_MS } from "./constants";
 import {
   IMMEDIATE_HEARTH_ACCESS_GATE,
   type HearthAccessGate,
   type PiToolSettings,
 } from "./engine";
 
+const FILE_REFERENCE_PREFIX = "@";
+const HOME_DIRECTORY_TOKEN = "~";
+const HOME_DIRECTORY_PREFIX = "~/";
+const FILE_URL_PREFIX = "file://";
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+const FILE_START_OFFSET = 0;
+
 const DEFAULT_GREP_LIMIT = 100;
+const MIN_GREP_LIMIT = 1;
+const FIRST_LINE_NUMBER = 1;
+const NO_CONTEXT_LINES = 0;
+const GREP_LIMIT_REFINEMENT_MULTIPLIER = 2;
+const GREP_MAX_LINE_LENGTH = 500;
 const GLOB_SCAN_MIN = 1_000;
 const GLOB_SCAN_MAX = 100_000;
 const GLOB_SCAN_MULTIPLIER = 100;
-const MAX_TIMEOUT_MS = 2_147_483_647;
+const MILLISECONDS_PER_SECOND = 1_000;
+const HEARTH_SIGNAL_EXIT_CODE = -1;
+
+// Mirrors pi 0.80.7's bounded image sniffer and supported MIME contract.
+const IMAGE_TYPE_SNIFF_BYTES = 4_100;
+const ASCII_ENCODING = "ascii";
+const IMAGE_MIME = {
+  jpeg: "image/jpeg",
+  png: "image/png",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+} as const;
+
+const JPEG_SIGNATURE = Buffer.from([0xff, 0xd8, 0xff]);
+const JPEG_MARKER_OFFSET = JPEG_SIGNATURE.length;
+const JPEG_LS_MARKER = 0xf7;
+
+const PNG_SIGNATURE = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
+const PNG_CHUNK_LENGTH_BYTES = 4;
+const PNG_CHUNK_TYPE_BYTES = 4;
+const PNG_CHUNK_CRC_BYTES = 4;
+const PNG_CHUNK_HEADER_BYTES = PNG_CHUNK_LENGTH_BYTES + PNG_CHUNK_TYPE_BYTES;
+const PNG_CHUNK_OVERHEAD_BYTES = PNG_CHUNK_HEADER_BYTES + PNG_CHUNK_CRC_BYTES;
+const PNG_CHUNK_TYPE_OFFSET = PNG_CHUNK_LENGTH_BYTES;
+const PNG_IHDR_DATA_LENGTH = 13;
+const PNG_IHDR_DATA_LENGTH_OFFSET = PNG_SIGNATURE.length;
+const PNG_IHDR_TYPE_OFFSET =
+  PNG_IHDR_DATA_LENGTH_OFFSET + PNG_CHUNK_LENGTH_BYTES;
+const PNG_MIN_HEADER_BYTES = PNG_IHDR_TYPE_OFFSET + PNG_CHUNK_TYPE_BYTES;
+const PNG_ANIMATION_CONTROL_CHUNK = Buffer.from("acTL", ASCII_ENCODING);
+const PNG_IMAGE_DATA_CHUNK = Buffer.from("IDAT", ASCII_ENCODING);
+const PNG_HEADER_CHUNK = Buffer.from("IHDR", ASCII_ENCODING);
+
+const GIF_SIGNATURE = Buffer.from("GIF", ASCII_ENCODING);
+const RIFF_SIGNATURE = Buffer.from("RIFF", ASCII_ENCODING);
+const RIFF_SIZE_FIELD_BYTES = 4;
+const WEBP_SIGNATURE = Buffer.from("WEBP", ASCII_ENCODING);
+const WEBP_FORMAT_OFFSET = RIFF_SIGNATURE.length + RIFF_SIZE_FIELD_BYTES;
+
+const BMP_SIGNATURE = Buffer.from("BM", ASCII_ENCODING);
+const BMP_FILE_HEADER_BYTES = 14;
+const BMP_CORE_DIB_HEADER_BYTES = 12;
+const BMP_INFO_DIB_HEADER_MIN_BYTES = 40;
+const BMP_INFO_DIB_HEADER_MAX_BYTES = 124;
+const BMP_MIN_HEADER_BYTES = BMP_FILE_HEADER_BYTES + BMP_CORE_DIB_HEADER_BYTES;
+const BMP_FILE_SIZE_OFFSET = 2;
+const BMP_PIXEL_DATA_OFFSET = 10;
+const BMP_DIB_HEADER_SIZE_OFFSET = 14;
+const BMP_CORE_PLANES_OFFSET = 22;
+const BMP_CORE_BITS_PER_PIXEL_OFFSET = 24;
+const BMP_INFO_PLANES_OFFSET = 26;
+const BMP_INFO_BITS_PER_PIXEL_OFFSET = 28;
+const BMP_FIELD_BYTES = 2;
+const BMP_INFO_MIN_FILE_BYTES =
+  BMP_INFO_BITS_PER_PIXEL_OFFSET + BMP_FIELD_BYTES;
+const BMP_UNKNOWN_FILE_SIZE = 0;
+const BMP_REQUIRED_COLOR_PLANES = 1;
+const BMP_SUPPORTED_BITS_PER_PIXEL: ReadonlySet<number> = new Set([
+  1, 4, 8, 16, 24, 32,
+]);
 
 const absolutePath = (cwd: string, input: string): string => {
-  let normalized = input.replace(
-    /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g,
-    " ",
-  );
-  if (normalized.startsWith("@")) normalized = normalized.slice(1);
-  if (normalized === "~") normalized = homedir();
-  else if (normalized.startsWith("~/"))
-    normalized = join(homedir(), normalized.slice(2));
-  if (normalized.startsWith("file://")) normalized = fileURLToPath(normalized);
+  let normalized = input.replace(UNICODE_SPACES, " ");
+  if (normalized.startsWith(FILE_REFERENCE_PREFIX)) {
+    normalized = normalized.slice(FILE_REFERENCE_PREFIX.length);
+  }
+  if (normalized === HOME_DIRECTORY_TOKEN) normalized = homedir();
+  else if (normalized.startsWith(HOME_DIRECTORY_PREFIX)) {
+    normalized = join(
+      homedir(),
+      normalized.slice(HOME_DIRECTORY_PREFIX.length),
+    );
+  }
+  if (normalized.startsWith(FILE_URL_PREFIX)) {
+    normalized = fileURLToPath(normalized);
+  }
   return isAbsolute(normalized)
     ? resolve(normalized)
     : resolve(cwd, normalized);
@@ -59,45 +139,61 @@ const mapCancelled = (error: unknown, message: string): never => {
   throw error;
 };
 
-const PNG_SIGNATURE = Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-]);
-
-const asciiAt = (buffer: Buffer, offset: number, text: string): boolean =>
-  buffer.length >= offset + text.length &&
-  [...text].every(
-    (character, index) => buffer[offset + index] === character.charCodeAt(0),
-  );
+const signatureAt = (
+  buffer: Buffer,
+  offset: number,
+  signature: Buffer,
+): boolean =>
+  buffer.length >= offset + signature.length &&
+  buffer.subarray(offset, offset + signature.length).equals(signature);
 
 const validBmp = (buffer: Buffer): boolean => {
-  if (buffer.length < 26) return false;
-  const size = buffer.readUInt32LE(2);
-  const pixels = buffer.readUInt32LE(10);
-  const dib = buffer.readUInt32LE(14);
+  if (buffer.length < BMP_MIN_HEADER_BYTES) return false;
+  const size = buffer.readUInt32LE(BMP_FILE_SIZE_OFFSET);
+  const pixels = buffer.readUInt32LE(BMP_PIXEL_DATA_OFFSET);
+  const dib = buffer.readUInt32LE(BMP_DIB_HEADER_SIZE_OFFSET);
   if (
-    (size !== 0 && size < 26) ||
-    pixels < 14 + dib ||
-    (size !== 0 && pixels >= size)
+    (size !== BMP_UNKNOWN_FILE_SIZE && size < BMP_MIN_HEADER_BYTES) ||
+    pixels < BMP_FILE_HEADER_BYTES + dib ||
+    (size !== BMP_UNKNOWN_FILE_SIZE && pixels >= size)
   ) {
     return false;
   }
-  if (dib !== 12 && buffer.length < 30) return false;
-  const planes = buffer.readUInt16LE(dib === 12 ? 22 : 26);
-  const bits = buffer.readUInt16LE(dib === 12 ? 24 : 28);
+  if (
+    dib !== BMP_CORE_DIB_HEADER_BYTES &&
+    buffer.length < BMP_INFO_MIN_FILE_BYTES
+  ) {
+    return false;
+  }
+  const coreHeader = dib === BMP_CORE_DIB_HEADER_BYTES;
+  const planes = buffer.readUInt16LE(
+    coreHeader ? BMP_CORE_PLANES_OFFSET : BMP_INFO_PLANES_OFFSET,
+  );
+  const bits = buffer.readUInt16LE(
+    coreHeader
+      ? BMP_CORE_BITS_PER_PIXEL_OFFSET
+      : BMP_INFO_BITS_PER_PIXEL_OFFSET,
+  );
+  const supportedHeader =
+    coreHeader ||
+    (dib >= BMP_INFO_DIB_HEADER_MIN_BYTES &&
+      dib <= BMP_INFO_DIB_HEADER_MAX_BYTES);
   return (
-    (dib === 12 || (dib >= 40 && dib <= 124)) &&
-    planes === 1 &&
-    [1, 4, 8, 16, 24, 32].includes(bits)
+    supportedHeader &&
+    planes === BMP_REQUIRED_COLOR_PLANES &&
+    BMP_SUPPORTED_BITS_PER_PIXEL.has(bits)
   );
 };
 
 const animatedPng = (buffer: Buffer): boolean => {
   let offset = PNG_SIGNATURE.length;
-  while (offset + 8 <= buffer.length) {
+  while (offset + PNG_CHUNK_HEADER_BYTES <= buffer.length) {
     const length = buffer.readUInt32BE(offset);
-    if (asciiAt(buffer, offset + 4, "acTL")) return true;
-    if (asciiAt(buffer, offset + 4, "IDAT")) return false;
-    const next = offset + 12 + length;
+    const typeOffset = offset + PNG_CHUNK_TYPE_OFFSET;
+    if (signatureAt(buffer, typeOffset, PNG_ANIMATION_CONTROL_CHUNK))
+      return true;
+    if (signatureAt(buffer, typeOffset, PNG_IMAGE_DATA_CHUNK)) return false;
+    const next = offset + PNG_CHUNK_OVERHEAD_BYTES + length;
     if (next <= offset || next > buffer.length) return false;
     offset = next;
   }
@@ -107,24 +203,39 @@ const animatedPng = (buffer: Buffer): boolean => {
 const imageMime = async (path: string): Promise<string | null> => {
   const handle = await open(path, "r");
   try {
-    const bytes = Buffer.alloc(4_100);
-    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
-    const data = bytes.subarray(0, bytesRead);
-    if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) {
-      return data[3] === 0xf7 ? null : "image/jpeg";
+    const bytes = Buffer.alloc(IMAGE_TYPE_SNIFF_BYTES);
+    const { bytesRead } = await handle.read(
+      bytes,
+      FILE_START_OFFSET,
+      bytes.length,
+      FILE_START_OFFSET,
+    );
+    const data = bytes.subarray(FILE_START_OFFSET, bytesRead);
+    if (signatureAt(data, FILE_START_OFFSET, JPEG_SIGNATURE)) {
+      return data[JPEG_MARKER_OFFSET] === JPEG_LS_MARKER
+        ? null
+        : IMAGE_MIME.jpeg;
     }
     if (
-      data.subarray(0, 8).equals(PNG_SIGNATURE) &&
-      data.length >= 16 &&
-      data.readUInt32BE(8) === 13 &&
-      asciiAt(data, 12, "IHDR")
+      signatureAt(data, FILE_START_OFFSET, PNG_SIGNATURE) &&
+      data.length >= PNG_MIN_HEADER_BYTES &&
+      data.readUInt32BE(PNG_IHDR_DATA_LENGTH_OFFSET) === PNG_IHDR_DATA_LENGTH &&
+      signatureAt(data, PNG_IHDR_TYPE_OFFSET, PNG_HEADER_CHUNK)
     ) {
-      return animatedPng(data) ? null : "image/png";
+      return animatedPng(data) ? null : IMAGE_MIME.png;
     }
-    if (asciiAt(data, 0, "GIF")) return "image/gif";
-    if (asciiAt(data, 0, "RIFF") && asciiAt(data, 8, "WEBP"))
-      return "image/webp";
-    if (asciiAt(data, 0, "BM") && validBmp(data)) return "image/bmp";
+    if (signatureAt(data, FILE_START_OFFSET, GIF_SIGNATURE)) {
+      return IMAGE_MIME.gif;
+    }
+    if (
+      signatureAt(data, FILE_START_OFFSET, RIFF_SIGNATURE) &&
+      signatureAt(data, WEBP_FORMAT_OFFSET, WEBP_SIGNATURE)
+    ) {
+      return IMAGE_MIME.webp;
+    }
+    if (signatureAt(data, FILE_START_OFFSET, BMP_SIGNATURE) && validBmp(data)) {
+      return IMAGE_MIME.bmp;
+    }
     return null;
   } finally {
     await handle.close();
@@ -400,8 +511,14 @@ export const createHearthGrepDefinition = (
     execute(_id, input, signal) {
       return gate.shared(async () => {
         const searchPath = absolutePath(cwd, input.path || ".");
-        const limit = Math.max(1, input.limit ?? DEFAULT_GREP_LIMIT);
-        const context = input.context && input.context > 0 ? input.context : 0;
+        const limit = Math.max(
+          MIN_GREP_LIMIT,
+          input.limit ?? DEFAULT_GREP_LIMIT,
+        );
+        const context =
+          input.context && input.context > NO_CONTEXT_LINES
+            ? input.context
+            : NO_CONTEXT_LINES;
         const glob = parseGrepGlob(input.glob);
         const postFilterGlob =
           glob !== undefined &&
@@ -461,7 +578,7 @@ export const createHearthGrepDefinition = (
             : basename(file.path);
           const matches = file.lines.filter((line) => line.isMatch);
           let fullLines: string[] | undefined;
-          if (context > 0) {
+          if (context > NO_CONTEXT_LINES) {
             try {
               const content = await engine.readBytesAsync(
                 { path: file.path },
@@ -477,9 +594,12 @@ export const createHearthGrepDefinition = (
             }
           }
           for (const match of matches) {
-            const firstLine = Math.max(1, match.lineNumber - context);
+            const firstLine = Math.max(
+              FIRST_LINE_NUMBER,
+              match.lineNumber - context,
+            );
             const block =
-              context === 0 || fullLines === undefined
+              context === NO_CONTEXT_LINES || fullLines === undefined
                 ? [match]
                 : fullLines
                     .slice(
@@ -511,14 +631,14 @@ export const createHearthGrepDefinition = (
         const notices: string[] = [];
         if (matchLimitReached !== undefined) {
           notices.push(
-            `${limit} matches limit reached. Use limit=${limit * 2} for more, or refine pattern`,
+            `${limit} matches limit reached. Use limit=${limit * GREP_LIMIT_REFINEMENT_MULTIPLIER} for more, or refine pattern`,
           );
         }
         if (truncation.truncated)
           notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
         if (linesTruncated)
           notices.push(
-            "Some lines truncated to 500 chars. Use read tool to see full lines",
+            `Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines`,
           );
         const output = `${truncation.content}${
           notices.length === 0 ? "" : `\n\n[${notices.join(". ")}]`
@@ -549,10 +669,10 @@ const timeoutMs = (seconds: number | undefined): number | undefined => {
   if (!Number.isFinite(seconds) || seconds <= 0) {
     throw new Error("Invalid timeout: must be a finite number of seconds");
   }
-  const milliseconds = seconds * 1000;
+  const milliseconds = seconds * MILLISECONDS_PER_SECOND;
   if (milliseconds > MAX_TIMEOUT_MS) {
     throw new Error(
-      `Invalid timeout: maximum is ${MAX_TIMEOUT_MS / 1000} seconds`,
+      `Invalid timeout: maximum is ${MAX_TIMEOUT_MS / MILLISECONDS_PER_SECOND} seconds`,
     );
   }
   return milliseconds;
@@ -599,10 +719,13 @@ export const createHearthBashOperations = (
         );
         if (result.aborted) throw new Error("aborted");
         if (result.timedOut)
-          throw new Error(`timeout:${effectiveTimeoutMs / 1000}`);
+          throw new Error(
+            `timeout:${effectiveTimeoutMs / MILLISECONDS_PER_SECOND}`,
+          );
         return {
           exitCode:
-            result.signal !== undefined && result.exitCode === -1
+            result.signal !== undefined &&
+            result.exitCode === HEARTH_SIGNAL_EXIT_CODE
               ? null
               : result.exitCode,
         };

@@ -1,5 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { MAX_TIMEOUT_MS } from "./constants";
+
+const MIN_CACHED_FILES = 1;
+const MAX_CACHED_FILES = 1_000_000;
+const MIN_TIMEOUT_MS = 1;
 
 export interface HearthToolsConfig {
   trustCache: boolean;
@@ -13,7 +18,7 @@ export const DEFAULT_HEARTH_TOOLS_CONFIG: Readonly<HearthToolsConfig> = {
   trustCache: true,
   warmShell: true,
   enableOptimizer: true,
-  bashTimeoutMs: 2_147_483_647,
+  bashTimeoutMs: MAX_TIMEOUT_MS,
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -66,8 +71,8 @@ export const parseHearthToolsConfig = (value: unknown): HearthToolsConfig => {
   const maxCachedFiles = boundedInteger(
     value.maxCachedFiles,
     "maxCachedFiles",
-    1,
-    1_000_000,
+    MIN_CACHED_FILES,
+    MAX_CACHED_FILES,
   );
   return {
     trustCache: optionalBoolean(
@@ -89,8 +94,8 @@ export const parseHearthToolsConfig = (value: unknown): HearthToolsConfig => {
     bashTimeoutMs: boundedInteger(
       value.bashTimeoutMs,
       "bashTimeoutMs",
-      1,
-      2_147_483_647,
+      MIN_TIMEOUT_MS,
+      MAX_TIMEOUT_MS,
       DEFAULT_HEARTH_TOOLS_CONFIG.bashTimeoutMs,
     )!,
   };
