@@ -39,6 +39,7 @@ const makeConfig = (home: string): HarnessConfig => ({
 });
 
 interface RuntimeComponent {
+  focused?: boolean;
   render(width: number): string[];
   invalidate(): void;
   handleInput?(data: string): void;
@@ -76,8 +77,11 @@ const createRuntime = (cwd: string, options: { background?: boolean } = {}) => {
     getCursor(): { line: number; col: number };
     isShowingAutocomplete(): boolean;
   } = {
+    focused: true,
     keybindings,
-    render: () => ["editor"],
+    render() {
+      return [this.focused ? "editor cursor" : "editor"];
+    },
     invalidate() {},
     getText: () => editorLines.join("\n"),
     getCursor: () => ({ ...editorCursor }),
@@ -100,7 +104,17 @@ const createRuntime = (cwd: string, options: { background?: boolean } = {}) => {
     requestRender: () => {},
     focusedComponent: editor as RuntimeComponent | null,
     setFocus(next: RuntimeComponent | null) {
+      if (
+        this.focusedComponent !== null &&
+        this.focusedComponent !== undefined &&
+        "focused" in this.focusedComponent
+      ) {
+        this.focusedComponent.focused = false;
+      }
       this.focusedComponent = next;
+      if (next !== null && next !== undefined && "focused" in next) {
+        next.focused = true;
+      }
     },
   };
   let widgetCalls = 0;
@@ -1676,13 +1690,25 @@ describe("child-run subagent integration", () => {
     expect(panel.getSelectedRunId()).toBe(selectedRunId);
   });
 
-  test("Down transfers focus only after native editor navigation reaches its bottom boundary", () => {
+  test("Down and Escape move the visible cursor between input and browser", () => {
     const home = "/tmp/pi-child-down-focus";
     const runtime = createRuntime(home);
     const childRuns = setupChildRuns(runtime.pi);
+    childRuns.registry.beginInvocation({
+      toolCallId: "cursor-parent",
+      source: "subagent",
+      mode: "single",
+      label: "subagent",
+      runs: [{ agent: "worker", task: "inspect", taskIndex: 0 }],
+    });
     childRuns.ensureVisible(runtime.ctx);
     const panel = runtime.getComponent();
     if (panel === undefined) throw new Error("child-run panel did not mount");
+
+    expect(runtime.editor.focused).toBe(true);
+    expect(runtime.editor.render(80)).toEqual(["editor cursor"]);
+    expect(panel.focused).toBe(false);
+    expect(panel.render(80).some((line) => line.startsWith("> "))).toBe(false);
 
     runtime.setEditorState(["first", "second"], 0, 0);
     runtime.dispatchInput("down");
@@ -1695,9 +1721,17 @@ describe("child-run subagent integration", () => {
 
     runtime.dispatchInput("down");
     expect(runtime.tui.focusedComponent).toBe(panel);
+    expect(runtime.editor.focused).toBe(false);
+    expect(runtime.editor.render(80)).toEqual(["editor"]);
+    expect(panel.focused).toBe(true);
+    expect(panel.render(80).some((line) => line.startsWith("> "))).toBe(true);
 
     panel.handleInput?.("\u001b");
     expect(runtime.tui.focusedComponent).toBe(runtime.editor);
+    expect(runtime.editor.focused).toBe(true);
+    expect(runtime.editor.render(80)).toEqual(["editor cursor"]);
+    expect(panel.focused).toBe(false);
+    expect(panel.render(80).some((line) => line.startsWith("> "))).toBe(false);
   });
 
   test("custom editors without cursor capability retain native Down handling", () => {
