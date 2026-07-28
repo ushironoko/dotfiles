@@ -6,6 +6,7 @@ import {
   CODEX_WEB_EXTENSION_ROOT,
   collectViolations,
   EXTENSION_ROOT,
+  HEARTH_TOOLS_EXTENSION_ROOT,
   scanExtension,
 } from "../../scripts/check-pi-imports";
 
@@ -60,6 +61,30 @@ describe("check-pi-imports self-containment analysis", () => {
         check(`import { x } from ${JSON.stringify(specifier)};`)[0],
       ).toContain(`runtime import of ${specifier}`);
     }
+  });
+
+  test("allows only pi and Hearth package roots in hearth-tools", () => {
+    for (const specifier of [
+      "@earendil-works/pi-coding-agent",
+      "@hearthdev/napi",
+    ]) {
+      expect(
+        collectViolations(
+          "index.ts",
+          join(HEARTH_TOOLS_EXTENSION_ROOT, "index.ts"),
+          `import { x } from ${JSON.stringify(specifier)};`,
+          HEARTH_TOOLS_EXTENSION_ROOT,
+        ),
+      ).toEqual([]);
+    }
+    expect(
+      collectViolations(
+        "index.ts",
+        join(HEARTH_TOOLS_EXTENSION_ROOT, "index.ts"),
+        'import { x } from "@hearthdev/napi/subpath";',
+        HEARTH_TOOLS_EXTENSION_ROOT,
+      )[0],
+    ).toContain("disallowed bare import");
   });
 
   test("does not grant the pi-harness runtime allowlist to codex-web", () => {
@@ -135,8 +160,9 @@ describe("check-pi-imports self-containment analysis", () => {
 });
 
 describe("check-pi-imports scanExtension enumeration", () => {
-  test("the codex-web extension is self-contained", async () => {
+  test("the managed extensions are self-contained", async () => {
     expect(await scanExtension(CODEX_WEB_EXTENSION_ROOT)).toEqual([]);
+    expect(await scanExtension(HEARTH_TOOLS_EXTENSION_ROOT)).toEqual([]);
   });
 
   test("analyzes dotfile .ts and rejects escaping/broken symlinks", async () => {

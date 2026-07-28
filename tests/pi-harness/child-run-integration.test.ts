@@ -956,6 +956,54 @@ describe("child-run subagent integration", () => {
     expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
   });
 
+  test("cancels tree navigation while a timed-out child can still archive", async () => {
+    const home = await setupTestDirectory("pi-child-background-tree-timeout");
+    tempDirectories.push(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi, {
+      backgroundDrainTimeoutMs: 1,
+    });
+    const started = childRuns.registry.beginInvocation({
+      toolCallId: "tree-timeout-parent",
+      source: "workflow",
+      label: "tree timeout",
+      runs: [{ agent: "worker", task: "late", taskIndex: 0 }],
+    });
+    let finishChild!: (value: { text: string }) => void;
+    const childDone = new Promise<{ text: string }>((resolve) => {
+      finishChild = resolve;
+    });
+    childRuns.background!.schedule({
+      invocationId: started.invocationId,
+      toolCallId: "tree-timeout-parent",
+      source: "workflow",
+      run: () => childDone,
+    });
+    childRuns.background!.acknowledgeToolResult("tree-timeout-parent");
+    await Promise.resolve();
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toEqual({ cancel: true });
+    expect(childRuns.background?.hasActiveInvocations()).toBe(true);
+    expect(runtime.getAppendedEntries()).toEqual([]);
+    expect(() => childRuns.background?.assertCanAccept()).not.toThrow();
+
+    finishChild({ text: "late old-branch completion" });
+    await childRuns.background?.drain(started.invocationId);
+    expect(childRuns.background?.hasActiveInvocations()).toBe(false);
+    expect(runtime.getAppendedEntries()).toHaveLength(1);
+
+    expect(
+      await runtime.emit("session_before_tree", {
+        type: "session_before_tree",
+      }),
+    ).toBeUndefined();
+    await runtime.emit("session_tree", { type: "session_tree" });
+  });
+
   test("session_before_tree aborts and persists production work without cross-branch delivery", async () => {
     const home = await setupTestDirectory("pi-child-background-tree");
     tempDirectories.push(home);

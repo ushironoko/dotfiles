@@ -33,6 +33,9 @@ interface RuntimeBeforeAgentStartEvent {
 }
 
 interface RuntimePiLike {
+  events?: {
+    emit(event: string, value: unknown): void;
+  };
   on(
     event: string,
     handler: (event: unknown, ctx: RuntimeContextLike) => unknown,
@@ -84,6 +87,15 @@ const completionInvocationId = (details: unknown): string | undefined => {
   return typeof invocationId === "string" ? invocationId : undefined;
 };
 
+const HEARTH_INVALIDATE_REQUEST = "pi-hearth-tools:invalidate-request:v1";
+const HEARTH_EXTERNAL_WRITER_REQUEST =
+  "pi-hearth-tools:external-writer-request:v1";
+
+interface ExternalWriterLease {
+  ready: Promise<void>;
+  complete: Promise<void>;
+}
+
 const BACKGROUND_AGENT_SYSTEM_PROMPT = `## Background agent completion
 
 The subagent and workflow tools run child agents asynchronously. After either tool accepts a background invocation, never use sleep, shell polling, repeated status checks, or any other blocking or waiting call to wait for it. Pi delivers completion automatically as a new message and starts the continuation turn. Continue only work that is independent of the child; otherwise end the current response and return control to Pi.`;
@@ -104,6 +116,7 @@ export interface SetupChildRunsOptions {
   readonly bitIssues?: boolean;
   readonly bitIssueCli?: BitIssueCli;
   readonly childExecution?: boolean;
+  readonly backgroundDrainTimeoutMs?: number;
 }
 
 const replayBranch = (
@@ -155,14 +168,55 @@ const setupChildRuns = (
       if (activeContext !== undefined) await refreshBitIssues(activeContext);
     },
   });
+  const invalidateHearthCaches = async (): Promise<void> => {
+    const pending: Promise<void>[] = [];
+    runtime.events?.emit(HEARTH_INVALIDATE_REQUEST, {
+      accept(operation: Promise<void>) {
+        pending.push(Promise.resolve(operation));
+      },
+    });
+    await Promise.allSettled(pending);
+  };
+  const runExternalWork = async <T>(
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    let finish = (): void => {};
+    const finished = new Promise<void>((resolveFinished) => {
+      finish = resolveFinished;
+    });
+    const leases: ExternalWriterLease[] = [];
+    runtime.events?.emit(HEARTH_EXTERNAL_WRITER_REQUEST, {
+      finished,
+      accept(lease: ExternalWriterLease) {
+        leases.push(lease);
+      },
+    });
+    try {
+      if (leases.length > 0) {
+        await Promise.all(leases.map((lease) => lease.ready));
+      }
+      return await operation();
+    } finally {
+      finish();
+      await Promise.allSettled(leases.map((lease) => lease.complete));
+    }
+  };
   const background =
     options.childExecution !== false &&
     typeof runtime.appendEntry === "function" &&
     typeof runtime.sendMessage === "function"
-      ? new BackgroundInvocationManager(registry, {
-          appendEntry: runtime.appendEntry.bind(runtime),
-          sendMessage: runtime.sendMessage.bind(runtime),
-        })
+      ? new BackgroundInvocationManager(
+          registry,
+          {
+            appendEntry: runtime.appendEntry.bind(runtime),
+            sendMessage: runtime.sendMessage.bind(runtime),
+            onWorkSettled: invalidateHearthCaches,
+            runExternalWork,
+          },
+          options.backgroundDrainTimeoutMs === undefined
+            ? {}
+            : { drainTimeoutMs: options.backgroundDrainTimeoutMs },
+        )
       : undefined;
   const pendingTreeTransitions: PendingTreeTransition[] = [];
   const releaseTreeTransition = (entry: PendingTreeTransition): void => {
@@ -366,7 +420,10 @@ const setupChildRuns = (
       return { cancel: true };
     }
     if (pending?.released) return { cancel: true };
-    if (background?.shouldCancelBranchNavigation()) {
+    if (
+      background?.hasActiveInvocations() ||
+      background?.shouldCancelBranchNavigation()
+    ) {
       if (pending !== undefined) releaseTreeTransition(pending);
       return { cancel: true };
     }

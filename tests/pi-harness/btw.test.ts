@@ -6,6 +6,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { UserMessage } from "@earendil-works/pi-ai/compat";
 import {
   buildSessionContext,
+  createEventBus,
   type CreateAgentSessionOptions,
   type EntryRenderer,
   type ExtensionCommandContext,
@@ -259,6 +260,30 @@ describe("BTW read-only fork runner", () => {
     expect(harness.child.disposed).toBe(true);
   });
 
+  test("injects a Hearth read override without enabling extensions", async () => {
+    const harness = childHarness();
+    const readTool = {
+      name: "read",
+      label: "read",
+      description: "Hearth read",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+      }),
+    } as never;
+
+    await answerFromReadOnlyFork(
+      snapshot(),
+      "question",
+      harness.dependencies,
+      readTool,
+    );
+
+    expect(harness.createOptions[0].customTools).toEqual([readTool]);
+    expect(harness.createOptions[0].tools).toEqual([...BTW_READ_ONLY_TOOLS]);
+    expect(harness.loaderOptions[0].noExtensions).toBe(true);
+  });
+
   test("seeds compaction summaries into the recoverable child session", async () => {
     const harness = childHarness();
     const parent = snapshot();
@@ -374,7 +399,9 @@ const commandHarness = (
   let startHandler: (() => Promise<void> | void) | undefined;
   let shutdownHandler: (() => Promise<void> | void) | undefined;
   const entries: { customType: string; data: unknown }[] = [];
+  const events = createEventBus();
   const pi = {
+    events,
     on(event: string, handler: () => Promise<void> | void) {
       if (event === "session_compact") {
         compactHandler = handler as unknown as typeof compactHandler;

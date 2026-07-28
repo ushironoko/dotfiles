@@ -24,9 +24,14 @@ export const CODEX_WEB_EXTENSION_ROOT = resolve(
   PI_EXTENSIONS_ROOT,
   "codex-web",
 );
+export const HEARTH_TOOLS_EXTENSION_ROOT = resolve(
+  PI_EXTENSIONS_ROOT,
+  "hearth-tools",
+);
 export const EXTENSION_ROOTS = [
   EXTENSION_ROOT,
   CODEX_WEB_EXTENSION_ROOT,
+  HEARTH_TOOLS_EXTENSION_ROOT,
 ] as const;
 
 // pi's extension loader aliases this documented root import to the copy bundled
@@ -36,6 +41,10 @@ const RUNTIME_IMPORTS_BY_ROOT = new Map<string, ReadonlySet<string>>([
   [
     EXTENSION_ROOT,
     new Set(["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]),
+  ],
+  [
+    HEARTH_TOOLS_EXTENSION_ROOT,
+    new Set(["@earendil-works/pi-coding-agent", "@hearthdev/napi"]),
   ],
 ]);
 
@@ -209,10 +218,10 @@ export const collectViolations = (
 
   for (const specifier of specifiers) {
     if (specifier.startsWith("node:")) continue;
+    // Type-only imports are erased before this scan. Runtime imports are
+    // limited to exact documented/package roots per extension.
+    if (RUNTIME_IMPORTS_BY_ROOT.get(root)?.has(specifier) === true) continue;
     if (specifier.startsWith("@earendil-works/")) {
-      // Type-only imports are erased before this scan. Runtime imports are
-      // limited to exact roots virtualized by pi for this extension.
-      if (RUNTIME_IMPORTS_BY_ROOT.get(root)?.has(specifier) === true) continue;
       violations.push(
         `${relFile}: runtime import of ${specifier} (type-only imports and explicitly bundled roots only)`,
       );

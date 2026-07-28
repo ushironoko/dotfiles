@@ -6,6 +6,7 @@
       "name": "dotfiles",
       "dependencies": {
         "@clack/prompts": "0.11.0",
+        "@hearthdev/napi": "0.1.0",
         "c12": "3.2.0",
         "consola": "3.4.2",
         "defu": "6.1.4",
@@ -173,6 +174,16 @@
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.9", "", { "os": "win32", "cpu": "x64" }, "sha512-PPOl1mi6lpLNQxnGoyAfschAodRFYXJ+9fs6WHXz7CSWKbOqiMZsubC+BQsVKuul+3vKLuwTHsS2c2y9EoKwxQ=="],
 
     "@google/genai": ["@google/genai@1.52.0", "", { "dependencies": { "google-auth-library": "^10.3.0", "p-retry": "^4.6.2", "protobufjs": "^7.5.4", "ws": "^8.18.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.2" }, "optionalPeers": ["@modelcontextprotocol/sdk"] }, "sha512-gwSvbpiN/17O9TbsqSsE/OzZcpv5Fo4RQjdngGgogtuB9RsyJ8ZHhX5KjHj1bp5N9snN2eK8LDGXSaWW2hof8Q=="],
+
+    "@hearthdev/napi": ["@hearthdev/napi@0.1.0", "", { "optionalDependencies": { "@hearthdev/napi-darwin-arm64": "0.1.0", "@hearthdev/napi-darwin-x64": "0.1.0", "@hearthdev/napi-linux-arm64-gnu": "0.1.0", "@hearthdev/napi-linux-x64-gnu": "0.1.0" } }, "sha512-obrufSxvnEBrn7SM72qW3xdMg6pqT/sC586k0JpNpIkX/oPIVJWIuToYQnQinwE8ca/QHZM9K9WhXBz/M+G3nQ=="],
+
+    "@hearthdev/napi-darwin-arm64": ["@hearthdev/napi-darwin-arm64@0.1.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-3vg3ykiPVCNnL54+Pnnmy0j4X9qPsQQuJzZ5ba3K362KYXCyhD8u9knEQKlqJNNGL/BQT2C0y/MH4ODdJvCaow=="],
+
+    "@hearthdev/napi-darwin-x64": ["@hearthdev/napi-darwin-x64@0.1.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-rVSQ7rT//l8vhrFHnCc/jaN7bdqlsx6ZgW34p6tdPNNoAYoNt9MPzyvmP5Q+eezH99mccNpjyPjg1blWQQBQbQ=="],
+
+    "@hearthdev/napi-linux-arm64-gnu": ["@hearthdev/napi-linux-arm64-gnu@0.1.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-FUDNTOjubtnEaWL4FJfWdciGO0YWqrAnzzXMduIm8g7JFb0JRu92Rg67/RdPW+5rtovbne8KpUgqIreuxUkEiw=="],
+
+    "@hearthdev/napi-linux-x64-gnu": ["@hearthdev/napi-linux-x64-gnu@0.1.0", "", { "os": "linux", "cpu": "x64" }, "sha512-aS6smaXHMsSk+ZCi25YWNyXPPwjplqWBCLAGQVluR+7dLFdYUwGMkeMM9g707DURhXyD9gUE6eofOrbmBK2eTA=="],
 
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
 

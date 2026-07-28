@@ -11,12 +11,13 @@ child-process behavior): `tests/fixtures/pi-harness/raw/`.
 
 ## Layout
 
-| Repo path                  | Deployed to                         | Mechanism                                     |
-| -------------------------- | ----------------------------------- | --------------------------------------------- |
-| `pi/extensions/pi-harness` | `~/.pi/agent/extensions/pi-harness` | dotfiles directory symlink                    |
-| `pi/extensions/codex-web`  | `~/.pi/agent/extensions/codex-web`  | dotfiles directory symlink                    |
-| `claude/.claude/skills`    | `~/.agents/skills`                  | existing shared mapping                       |
-| `pi/skills`                | `~/.pi/agent/skills`                | selective symlink (6 forks + 1 pi-only skill) |
+| Repo path                    | Deployed to                           | Mechanism                                     |
+| ---------------------------- | ------------------------------------- | --------------------------------------------- |
+| `pi/extensions/pi-harness`   | `~/.pi/agent/extensions/pi-harness`   | dotfiles directory symlink                    |
+| `pi/extensions/hearth-tools` | `~/.pi/agent/extensions/hearth-tools` | dotfiles directory symlink                    |
+| `pi/extensions/codex-web`    | `~/.pi/agent/extensions/codex-web`    | dotfiles directory symlink                    |
+| `claude/.claude/skills`      | `~/.agents/skills`                    | existing shared mapping                       |
+| `pi/skills`                  | `~/.pi/agent/skills`                  | selective symlink (6 forks + 1 pi-only skill) |
 
 ## Install
 
@@ -56,9 +57,12 @@ rejection may short-circuit first, then permission-policy remains the mandatory
 safety floor before every path that can execute a command, followed by the
 remaining hook-bridge features. The preflight uses `/bin/bash` with a fixed
 root-owned system `PATH`, never the repository-influenced inherited path. The
-narrowly scoped `codex-web` extension is
-separate because it owns provider credentials
-and network traffic rather than harness lifecycle compatibility. Harness
+`hearth-tools` extension is separate so native-addon preflight cannot partially
+initialize the permission/audit extension. It replaces pi's `read`, `write`,
+`edit`, `bash`, and `grep` execution while preserving their public schemas and
+built-in renderers. The narrowly scoped `codex-web` extension is separate
+because it owns provider credentials and network traffic rather than harness
+lifecycle compatibility. Harness
 feature toggles live in `~/.pi/agent/pi-harness.local.json` (machine-local):
 
 ```json
@@ -147,6 +151,87 @@ on the judge route, and child profiles never inherit grants. A skill's mutating
 worktree that shares the active cwd's canonical Git common directory. A
 helper-capable `git -C` read never bypasses the judge through a skill grant; it
 uses the verified read-only route described above.
+
+## Hearth-backed built-in tools
+
+`pi/extensions/hearth-tools` pins `@hearthdev/napi` exactly to `0.1.0` and
+constructs one in-process `HearthEngine` per pi process. Parent pi and every
+subagent/workflow child have separate resident caches and warm-shell pools;
+`/reload` reuses the process Engine when every Engine option is unchanged. A
+config, cwd, or inherited shell change during reload fails with a bounded
+restart-required diagnostic instead of silently retaining old settings. BTW
+keeps extension/package discovery off but receives a custom Hearth-backed
+`read`; its active tools remain `read` and `ls`.
+
+The checked-in maximum-speed defaults are:
+
+```json
+{
+  "trustCache": true,
+  "warmShell": true,
+  "enableOptimizer": true,
+  "bashTimeoutMs": 2147483647
+}
+```
+
+Override these fields, plus optional `maxCachedFiles`, in
+`~/.pi/agent/hearth-tools.local.json`; unknown keys are rejected. Invalid
+config, a missing/incompatible native addon, or an effective competing override
+for one of the five names terminates pi at startup with exit code 1; there is no
+built-in fallback. Registration restores the prior active names, so replacing
+`grep` does not enable it. Pi 0.80.7 exposes only the first effective tool per
+name: a later inert losing registration cannot be enumerated, but it also cannot
+execute. Hearth checks effective ownership before registration, immediately
+after registration, before each agent turn, and again at the tool-call boundary.
+
+`trustCache` is a single-writer optimization. File-backed tools share an Engine
+gate; tool Bash and user Bash (`!`/`!!`) take it exclusively and clear all
+caches before another file operation can start, after every outcome including
+nonzero, timeout, abort, and indeterminate. Cache invalidation also runs after
+write/edit and worktree create/remove result hooks. Every managed
+subagent/workflow acquires an exclusive parent-Engine lease before child work
+begins, clears caches after settlement, and only then releases parent file
+tools. Its background acceptance result does not queue a redundant clear behind
+the live lease. Concurrent managed children share one writer epoch so fan-out
+remains parallel. Abort, branch navigation, reload, and shutdown paths use the
+same lease even when completion notification is suppressed; after a bounded
+drain timeout, the lease remains held until the late child actually settles,
+and branch navigation is cancelled until that old-branch record archives. This
+covers formatters and child writers independently of parent-message delivery.
+External editors and unmanaged processes still require `/hearth-clear-cache`,
+a restart, or `trustCache: false`. An `indeterminate` command is never retried
+automatically. In particular, a command that terminates its pooled warm shell
+may be indeterminate; set `warmShell: false` when exact signal-exit reporting is
+more important than shell reuse.
+
+Grep translates cwd-relative positive and negative ripgrep globs to Hearth,
+preserves root anchors, ignores valid globs for an explicit file operand like
+ripgrep, and still validates malformed classes, ranges, alternates, and escapes
+through Hearth's strict native glob parser. Negative globs, rooted positive
+globs, directory-only globs ending in `/`, and positive globs containing `/`
+use separator-aware post-filtering because Hearth 0.1.0 has no native exclusion
+glob and lets `*` cross separators in path globs. Negative matching also filters
+matching ancestor directories like ripgrep's walker. The adapter bounds native
+candidates and fails closed with a refinement error rather than returning an
+incomplete result if that bound is exhausted.
+
+Bash streams once into pi's existing accumulator, preserving progress updates,
+tail truncation, and full-output files. Hearth 0.1.0 streams valid UTF-8 text,
+so invalid binary bytes are replacement-decoded and are not byte-identical in
+full-output files.
+
+### Benchmarking
+
+Run `bun run benchmark:hearth-tools` to compare warm-cache performance in one
+Bun process. The benchmark covers both pi's end-to-end `read`/`grep` tool
+contracts and raw `fs.readFile`/`rg --json` backends against Hearth, over this
+repository and a deterministic synthetic corpus. End-to-end Hearth samples use
+the same shared access gate as the production extension. The benchmark validates
+equivalent outputs before timing, warms each implementation equally, alternates
+AB/BA execution order, and reports median, mean, and p95 latency. The primary speedup
+is baseline median divided by Hearth median; corpus generation and equivalence
+checks are outside timed regions. Use `--json` for machine-readable output and
+`--help` for iteration and corpus-size controls.
 
 ## Codex web tools
 

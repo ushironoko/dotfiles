@@ -5,7 +5,10 @@ import { join } from "node:path";
 import type { PiInstallation } from "./installation";
 import { StrictJsonlDecoder, terminateProcessGroup } from "./process";
 
+const HEARTH_TOOLS = ["read", "write", "edit", "bash", "grep"];
+
 const EXPECTED_TOOLS = [
+  ...HEARTH_TOOLS,
   "subagent",
   "workflow",
   "worktree_create",
@@ -54,9 +57,15 @@ export default function compatProbe(pi: ExtensionAPI): void {
   pi.registerCommand(${JSON.stringify(command)}, {
     description: "Internal compatibility probe",
     handler: async (_args, ctx) => {
-      const tools = new Set(pi.getAllTools().map((tool) => tool.name));
+      const allTools = pi.getAllTools();
+      const tools = new Set(allTools.map((tool) => tool.name));
       const missing = ${JSON.stringify(EXPECTED_TOOLS)}.filter((name) => !tools.has(name));
       if (missing.length > 0) throw new Error("missing tools: " + missing.join(", "));
+      const wrongBackend = ${JSON.stringify(HEARTH_TOOLS)}.filter((name) => {
+        const tool = allTools.find((candidate) => candidate.name === name);
+        return !tool?.sourceInfo.path.includes("hearth-tools");
+      });
+      if (wrongBackend.length > 0) throw new Error("non-Hearth tools: " + wrongBackend.join(", "));
       if (ctx.mode !== "rpc" || !ctx.hasUI || typeof ctx.shutdown !== "function") {
         throw new Error("incompatible extension context");
       }
@@ -103,6 +112,8 @@ export const smokeGlobalPiRpc = async (
       "pi-compat-smoke",
       "--model",
       "never-invoked",
+      "-e",
+      join(options.repoRoot, "pi/extensions/hearth-tools/index.ts"),
       "-e",
       join(options.repoRoot, "pi/extensions/pi-harness/index.ts"),
       "-e",

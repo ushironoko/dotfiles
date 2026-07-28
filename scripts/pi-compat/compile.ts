@@ -68,6 +68,11 @@ export const compileExtensionsAgainstGlobalPi = async (
         recursive: true,
       },
     );
+    await cp(
+      join(repoRoot, "pi/extensions/hearth-tools"),
+      join(sourceRoot, "hearth-tools"),
+      { recursive: true },
+    );
 
     // Recreate only pi's captured package closure under a temporary
     // node_modules. TypeScript now honors package exports/types normally.
@@ -80,6 +85,13 @@ export const compileExtensionsAgainstGlobalPi = async (
       await mkdir(resolve(target, ".."), { recursive: true });
       await symlink(pkg.root, target, "dir");
     }
+    const hearthTarget = join(tempModules, "@hearthdev", "napi");
+    await mkdir(resolve(hearthTarget, ".."), { recursive: true });
+    await symlink(
+      join(repoRoot, "node_modules/@hearthdev/napi"),
+      hearthTarget,
+      "dir",
+    );
 
     const tsconfigPath = join(tempRoot, "tsconfig.json");
     await writeFile(
