@@ -159,6 +159,16 @@ export default defineConfig({
       type: "directory",
     },
     {
+      // pi's jiti loader imports extensions through the symlink path above
+      // without realpath resolution, so hearth-tools' runtime
+      // import("@hearthdev/napi") walks up from ~/.pi/agent/extensions/…,
+      // never reaching this repo's node_modules. Publishing the @hearthdev
+      // scope at ~/.pi/agent/node_modules puts it on that walk-up chain.
+      source: "./node_modules/@hearthdev",
+      target: "~/.pi/agent/node_modules/@hearthdev",
+      type: "directory",
+    },
+    {
       source: "./pi/extensions/codex-web",
       target: "~/.pi/agent/extensions/codex-web",
       type: "directory",
