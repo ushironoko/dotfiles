@@ -77,7 +77,9 @@ const expectCompleteReviewPrompt = (stage: Record<string, unknown>): void => {
       String(task.task).match(/^Plan Review Transport: path-base64-v1$/gm),
     ).toHaveLength(1);
     expect(task.task).toContain("Plan Path Encoding: base64 (UTF-8)");
-    expect(task.task).toContain("Plan Safe Path Transport: restricted-ascii-v1");
+    expect(task.task).toContain(
+      "Plan Safe Path Transport: restricted-ascii-v1",
+    );
     expect(task.task).toContain("<validated-plan-path>");
     expect(task.task).toContain("<base64-plan-path>");
     expect(task.task).toContain("read the exact file from disk");
@@ -190,9 +192,7 @@ describe("pi plan-review skill workflow contract", () => {
     const manual = firstStage(expectValidWorkflowExample("plan-review-manual"));
     const [manualTask] = manual.tasks as Record<string, unknown>[];
     expect(manualTask?.readOnly).toBe(true);
-    expect(skill).toContain(
-      "For `codex-reviewer` only, omit `readOnly`",
-    );
+    expect(skill).toContain("For `codex-reviewer` only, omit `readOnly`");
   });
 
   test("keeps synthesis with the parent and classifies incomplete coverage", () => {

@@ -83,11 +83,11 @@ reviewer by itself.
 
 #### Reviewer matching rules
 
-| Condition                         | Agent to launch  |
-| --------------------------------- | ---------------- |
-| Rust project                      | `rust-reviewer`  |
-| codex CLI available               | `codex-reviewer` |
-| Test infrastructure exists        | `tdd-reviewer`   |
+| Condition                  | Agent to launch  |
+| -------------------------- | ---------------- |
+| Rust project               | `rust-reviewer`  |
+| codex CLI available        | `codex-reviewer` |
+| Test infrastructure exists | `tdd-reviewer`   |
 
 - Select every matching reviewer.
 - Never add `similarity` to a read-only roster; worktree isolation does not
@@ -364,18 +364,18 @@ Reviewing... (background workflow invocation accepted)
 
 ## Error Handling
 
-| Situation                                        | Response                                                                                   |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| No plan file found                               | Report that `plans/` has no files                                                          |
-| `workflow` unavailable                           | Stop; never fall back to `subagent`                                                        |
-| Auto-selection matched no reviewer               | Show available agents and ask for manual specification                                     |
-| Codex missing but specialists matched            | Ask separately; set `codexSkip` only after explicit approval                               |
-| Manual agent definition not found                | Show available agents and stop                                                             |
-| Manual `similarity` / `codex-poc` / `codex-runner` requested | Report the read-only incompatibility and stop without spawning                  |
-| Workflow validation or preflight failed          | Report that no review ran and stop                                                         |
-| Invocation only accepted                         | Wait for its automatic background-completion message; do not aggregate the acceptance text |
-| Task failed, reported inability, or empty output | Keep usable reviews and report a reviewer-specific coverage gap                            |
-| Workflow output truncated                        | Synthesize available text and disclose the coverage limitation                             |
+| Situation                                                    | Response                                                                                   |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| No plan file found                                           | Report that `plans/` has no files                                                          |
+| `workflow` unavailable                                       | Stop; never fall back to `subagent`                                                        |
+| Auto-selection matched no reviewer                           | Show available agents and ask for manual specification                                     |
+| Codex missing but specialists matched                        | Ask separately; set `codexSkip` only after explicit approval                               |
+| Manual agent definition not found                            | Show available agents and stop                                                             |
+| Manual `similarity` / `codex-poc` / `codex-runner` requested | Report the read-only incompatibility and stop without spawning                             |
+| Workflow validation or preflight failed                      | Report that no review ran and stop                                                         |
+| Invocation only accepted                                     | Wait for its automatic background-completion message; do not aggregate the acceptance text |
+| Task failed, reported inability, or empty output             | Keep usable reviews and report a reviewer-specific coverage gap                            |
+| Workflow output truncated                                    | Synthesize available text and disclose the coverage limitation                             |
 
 ## Notes
 
