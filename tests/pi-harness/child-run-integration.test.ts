@@ -490,9 +490,13 @@ const writeAgent = async (
   for (const name of names) {
     await fs.writeFile(
       join(dir, `${name}.md`),
-      ["---", `name: ${name}`, `description: ${name}`, "---", "Work safely."].join(
-        "\n",
-      ),
+      [
+        "---",
+        `name: ${name}`,
+        `description: ${name}`,
+        "---",
+        "Work safely.",
+      ].join("\n"),
     );
   }
 };
@@ -1160,7 +1164,9 @@ describe("child-run subagent integration", () => {
   });
 
   test("retains every reviewer identity in an oversized four-task background result", async () => {
-    const home = await setupTestDirectory("pi-child-background-workflow-budget");
+    const home = await setupTestDirectory(
+      "pi-child-background-workflow-budget",
+    );
     tempDirectories.push(home);
     const reviewers = [
       "codex-reviewer",
@@ -1176,9 +1182,9 @@ describe("child-run subagent integration", () => {
       const reviewer = task.replace(/^Task: lens /, "");
       // Every byte after the lens expands to two bytes in JSON. This catches a
       // second prefix truncation at the notification framing boundary.
-      return scriptedSpawn(
-        `LENS-${reviewer}-${'"\\\n'.repeat(20_000)}`,
-      )(...args);
+      return scriptedSpawn(`LENS-${reviewer}-${'"\\\n'.repeat(20_000)}`)(
+        ...args,
+      );
     };
     setupWorkflow(runtime.pi, makeConfig(home), {
       childRuns,
@@ -1235,9 +1241,9 @@ describe("child-run subagent integration", () => {
     expect(typeof report).toBe("string");
     for (const [index, reviewer] of reviewers.entries()) {
       const next = reviewers[index + 1];
-      const section = String(report).split(`### [${reviewer}]`)[1]?.split(
-        next === undefined ? "\u0000" : `### [${next}]`,
-      )[0];
+      const section = String(report)
+        .split(`### [${reviewer}]`)[1]
+        ?.split(next === undefined ? "\u0000" : `### [${next}]`)[0];
       expect(section).toContain(`LENS-${reviewer}-`);
     }
     expect(report).toContain("Workflow completed: 4/4");

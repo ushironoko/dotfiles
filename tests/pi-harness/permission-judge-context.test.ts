@@ -429,9 +429,9 @@ describe("current permission run evidence", () => {
       message: { content: Array<{ text: string }> };
     };
     assistantEntry.message.content[0]!.text = `${"b".repeat(3_000)}TAIL`;
-    expect(derivePermissionRunEvidence(changed, "current")?.fingerprint).not.toBe(
-      first?.fingerprint,
-    );
+    expect(
+      derivePermissionRunEvidence(changed, "current")?.fingerprint,
+    ).not.toBe(first?.fingerprint);
   });
 });
 

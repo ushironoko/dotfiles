@@ -311,7 +311,8 @@ const sessionMessage = (entry: unknown): Record<string, unknown> | undefined =>
     : undefined;
 
 const assistantTextBlocks = (message: Record<string, unknown>): string[] => {
-  if (message.role !== "assistant" || !Array.isArray(message.content)) return [];
+  if (message.role !== "assistant" || !Array.isArray(message.content))
+    return [];
   return message.content.flatMap((block) =>
     isRecord(block) && block.type === "text" && typeof block.text === "string"
       ? [block.text]
@@ -327,9 +328,7 @@ const containsToolCall = (
   Array.isArray(message.content) &&
   message.content.some(
     (block) =>
-      isRecord(block) &&
-      block.type === "toolCall" &&
-      block.id === toolCallId,
+      isRecord(block) && block.type === "toolCall" && block.id === toolCallId,
   );
 
 const truncateUtf8Tail = (value: string, maxBytes: number): string => {
@@ -342,7 +341,7 @@ const truncateUtf8Tail = (value: string, maxBytes: number): string => {
   while (
     start < encoded.byteLength &&
     (encoded[start] ?? 0) >= 0x80 &&
-    (encoded[start] ?? 0) < 0xC0
+    (encoded[start] ?? 0) < 0xc0
   ) {
     start += 1;
   }
@@ -396,7 +395,10 @@ export const derivePermissionRunEvidence = (
     if (message.isError === true) status = "error";
     else if (message.isError === false) status = "ok";
     allToolResults.push({
-      toolName: truncateUtf8(sanitizeTaskText(rawToolName), MAX_TOOL_NAME_BYTES),
+      toolName: truncateUtf8(
+        sanitizeTaskText(rawToolName),
+        MAX_TOOL_NAME_BYTES,
+      ),
       status,
     });
     fingerprintParts.push("tool-result", rawToolName, status);
