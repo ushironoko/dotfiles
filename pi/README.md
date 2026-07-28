@@ -11,13 +11,14 @@ child-process behavior): `tests/fixtures/pi-harness/raw/`.
 
 ## Layout
 
-| Repo path                    | Deployed to                           | Mechanism                                     |
-| ---------------------------- | ------------------------------------- | --------------------------------------------- |
-| `pi/extensions/pi-harness`   | `~/.pi/agent/extensions/pi-harness`   | dotfiles directory symlink                    |
-| `pi/extensions/hearth-tools` | `~/.pi/agent/extensions/hearth-tools` | dotfiles directory symlink                    |
-| `pi/extensions/codex-web`    | `~/.pi/agent/extensions/codex-web`    | dotfiles directory symlink                    |
-| `claude/.claude/skills`      | `~/.agents/skills`                    | existing shared mapping                       |
-| `pi/skills`                  | `~/.pi/agent/skills`                  | selective symlink (6 forks + 1 pi-only skill) |
+| Repo path                         | Deployed to                                | Mechanism                                     |
+| --------------------------------- | ------------------------------------------ | --------------------------------------------- |
+| `pi/extensions/pi-harness`        | `~/.pi/agent/extensions/pi-harness`        | dotfiles directory symlink                    |
+| `pi/extensions/hearth-tools`      | `~/.pi/agent/extensions/hearth-tools`      | dotfiles directory symlink                    |
+| `pi/extensions/codex-web`         | `~/.pi/agent/extensions/codex-web`         | dotfiles directory symlink                    |
+| `pi/themes/transparent-dark.json` | `~/.pi/agent/themes/transparent-dark.json` | dotfiles file symlink                         |
+| `claude/.claude/skills`           | `~/.agents/skills`                         | existing shared mapping                       |
+| `pi/skills`                       | `~/.pi/agent/skills`                       | selective symlink (6 forks + 1 pi-only skill) |
 
 ## Install
 
@@ -29,6 +30,10 @@ pi                                                      # /login → provider of
 bun run check:pi-compat                                 # compile + offline real-pi RPC smoke
 bun run update:pi                                       # preflight, update, verify, auto-rollback
 ```
+
+Select `transparent-dark` from `/settings` after installation. The theme keeps
+only the user-message background opaque; tool, skill/custom-message, and
+selection backgrounds use the terminal default background.
 
 The exact versions in `package.json`/`bun.lock` are the **local development
 baseline**, not a global-version allowlist. A newer global pi is accepted when
