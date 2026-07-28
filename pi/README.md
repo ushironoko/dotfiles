@@ -220,6 +220,19 @@ tail truncation, and full-output files. Hearth 0.1.0 streams valid UTF-8 text,
 so invalid binary bytes are replacement-decoded and are not byte-identical in
 full-output files.
 
+### Benchmarking
+
+Run `bun run benchmark:hearth-tools` to compare warm-cache performance in one
+Bun process. The benchmark covers both pi's end-to-end `read`/`grep` tool
+contracts and raw `fs.readFile`/`rg --json` backends against Hearth, over this
+repository and a deterministic synthetic corpus. End-to-end Hearth samples use
+the same shared access gate as the production extension. The benchmark validates
+equivalent outputs before timing, warms each implementation equally, alternates
+AB/BA execution order, and reports median, mean, and p95 latency. The primary speedup
+is baseline median divided by Hearth median; corpus generation and equivalence
+checks are outside timed regions. Use `--json` for machine-readable output and
+`--help` for iteration and corpus-size controls.
+
 ## Codex web tools
 
 `extensions/codex-web` registers `web_search` and `web_fetch` for the current
