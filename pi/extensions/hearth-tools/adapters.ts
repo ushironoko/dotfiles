@@ -277,50 +277,25 @@ interface GrepGlob {
   original: string;
   negative: boolean;
   rooted: boolean;
+  directoryOnly: boolean;
   pattern: string;
   hasSlash: boolean;
   matcher: Bun.Glob;
 }
 
-const validateGrepGlob = (original: string, pattern: string): void => {
-  let inClass = false;
-  let classHasMember = false;
-  for (let index = 0; index < pattern.length; index += 1) {
-    const character = pattern[index];
-    if (!inClass) {
-      if (character === "[") {
-        inClass = true;
-        classHasMember = false;
-      }
-      continue;
-    }
-    if (!classHasMember && (character === "!" || character === "^")) {
-      continue;
-    }
-    if (character === "]" && classHasMember) {
-      inClass = false;
-      continue;
-    }
-    classHasMember = true;
-  }
-  if (inClass) {
-    throw new Error(
-      `rg: error parsing glob '${original}': unclosed character class`,
-    );
-  }
-};
-
 const parseGrepGlob = (glob: string | undefined): GrepGlob | undefined => {
   if (glob === undefined) return undefined;
   const negative = glob.startsWith("!");
-  const rawPattern = normalizedGlobPath(negative ? glob.slice(1) : glob);
+  const rawPattern = negative ? glob.slice(1) : glob;
   const rooted = rawPattern.startsWith("/");
-  const pattern = rawPattern.replace(/^\/+/, "");
-  validateGrepGlob(glob, pattern);
+  const directoryOnly = rawPattern.endsWith("/");
+  const withoutRoot = rawPattern.replace(/^\/+/, "");
+  const pattern = directoryOnly ? withoutRoot.slice(0, -1) : withoutRoot;
   return {
     original: glob,
     negative,
     rooted,
+    directoryOnly,
     pattern,
     hasSlash: pattern.includes("/"),
     matcher: new Bun.Glob(pattern),
@@ -328,8 +303,19 @@ const parseGrepGlob = (glob: string | undefined): GrepGlob | undefined => {
 };
 
 const hearthGlobs = (glob: GrepGlob | undefined): string[] => {
-  if (glob === undefined || glob.negative || glob.hasSlash) return [];
-  return [glob.pattern];
+  if (glob === undefined) return [];
+  if (
+    glob.negative ||
+    glob.rooted ||
+    glob.directoryOnly ||
+    glob.hasSlash
+  ) {
+    // Hearth's native globset is the same strict parser family as ripgrep.
+    // `**` keeps the candidate walk unfiltered while the second entry validates
+    // malformed classes, ranges, alternates, and escapes before JS post-filtering.
+    return ["**", glob.original];
+  }
+  return [glob.original];
 };
 
 const ancestorPaths = (path: string): string[] => {
@@ -340,12 +326,14 @@ const ancestorPaths = (path: string): string[] => {
 };
 
 const matchesNegativeGlob = (path: string, glob: GrepGlob): boolean => {
+  const ancestors = ancestorPaths(path);
   if (!glob.rooted && !glob.hasSlash) {
-    return path.split("/").some((segment) => glob.matcher.match(segment));
+    const segments = path.split("/");
+    const candidates = glob.directoryOnly ? segments.slice(0, -1) : segments;
+    return candidates.some((segment) => glob.matcher.match(segment));
   }
-  return [...ancestorPaths(path), path].some((candidate) =>
-    glob.matcher.match(candidate),
-  );
+  const candidates = glob.directoryOnly ? ancestors : [...ancestors, path];
+  return candidates.some((candidate) => glob.matcher.match(candidate));
 };
 
 const filterPostProcessedGlob = (
@@ -357,15 +345,18 @@ const filterPostProcessedGlob = (
   if (
     glob === undefined ||
     !rootIsDirectory ||
-    (!glob.negative && !glob.hasSlash)
+    (!glob.negative &&
+      !glob.rooted &&
+      !glob.directoryOnly &&
+      !glob.hasSlash)
   ) {
     return files;
   }
   return files.filter((file) => {
     const relativePath = normalizedGlobPath(relative(cwd, file.path));
-    return glob.negative
-      ? !matchesNegativeGlob(relativePath, glob)
-      : glob.matcher.match(relativePath);
+    if (glob.negative) return !matchesNegativeGlob(relativePath, glob);
+    if (glob.directoryOnly) return false;
+    return glob.matcher.match(relativePath);
   });
 };
 
@@ -421,7 +412,11 @@ export const createHearthGrepDefinition = (
         const context = input.context && input.context > 0 ? input.context : 0;
         const glob = parseGrepGlob(input.glob);
         const postFilterGlob =
-          glob !== undefined && (glob.negative || glob.hasSlash);
+          glob !== undefined &&
+          (glob.negative ||
+            glob.rooted ||
+            glob.directoryOnly ||
+            glob.hasSlash);
         const result = await engine
           .grepAsync(
             {

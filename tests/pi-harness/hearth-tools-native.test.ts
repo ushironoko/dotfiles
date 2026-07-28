@@ -227,6 +227,8 @@ describe("Hearth-backed pi tool contracts", () => {
     await writeFile(join(cwd, "src", "a.ts"), "needle\n");
     await writeFile(join(cwd, "src", "a.md"), "needle\n");
     await writeFile(join(cwd, "src", "nested", "deep.ts"), "needle\n");
+    await writeFile(join(cwd, "src", "README.md"), "needle\n");
+    await writeFile(join(cwd, "README.md"), "needle\n");
     await writeFile(join(cwd, "root.ts"), "needle\n");
     const grep = createHearthGrepDefinition(cwd, engine(cwd));
 
@@ -252,6 +254,18 @@ describe("Hearth-backed pi tool contracts", () => {
     expect(rootedPositive.content[0]).toEqual({
       type: "text",
       text: "src/a.ts:1: needle",
+    });
+
+    const rootedBasename = await grep.execute(
+      "grep-rooted-basename",
+      { pattern: "needle", path: "src", glob: "/README.md" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(rootedBasename.content[0]).toEqual({
+      type: "text",
+      text: "No matches found",
     });
 
     const cwdRelative = await grep.execute(
@@ -302,10 +316,29 @@ describe("Hearth-backed pi tool contracts", () => {
       undefined,
       context,
     );
-    expect(excludedDirectory.content[0]).toEqual({
-      type: "text",
-      text: "root.ts:1: needle",
-    });
+    const excludedDirectoryText =
+      excludedDirectory.content[0]?.type === "text"
+        ? excludedDirectory.content[0].text
+        : "";
+    expect(excludedDirectoryText).toContain("README.md:1: needle");
+    expect(excludedDirectoryText).toContain("root.ts:1: needle");
+    expect(excludedDirectoryText).not.toContain("src/");
+
+    for (const glob of ["!src/nested/", "!nested/"]) {
+      const directoryOnly = await grep.execute(
+        `grep-directory-only-${glob}`,
+        { pattern: "needle", path: ".", glob },
+        undefined,
+        undefined,
+        context,
+      );
+      const directoryOnlyText =
+        directoryOnly.content[0]?.type === "text"
+          ? directoryOnly.content[0].text
+          : "";
+      expect(directoryOnlyText).toContain("src/a.ts:1: needle");
+      expect(directoryOnlyText).not.toContain("src/nested/deep.ts");
+    }
 
     const rootedFromSubdir = await grep.execute(
       "grep-rooted-subdir",
@@ -333,15 +366,29 @@ describe("Hearth-backed pi tool contracts", () => {
       text: "a.ts:1: needle",
     });
 
-    await expect(
-      grep.execute(
-        "grep-invalid-file-glob",
-        { pattern: "needle", path: "src/a.ts", glob: "![" },
-        undefined,
-        undefined,
-        context,
-      ),
-    ).rejects.toThrow("unclosed character class");
+    const escapedFileGlob = await grep.execute(
+      "grep-escaped-file-glob",
+      { pattern: "needle", path: "src/a.ts", glob: "!\\[" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(escapedFileGlob.content[0]).toEqual({
+      type: "text",
+      text: "a.ts:1: needle",
+    });
+
+    for (const glob of ["![", "![z-a]", "!{a,b", "!a}", "!\\"]) {
+      await expect(
+        grep.execute(
+          `grep-invalid-file-glob-${glob}`,
+          { pattern: "needle", path: "src/a.ts", glob },
+          undefined,
+          undefined,
+          context,
+        ),
+      ).rejects.toThrow(/invalid glob|error parsing glob/);
+    }
   });
 
   test("grep reproduces pi context blocks for adjacent matches", async () => {

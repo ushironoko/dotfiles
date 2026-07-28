@@ -206,12 +206,14 @@ more important than shell reuse.
 
 Grep translates cwd-relative positive and negative ripgrep globs to Hearth,
 preserves root anchors, ignores valid globs for an explicit file operand like
-ripgrep, and still validates malformed globs first. Negative globs and positive
-globs containing `/` use separator-aware post-filtering because Hearth 0.1.0
-has no native exclusion glob and lets `*` cross separators in path globs.
-Negative matching also filters matching ancestor directories like ripgrep's
-walker. The adapter bounds native candidates and fails closed with a refinement
-error rather than returning an incomplete result if that bound is exhausted.
+ripgrep, and still validates malformed classes, ranges, alternates, and escapes
+through Hearth's strict native glob parser. Negative globs, rooted positive
+globs, directory-only globs ending in `/`, and positive globs containing `/`
+use separator-aware post-filtering because Hearth 0.1.0 has no native exclusion
+glob and lets `*` cross separators in path globs. Negative matching also filters
+matching ancestor directories like ripgrep's walker. The adapter bounds native
+candidates and fails closed with a refinement error rather than returning an
+incomplete result if that bound is exhausted.
 
 Bash streams once into pi's existing accumulator, preserving progress updates,
 tail truncation, and full-output files. Hearth 0.1.0 streams valid UTF-8 text,
