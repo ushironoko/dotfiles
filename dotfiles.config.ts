@@ -164,6 +164,11 @@ export default defineConfig({
       type: "directory",
     },
     {
+      source: "./pi/themes/transparent-dark.json",
+      target: "~/.pi/agent/themes/transparent-dark.json",
+      type: "file",
+    },
+    {
       source: "./pi/skills",
       target: "~/.pi/agent/skills",
       type: "selective",
