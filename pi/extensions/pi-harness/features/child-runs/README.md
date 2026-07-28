@@ -16,7 +16,9 @@ uses one `belowEditor` widget and one focus owner for both sources.
   stealing editor focus. Closed issues are never listed.
 - The header reports `Child sessions: N | Open bit issues: M`. One scrollable
   list places child rows first when present, followed by issue rows sorted by
-  `updated_at` descending and stable issue id.
+  `updated_at` descending and stable issue id. Child status icons use the
+  active theme's semantic status colors (`success`, `error`, and the existing
+  warning/dim mappings), and overlong rows end with a width-safe ellipsis.
 - The browser receives the full terminal content width and remains in normal
   layout flow, so it does not cover chat or editor content.
 - Its height is approximately one quarter of the terminal, clamped to 4–10
@@ -45,10 +47,12 @@ uses one `belowEditor` widget and one focus owner for both sources.
 - In the resident list, Up/Down, `j`/`k`, and PageUp/PageDown select across both
   row kinds. Enter or Right opens the selected child or issue. `r` refreshes
   open issues without polling or relay-backed watch behavior.
-- Child and issue details use the same focused near-full-screen overlay.
-  PageUp/PageDown move by a viewport, Home/End jump to the ends, and Escape,
-  Left, `b`, or `q` closes the overlay and returns to the list. Child details
-  retain live-follow behavior.
+- Child and issue details use the same focused, zero-margin full-terminal
+  overlay, covering the resident panes in both dimensions. PageUp/PageDown move
+  by a viewport, Home/End jump to the ends, and Escape, Left, `b`, or `q` closes
+  the overlay and returns to the list. Child details retain live-follow
+  behavior. Transcript text, issue bodies, and comments use the theme's primary
+  `text` color rather than the secondary tool-output color.
 - Issue detail is loaded lazily with `bit issue get <id> --format json`, then
   bounded raw output from `bit issue comment list <id>`. It shows metadata,
   labels, body, and comments read-only. Human-readable comment output is not
@@ -152,8 +156,8 @@ raw source data.
    statusline without taking editor focus.
 3. In a multi-line draft, press Down and confirm native cursor movement still
    works; at the bottom boundary, press Down again and confirm list focus.
-4. Select a running child, press Enter, and confirm its near-full-screen detail
-   overlay opens with live updates.
+4. Select a running child, press Enter, and confirm its full-terminal detail
+   overlay covers the panes behind it and opens with live updates.
 5. Press Up/PageUp and confirm the transcript scrolls while the selected run
    remains fixed; press End and confirm live-follow resumes.
 6. Press Escape and confirm focus returns to the resident list, then Escape
