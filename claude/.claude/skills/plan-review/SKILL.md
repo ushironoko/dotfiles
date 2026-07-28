@@ -37,11 +37,11 @@ Plan modeで作成した最新のプランファイルに対して、プロジ�
 
 引数が省略された場合は、以下のシグナルを並列収集する。
 
-| シグナル           | 検出方法                                          |
-| ------------------ | ------------------------------------------------- |
-| Rust プロジェクト  | `Cargo.toml` の存在、または `*.rs` ファイルの存在 |
-| codex CLI 利用可   | `which codex` が成功するか                        |
-| テスト基盤あり     | テストファイル・テスト設定の存在を検査            |
+| シグナル          | 検出方法                                          |
+| ----------------- | ------------------------------------------------- |
+| Rust プロジェクト | `Cargo.toml` の存在、または `*.rs` ファイルの存在 |
+| codex CLI 利用可  | `which codex` が成功するか                        |
+| テスト基盤あり    | テストファイル・テスト設定の存在を検査            |
 
 **テスト基盤のプライマリシグナル**:
 
@@ -53,11 +53,11 @@ Plan modeで作成した最新のプランファイルに対して、プロジ�
 
 #### レビュワーマッチングルール
 
-| 条件                               | 起動するエージェント |
-| ---------------------------------- | -------------------- |
-| Rustプロジェクトである             | `rust-reviewer`      |
-| codex CLI が利用可能               | `codex-reviewer`     |
-| テスト基盤が存在する               | `tdd-reviewer`       |
+| 条件                   | 起動するエージェント |
+| ---------------------- | -------------------- |
+| Rustプロジェクトである | `rust-reviewer`      |
+| codex CLI が利用可能   | `codex-reviewer`     |
+| テスト基盤が存在する   | `tdd-reviewer`       |
 
 - 複数条件に一致した場合はすべて選択する
 - global tool installationとrepository mutationを要求する `similarity` はread-only rosterへ入れない
@@ -212,16 +212,16 @@ Claudeの `isolation: "worktree"` が返すpathは transient execution path と�
 
 ## エラーハンドリング
 
-| 状況                                         | 対応                                                |
-| -------------------------------------------- | --------------------------------------------------- |
-| Planファイルなし                             | `plans/` にファイルがないことを通知して停止         |
-| Workflow利用不可                             | 停止し、Agent個別呼び出しへfallbackしない           |
-| 自動選択で該当なし                           | 定義済みagent一覧を示し、手動指定を依頼             |
-| ClaudeでCodex不在                            | 別ターンで確認し、承認後だけ `// codex-skip`        |
-| 選択agent定義なし                            | atomic preflightで停止し、childを1件も起動しない    |
-| roster外agentを手動指定                       | read-only互換性未検証として起動せず停止             |
-| Workflow/preflight failure                   | review未実行として停止                              |
-| task failure/inability/empty/truncated       | usable reviewを保持し、reviewer別coverage gapを報告 |
+| 状況                                   | 対応                                                |
+| -------------------------------------- | --------------------------------------------------- |
+| Planファイルなし                       | `plans/` にファイルがないことを通知して停止         |
+| Workflow利用不可                       | 停止し、Agent個別呼び出しへfallbackしない           |
+| 自動選択で該当なし                     | 定義済みagent一覧を示し、手動指定を依頼             |
+| ClaudeでCodex不在                      | 別ターンで確認し、承認後だけ `// codex-skip`        |
+| 選択agent定義なし                      | atomic preflightで停止し、childを1件も起動しない    |
+| roster外agentを手動指定                | read-only互換性未検証として起動せず停止             |
+| Workflow/preflight failure             | review未実行として停止                              |
+| task failure/inability/empty/truncated | usable reviewを保持し、reviewer別coverage gapを報告 |
 
 ## Notes
 
