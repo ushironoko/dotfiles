@@ -83,7 +83,27 @@ describe("child-session private focus capability", () => {
   });
 });
 
-const setup = (rows = 20) => {
+const semanticFgCodes: Readonly<Record<string, number>> = {
+  success: 32,
+  error: 31,
+  text: 37,
+  toolOutput: 90,
+};
+
+const semanticTheme = {
+  fg(color: string, text: string) {
+    const code = semanticFgCodes[color] ?? 36;
+    return `\u001b[${code}m${text}\u001b[39m`;
+  },
+  bg(_color: string, text: string) {
+    return `\u001b[48;5;236m${text}\u001b[49m`;
+  },
+  bold(text: string) {
+    return `\u001b[1m${text}\u001b[22m`;
+  },
+};
+
+const setup = (rows = 20, theme?: unknown) => {
   let id = 0;
   const registry = new ChildRunRegistry({
     idFactory: () => `id-${++id}`,
@@ -121,6 +141,8 @@ const setup = (rows = 20) => {
     (runId) => inspected.push(runId),
     () => unfocused++,
     () => hidden++,
+    undefined,
+    theme,
   );
   return {
     registry,
@@ -245,6 +267,51 @@ describe("child-session browser component", () => {
     expect(component.getSelectedRunId()).toBe(started.runIds[1]);
   });
 
+  test("themes status icons and ellipsizes overlong run titles", () => {
+    const { registry, component } = setup(20, semanticTheme);
+    const { runIds } = registry.beginInvocation({
+      toolCallId: "themed-browser",
+      source: "workflow",
+      label: "workflow",
+      runs: [
+        {
+          agent: "successful-reviewer",
+          task: `successful ${"title ".repeat(20)}SUCCESS-END`,
+          taskIndex: 0,
+          stageIndex: 0,
+        },
+        {
+          agent: "failed-reviewer",
+          task: `failed ${"title ".repeat(20)}FAIL-END`,
+          taskIndex: 1,
+          stageIndex: 0,
+        },
+      ],
+    });
+    registry.finishRun(runAt(runIds, 0), {
+      status: "succeeded",
+      reason: "completed",
+      endedAt: 101,
+    });
+    registry.finishRun(runAt(runIds, 1), {
+      status: "failed",
+      reason: "model-error",
+      endedAt: 102,
+    });
+
+    const lines = component.render(32);
+    const rendered = lines.join("\n");
+    const plain = lines.map((item) => stripTerminalControls(item));
+    const runRows = plain.filter((item) => item.includes("reviewer"));
+    expect(rendered).toContain("\u001b[32m✓\u001b[39m");
+    expect(rendered).toContain("\u001b[31m✗\u001b[39m");
+    expect(runRows).toHaveLength(2);
+    expect(runRows.every((item) => item.endsWith("…"))).toBe(true);
+    expect(plain.every((item) => visibleWidth(item) <= 32)).toBe(true);
+    expect(rendered).not.toContain("SUCCESS-END");
+    expect(rendered).not.toContain("FAIL-END");
+  });
+
   test("Escape unfocuses and q hides without changing run state", () => {
     const { registry, component, getUnfocused, getHidden } = setup();
     const { runIds } = registry.beginInvocation({
@@ -301,24 +368,13 @@ describe("child-session detail component", () => {
       at: 4,
     });
 
-    const theme = {
-      fg(_color: string, text: string) {
-        return `\u001b[36m${text}\u001b[39m`;
-      },
-      bg(_color: string, text: string) {
-        return `\u001b[48;5;236m${text}\u001b[49m`;
-      },
-      bold(text: string) {
-        return `\u001b[1m${text}\u001b[22m`;
-      },
-    };
     const detail = new ChildRunDetailComponent(
       registry,
       runId,
       tui,
       keybindings,
       () => {},
-      theme,
+      semanticTheme,
     );
 
     const lines = detail.render(64);
@@ -332,10 +388,13 @@ describe("child-session detail component", () => {
     expect(rendered).toContain("Transcript");
     expect(rendered).toContain("✗ tool-1 read (failed)");
     expect(rendered).toContain("Found one actionable issue.");
+    expect(lines.join("\n")).toContain(
+      "\u001b[37mFound one actionable issue.\u001b[39m",
+    );
     expect(lines.every((item) => visibleWidth(item) <= 64)).toBe(true);
   });
 
-  test("uses the near-full terminal height and starts completed output at the top", () => {
+  test("uses the full terminal height and starts completed output at the top", () => {
     const { registry, tui, keybindings } = setup(24);
     const [runId] = addRuns(registry, 1);
     if (runId === undefined) throw new Error("run did not initialize");
@@ -354,7 +413,7 @@ describe("child-session detail component", () => {
     );
 
     const lines = detail.render(80);
-    expect(lines).toHaveLength(22);
+    expect(lines).toHaveLength(24);
     expect(lines[0]).toContain("Child session");
     expect(lines[1]).toContain("agent-0");
     expect(lines.at(-1)).toContain("Home/End");
@@ -382,8 +441,8 @@ describe("child-session detail component", () => {
 
   test("keeps the last transcript line reachable on tiny terminals", () => {
     for (const [rows, expectedHeight] of [
-      [4, 2],
-      [3, 1],
+      [4, 4],
+      [3, 3],
     ] as const) {
       const { registry, tui, keybindings } = setup(rows);
       const [runId] = addRuns(registry, 1);
@@ -750,12 +809,14 @@ describe("bit issue detail component", () => {
       tui,
       keybindings,
       () => {},
+      semanticTheme,
     );
     expect(detail.render(32).join("\n")).toContain("Loading bit issue");
 
     await registry.loadDetail("issue-a");
     const lines = detail.render(32);
     expect(lines.join("\n")).toContain("Body");
+    expect(lines.join("\n")).toContain("\u001b[37mBody for issue-a");
     expect(lines.join("\n")).toContain("Comments");
     expect(lines.join("\n")).not.toContain("spoof");
     expect(lines.every((item) => visibleWidth(item) <= 32)).toBe(true);
@@ -767,8 +828,8 @@ describe("bit issue detail component", () => {
 
   test("keeps the final comment state reachable on tiny terminals", async () => {
     for (const [rows, expectedHeight] of [
-      [4, 2],
-      [3, 1],
+      [4, 4],
+      [3, 3],
     ] as const) {
       const { tui, keybindings } = setup(rows);
       const source: BitIssueDataSource = {

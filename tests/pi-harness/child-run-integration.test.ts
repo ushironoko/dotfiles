@@ -1689,7 +1689,7 @@ describe("child-run subagent integration", () => {
     expect(runtime.getCustomCalls()).toBe(1);
     expect(runtime.getCustomOptions()).toMatchObject({
       overlay: true,
-      overlayOptions: { width: "100%", maxHeight: "100%", margin: 1 },
+      overlayOptions: { width: "100%", maxHeight: "100%", margin: 0 },
     });
     expect(runtime.tui.focusedComponent).toBe(detail);
     expect(detail.render(80)[0]).toContain("LIVE");

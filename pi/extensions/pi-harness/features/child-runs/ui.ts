@@ -127,11 +127,11 @@ const resolveTheme = (value: unknown): ChildRunTheme => {
 
 const safeBlock = (value: string): string => stripTerminalControls(value);
 
-const styledLine = (value: string, width: number): string => {
+const styledLine = (value: string, width: number, suffix = ""): string => {
   const safeWidth = Math.max(1, width);
   return value.includes("\u001b")
-    ? truncateStyledToWidth(value, safeWidth, "")
-    : truncateToWidth(value, safeWidth, "");
+    ? truncateStyledToWidth(value, safeWidth, suffix)
+    : truncateToWidth(value, safeWidth, suffix);
 };
 
 const statusColors: Record<ChildRunStatus, ThemeColor> = {
@@ -156,7 +156,7 @@ const transcriptComponent = (
       new Text(theme.fg("accent", theme.bold("assistant")), 0, 0),
     );
     const body = new Box(1, 0);
-    body.addChild(new Text(theme.fg("toolOutput", safeBlock(item.text)), 0, 0));
+    body.addChild(new Text(theme.fg("text", safeBlock(item.text)), 0, 0));
     assistant.addChild(body);
     return assistant;
   }
@@ -207,6 +207,7 @@ const issueIcon = (issue: BitIssueSummary): string => {
 
 export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
   focused = false;
+  private readonly theme: ChildRunTheme;
   private selection: BrowserSelection | undefined;
   private pendingPreference: BrowserSelection["kind"] | undefined;
   private selectedIndexHint = 0;
@@ -222,7 +223,9 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
     private readonly onUnfocus: () => void,
     private readonly onHide: () => void,
     private readonly bitIssues?: BitIssueBrowserBindings,
+    theme?: unknown,
   ) {
+    this.theme = resolveTheme(theme);
     this.unsubscribeChild = registry.subscribe(() => this.requestRender());
     this.unsubscribeIssues = bitIssues?.registry.subscribe(() =>
       this.requestRender(),
@@ -447,9 +450,13 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
             kind: "child",
             id: run.runId,
           };
+          const icon = this.theme.fg(
+            statusColor(run.status),
+            statusIcon(run.status),
+          );
           rendered.push({
             selection,
-            text: `${this.isCursorVisible(selection) ? ">" : " "} ${statusIcon(run.status)} ${stage} ${run.agent} — ${taskOneLine(run.task)}`,
+            text: `${this.isCursorVisible(selection) ? ">" : " "} ${icon} ${stage} ${run.agent} — ${taskOneLine(run.task)}`,
           });
         }
       }
@@ -495,7 +502,7 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
     }
     return rendered
       .slice(this.listOffset, this.listOffset + viewport)
-      .map((item) => line(item.text, width));
+      .map((item) => styledLine(item.text, width, "…"));
   }
 
   private isCursorVisible(selection: BrowserSelection): boolean {
@@ -583,9 +590,7 @@ const detailContentLines = (
       new Text(theme.fg("warning", theme.bold("assistant LIVE")), 0, 0),
     );
     const draft = new Box(1, 0);
-    draft.addChild(
-      new Text(theme.fg("toolOutput", safeBlock(run.liveDraft)), 0, 0),
-    );
+    draft.addChild(new Text(theme.fg("text", safeBlock(run.liveDraft)), 0, 0));
     transcript.addChild(draft);
   }
   if (run.transcript.length === 0 && !run.liveDraft) {
@@ -644,11 +649,9 @@ export class ChildRunDetailComponent implements ComponentLike {
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
-    // The overlay uses a one-cell margin on each side, so rows - 2 fills the
-    // available height without competing with the resident editor-flow panel.
-    // On tiny terminals, drop the hint and then the title before reducing the
-    // transcript to zero visible rows.
-    const height = Math.max(1, this.tui.terminal.rows - 2);
+    // The zero-margin overlay owns the full terminal. On tiny terminals, drop
+    // the hint and then the title before reducing the transcript to zero rows.
+    const height = Math.max(1, this.tui.terminal.rows);
     const showTitle = height >= 2;
     const showHint = height >= 3;
     const chrome = Number(showTitle) + Number(showHint);
@@ -833,7 +836,7 @@ const issueDetailContentLines = (
   body.addChild(
     new Text(
       theme.fg(
-        "toolOutput",
+        "text",
         wrapPlainText(
           issue.body === "" ? "(empty body)" : safeBlock(issue.body),
           Math.max(1, width - 2),
@@ -863,7 +866,7 @@ const issueDetailContentLines = (
     commentBox.addChild(
       new Text(
         theme.fg(
-          comments.truncated ? "warning" : "toolOutput",
+          comments.truncated ? "warning" : "text",
           wrapPlainText(safeBlock(comments.text), Math.max(1, width - 2)).join(
             "\n",
           ),
@@ -899,7 +902,7 @@ export class BitIssueDetailComponent implements ComponentLike {
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
-    const height = Math.max(1, this.tui.terminal.rows - 2);
+    const height = Math.max(1, this.tui.terminal.rows);
     const showTitle = height >= 2;
     const showHint = height >= 3;
     const chrome = Number(showTitle) + Number(showHint);
@@ -1201,7 +1204,7 @@ export class ChildRunsPanelController {
     try {
       ui.setWidget(
         CHILD_RUNS_WIDGET_KEY,
-        (tui) => {
+        (tui, theme) => {
           this.tui = tui;
           this.captureCurrentFocus();
           const component = new ChildRunsBrowserComponent(
@@ -1212,6 +1215,7 @@ export class ChildRunsPanelController {
             () => this.restoreFocus(),
             () => this.hide(),
             this.bitIssueBindings(),
+            theme,
           );
           if (preferred !== undefined) component.prefer(preferred);
           this.component = component;
@@ -1256,7 +1260,7 @@ export class ChildRunsPanelController {
     let fallbackPromise: Promise<void>;
     try {
       fallbackPromise = ui.custom<void>(
-        (tui, _theme, keybindings, done) => {
+        (tui, theme, keybindings, done) => {
           let closed = false;
           const close = () => {
             if (closed) return;
@@ -1275,6 +1279,7 @@ export class ChildRunsPanelController {
               close();
             },
             this.bitIssueBindings(),
+            theme,
           );
           if (preferred !== undefined) component.prefer(preferred);
           if (refreshOnFocus) void this.options.refreshBitIssues?.();
@@ -1286,7 +1291,7 @@ export class ChildRunsPanelController {
             width: "100%",
             maxHeight: "100%",
             anchor: "center",
-            margin: 1,
+            margin: 0,
           },
         },
       );
@@ -1350,7 +1355,7 @@ export class ChildRunsPanelController {
             width: "100%",
             maxHeight: "100%",
             anchor: "center",
-            margin: 1,
+            margin: 0,
           },
         },
       );
@@ -1419,7 +1424,7 @@ export class ChildRunsPanelController {
             width: "100%",
             maxHeight: "100%",
             anchor: "center",
-            margin: 1,
+            margin: 0,
           },
         },
       );
