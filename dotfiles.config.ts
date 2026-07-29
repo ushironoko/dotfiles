@@ -138,8 +138,7 @@ export default defineConfig({
       // Codex discovers personal skills under ~/.agents/skills and follows
       // symlinked skill directories. Reuse the Claude skill source so both
       // harnesses stay in sync without replacing Codex's bundled skills.
-      // pi also auto-discovers this path (verified on 0.80.6), so the same
-      // link serves three harnesses.
+      // Pi excludes this shared location and uses its dedicated skills below.
       source: "./claude/.claude/skills",
       target: "~/.agents/skills",
       type: "selective",
@@ -147,9 +146,17 @@ export default defineConfig({
     },
     {
       // Pi appends this file to its built-in system prompt. Publish only the
-      // child file so machine-local auth, settings, and sessions stay intact.
+      // child file so machine-local auth and sessions stay intact.
       source: "./pi/APPEND_SYSTEM.md",
       target: "~/.pi/agent/APPEND_SYSTEM.md",
+      type: "file",
+    },
+    {
+      // Pi rewrites this live file at runtime. The pi-scrub Git clean filter
+      // removes machine/account-local values from staged content while the
+      // working tree retains the complete settings file.
+      source: "./pi/settings.json",
+      target: "~/.pi/agent/settings.json",
       type: "file",
     },
     {

@@ -14,3 +14,9 @@ codex/config.toml filter=codex-scrub
 # `git add` time while the working tree keeps the live value. Driver is
 # registered per-checkout by scripts/setup-git-filters.sh.
 claude/.claude/settings.json filter=claude-scrub
+
+# pi/settings.json is also a live settings file. Pi writes runtime state into
+# it, while users may add machine-local paths, proxy credentials, or account
+# identifiers. The required pi-scrub clean filter removes those values from the
+# staged blob without changing the working-tree file.
+pi/settings.json filter=pi-scrub
