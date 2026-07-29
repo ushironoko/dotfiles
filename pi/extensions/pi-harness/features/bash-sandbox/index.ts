@@ -259,7 +259,12 @@ export const setupBashSandbox = (
     pi.events.emit(BASH_SANDBOX_PROVIDER_EVENT, provider);
   });
 
-  pi.on("user_bash", () => ({ operations: userOperations }));
+  pi.on("user_bash", () =>
+    // Pi accepts the first user_bash result. Once Hearth has attached, yield
+    // ownership so its handler can apply the exclusive gate/cache invalidation
+    // even when pi-harness was loaded first.
+    backendAttached ? undefined : { operations: userOperations },
+  );
 
   pi.on("session_shutdown", async (_event, ctx) => {
     const previous = state;

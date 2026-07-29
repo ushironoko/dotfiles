@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import type { BashOperations } from "@earendil-works/pi-coding-agent";
 import type { SandboxAskCallback } from "@anthropic-ai/sandbox-runtime";
 import {
   BASH_SANDBOX_PROVIDER_EVENT,
@@ -87,6 +88,7 @@ const setup = (
     attach?: boolean;
     commandPrefix?: string;
     spawnFn?: SpawnFunction;
+    userOwnerOrder?: "before" | "after";
   } = {},
 ) => {
   const pi = createFakePi({ cwd: "/repo", hasUI: options.hasUI });
@@ -100,6 +102,20 @@ const setup = (
       provider.attach({ commandPrefix: options.commandPrefix });
     }
   });
+  let userOwnerExecutions = 0;
+  const ownerOperations: BashOperations = {
+    exec(command, cwd, execution) {
+      userOwnerExecutions += 1;
+      if (provider === undefined) throw new Error("provider unavailable");
+      return provider.userOperations.exec(command, cwd, execution);
+    },
+  };
+  const registerUserOwner = (): void => {
+    pi.on("user_bash", () =>
+      provider === undefined ? undefined : { operations: ownerOperations },
+    );
+  };
+  if (options.userOwnerOrder === "before") registerUserOwner();
   const removed: string[] = [];
   const auditStages: PermissionAuditStage[] = [];
   const permissionAudit: PermissionAuditIntegration = {
@@ -131,6 +147,7 @@ const setup = (
     blockToolCall: (reason) => ({ block: true, reason }),
     permissionAudit,
   });
+  if (options.userOwnerOrder === "after") registerUserOwner();
   return {
     pi,
     fakeManager,
@@ -139,6 +156,7 @@ const setup = (
     controller,
     getProvider: () => provider,
     getProviderEvents: () => providerEvents,
+    getUserOwnerExecutions: () => userOwnerExecutions,
   };
 };
 
@@ -373,6 +391,46 @@ describe("Bash effect sandbox lifecycle", () => {
     expect(result).toEqual({ exitCode: 0 });
     expect(runtime.fakeManager.wrapped).toEqual(["printf user"]);
     expect(launchedCommand).toBe("sandbox(printf user)");
+  });
+
+  test("yields attached user Bash to its owner in either load order", async () => {
+    for (const userOwnerOrder of ["before", "after"] as const) {
+      const child = new EventEmitter() as EventEmitter & {
+        pid?: number;
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill(signal?: NodeJS.Signals): boolean;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => true;
+      const spawnFn: SpawnFunction = () => {
+        queueMicrotask(() => {
+          child.stdout.emit("end");
+          child.stderr.emit("end");
+          child.emit("exit", 0);
+        });
+        return child;
+      };
+      const runtime = setup({ spawnFn, userOwnerOrder });
+      await runtime.pi.emitSessionStart({
+        type: "session_start",
+        reason: "startup",
+      });
+
+      const routed = await runtime.pi.emitUserBash({
+        type: "user_bash",
+        command: "printf user",
+        excludeFromContext: false,
+        cwd: "/repo",
+      });
+      expect(routed?.operations).toBeDefined();
+      await routed?.operations?.exec("printf user", "/repo", {
+        onData: () => {},
+      });
+      expect(runtime.getUserOwnerExecutions()).toBe(1);
+      expect(runtime.fakeManager.wrapped).toEqual(["printf user"]);
+    }
   });
 
   test("binds escalated execution to the active session cwd", async () => {

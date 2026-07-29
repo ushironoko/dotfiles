@@ -12,8 +12,13 @@ import {
 } from "../../pi/extensions/pi-harness/features/bash-sandbox/runtime";
 import { cleanupTestDirectory, setupTestDirectory } from "../test-helpers";
 
+const dependencyVersionArguments = (command: string): string[] =>
+  command === "socat" ? ["-V"] : ["--version"];
+
 const commandAvailable = (command: string): boolean =>
-  spawnSync(command, ["--version"], { stdio: "ignore" }).status === 0;
+  spawnSync(command, dependencyVersionArguments(command), {
+    stdio: "ignore",
+  }).status === 0;
 
 const requiredCommands = (): readonly string[] => {
   if (process.platform === "linux") return ["bwrap", "socat", "rg"];
@@ -45,6 +50,12 @@ const pathExists = async (path: string): Promise<boolean> => {
 };
 
 const smokeUnavailable = unavailableReason();
+
+test("uses supported dependency version probes", () => {
+  expect(dependencyVersionArguments("bwrap")).toEqual(["--version"]);
+  expect(dependencyVersionArguments("rg")).toEqual(["--version"]);
+  expect(dependencyVersionArguments("socat")).toEqual(["-V"]);
+});
 
 describe.skipIf(smokeUnavailable !== undefined)(
   `real Bash sandbox (${smokeUnavailable ?? process.platform})`,
