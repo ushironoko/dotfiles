@@ -146,6 +146,13 @@ export default defineConfig({
       include: sharedAgentSkills,
     },
     {
+      // Pi appends this file to its built-in system prompt. Publish only the
+      // child file so machine-local auth, settings, and sessions stay intact.
+      source: "./pi/APPEND_SYSTEM.md",
+      target: "~/.pi/agent/APPEND_SYSTEM.md",
+      type: "file",
+    },
+    {
       // pi auto-discovers ~/.pi/agent/extensions/*/index.ts. Only child
       // directories are linked — ~/.pi/agent itself stays machine-local
       // (auth.json, settings.json, sessions are rewritten by pi at runtime).
