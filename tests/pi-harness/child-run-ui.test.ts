@@ -196,11 +196,11 @@ describe("child-session browser component", () => {
     const lines = component.render(24);
     expect(lines.join("\n")).toContain("No child runs");
     expect(lines.join("\n")).not.toContain("Open bit issues");
-    expect(lines.at(-1)).not.toContain("r refresh");
+    expect(lines.join("\n")).not.toContain("↑↓ select");
     expect(lines.every((item) => visibleWidth(item) <= 24)).toBe(true);
   });
 
-  test("caps populated list height for common and small terminals", () => {
+  test("caps populated height and uses every row after the title for content", () => {
     for (const [rows, expectedHeight] of [
       [24, 6],
       [40, 10],
@@ -210,7 +210,8 @@ describe("child-session browser component", () => {
       addRuns(registry, 30);
       const lines = component.render(80);
       expect(lines).toHaveLength(expectedHeight);
-      expect(lines.at(-1)).toContain("↑↓ select");
+      expect(lines.join("\n")).not.toContain("↑↓ select");
+      expect(lines.at(-1)).toContain(`agent-${expectedHeight - 3}`);
     }
   });
 

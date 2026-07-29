@@ -251,7 +251,7 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
       runs,
       issues,
       safeWidth,
-      height - 2,
+      height - 1,
     );
     let issueState = "";
     if (issueSnapshot?.loading === true) issueState = " · refreshing";
@@ -261,15 +261,10 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
       this.bitIssues === undefined
         ? " Child sessions "
         : ` Child sessions: ${runs.length} | Open bit issues: ${issues.length}${issueState} `;
-    const hint =
-      this.bitIssues === undefined
-        ? "↑↓ select  Enter inspect  Esc unfocus  q hide"
-        : "↑↓ select  Enter inspect  r refresh  Esc unfocus  q hide";
     const borderWidth = Math.max(1, safeWidth - visibleWidth(title));
     return [
       line(`${title}${"─".repeat(borderWidth)}`, safeWidth),
       ...body,
-      line(hint, safeWidth),
     ].slice(0, height);
   }
 
