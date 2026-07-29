@@ -217,6 +217,10 @@ const singleLineExtensionStatus = (value: string): string | undefined => {
   return sgrNeedsReset ? `${output}\u001b[0m` : output;
 };
 
+// Sandbox failures already notify the user; its steady-state profile is not
+// actionable footer information.
+const HIDDEN_EXTENSION_STATUS_KEYS = new Set(["bash-sandbox"]);
+
 const compareExtensionStatusKeys = (
   [left]: readonly [string, string],
   [right]: readonly [string, string],
@@ -226,13 +230,14 @@ const compareExtensionStatusKeys = (
   return 0;
 };
 
-/** Render every extension status on one stable, terminal-width-safe line. */
+/** Render visible extension statuses on one stable, terminal-width-safe line. */
 export const renderExtensionStatuses = (
   statuses: ReadonlyMap<string, string>,
   width: number,
 ): string | undefined => {
   if (width <= 0) return undefined;
   const statusLine = [...statuses.entries()]
+    .filter(([key]) => !HIDDEN_EXTENSION_STATUS_KEYS.has(key))
     .sort(compareExtensionStatusKeys)
     .map(([, text]) => singleLineExtensionStatus(text))
     .filter((text): text is string => text !== undefined)
