@@ -80,9 +80,11 @@ TASK_EOF
   (writable root = the `-C` dir), so it depends on `~/.codex/config.toml` not
   widening `sandbox_workspace_write.writable_roots`; a codex config/version
   change, not a wrapper change, is the failure mode to watch.
-- codex needs network and a local app-server: if a sandboxed Bash run of the
-  wrapper fails with "Operation not permitted", retry with the Bash sandbox
-  disabled — that is a harness sandbox restriction, not a wrapper defect.
+- codex needs network and a local app-server. Under pi, if ordinary Bash blocks
+  the wrapper at the effect boundary, retry that exact wrapper call with the
+  explicit `bash_escalated` tool; it performs a fresh local classification.
+  If escalation is unavailable or not approved, report the run as blocked.
+  Never disable the sandbox implicitly or invoke `codex` directly.
 
 ### Phase 3: Report
 

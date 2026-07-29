@@ -292,7 +292,11 @@ const readPermissionJudgeConfig = (
 
 const MAX_SANDBOX_LIST_ENTRIES = 256;
 const MAX_SANDBOX_VALUE_BYTES = 4_096;
-const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+const hasControlCharacter = (value: string): boolean =>
+  [...value].some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && (codePoint <= 31 || codePoint === 127);
+  });
 const LINUX_GLOB_CHARACTER = /[*?[]/;
 
 const cloneBashSandboxDefaults = (): BashSandboxConfig => ({
@@ -314,7 +318,7 @@ const validSandboxDomain = (value: string): boolean => {
     value.includes("://") ||
     value.includes("/") ||
     value.includes(":") ||
-    CONTROL_CHARACTER.test(value)
+    hasControlCharacter(value)
   ) {
     return false;
   }
@@ -333,13 +337,10 @@ const validSandboxDomain = (value: string): boolean => {
   );
 };
 
-const validSandboxPath = (
-  value: string,
-  platform: NodeJS.Platform,
-): boolean =>
+const validSandboxPath = (value: string, platform: NodeJS.Platform): boolean =>
   value.length > 0 &&
   Buffer.byteLength(value, "utf8") <= MAX_SANDBOX_VALUE_BYTES &&
-  !CONTROL_CHARACTER.test(value) &&
+  !hasControlCharacter(value) &&
   (value.startsWith("/") || value.startsWith("~/")) &&
   (platform !== "linux" || !LINUX_GLOB_CHARACTER.test(value));
 
@@ -449,22 +450,13 @@ const readBashSandboxConfig = (
     },
     filesystem: {
       denyRead: [
-        ...new Set([
-          ...defaults.filesystem.denyRead,
-          ...(denyRead ?? []),
-        ]),
+        ...new Set([...defaults.filesystem.denyRead, ...(denyRead ?? [])]),
       ],
       allowWrite: [
-        ...new Set([
-          ...defaults.filesystem.allowWrite,
-          ...(allowWrite ?? []),
-        ]),
+        ...new Set([...defaults.filesystem.allowWrite, ...(allowWrite ?? [])]),
       ],
       denyWrite: [
-        ...new Set([
-          ...defaults.filesystem.denyWrite,
-          ...(denyWrite ?? []),
-        ]),
+        ...new Set([...defaults.filesystem.denyWrite, ...(denyWrite ?? [])]),
       ],
     },
     ...(errors.length === 0

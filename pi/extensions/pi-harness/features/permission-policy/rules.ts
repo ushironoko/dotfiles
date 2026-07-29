@@ -56,6 +56,7 @@ export type PermissionVerdictBasis =
   | "configured-ask"
   | "speculative-ask"
   | "builtin-read-allow"
+  | "sandbox-residual"
   | "default-continue"
   | "combined-allow"
   | "combined-default";
@@ -1052,7 +1053,8 @@ const structuralKnownRisk = (
   if (normalized.words[0] === "rg" && hasRgExecutionOption(normalized.words)) {
     return {
       kind: "parser-only",
-      reason: "rg の外部preprocessor・archive展開・symlink追跡には確認が必要です",
+      reason:
+        "rg の外部preprocessor・archive展開・symlink追跡には確認が必要です",
     };
   }
   if (
@@ -1061,7 +1063,8 @@ const structuralKnownRisk = (
   ) {
     return {
       kind: "parser-only",
-      reason: "Git の外部diff・textconv実行またはファイル出力には確認が必要です",
+      reason:
+        "Git の外部diff・textconv実行またはファイル出力には確認が必要です",
     };
   }
   if (isOpaqueExecutor(normalized.words)) {
@@ -1162,7 +1165,8 @@ const gitReadCwdTarget = (command: string): string | undefined => {
     segment.words[0] !== normalized.words[0] ||
     hasGitReadExecutionOption(normalized.words) ||
     !isHelperCapableGitRead(normalized) ||
-    structuralKnownRisk(segment, normalized)?.reason !== GIT_GLOBAL_OPTION_REASON
+    structuralKnownRisk(segment, normalized)?.reason !==
+      GIT_GLOBAL_OPTION_REASON
   ) {
     return undefined;
   }
@@ -1244,9 +1248,11 @@ const evaluateNormalized = (
       normalized,
       trustedGitCwdTarget,
     );
-    return structuralRisk === undefined ||
-      (effectSandboxed && structuralRisk.kind === "parser-only")
-      ? audited({ verdict: "default-continue" }, "default-continue")
+    if (structuralRisk === undefined) {
+      return audited({ verdict: "default-continue" }, "default-continue");
+    }
+    return effectSandboxed && structuralRisk.kind === "parser-only"
+      ? audited({ verdict: "default-continue" }, "sandbox-residual")
       : audited(
           { verdict: "ask", reason: structuralRisk.reason },
           "structural-ask",
@@ -1254,6 +1260,7 @@ const evaluateNormalized = (
   }
   const command = normalized.words.join(" ");
   const potential = speculativeFloor(normalized);
+  let sandboxResidual = effectSandboxed && potential !== undefined;
 
   const denied = rules.deny.find((rule) => rule.pattern.test(command));
   if (denied !== undefined) {
@@ -1281,26 +1288,27 @@ const evaluateNormalized = (
     normalized,
     trustedGitCwdTarget,
   );
-  if (
-    structuralRisk !== undefined &&
-    (!effectSandboxed || structuralRisk.kind === "semantic")
-  ) {
-    return audited(
-      { verdict: "ask", reason: structuralRisk.reason },
-      "structural-ask",
-    );
+  if (structuralRisk !== undefined) {
+    if (!effectSandboxed || structuralRisk.kind === "semantic") {
+      return audited(
+        { verdict: "ask", reason: structuralRisk.reason },
+        "structural-ask",
+      );
+    }
+    sandboxResidual = true;
   }
-  if (
-    !effectSandboxed &&
-    hasRgOptionLikeGlobExpansion(normalized, trustedReadContext)
-  ) {
-    return audited(
-      {
-        verdict: "ask",
-        reason: "rg のglob展開が実行オプションとして解釈される可能性があります",
-      },
-      "rg-option-glob-ask",
-    );
+  if (hasRgOptionLikeGlobExpansion(normalized, trustedReadContext)) {
+    if (!effectSandboxed) {
+      return audited(
+        {
+          verdict: "ask",
+          reason:
+            "rg のglob展開が実行オプションとして解釈される可能性があります",
+        },
+        "rg-option-glob-ask",
+      );
+    }
+    sandboxResidual = true;
   }
 
   // A same-repository leading cd is neutral only for explicit-allow
@@ -1352,8 +1360,21 @@ const evaluateNormalized = (
     return audited({ verdict: "allow" }, "builtin-read-allow");
   }
 
-  return audited({ verdict: "default-continue" }, "default-continue");
+  return audited(
+    { verdict: "default-continue" },
+    sandboxResidual ? "sandbox-residual" : "default-continue",
+  );
 };
+
+const SANDBOX_RESIDUAL_BASES: ReadonlySet<PermissionVerdictBasis> = new Set([
+  "parse-error",
+  "depth-limit",
+  "sandbox-residual",
+]);
+
+export const isSandboxResidualVerdict = (verdict: AuditedVerdict): boolean =>
+  verdict.verdict === "default-continue" &&
+  SANDBOX_RESIDUAL_BASES.has(verdict.audit.basis);
 
 const VERDICT_RANK: Readonly<Record<Verdict["verdict"], number>> = {
   deny: 3,
@@ -1373,6 +1394,7 @@ const combineVerdicts = (
     "default-continue",
   );
   let allAllow = verdicts.length > 0;
+  const sandboxResidual = verdicts.find(isSandboxResidualVerdict);
   for (const verdict of verdicts) {
     if (verdict.verdict !== "allow") allAllow = false;
     if (VERDICT_RANK[verdict.verdict] > VERDICT_RANK[best.verdict]) {
@@ -1380,7 +1402,13 @@ const combineVerdicts = (
     }
   }
   if (best.verdict === "allow" && !allAllow) {
-    return audited({ verdict: "default-continue" }, "combined-default");
+    return (
+      sandboxResidual ??
+      audited({ verdict: "default-continue" }, "combined-default")
+    );
+  }
+  if (best.verdict === "default-continue" && sandboxResidual !== undefined) {
+    return sandboxResidual;
   }
   if (allAllow && verdicts.length > 1) {
     return audited(best, "combined-allow");
@@ -1397,19 +1425,13 @@ const evaluateCommandInner = (
   if (depth > MAX_SUBSTITUTION_DEPTH) {
     return options.effectSandboxed === true
       ? audited({ verdict: "default-continue" }, "depth-limit")
-      : audited(
-          { verdict: "deny", reason: UNPARSEABLE_REASON },
-          "depth-limit",
-        );
+      : audited({ verdict: "deny", reason: UNPARSEABLE_REASON }, "depth-limit");
   }
   const scanned = scanCommand(command);
   if (!scanned.ok) {
     return options.effectSandboxed === true
       ? audited({ verdict: "default-continue" }, "parse-error")
-      : audited(
-          { verdict: "deny", reason: UNPARSEABLE_REASON },
-          "parse-error",
-        );
+      : audited({ verdict: "deny", reason: UNPARSEABLE_REASON }, "parse-error");
   }
   const verdicts: AuditedVerdict[] = [];
   for (const [index, segment] of scanned.segments.entries()) {

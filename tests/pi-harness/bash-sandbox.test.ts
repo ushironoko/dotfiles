@@ -7,7 +7,10 @@ import {
   type BashSandboxOperationsProvider,
   type SandboxManagerLike,
 } from "../../pi/extensions/pi-harness/features/bash-sandbox";
-import type { BashSandboxProfile } from "../../pi/extensions/pi-harness/features/bash-sandbox/profile";
+import {
+  buildBashSandboxProfile,
+  type BashSandboxProfile,
+} from "../../pi/extensions/pi-harness/features/bash-sandbox/profile";
 import {
   buildControlledBashEnv,
   CONTROLLED_BASH_PATH,
@@ -18,6 +21,8 @@ import {
   DEFAULT_BASH_SANDBOX_CONFIG,
   type HarnessConfig,
 } from "../../pi/extensions/pi-harness/config";
+import type { PermissionAuditIntegration } from "../../pi/extensions/pi-harness/features/permission-audit";
+import type { PermissionAuditStage } from "../../pi/extensions/pi-harness/features/permission-audit/model";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import { createFakePi } from "./fake-pi";
 
@@ -76,15 +81,41 @@ const manager = (): FakeManager => ({
   },
 });
 
-const setup = (options: { hasUI?: boolean; attach?: boolean } = {}) => {
+const setup = (
+  options: {
+    hasUI?: boolean;
+    attach?: boolean;
+    commandPrefix?: string;
+    spawnFn?: SpawnFunction;
+  } = {},
+) => {
   const pi = createFakePi({ cwd: "/repo", hasUI: options.hasUI });
   const fakeManager = manager();
   let provider: BashSandboxOperationsProvider | undefined;
+  let providerEvents = 0;
   pi.events.on(BASH_SANDBOX_PROVIDER_EVENT, (value) => {
+    providerEvents += 1;
     provider = value as BashSandboxOperationsProvider;
-    if (options.attach !== false) provider.attach();
+    if (options.attach !== false) {
+      provider.attach({ commandPrefix: options.commandPrefix });
+    }
   });
   const removed: string[] = [];
+  const auditStages: PermissionAuditStage[] = [];
+  const permissionAudit: PermissionAuditIntegration = {
+    lineageId: "test-lineage",
+    addStage(_toolCallId, stage) {
+      auditStages.push(stage);
+    },
+    updateContext() {},
+    async finalizeBlock() {
+      return true;
+    },
+    registerTail() {},
+    childEnvironment() {
+      return {};
+    },
+  };
   const controller = setupBashSandbox(pi, config(), {
     loadRuntime: async () => ({ SandboxManager: fakeManager }),
     buildProfile: async () => profile(),
@@ -94,18 +125,117 @@ const setup = (options: { hasUI?: boolean; attach?: boolean } = {}) => {
     removePath: async (path) => {
       removed.push(path);
     },
+    ...(options.spawnFn === undefined ? {} : { spawnFn: options.spawnFn }),
   });
   controller.registerExecutionBoundary({
     blockToolCall: (reason) => ({ block: true, reason }),
+    permissionAudit,
   });
-  return { pi, fakeManager, removed, controller, getProvider: () => provider };
+  return {
+    pi,
+    fakeManager,
+    removed,
+    auditStages,
+    controller,
+    getProvider: () => provider,
+    getProviderEvents: () => providerEvents,
+  };
 };
+
+describe("Bash sandbox profile", () => {
+  test("allows only the active worktree, verified Git metadata, scratch, and trusted additions", async () => {
+    const sandboxConfig = structuredClone(DEFAULT_BASH_SANDBOX_CONFIG);
+    sandboxConfig.filesystem.allowWrite.push("~/trusted-output");
+    const result = await buildBashSandboxProfile(
+      "/repo/active/subdir",
+      "/private/scratch",
+      sandboxConfig,
+      undefined,
+      {
+        home: "/home/test",
+        canonicalize: async () => "/repo/active/subdir",
+        discoverProject: async () => ({
+          kind: "git",
+          name: "repo",
+          cwd: "/repo/active/subdir",
+          activeWorktree: "/repo/active",
+          navigableRoots: ["/repo/active", "/repo/other-worktree"],
+          worktrees: ["/repo/active", "/repo/other-worktree"],
+          fingerprint: "project-fingerprint",
+        }),
+        discoverGitCommonDir: async () => "/repo/common.git",
+      },
+    );
+
+    expect(result.writableRoots).toEqual([
+      "/repo/active",
+      "/repo/common.git",
+      "/private/scratch",
+      "/home/test/trusted-output",
+    ]);
+    expect(result.writableRoots).not.toContain("/repo/other-worktree");
+    expect(result.runtimeConfig.filesystem.allowWrite).toEqual([
+      ...result.writableRoots,
+    ]);
+    expect(result.runtimeConfig.filesystem.denyWrite).toEqual(
+      expect.arrayContaining([
+        "/repo/common.git/config",
+        "/repo/common.git/hooks",
+      ]),
+    );
+  });
+
+  test("fails closed when project or Git common-dir discovery is unavailable", async () => {
+    await expect(
+      buildBashSandboxProfile(
+        "/repo",
+        "/scratch",
+        structuredClone(DEFAULT_BASH_SANDBOX_CONFIG),
+        undefined,
+        {
+          canonicalize: async (path) => path,
+          discoverProject: async () => ({
+            kind: "unavailable",
+            reason: "test failure",
+            fingerprint: "unavailable",
+          }),
+        },
+      ),
+    ).rejects.toThrow("project boundary unavailable");
+
+    await expect(
+      buildBashSandboxProfile(
+        "/repo",
+        "/scratch",
+        structuredClone(DEFAULT_BASH_SANDBOX_CONFIG),
+        undefined,
+        {
+          canonicalize: async (path) => path,
+          discoverProject: async () => ({
+            kind: "git",
+            cwd: "/repo",
+            activeWorktree: "/repo",
+            navigableRoots: ["/repo"],
+            worktrees: ["/repo"],
+            fingerprint: "project-fingerprint",
+          }),
+          discoverGitCommonDir: async () => undefined,
+        },
+      ),
+    ).rejects.toThrow("Git common directory unavailable");
+  });
+});
 
 describe("Bash effect sandbox lifecycle", () => {
   test("publishes operations, wraps after attachment, and cleans up", async () => {
     const runtime = setup();
-    await runtime.pi.emitSessionStart({ type: "session_start", reason: "startup" });
     expect(runtime.getProvider()).toBeDefined();
+    expect(runtime.getProviderEvents()).toBe(1);
+    await runtime.pi.emitSessionStart({
+      type: "session_start",
+      reason: "startup",
+    });
+    expect(runtime.getProviderEvents()).toBe(2);
     const call = {
       type: "tool_call" as const,
       toolName: "bash",
@@ -120,16 +250,38 @@ describe("Bash effect sandbox lifecycle", () => {
       network: "denied",
       profileFingerprint: "a".repeat(64),
     });
-    expect(runtime.pi.tools.map((tool) => tool.name)).toContain("bash_escalated");
+    expect(runtime.pi.tools.map((tool) => tool.name)).toContain(
+      "bash_escalated",
+    );
 
     await runtime.pi.emitSessionShutdown();
     expect(runtime.fakeManager.resets).toBe(1);
     expect(runtime.removed).toEqual(["/private/scratch"]);
   });
 
+  test("includes the trusted shell prefix inside the sandbox wrapper", async () => {
+    const runtime = setup({ commandPrefix: "set -e" });
+    await runtime.pi.emitSessionStart({
+      type: "session_start",
+      reason: "startup",
+    });
+    const call = {
+      type: "tool_call" as const,
+      toolName: "bash",
+      toolCallId: "sandbox-prefix",
+      input: { command: "printf ok" },
+    };
+    expect(await runtime.pi.emitToolCall(call)).toBeUndefined();
+    expect(runtime.fakeManager.wrapped).toEqual(["set -e\nprintf ok"]);
+    expect(call.input.command).toBe("sandbox(set -e\nprintf ok)");
+  });
+
   test("blocks ordinary Bash when the owning backend did not attach", async () => {
     const runtime = setup({ attach: false });
-    await runtime.pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    await runtime.pi.emitSessionStart({
+      type: "session_start",
+      reason: "startup",
+    });
     expect(
       await runtime.pi.emitToolCall({
         type: "tool_call",
@@ -143,6 +295,120 @@ describe("Bash effect sandbox lifecycle", () => {
     });
   });
 
+  test("fails closed on initialization and wrapper failures", async () => {
+    const initialization = setup();
+    initialization.fakeManager.initialize = async () => {
+      throw new Error("initialization failed at /private/profile-secret");
+    };
+    await initialization.pi.emitSessionStart({
+      type: "session_start",
+      reason: "startup",
+    });
+    expect(
+      await initialization.pi.emitToolCall({
+        type: "tool_call",
+        toolName: "bash",
+        toolCallId: "initialization-failure",
+        input: { command: "echo no" },
+      }),
+    ).toEqual({
+      block: true,
+      reason: expect.stringContaining("initialization failed"),
+    });
+    expect(JSON.stringify(initialization.auditStages)).not.toContain(
+      "/private/profile-secret",
+    );
+    await initialization.pi.emitSessionShutdown();
+    expect(initialization.removed).toEqual(["/private/scratch"]);
+
+    const wrapping = setup();
+    await wrapping.pi.emitSessionStart({
+      type: "session_start",
+      reason: "startup",
+    });
+    wrapping.fakeManager.wrapWithSandbox = async () => {
+      throw new Error("wrapper failed for private.example");
+    };
+    expect(
+      await wrapping.pi.emitToolCall({
+        type: "tool_call",
+        toolName: "bash",
+        toolCallId: "wrapper-failure",
+        input: { command: "echo no" },
+      }),
+    ).toEqual({
+      block: true,
+      reason: expect.stringContaining("wrapper failed"),
+    });
+    expect(JSON.stringify(wrapping.auditStages)).not.toContain(
+      "private.example",
+    );
+  });
+
+  test("routes user Bash operations through the same sandbox wrapper", async () => {
+    let launchedCommand: string | undefined;
+    const child = new EventEmitter() as EventEmitter & {
+      pid?: number;
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill(signal?: NodeJS.Signals): boolean;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => true;
+    const spawnFn: SpawnFunction = (_command, args) => {
+      launchedCommand = args.at(3);
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    };
+    const runtime = setup({ spawnFn });
+    await runtime.pi.emitSessionStart({
+      type: "session_start",
+      reason: "startup",
+    });
+
+    const result = await runtime
+      .getProvider()
+      ?.userOperations.exec("printf user", "/repo", { onData: () => {} });
+    expect(result).toEqual({ exitCode: 0 });
+    expect(runtime.fakeManager.wrapped).toEqual(["printf user"]);
+    expect(launchedCommand).toBe("sandbox(printf user)");
+  });
+
+  test("binds escalated execution to the active session cwd", async () => {
+    let launchedCwd: string | undefined;
+    const child = new EventEmitter() as EventEmitter & {
+      pid?: number;
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill(signal?: NodeJS.Signals): boolean;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => true;
+    const spawnFn: SpawnFunction = (_command, _args, options) => {
+      launchedCwd = options.cwd;
+      queueMicrotask(() => child.emit("exit", 0));
+      return child;
+    };
+    const runtime = setup({ spawnFn });
+    await runtime.pi.emitSessionStart({
+      type: "session_start",
+      reason: "startup",
+    });
+    const escalated = runtime.pi.tools.find(
+      (tool) => tool.name === "bash_escalated",
+    );
+    await escalated?.execute(
+      "escalated-cwd",
+      { command: "printf ok" } as never,
+      undefined,
+      undefined,
+      runtime.pi.ctx,
+    );
+    expect(launchedCwd).toBe("/repo");
+  });
+
   test("memoizes interactive host decisions and denies without UI", async () => {
     const interactive = setup();
     interactive.pi.queueConfirm(true);
@@ -150,16 +416,26 @@ describe("Bash effect sandbox lifecycle", () => {
       type: "session_start",
       reason: "startup",
     });
-    const ask = interactive.fakeManager.asks[0];
+    const [ask] = interactive.fakeManager.asks;
     expect(ask).toBeDefined();
+    expect(interactive.controller.boundaryFor("bash")?.network).toBe("denied");
     expect(await ask?.({ host: "api.example.com", port: 443 })).toBe(true);
+    expect(interactive.controller.boundaryFor("bash")?.network).toBe(
+      "allowlisted",
+    );
     expect(await ask?.({ host: "api.example.com", port: 443 })).toBe(true);
     expect(interactive.pi.confirmDialogs).toHaveLength(1);
 
     const headless = setup({ hasUI: false });
-    await headless.pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    await headless.pi.emitSessionStart({
+      type: "session_start",
+      reason: "startup",
+    });
     expect(
-      await headless.fakeManager.asks[0]?.({ host: "api.example.com", port: 443 }),
+      await headless.fakeManager.asks[0]?.({
+        host: "api.example.com",
+        port: 443,
+      }),
     ).toBe(false);
     expect(headless.pi.confirmDialogs).toHaveLength(0);
   });
@@ -190,6 +466,13 @@ describe("controlled Bash launcher", () => {
       TMPDIR: "/private/scratch",
     });
     expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(
+      buildControlledBashEnv(
+        { HOME: "/home/test", PATH: "/repo/bin:relative" },
+        "/repo",
+        "/private/scratch",
+      ).PATH,
+    ).toBe("/usr/bin:/bin:/usr/sbin:/sbin");
     for (const key of [
       "BASH_ENV",
       "DYLD_INSERT_LIBRARIES",
@@ -220,7 +503,12 @@ describe("controlled Bash launcher", () => {
     child.kill = () => true;
     const spawnFn: SpawnFunction = (command, args, options) => {
       launch = { command, args, env: options.env };
-      queueMicrotask(() => child.emit("close", 0));
+      queueMicrotask(() => {
+        child.emit("exit", 0);
+        stdout.emit("data", Buffer.from("tail-after-exit"));
+        stdout.emit("end");
+        stderr.emit("end");
+      });
       return child;
     };
     const operations = createControlledBashOperations({
@@ -232,13 +520,17 @@ describe("controlled Bash launcher", () => {
         BASH_ENV: "/tmp/should-not-run",
       },
     });
+    let output = "";
     await operations.exec("echo ok", "/repo", {
-      onData: () => {},
+      onData: (chunk) => {
+        output += chunk.toString();
+      },
     });
     expect(launch).toMatchObject({
       command: CONTROLLED_BASH_PATH,
       args: ["--noprofile", "--norc", "-c", "echo ok"],
     });
     expect(launch?.env).not.toHaveProperty("BASH_ENV");
+    expect(output).toBe("tail-after-exit");
   });
 });

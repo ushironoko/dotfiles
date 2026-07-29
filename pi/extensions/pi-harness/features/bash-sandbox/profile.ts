@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import type { BashSandboxConfig } from "../../config";
 import {
@@ -25,8 +25,10 @@ interface BuildProfileOptions {
   readonly canonicalize?: (path: string) => Promise<string>;
 }
 
-const expandHome = (path: string, home: string): string =>
-  path === "~" ? home : path.startsWith("~/") ? resolve(home, path.slice(2)) : path;
+const expandHome = (path: string, home: string): string => {
+  if (path === "~") return home;
+  return path.startsWith("~/") ? resolve(home, path.slice(2)) : path;
+};
 
 const unique = (values: readonly string[]): string[] => [...new Set(values)];
 
@@ -49,12 +51,13 @@ export const buildBashSandboxProfile = async (
   }
 
   const projectRoots =
-    project.kind === "git" ? project.navigableRoots : [project.cwd];
+    project.kind === "git" ? [project.activeWorktree] : [project.cwd];
   let gitCommonDir: string | undefined;
   if (project.kind === "git") {
-    gitCommonDir = await (
-      options.discoverGitCommonDir ?? runGitCommonDir
-    )(project.cwd, signal);
+    gitCommonDir = await (options.discoverGitCommonDir ?? runGitCommonDir)(
+      project.cwd,
+      signal,
+    );
     if (gitCommonDir === undefined) {
       throw new Error("Git common directory unavailable");
     }
@@ -73,9 +76,12 @@ export const buildBashSandboxProfile = async (
   const denyRead = unique(
     config.filesystem.denyRead.map((path) => expandHome(path, home)),
   );
-  const denyWrite = unique(
-    config.filesystem.denyWrite.map((path) => expandHome(path, home)),
-  );
+  const denyWrite = unique([
+    ...config.filesystem.denyWrite.map((path) => expandHome(path, home)),
+    ...(gitCommonDir === undefined
+      ? []
+      : [join(gitCommonDir, "config"), join(gitCommonDir, "hooks")]),
+  ]);
   const runtimeConfig: SandboxRuntimeConfig = {
     network: {
       allowedDomains: [...config.network.allowedDomains],

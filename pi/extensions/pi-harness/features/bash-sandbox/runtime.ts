@@ -34,7 +34,10 @@ export const buildControlledBashEnv = (
     if (ALLOWED_ENV_KEYS.has(key) || key.startsWith("LC_")) env[key] = value;
   }
   env.HOME = sanitized.HOME ?? homedir();
-  env.PATH = sanitized.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin";
+  env.PATH =
+    sanitized.PATH === undefined || sanitized.PATH === ""
+      ? "/usr/bin:/bin:/usr/sbin:/sbin"
+      : sanitized.PATH;
   env.SHELL = CONTROLLED_BASH_PATH;
   env.TMPDIR = scratchDirectory;
   env.TMP = scratchDirectory;
@@ -43,12 +46,25 @@ export const buildControlledBashEnv = (
   return env;
 };
 
+interface SpawnedStream {
+  on(event: "data", listener: (chunk: Buffer) => void): void;
+  on(event: "end", listener: () => void): void;
+  removeListener(event: "data", listener: (chunk: Buffer) => void): void;
+  removeListener(event: "end", listener: () => void): void;
+  destroy?(): void;
+}
+
 interface SpawnedProcess {
   readonly pid?: number;
-  readonly stdout: { on(event: "data", listener: (chunk: Buffer) => void): void } | null;
-  readonly stderr: { on(event: "data", listener: (chunk: Buffer) => void): void } | null;
+  readonly stdout: SpawnedStream | null;
+  readonly stderr: SpawnedStream | null;
   on(event: "error", listener: (error: Error) => void): void;
-  on(event: "close", listener: (code: number | null) => void): void;
+  on(event: "exit" | "close", listener: (code: number | null) => void): void;
+  removeListener(event: "error", listener: (error: Error) => void): void;
+  removeListener(
+    event: "exit" | "close",
+    listener: (code: number | null) => void,
+  ): void;
   kill(signal?: NodeJS.Signals): boolean;
 }
 
@@ -101,6 +117,8 @@ interface ControlledBashOptions {
   readonly baseEnv?: NodeJS.ProcessEnv;
 }
 
+const EXIT_STDIO_GRACE_MS = 100;
+
 const killProcessGroup = (
   child: SpawnedProcess,
   signal: NodeJS.Signals,
@@ -144,8 +162,12 @@ export const createControlledBashOperations = (
 
     return new Promise((resolve, reject) => {
       let settled = false;
+      let acceptingOutput = true;
       let timedOut = false;
+      let exited = false;
+      let exitCode: number | null = null;
       let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      let postExitHandle: ReturnType<typeof setTimeout> | undefined;
       const child = spawnFn(
         CONTROLLED_BASH_PATH,
         ["--noprofile", "--norc", "-c", effectiveCommand],
@@ -156,9 +178,34 @@ export const createControlledBashOperations = (
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
+      let stdoutEnded = child.stdout === null;
+      let stderrEnded = child.stderr === null;
       const cleanup = (): void => {
+        acceptingOutput = false;
         if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+        if (postExitHandle !== undefined) clearTimeout(postExitHandle);
         signal?.removeEventListener("abort", onAbort);
+        child.removeListener("error", fail);
+        child.removeListener("exit", onExit);
+        child.removeListener("close", finish);
+        child.stdout?.removeListener("data", onData);
+        child.stderr?.removeListener("data", onData);
+        child.stdout?.removeListener("end", onStdoutEnd);
+        child.stderr?.removeListener("end", onStderrEnd);
+      };
+      const finish = (code: number | null): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        child.stdout?.destroy?.();
+        child.stderr?.destroy?.();
+        if (isAborted()) {
+          reject(new Error("aborted"));
+        } else if (timedOut) {
+          reject(new Error(`timeout:${execution.timeout}`));
+        } else {
+          resolve({ exitCode: code });
+        }
       };
       const fail = (error: Error): void => {
         if (settled) return;
@@ -169,9 +216,38 @@ export const createControlledBashOperations = (
       const onAbort = (): void => {
         killProcessGroup(child, "SIGKILL");
       };
-
-      child.stdout?.on("data", execution.onData);
-      child.stderr?.on("data", execution.onData);
+      const armPostExitGrace = (): void => {
+        if (postExitHandle !== undefined) clearTimeout(postExitHandle);
+        postExitHandle = setTimeout(
+          () => finish(exitCode),
+          EXIT_STDIO_GRACE_MS,
+        );
+      };
+      const maybeFinishAfterExit = (): void => {
+        if (exited && stdoutEnded && stderrEnded) finish(exitCode);
+      };
+      const onStdoutEnd = (): void => {
+        stdoutEnded = true;
+        maybeFinishAfterExit();
+      };
+      const onStderrEnd = (): void => {
+        stderrEnded = true;
+        maybeFinishAfterExit();
+      };
+      const onExit = (code: number | null): void => {
+        exited = true;
+        exitCode = code;
+        maybeFinishAfterExit();
+        if (!settled) armPostExitGrace();
+      };
+      const onData = (chunk: Buffer): void => {
+        if (acceptingOutput) execution.onData(chunk);
+        if (exited && !settled) armPostExitGrace();
+      };
+      child.stdout?.on("data", onData);
+      child.stderr?.on("data", onData);
+      child.stdout?.on("end", onStdoutEnd);
+      child.stderr?.on("end", onStderrEnd);
       signal?.addEventListener("abort", onAbort, { once: true });
       if (execution.timeout !== undefined && execution.timeout > 0) {
         timeoutHandle = setTimeout(() => {
@@ -180,18 +256,8 @@ export const createControlledBashOperations = (
         }, execution.timeout * 1_000);
       }
       child.on("error", fail);
-      child.on("close", (code) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        if (isAborted()) {
-          reject(new Error("aborted"));
-        } else if (timedOut) {
-          reject(new Error(`timeout:${execution.timeout}`));
-        } else {
-          resolve({ exitCode: code });
-        }
-      });
+      child.on("exit", onExit);
+      child.on("close", finish);
       if (isAborted()) onAbort();
     });
   },

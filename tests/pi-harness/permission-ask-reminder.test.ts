@@ -36,6 +36,22 @@ const reminders = (messages: readonly unknown[]) =>
       message.customType === PERMISSION_ASK_REMINDER_CUSTOM_TYPE,
   );
 
+const setupReminderHarness = (
+  pi: ReturnType<typeof createFakePi>,
+  value: HarnessConfig,
+): void => {
+  setupHarness(pi, value, {
+    setupBashSandbox: () => ({
+      boundaryFor: (toolName) => ({
+        mode: toolName === "bash" ? "sandboxed" : "escalated",
+        network: "denied",
+        profileFingerprint: "e".repeat(64),
+      }),
+      registerExecutionBoundary() {},
+    }),
+  });
+};
+
 describe("permission ASK reminder", () => {
   test("injects one hidden reminder after every three displayed confirmations", async () => {
     const pi = createFakePi();
@@ -76,7 +92,7 @@ describe("permission ASK reminder", () => {
   test("counts accepted policy challenges but excludes UI-less not-shown outcomes", async () => {
     const value = await config();
     const pi = createFakePi({ cwd: value.paths.home });
-    setupHarness(pi, value);
+    setupReminderHarness(pi, value);
 
     for (let index = 0; index < PERMISSION_ASK_REMINDER_THRESHOLD; index += 1) {
       pi.queueConfirm(true);
@@ -97,7 +113,7 @@ describe("permission ASK reminder", () => {
       cwd: headlessValue.paths.home,
       hasUI: false,
     });
-    setupHarness(headless, headlessValue);
+    setupReminderHarness(headless, headlessValue);
 
     for (let index = 0; index < PERMISSION_ASK_REMINDER_THRESHOLD; index += 1) {
       expect(

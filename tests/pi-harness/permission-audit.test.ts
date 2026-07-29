@@ -145,6 +145,36 @@ describe("permission audit record model", () => {
     ).toBe("deny");
   });
 
+  test("validates and exports bounded execution-boundary metadata", () => {
+    const profileFingerprint = "c".repeat(64);
+    const record = buildPermissionDecisionRecord(
+      baseInput([allowedStage], {
+        executionBoundary: { mode: "sandboxed", profileFingerprint },
+      }),
+    );
+    const parsed = parsePermissionAuditJsonl(`${JSON.stringify(record)}\n`);
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.records[0]?.executionBoundary).toEqual({
+      mode: "sandboxed",
+      profileFingerprint,
+    });
+    expect(
+      buildPermissionQualificationCandidates(parsed.records)[0]
+        ?.executionBoundary,
+    ).toEqual({ mode: "sandboxed", profileFingerprint });
+
+    const invalid = {
+      ...record,
+      executionBoundary: {
+        mode: "sandboxed",
+        profileFingerprint: "/private/profile/path",
+      },
+    };
+    expect(
+      parsePermissionAuditJsonl(`${JSON.stringify(invalid)}\n`).diagnostics,
+    ).toEqual([{ line: 1, code: "invalid-record" }]);
+  });
+
   test("retains full corpus canaries and emits a bounded oversized marker", () => {
     const canary = "secret-token-CANARY";
     const record = buildPermissionDecisionRecord(
@@ -678,6 +708,47 @@ describe("permission audit policy lifecycle", () => {
         status: "accepted",
       }),
     );
+  });
+
+  test("records only tool mode and a sanitized profile fingerprint", async () => {
+    const home = await tempRoot("pi-permission-audit-boundary");
+    const config = harnessConfig(home);
+    const pi = createFakePi({ cwd: home, sessionId: "boundary-session" });
+    const profileFingerprint = "d".repeat(64);
+    const privatePath = "/private/never-record-this-profile";
+    const audit = setupPermissionAudit(pi, config, {
+      taskTracker: createPermissionTaskTracker(),
+      executionBoundary: () =>
+        ({ profileFingerprint, privatePath }) as {
+          profileFingerprint: string;
+        },
+    });
+    audit.registerTail(pi, (reason) => ({ block: true as const, reason }));
+
+    for (const toolName of ["bash", "bash_escalated"] as const) {
+      expect(
+        await pi.emitToolCall({
+          type: "tool_call",
+          toolName,
+          toolCallId: `boundary-${toolName}`,
+          input: { command: "printf ok" },
+        }),
+      ).toBeUndefined();
+    }
+    await pi.emitSessionShutdown();
+
+    const [file] = await fs.readdir(config.paths.logDir);
+    const text = await fs.readFile(
+      join(config.paths.logDir, file ?? ""),
+      "utf8",
+    );
+    const parsed = parsePermissionAuditJsonl(text);
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.records.map((record) => record.executionBoundary)).toEqual([
+      { mode: "sandboxed", profileFingerprint },
+      { mode: "escalated", profileFingerprint },
+    ]);
+    expect(text).not.toContain(privatePath);
   });
 
   test("records rejected ASK at the challenge site without reaching tail release", async () => {

@@ -850,12 +850,15 @@ describe("pi-harness AskUserQuestion configuration", () => {
   test("umbrella composition follows the feature toggle", () => {
     const enabled = createFakePi();
     setupHarness(enabled, makeConfig("/tmp/pi-ask-enabled"));
-    expect(enabled.tools.map((tool) => tool.name)).toEqual(["AskUserQuestion"]);
+    expect(enabled.tools.map((tool) => tool.name)).toEqual([
+      "bash_escalated",
+      "AskUserQuestion",
+    ]);
 
     const disabled = createFakePi();
     const config = makeConfig("/tmp/pi-ask-disabled");
     config.features["ask-user-question"] = false;
     setupHarness(disabled, config);
-    expect(disabled.tools).toHaveLength(0);
+    expect(disabled.tools.map((tool) => tool.name)).toEqual(["bash_escalated"]);
   });
 });

@@ -50,7 +50,7 @@ const BASH_SANDBOX_PROVIDER_EVENT = "pi-harness:bash-sandbox-provider";
 interface BashSandboxOperationsProvider {
   readonly sandboxedOperations: BashOperations;
   readonly userOperations: BashOperations;
-  attach(): void;
+  attach(options?: { readonly commandPrefix?: string }): void;
 }
 const HEARTH_ENTRY_PATH = fileURLToPath(import.meta.url);
 const POST_TOOL_INVALIDATION = new Set([
@@ -93,6 +93,21 @@ const shellSpec = (shellPath?: string): ShellSpec => {
   } as ShellSpec;
 };
 
+export const guardHearthBashOperations = (
+  runtime: HearthEngineRuntime,
+  operations: BashOperations,
+): BashOperations => ({
+  exec(command, cwd, options) {
+    return runtime.gate.exclusive(async () => {
+      try {
+        return await operations.exec(command, cwd, options);
+      } finally {
+        runtime.engine.clearCaches();
+      }
+    });
+  },
+});
+
 const definitions = (
   cwd: string,
   runtime: HearthEngineRuntime,
@@ -107,7 +122,12 @@ const definitions = (
     createHearthBashDefinition(cwd, runtime.engine, settings, {
       defaultTimeoutMs: config.bashTimeoutMs,
       gate: runtime.gate,
-      ...(bashOperations === undefined ? {} : { operations: bashOperations }),
+      ...(bashOperations === undefined
+        ? {}
+        : {
+            operations: guardHearthBashOperations(runtime, bashOperations),
+            commandPrefixHandled: true,
+          }),
     }),
     createHearthGrepDefinition(cwd, runtime.engine, runtime.gate),
   ] as const;
@@ -320,7 +340,9 @@ export const setupHearthTools = async (
       pi.registerTool(grep);
       pi.setActiveTools(activeBefore);
       assertHearthOwnership(pi);
-      bashSandboxProvider?.attach();
+      bashSandboxProvider?.attach({
+        commandPrefix: settings.shellCommandPrefix,
+      });
 
       registered = true;
       service.announce();
@@ -371,11 +393,19 @@ export const setupHearthTools = async (
     if (state === undefined) return;
     return {
       operations:
-        bashSandboxProvider?.userOperations ??
-        createHearthBashOperations(state.runtime.engine, state.settings.shell, {
-          defaultTimeoutMs: state.config.bashTimeoutMs,
-          gate: state.runtime.gate,
-        }),
+        bashSandboxProvider === undefined
+          ? createHearthBashOperations(
+              state.runtime.engine,
+              state.settings.shell,
+              {
+                defaultTimeoutMs: state.config.bashTimeoutMs,
+                gate: state.runtime.gate,
+              },
+            )
+          : guardHearthBashOperations(
+              state.runtime,
+              bashSandboxProvider.userOperations,
+            ),
     };
   });
 

@@ -223,9 +223,11 @@ gap), 124 = timed out.
 
 - The actual review is performed by Codex CLI; this agent only orchestrates
 - Review runs are read-only (`--sandbox read-only` / the review subcommand)
-- codex needs network and a local app-server: if a sandboxed Bash run of the
-  wrapper fails with "Operation not permitted", retry with the Bash sandbox
-  disabled — that is a harness sandbox restriction, not a wrapper defect
+- codex needs network and a local app-server. Under pi, if ordinary Bash blocks
+  the wrapper at the effect boundary, retry that exact wrapper call with the
+  explicit `bash_escalated` tool; it performs a fresh local classification.
+  If escalation is unavailable or not approved, report the wrapper as blocked.
+  Never disable the sandbox implicitly or invoke `codex` directly.
 - Never pass `-m` — `~/.codex/config.toml` owns model selection
 - Privacy: the artifact and any repo files codex reads are sent to OpenAI
 - If the wrapper is missing, report that failure; never bypass it by invoking

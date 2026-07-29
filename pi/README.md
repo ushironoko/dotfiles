@@ -57,11 +57,13 @@ is the no-extra-cost alternative for evaluation.
 ## Extension architecture
 
 The harness stays a single umbrella extension (`extensions/pi-harness/index.ts`)
-composing compatibility features in a fixed order: the non-executing npm-script
-rejection may short-circuit first, then permission-policy remains the mandatory
-safety floor before every path that can execute a command, followed by the
-remaining hook-bridge features. The preflight uses `/bin/bash` with a fixed
-root-owned system `PATH`, never the repository-influenced inherited path. The
+composing compatibility features in a fixed order. Bash audit starts first;
+the non-executing npm-script preflight may short-circuit next; permission-policy
+then remains the mandatory safety floor before the remaining hook-bridge
+features. Every handler evaluates the original command. Only after they pass is
+ordinary Bash replaced with an OS-sandbox wrapper and the audit record released
+to controlled execution. The preflight uses `/bin/bash` with a fixed root-owned
+system `PATH`, never the repository-influenced inherited path. The
 `hearth-tools` extension is separate so native-addon preflight cannot partially
 initialize the permission/audit extension. It replaces pi's `read`, `write`,
 `edit`, `bash`, and `grep` execution while preserving their public schemas and
@@ -86,6 +88,70 @@ feature toggles live in `~/.pi/agent/pi-harness.local.json` (machine-local):
 
 Child pi processes spawned by subagent/workflow receive `PI_HARNESS_CHILD=1`
 and keep only the safety layer (no recursion, no duplicate notifications).
+
+## Bash auto-mode effect boundary
+
+Ordinary `bash` and user `!`/`!!` commands always execute inside
+`@anthropic-ai/sandbox-runtime`: macOS Seatbelt or Linux bubblewrap. The
+launcher is fixed to `/bin/bash --noprofile --norc -c` with a complete
+allowlisted environment and private per-session `TMPDIR`. Shell startup hooks,
+loader/interpreter injection, every inherited `GIT_*`, token/secret variables,
+proxy credentials, and auth sockets are removed before the outer shell starts.
+Initialization, dependency, profile-discovery, provider-attachment, and wrapper
+failures block ordinary Bash; there is no unsandboxed fallback.
+
+The default writable scope is the active verified worktree, its canonical Git
+common directory, and session scratch. The common directory's Git config and
+hooks remain explicitly denied even for linked worktrees. Credential stores are
+denied for reads; harness settings/hooks and agent configuration are denied for writes. Network
+is deny-by-default: an empty `allowedDomains` list means no network. An unknown
+host can be approved or denied once for the current interactive session and is
+denied without UI. `/sandbox` shows the active mode, write-root count, network
+mode, and a short profile fingerprint without exposing private paths.
+
+Only the machine-local `~/.pi/agent/pi-harness.local.json` can add trusted
+paths or domains; repository configuration cannot widen this boundary:
+
+```json
+{
+  "bashSandbox": {
+    "network": {
+      "allowedDomains": ["api.example.com"],
+      "deniedDomains": ["uploads.example.com"]
+    },
+    "filesystem": {
+      "allowWrite": ["~/trusted-output"],
+      "denyWrite": ["~/trusted-output/protected"],
+      "denyRead": ["~/.config/example/credentials"]
+    }
+  }
+}
+```
+
+These arrays are additive to the built-in profile. Values are size/shape
+validated and malformed explicit values make the sandbox unavailable. Linux
+rejects wildcard deny paths because bubblewrap cannot enforce macOS-style deny
+globs. Linux requires `bubblewrap`, `socat`, and `ripgrep`; macOS uses the
+built-in Seatbelt facility and requires `ripgrep`. The weaker nested Linux mode
+is disabled.
+
+This is an **effect boundary**, not semantic proof that opaque code is benign.
+Code admitted to ordinary Bash may freely and irreversibly mutate every
+configured writable root and communicate with every allowlisted or
+session-approved host. Visible destructive writes, Git/ref/history destruction,
+credential handling, uploads, deploy/publish, and persistence still reach the
+semantic policy/classifier. Parser uncertainty alone (`eval`, heredocs,
+generated scripts, interpreters, package runners, safe redirection, or compound
+syntax) is residual because OS enforcement contains its effects. If the local
+judge is explicitly disabled, those parser-only residuals return to interactive
+confirmation and block without UI instead of becoming less restrictive.
+
+`bash_escalated` is the only explicit sandbox escape. It is intended only when
+the requested operation genuinely needs an effect blocked by ordinary Bash.
+Every call ignores configured/skill automatic allows, bypasses the ALLOW cache,
+and requires a fresh local classifier ALLOW; any other outcome confirms with an
+interactive user or blocks in no-UI children. Hard-denied relay/import commands
+remain denied before both execution paths.
 
 The safety layer also appends soft command-hygiene guidance to every parent and
 child system prompt: prefer dedicated file tools, literal project-bounded
@@ -131,8 +197,9 @@ have not independently satisfied the no-config/canonical-path conditions.
 The safety layer also writes an always-on, versioned permission audit record for
 every Bash call it observes, in parent and pi-harness child processes. One JSONL
 record combines npm preflight, deterministic route/basis, verified project and
-worktree scope, local-judge safety/relevance gates and cache source, later hook
-stages, confirmation outcome, and the final pi-harness boundary disposition.
+worktree scope, the `sandboxed|escalated` execution mode and profile fingerprint
+(no profile paths), local-judge safety/relevance gates and cache source, later
+hook stages, confirmation outcome, and the final pi-harness boundary disposition.
 ALLOW or an accepted ASK is not released unless that record append succeeds;
 an unavailable sink blocks the command. These records intentionally retain the
 raw shell command and bounded task/run/project context for corpus review, so
@@ -314,9 +381,9 @@ typebox baseline + acceptance/rejection through pi's real `validateToolArguments
 | statusLine                           | statusline feature (Claude-equivalent custom footer)                         |
 | logproxy                             | provider-log feature (opt-in, reduced scope)                                 |
 
-Known gaps vs Claude Code: no Claude server-side auto mode (the local Ollama
-judge plus deterministic rules approximates it), no LSP plugins, provider-log
-is a request/status logger (not full logproxy).
+Known gaps vs Claude Code: this is a local effect-sandbox plus local-classifier
+implementation rather than Claude's server-side auto mode; there are no LSP
+plugins, and provider-log is a request/status logger (not full logproxy).
 
 ## BTW side questions
 
@@ -418,8 +485,8 @@ mode mismatches are skipped.
 
 The V1 schema is `pi-harness/bash-permission`. It records writer sequence,
 process/session/parent-child correlation, command text/hash/size, bounded task
-and authenticated same-run evidence, project/worktree/navigation context,
-ordered typed stages, `allow|ask|deny`, and the pi-harness boundary disposition
+and authenticated same-run evidence, project/worktree/navigation context, sandboxed/escalated mode plus a profile
+fingerprint, ordered typed stages, `allow|ask|deny`, and the pi-harness boundary disposition
 `release|block`. `release` means later pi handlers may run; Pi exposes no final
 immutable pre-execution hook, so it is not proof that a later extension did not
 veto or mutate the call. Observed decisions are telemetry, not ground-truth

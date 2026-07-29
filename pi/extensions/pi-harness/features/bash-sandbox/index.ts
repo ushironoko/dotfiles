@@ -21,10 +21,7 @@ import {
   type PermissionAuditIntegration,
 } from "../permission-audit";
 import type { PermissionBlockResult } from "../permission-policy/block";
-import {
-  buildBashSandboxProfile,
-  type BashSandboxProfile,
-} from "./profile";
+import { buildBashSandboxProfile, type BashSandboxProfile } from "./profile";
 import {
   CONTROLLED_BASH_PATH,
   createControlledBashOperations,
@@ -56,13 +53,12 @@ export interface BashExecutionBoundary {
   readonly profileFingerprint: string;
 }
 
-export const BASH_SANDBOX_PROVIDER_EVENT =
-  "pi-harness:bash-sandbox-provider";
+export const BASH_SANDBOX_PROVIDER_EVENT = "pi-harness:bash-sandbox-provider";
 
 export interface BashSandboxOperationsProvider {
   readonly sandboxedOperations: BashOperations;
   readonly userOperations: BashOperations;
-  attach(): void;
+  attach(options?: { readonly commandPrefix?: string }): void;
 }
 
 export interface BashSandboxController {
@@ -128,7 +124,15 @@ export const setupBashSandbox = (
   const approvedHosts = new Set<string>();
   const deniedHosts = new Set<string>();
   let backendAttached = false;
+  let backendCommandPrefix: string | undefined;
 
+  const networkMode = (): BashExecutionBoundary["network"] => {
+    const { profile } = state;
+    if (profile === undefined) return "unavailable";
+    return profile.networkMode === "allowlisted" || approvedHosts.size > 0
+      ? "allowlisted"
+      : "denied";
+  };
   const scratchDirectory = (): string | undefined => state.scratchDirectory;
   const controlledOptions = {
     getScratchDirectory: scratchDirectory,
@@ -159,14 +163,21 @@ export const setupBashSandbox = (
   const provider: BashSandboxOperationsProvider = {
     sandboxedOperations,
     userOperations,
-    attach() {
+    attach(attachOptions = {}) {
       backendAttached = true;
+      backendCommandPrefix = attachOptions.commandPrefix;
     },
   };
+  // Cover both extension load orders. A Hearth extension already loaded sees
+  // this publication immediately; one loaded later sees the session_start
+  // replay after all extensions have registered their listeners.
+  pi.events.emit(BASH_SANDBOX_PROVIDER_EVENT, provider);
 
   const cwd = process.cwd();
+  let sessionCwd = cwd;
   const escalatedBash = createBashTool(cwd, {
     operations: escalatedOperations as BashOperations,
+    spawnHook: (context) => ({ ...context, cwd: sessionCwd }),
   });
   pi.registerTool({
     ...escalatedBash,
@@ -182,6 +193,7 @@ export const setupBashSandbox = (
   } as unknown as ToolDefLike);
 
   pi.on("session_start", async (_event, ctx) => {
+    sessionCwd = ctx.cwd ?? cwd;
     approvedHosts.clear();
     deniedHosts.clear();
     state = { kind: "starting" };
@@ -208,6 +220,12 @@ export const setupBashSandbox = (
           ctx.signal === undefined ? undefined : { signal: ctx.signal },
         );
         (allowed ? approvedHosts : deniedHosts).add(key);
+        if (allowed && state.profile !== undefined) {
+          ctx.ui.setStatus?.(
+            "bash-sandbox",
+            `sandbox: ${networkMode()}, ${state.profile.writableRoots.length} write roots`,
+          );
+        }
         return allowed;
       };
       await runtime.SandboxManager.initialize(
@@ -233,7 +251,10 @@ export const setupBashSandbox = (
         reason,
       };
       ctx.ui.setStatus?.("bash-sandbox", "sandbox unavailable");
-      ctx.ui.notify(`Bash sandbox unavailable; ordinary Bash is blocked: ${reason}`, "error");
+      ctx.ui.notify(
+        `Bash sandbox unavailable; ordinary Bash is blocked: ${reason}`,
+        "error",
+      );
     }
     pi.events.emit(BASH_SANDBOX_PROVIDER_EVENT, provider);
   });
@@ -244,6 +265,8 @@ export const setupBashSandbox = (
     const previous = state;
     state = { kind: "stopped" };
     backendAttached = false;
+    backendCommandPrefix = undefined;
+    sessionCwd = cwd;
     ctx.ui.setStatus?.("bash-sandbox", undefined);
     try {
       await previous.manager?.reset();
@@ -270,7 +293,7 @@ export const setupBashSandbox = (
       ctx.ui.notify(
         [
           "Bash effect sandbox: ready",
-          `Network: ${state.profile.networkMode} (unknown hosts ask once per session)`,
+          `Network: ${networkMode()} (unknown hosts ask once per session)`,
           `Writable roots: ${state.profile.writableRoots.length}`,
           `Profile: ${state.profile.fingerprint.slice(0, 12)}`,
           "Opaque code may freely affect every configured writable root and approved host.",
@@ -285,24 +308,25 @@ export const setupBashSandbox = (
       if (toolName !== "bash" && toolName !== "bash_escalated") {
         return undefined;
       }
-      const profile = state.profile;
+      const { profile } = state;
       return {
         mode: toolName === "bash" ? "sandboxed" : "escalated",
-        network: profile?.networkMode ?? "unavailable",
+        network: networkMode(),
         profileFingerprint: profile?.fingerprint ?? "unavailable",
       };
     },
     registerExecutionBoundary({ blockToolCall, permissionAudit }) {
       pi.on("tool_call", async (event, ctx) => {
         if (event.toolName !== "bash") return undefined;
-        const unavailable = async (reason: string): Promise<PermissionBlockResult> => {
+        const unavailable = async (
+          reason: string,
+        ): Promise<PermissionBlockResult> => {
           permissionAudit?.addStage(event.toolCallId, {
             type: "error",
             component: "bash-sandbox",
             phase: "pre-execution",
             verdict: "error",
             reasonCode: "sandbox-unavailable",
-            message: reason,
           });
           if (permissionAudit === undefined) return blockToolCall(reason);
           return (await permissionAudit.finalizeBlock(
@@ -322,20 +346,25 @@ export const setupBashSandbox = (
             `bash sandbox backend is not ready: ${state.reason ?? (backendAttached ? state.kind : "not attached")}`,
           );
         }
-        const command = event.input.command;
+        const { command } = event.input;
         if (typeof command !== "string") {
           return unavailable("bash sandbox received malformed command input");
         }
         try {
+          const commandWithPrefix = backendCommandPrefix
+            ? `${backendCommandPrefix}\n${command}`
+            : command;
           event.input.command = await state.manager.wrapWithSandbox(
-            command,
+            commandWithPrefix,
             CONTROLLED_BASH_PATH,
             undefined,
             ctx.signal,
           );
           return undefined;
         } catch (error) {
-          return unavailable(`bash sandbox wrapping failed: ${failureReason(error)}`);
+          return unavailable(
+            `bash sandbox wrapping failed: ${failureReason(error)}`,
+          );
         }
       });
     },
@@ -343,4 +372,8 @@ export const setupBashSandbox = (
 };
 
 export default setupBashSandbox;
-export type { SetupBashSandboxOptions, SandboxManagerLike, SandboxRuntimeModule };
+export type {
+  SetupBashSandboxOptions,
+  SandboxManagerLike,
+  SandboxRuntimeModule,
+};

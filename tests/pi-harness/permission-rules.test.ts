@@ -981,7 +981,9 @@ describe("permission judge config", () => {
 
 describe("bash sandbox config", () => {
   test("uses deny-by-default network and credential path defaults", () => {
-    const paths = resolvePaths(join(tmpdir(), `missing-sandbox-home-${Date.now()}`));
+    const paths = resolvePaths(
+      join(tmpdir(), `missing-sandbox-home-${Date.now()}`),
+    );
     expect(loadConfig({}, paths).bashSandbox).toEqual(
       DEFAULT_BASH_SANDBOX_CONFIG,
     );
@@ -1046,7 +1048,9 @@ describe("bash sandbox config", () => {
     );
 
     try {
-      expect(loadConfig({}, paths, "linux").bashSandbox?.configurationError).toBe(
+      expect(
+        loadConfig({}, paths, "linux").bashSandbox?.configurationError,
+      ).toBe(
         "invalid bashSandbox fields: network.allowedDomains, network.deniedDomains, filesystem.denyRead, filesystem.allowWrite, filesystem.denyWrite",
       );
     } finally {

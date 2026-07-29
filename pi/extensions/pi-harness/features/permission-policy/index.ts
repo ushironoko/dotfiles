@@ -21,6 +21,7 @@ import {
   gitReadCwdTarget,
   hasProjectSensitiveMutation,
   hasUnverifiedProjectMutationNavigation,
+  isSandboxResidualVerdict,
   loadRules,
   type AllowRule,
   type AuditedVerdict,
@@ -53,6 +54,8 @@ const readPermissionRules = (): string | undefined => {
 
 const MALFORMED_REASON =
   "permission-policy: bash ツール入力が不正なため実行をブロックしました（command が文字列ではありません）";
+const JUDGE_DISABLED_RESIDUAL_REASON =
+  "ローカル判定器が無効なため、sandbox内でも動的・不透明なコマンドには確認が必要です";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -390,8 +393,13 @@ const setupPermissionPolicy = (
     const executionBoundary = options.executionBoundary?.(event.toolName);
     // Narrow tests and older adapters without the execution layer retain the
     // original strict Bash policy. Production always supplies a boundary.
-    if (event.toolName === "bash_escalated" && executionBoundary === undefined) {
-      return blocked("bash_escalated is unavailable without an execution boundary");
+    if (
+      event.toolName === "bash_escalated" &&
+      executionBoundary === undefined
+    ) {
+      return blocked(
+        "bash_escalated is unavailable without an execution boundary",
+      );
     }
     const effectSandboxed = executionBoundary?.mode === "sandboxed";
     const isEscalated = executionBoundary?.mode === "escalated";
@@ -541,10 +549,10 @@ const setupPermissionPolicy = (
               "the active pi operation was cancelled",
             );
           }
-          if (
-            gitCwdNavigation?.scope !== "listed-worktree" ||
-            !gitCwdNavigation.sameRepository
-          ) {
+          const verifiedGitCwd =
+            gitCwdNavigation?.scope === "listed-worktree" &&
+            gitCwdNavigation.sameRepository;
+          if (!verifiedGitCwd) {
             permissionAudit?.addStage(event.toolCallId, {
               type: "scope",
               phase: "git-c",
@@ -556,26 +564,29 @@ const setupPermissionPolicy = (
                 ? {}
                 : { navigation: gitCwdNavigation }),
             });
-            return confirm(
-              "検証できないGit作業場所を使用しますか？",
-              "git -C の対象を登録済みの同一リポジトリworktree内と確認できませんでした",
-              "git-c-unverified",
-              "git-c-scope",
-            );
+            if (!isEscalated) {
+              return confirm(
+                "検証できないGit作業場所を使用しますか？",
+                "git -C の対象を登録済みの同一リポジトリworktree内と確認できませんでした",
+                "git-c-unverified",
+                "git-c-scope",
+              );
+            }
+          } else {
+            permissionAudit?.addStage(event.toolCallId, {
+              type: "scope",
+              phase: "git-c",
+              verdict: "allow",
+              reasonCode: "git-c-listed-worktree",
+              navigation: gitCwdNavigation,
+            });
+            trustedGitReadCwdTarget = readCwdTarget;
+            result = evaluateCommandWithAudit(command, evaluationRules, {
+              effectSandboxed,
+              trustedGitCwdTarget: readCwdTarget,
+            });
+            recordDeterministic(event.toolCallId, "verified-git-c", result);
           }
-          permissionAudit?.addStage(event.toolCallId, {
-            type: "scope",
-            phase: "git-c",
-            verdict: "allow",
-            reasonCode: "git-c-listed-worktree",
-            navigation: gitCwdNavigation,
-          });
-          trustedGitReadCwdTarget = readCwdTarget;
-          result = evaluateCommandWithAudit(command, evaluationRules, {
-            effectSandboxed,
-            trustedGitCwdTarget: readCwdTarget,
-          });
-          recordDeterministic(event.toolCallId, "verified-git-c", result);
         }
       }
       if (result.verdict === "deny") {
@@ -585,7 +596,7 @@ const setupPermissionPolicy = (
           result.reason,
         );
       }
-      if (result.verdict === "ask") {
+      if (result.verdict === "ask" && !isEscalated) {
         return confirm(
           "危険なコマンドを実行しますか？",
           result.reason,
@@ -617,12 +628,14 @@ const setupPermissionPolicy = (
           reasonCode: "mutation-navigation-unverified",
           reason,
         });
-        return confirm(
-          "検証できない移動後のプロジェクト変更を実行しますか？",
-          reason,
-          "mutation-navigation-unverified",
-          "mutation-navigation",
-        );
+        if (!isEscalated) {
+          return confirm(
+            "検証できない移動後のプロジェクト変更を実行しますか？",
+            reason,
+            "mutation-navigation-unverified",
+            "mutation-navigation",
+          );
+        }
       }
       // Context-free allows remain cheap, but an allow cannot bypass verified
       // leading navigation or the verified-project floor for a Git mutation.
@@ -640,7 +653,14 @@ const setupPermissionPolicy = (
         !projectSensitiveMutation &&
         !isEscalated
       ) {
-        return undefined;
+        return effectSandboxed && isSandboxResidualVerdict(result)
+          ? confirm(
+              "動的なsandbox内コマンドを実行しますか？",
+              JUDGE_DISABLED_RESIDUAL_REASON,
+              "judge-disabled-sandbox-residual",
+              "local-judge",
+            )
+          : undefined;
       }
       const project =
         ctx.cwd === undefined
@@ -668,11 +688,11 @@ const setupPermissionPolicy = (
           "the active pi operation was cancelled",
         );
       }
-      if (
+      const verifiedLeadingNavigation =
         leadingCdTarget !== undefined &&
-        (leadingNavigation?.scope !== "listed-worktree" ||
-          !leadingNavigation.sameRepository)
-      ) {
+        leadingNavigation?.scope === "listed-worktree" &&
+        leadingNavigation.sameRepository;
+      if (leadingCdTarget !== undefined && !verifiedLeadingNavigation) {
         const reason =
           "登録済みの同一リポジトリworktreeへの移動と確認できませんでした";
         permissionAudit?.addStage(event.toolCallId, {
@@ -685,14 +705,16 @@ const setupPermissionPolicy = (
             ? {}
             : { navigation: leadingNavigation }),
         });
-        return confirm(
-          "プロジェクト外へ移動するコマンドを実行しますか？",
-          reason,
-          "leading-navigation-unverified",
-          "leading-navigation",
-        );
+        if (!isEscalated) {
+          return confirm(
+            "プロジェクト外へ移動するコマンドを実行しますか？",
+            reason,
+            "leading-navigation-unverified",
+            "leading-navigation",
+          );
+        }
       }
-      if (leadingNavigation !== undefined) {
+      if (verifiedLeadingNavigation) {
         permissionAudit?.addStage(event.toolCallId, {
           type: "scope",
           phase: "leading-navigation",
@@ -714,12 +736,14 @@ const setupPermissionPolicy = (
           reasonCode: "project-mutation-unverified",
           reason,
         });
-        return confirm(
-          "検証できないプロジェクト変更を実行しますか？",
-          reason,
-          "project-mutation-unverified",
-          "project-mutation",
-        );
+        if (!isEscalated) {
+          return confirm(
+            "検証できないプロジェクト変更を実行しますか？",
+            reason,
+            "project-mutation-unverified",
+            "project-mutation",
+          );
+        }
       }
       if (result.verdict === "allow" && !isEscalated) return undefined;
 
@@ -758,7 +782,7 @@ const setupPermissionPolicy = (
             result.reason,
           );
         }
-        if (result.verdict === "ask") {
+        if (result.verdict === "ask" && !isEscalated) {
           return confirm(
             "危険なコマンドを実行しますか？",
             result.reason,
@@ -769,11 +793,19 @@ const setupPermissionPolicy = (
         if (result.verdict === "allow" && !isEscalated) return undefined;
       }
       if (judge === undefined) {
-        return isEscalated
+        if (isEscalated) {
+          return confirm(
+            "Sandbox外実行を確認しますか？",
+            "ローカル判定器が無効なため自動承認できません",
+            "judge-disabled",
+            "local-judge",
+          );
+        }
+        return effectSandboxed && isSandboxResidualVerdict(result)
           ? confirm(
-              "Sandbox外実行を確認しますか？",
-              "ローカル判定器が無効なため自動承認できません",
-              "judge-disabled",
+              "動的なsandbox内コマンドを実行しますか？",
+              JUDGE_DISABLED_RESIDUAL_REASON,
+              "judge-disabled-sandbox-residual",
               "local-judge",
             )
           : undefined;

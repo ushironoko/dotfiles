@@ -49,9 +49,11 @@ SPEC_EOF
 - The wrapper runs `codex -a never exec --sandbox workspace-write -C <worktree
 toplevel>` under the hood: codex edits files directly in the worktree; `.git`,
   `.codex` and `.agents` stay read-only by codex policy.
-- codex needs network and a local app-server: if a sandboxed Bash run of the
-  wrapper fails with "Operation not permitted", retry with the Bash sandbox
-  disabled — that is a harness sandbox restriction, not a wrapper defect.
+- codex needs network and a local app-server. Under pi, if ordinary Bash blocks
+  the wrapper at the effect boundary, retry that exact wrapper call with the
+  explicit `bash_escalated` tool; it performs a fresh local classification.
+  If escalation is unavailable or not approved, report the PoC as blocked.
+  Never disable the sandbox implicitly or invoke `codex` directly.
 
 ### Phase 3: Report
 
