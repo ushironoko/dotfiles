@@ -1013,7 +1013,7 @@ describe("bash sandbox config", () => {
     try {
       const sandbox = loadConfig({}, paths, "darwin").bashSandbox;
       expect(sandbox?.network).toEqual({
-        allowedDomains: ["api.github.com"],
+        allowedDomains: ["api.github.com", "github.com"],
         deniedDomains: ["malicious.example"],
       });
       expect(sandbox?.filesystem.denyRead).toContain("~/.ssh");

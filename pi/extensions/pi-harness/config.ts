@@ -77,7 +77,10 @@ export interface BashSandboxConfig {
 }
 
 export const DEFAULT_BASH_SANDBOX_CONFIG: Readonly<BashSandboxConfig> = {
-  network: { allowedDomains: [], deniedDomains: [] },
+  network: {
+    allowedDomains: ["api.github.com", "github.com"],
+    deniedDomains: [],
+  },
   filesystem: {
     denyRead: [
       "~/.ssh",

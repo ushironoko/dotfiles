@@ -104,14 +104,17 @@ failures block ordinary Bash; there is no unsandboxed fallback.
 The default writable scope is the active verified worktree, its canonical Git
 common directory, and session scratch. The common directory's Git config and
 hooks remain explicitly denied even for linked worktrees. Credential stores are
-denied for reads; harness settings/hooks and agent configuration are denied for writes. Network
-is deny-by-default: an empty `allowedDomains` list means no network. An unknown
-host can be approved or denied once for the current interactive session and is
-denied without UI. `/sandbox` shows the active mode, write-root count, network
-mode, and a short profile fingerprint without exposing private paths.
+denied for reads; harness settings/hooks and agent configuration are denied for
+writes. Network is allowlist-only. The checked-in global profile permits
+`api.github.com` and `github.com`; this applies to every ordinary sandboxed
+command, not only `gh`. Any other host can be approved or denied once for the
+current interactive session and is denied without UI. `/sandbox` shows the
+active mode, write-root count, network mode, and a short profile fingerprint
+without exposing private paths.
 
 Only the machine-local `~/.pi/agent/pi-harness.local.json` can add trusted
-paths or domains; repository configuration cannot widen this boundary:
+paths or additional domains; repository configuration cannot otherwise widen
+this boundary:
 
 ```json
 {
