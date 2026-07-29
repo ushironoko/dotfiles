@@ -3,15 +3,20 @@
  *
  * Frontmatter is a single-level "key: value" block delimited by "---" lines;
  * the rest of the file is the agent's system prompt. Only name/description
- * are required (the repo's agent files carry no model/tools keys; pi defaults
- * apply when absent).
+ * are required. Optional pi-codex-stage-modes values are a trusted,
+ * harness-specific capability declaration and are rejected fail-closed when
+ * any mode is unknown or duplicated.
  */
+
+export const CODEX_STAGE_MODES = ["prompt", "review", "poc", "run"] as const;
+export type CodexStageMode = (typeof CODEX_STAGE_MODES)[number];
 
 export interface AgentDefinition {
   name: string;
   description: string;
   tools?: string[];
   model?: string;
+  codexStageModes?: CodexStageMode[];
   systemPrompt: string;
 }
 
@@ -64,6 +69,22 @@ export const parseAgentMarkdown = (
   }
   if (fields.model !== undefined && fields.model !== "") {
     definition.model = fields.model;
+  }
+  if (
+    fields["pi-codex-stage-modes"] !== undefined &&
+    fields["pi-codex-stage-modes"] !== ""
+  ) {
+    const modes = fields["pi-codex-stage-modes"]
+      .split(",")
+      .map((mode) => mode.trim());
+    const knownModes = new Set<string>(CODEX_STAGE_MODES);
+    if (
+      modes.some((mode) => !knownModes.has(mode)) ||
+      new Set(modes).size !== modes.length
+    ) {
+      return undefined;
+    }
+    definition.codexStageModes = modes as CodexStageMode[];
   }
   return definition;
 };

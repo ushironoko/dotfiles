@@ -7,6 +7,11 @@ import {
   type HarnessConfig,
 } from "../../pi/extensions/pi-harness/config";
 import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
+import {
+  CODEX_STAGE_CAPABILITY_ENV,
+  consumeCodexStageCapability,
+  createCodexStageCapabilityRuntime,
+} from "../../pi/extensions/pi-harness/features/permission-policy/codex-stage-capability";
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
 import type { PermissionAuditIntegration } from "../../pi/extensions/pi-harness/features/permission-audit/index";
 import setupSubagent from "../../pi/extensions/pi-harness/features/subagent/index";
@@ -267,8 +272,20 @@ describe("pi-harness subagent", () => {
         "description: Reviews a change",
         "tools: read, grep",
         "model: openai-codex/gpt-5.4-mini",
+        "pi-codex-stage-modes: prompt,review",
         "---",
         "Review carefully.",
+      ].join("\n"),
+    );
+    await fs.writeFile(
+      join(directory, "invalid-capability.md"),
+      [
+        "---",
+        "name: invalid-capability",
+        "description: Must not load with an unknown privileged mode",
+        "pi-codex-stage-modes: prompt,unknown",
+        "---",
+        "Do not load.",
       ].join("\n"),
     );
     await fs.writeFile(join(directory, "broken.md"), "not frontmatter");
@@ -280,6 +297,7 @@ describe("pi-harness subagent", () => {
         description: "Reviews a change",
         tools: ["read", "grep"],
         model: "openai-codex/gpt-5.4-mini",
+        codexStageModes: ["prompt", "review"],
         systemPrompt: "Review carefully.",
       },
     ]);
@@ -320,6 +338,7 @@ describe("pi-harness subagent", () => {
         "description: Reviews a change",
         "tools: read, grep",
         "model: openai-codex/gpt-5.4-mini",
+        "pi-codex-stage-modes: prompt,review",
         "---",
         "Review carefully.",
       ].join("\n"),
@@ -381,6 +400,7 @@ describe("pi-harness subagent", () => {
     expect(recordedArgs).toContain("openai-codex/gpt-5.4-mini");
     expect(recordedArgs).toContain("read,grep");
     expect(recordedEnv.PI_HARNESS_CHILD).toBe("1");
+    expect(recordedEnv[CODEX_STAGE_CAPABILITY_ENV]).toBe("prompt,review");
     expect(recordedEnv.PI_HARNESS_AUDIT_LINEAGE_ID).toBe(
       "123e4567-e89b-42d3-a456-426614174000",
     );
@@ -631,12 +651,18 @@ describe("pi-harness subagent", () => {
     const agentsDirectory = resolvePaths(home).claudeAgentsDir;
     const wrapperDirectory = join(home, ".claude", "hooks", "lib");
     const wrapperPath = join(wrapperDirectory, "codex-stage.sh");
-    const privatePromptDirectory = join(home, "codex-reviewer-a1B2C3");
-    const promptArtifact = join(privatePromptDirectory, "prompt.md");
+    const sandboxScratch = join(home, "sandbox-scratch");
     const receivedPrompt = join(home, "mock-codex-stdin.txt");
     await fs.mkdir(agentsDirectory, { recursive: true });
     await fs.mkdir(wrapperDirectory, { recursive: true });
-    await fs.mkdir(privatePromptDirectory, { mode: 0o700 });
+    await fs.mkdir(sandboxScratch, { mode: 0o700 });
+    const canonicalScratch = await fs.realpath(sandboxScratch);
+    const scratchStat = await fs.stat(canonicalScratch);
+    const scratchBoundary = {
+      path: canonicalScratch,
+      identity: `${scratchStat.dev}:${scratchStat.ino}`,
+    };
+    const promptArtifact = join(canonicalScratch, "codex-reviewer-a1B2C3.md");
     await fs.copyFile(
       join(import.meta.dir, "../../claude/.claude/agents/codex-reviewer.md"),
       join(agentsDirectory, "codex-reviewer.md"),
@@ -647,16 +673,23 @@ describe("pi-harness subagent", () => {
       [
         "#!/bin/bash",
         "set -euo pipefail",
+        "while [ $# -gt 0 ]; do shift; done",
         'cat > "$MOCK_CODEX_STDIN"',
         String.raw`printf '%s\n' 'mock codex reached'`,
       ].join("\n"),
       { mode: 0o755 },
     );
+    const codexStageRuntime = createCodexStageCapabilityRuntime(wrapperPath, {
+      temporaryDirectory: home,
+    });
 
     let policyDecision: Awaited<
       ReturnType<ReturnType<typeof createFakePi>["emitToolCall"]>
     > = undefined;
     const spawnFn: SpawnFunction = (_command, args, launchOptions) => {
+      expect(launchOptions.env[CODEX_STAGE_CAPABILITY_ENV]).toBe(
+        "prompt,review",
+      );
       const promptFlag = args.indexOf("--append-system-prompt");
       const instructions = readFileSync(args[promptFlag + 1] ?? "", "utf8");
       const wrapperExamples = [
@@ -668,14 +701,14 @@ describe("pi-harness subagent", () => {
       expect(wrapperExamples).not.toContain("<<");
       expect(wrapperExamples).not.toContain('--dir "$PWD"');
       const commandMatch =
-        /```bash\n[ \t]*(printf '%s' 'Read \/tmp\/codex-reviewer-a1B2C3\/prompt\.md completely and follow it exactly\.' \|\n[ \t]+~\/\.claude\/hooks\/lib\/codex-stage\.sh prompt --timeout 600)\n[ \t]*```/.exec(
+        /```bash\n[ \t]*(printf '%s' 'Read \/PRINTED_PRIVATE_PROMPT_FILE completely and follow it exactly\.' \|\n[ \t]+~\/\.claude\/hooks\/lib\/codex-stage\.sh prompt --timeout 600)\n[ \t]*```/.exec(
           instructions,
         );
       if (commandMatch?.[1] === undefined) {
         throw new Error("documented default-cwd reviewer pipeline not found");
       }
       const documentedCommand = commandMatch[1].replaceAll(
-        "/tmp/codex-reviewer-a1B2C3/prompt.md",
+        "/PRINTED_PRIVATE_PROMPT_FILE",
         promptArtifact,
       );
       const controller = createFakeProcess();
@@ -698,17 +731,37 @@ describe("pi-harness subagent", () => {
                 },
               },
               {
+                codexStageModes: consumeCodexStageCapability(true, {
+                  ...launchOptions.env,
+                }),
+                codexStageRuntime,
+                discoverProject: async () => ({
+                  kind: "git",
+                  cwd: home,
+                  activeWorktree: home,
+                  navigableRoots: [home],
+                  worktrees: [home],
+                  fingerprint: `project:${home}`,
+                }),
+                executionBoundary: (toolName) => ({
+                  mode:
+                    toolName === "bash_escalated" ? "escalated" : "sandboxed",
+                  network: "denied",
+                  profileFingerprint: "c".repeat(64),
+                }),
+                scratchBoundaryFor: () => scratchBoundary,
                 permissionSignalToken:
                   launchOptions.env[CHILD_PERMISSION_SIGNAL_ENV],
                 writePermissionSignal: (text) => controller.emitStderr(text),
               },
             );
-            policyDecision = await childPi.emitToolCall({
-              type: "tool_call",
-              toolName: "bash",
+            const toolCall = {
+              type: "tool_call" as const,
+              toolName: "bash_escalated",
               toolCallId: "codex-reviewer-pipeline",
               input: { command: documentedCommand },
-            });
+            };
+            policyDecision = await childPi.emitToolCall(toolCall);
             if (policyDecision !== undefined) {
               controller.emitStdout(
                 assistantEvent(`blocked: ${policyDecision.reason}`),
@@ -717,16 +770,19 @@ describe("pi-harness subagent", () => {
               return;
             }
 
-            const executed = Bun.spawnSync(["bash", "-c", documentedCommand], {
-              cwd: home,
-              env: {
-                ...launchOptions.env,
-                HOME: home,
-                MOCK_CODEX_STDIN: receivedPrompt,
+            const executed = Bun.spawnSync(
+              ["bash", "-c", toolCall.input.command],
+              {
+                cwd: home,
+                env: {
+                  ...launchOptions.env,
+                  HOME: home,
+                  MOCK_CODEX_STDIN: receivedPrompt,
+                },
+                stdout: "pipe",
+                stderr: "pipe",
               },
-              stdout: "pipe",
-              stderr: "pipe",
-            });
+            );
             const stderr = Buffer.from(executed.stderr).toString("utf8");
             if (stderr !== "") controller.emitStderr(stderr);
             controller.emitStdout(
@@ -763,9 +819,10 @@ describe("pi-harness subagent", () => {
     expect(result.permissionBlocked).toBeUndefined();
     expect(result.failed).toBe(false);
     expect(result.output).toContain("mock codex reached");
-    expect(await fs.readFile(receivedPrompt, "utf8")).toBe(
-      `Read ${promptArtifact} completely and follow it exactly.`,
+    expect(await fs.readFile(receivedPrompt, "utf8")).toMatch(
+      /^Read \/.*\/pi-codex-stage-artifact-.*\/prompt\.md completely and follow it exactly\.$/,
     );
+    codexStageRuntime.dispose();
   });
 
   test("treats a child permission block as failure even when pi exits zero", async () => {

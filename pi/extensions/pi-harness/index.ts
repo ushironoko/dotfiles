@@ -129,6 +129,7 @@ const setupHarness = (
     taskTracker: permissionTaskTracker,
     permissionAudit,
     executionBoundary: (toolName) => bashSandbox.boundaryFor(toolName),
+    scratchBoundaryFor: (toolName) => bashSandbox.scratchBoundaryFor(toolName),
   });
 
   if (bridgeRegistry?.remaining.length) {

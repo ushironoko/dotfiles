@@ -25,11 +25,17 @@ const makeConfig = (isChild: boolean): HarnessConfig => ({
 });
 
 describe("permission command hygiene prompt", () => {
-  test("states a soft priority order with an explicit capability escape hatch", () => {
+  test("requires deterministic-ALLOW forms before confirmation-prone equivalents", () => {
     const prompt = appendCommandHygiene("BASE SYSTEM PROMPT\n");
 
     expect(prompt).toStartWith("BASE SYSTEM PROMPT\n\n");
-    expect(prompt).toContain("preference, not a hard constraint");
+    expect(prompt).toContain("ALLOW-first command selection");
+    expect(prompt).toContain(
+      "use the form expected to receive a deterministic ALLOW",
+    );
+    expect(prompt).toContain(
+      "Do not use ASK or user confirmation as a convenience path",
+    );
     expect(prompt).toContain("already captures stdout and stderr");
     expect(prompt).toContain(
       "Do not create a temporary file merely to inspect, filter, summarize",
@@ -78,13 +84,59 @@ describe("permission command hygiene prompt", () => {
     expect(prompt).toContain(
       "Do not synthesize the body with a heredoc, command substitution, or temporary file",
     );
-    expect(prompt).toContain("rg --no-config ... | head -200");
+    expect(prompt).toContain(
+      "rg --no-config -n 'sandbox|judge' pi/extensions/pi-harness",
+    );
+    expect(prompt).toContain(
+      "find pi/extensions/pi-harness -maxdepth 3 -type f -name '*.ts' -print",
+    );
+    expect(prompt).toContain("find pi/extensions -type l -print");
+    expect(prompt).toContain(
+      "Do not append sort, head, or wc solely to reorder, limit, or count inspection output",
+    );
+    expect(prompt).toContain(
+      "Do not use find -exec, find -execdir, or xargs merely for convenience during repository inspection",
+    );
+    expect(prompt).toContain(
+      "If one is genuinely required and no equivalent deterministic-ALLOW form can satisfy the task",
+    );
+    expect(COMMAND_HYGIENE_GUIDANCE).not.toContain("Never use find -exec");
+    expect(prompt).toContain(
+      "If no equivalent deterministic-ALLOW form can satisfy the task",
+    );
     expect(prompt).toContain("first state briefly why it is needed");
     expect(prompt).toContain("instead of merely claiming that it is safe");
     expect(prompt).toContain(
       "Do not compress complex work into a fragile one-liner",
     );
     expect(COMMAND_HYGIENE_GUIDANCE).not.toContain("never use Bash");
+  });
+
+  test("appends cleanly when the base system prompt is empty", () => {
+    expect(appendCommandHygiene("")).toBe(COMMAND_HYGIENE_GUIDANCE);
+  });
+
+  test("is reinjected into the system prompt on every agent start", async () => {
+    const pi = createFakePi();
+    setupPermissionPolicy(pi, makeConfig(false));
+
+    for (const prompt of ["Inspect files", "Continue the long task"]) {
+      const result = await pi.emitBeforeAgentStart({
+        type: "before_agent_start",
+        prompt,
+        systemPrompt: "BASE SYSTEM PROMPT",
+      });
+
+      expect(result?.message).toBeUndefined();
+      expect(result?.systemPrompt).toEndWith(COMMAND_HYGIENE_GUIDANCE);
+    }
+
+    const missingBase = await pi.emitBeforeAgentStart({
+      type: "before_agent_start",
+      prompt: "Start without a base prompt",
+    });
+    expect(missingBase?.message).toBeUndefined();
+    expect(missingBase?.systemPrompt).toBe(COMMAND_HYGIENE_GUIDANCE);
   });
 
   test.each([false, true])(

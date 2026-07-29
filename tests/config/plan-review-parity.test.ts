@@ -554,7 +554,10 @@ describe("shared Claude/Codex plan-review workflow contract", () => {
       "validated payload substituted as file content, never as shell text",
       "at or below 6 KiB of UTF-8 text",
       "keep the large prompt and all dynamic data out of the Bash command",
-      "printf '%s' 'Read /tmp/codex-reviewer-a1B2C3/prompt.md completely and follow it exactly.'",
+      "pi-codex-stage-modes: prompt,review",
+      'open(path, "wx", 0o600)',
+      '"codex-reviewer-" + randomUUID() + ".md"',
+      "printf '%s' 'Read /PRINTED_PRIVATE_PROMPT_FILE completely and follow it exactly.'",
     ]) {
       expect(normalized).toContain(phrase);
     }

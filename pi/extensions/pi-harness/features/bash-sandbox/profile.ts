@@ -9,6 +9,8 @@ import {
   runGitCommonDir,
 } from "../permission-policy/context";
 
+export const BASH_SANDBOX_PROJECT_DISCOVERY_TIMEOUT_MS = 5_000;
+
 export interface BashSandboxProfile {
   readonly cwd: string;
   readonly writableRoots: readonly string[];
@@ -45,7 +47,11 @@ export const buildBashSandboxProfile = async (
   const canonicalize = options.canonicalize ?? realpath;
   const canonicalCwd = await canonicalize(cwd);
   const discover = options.discoverProject ?? discoverProjectContext;
-  const project = await discover(canonicalCwd, {}, signal);
+  const project = await discover(
+    canonicalCwd,
+    { timeoutMs: BASH_SANDBOX_PROJECT_DISCOVERY_TIMEOUT_MS },
+    signal,
+  );
   if (project.kind === "unavailable") {
     throw new Error(`project boundary unavailable: ${project.reason}`);
   }
@@ -57,6 +63,7 @@ export const buildBashSandboxProfile = async (
     gitCommonDir = await (options.discoverGitCommonDir ?? runGitCommonDir)(
       project.cwd,
       signal,
+      { timeoutMs: BASH_SANDBOX_PROJECT_DISCOVERY_TIMEOUT_MS },
     );
     if (gitCommonDir === undefined) {
       throw new Error("Git common directory unavailable");
