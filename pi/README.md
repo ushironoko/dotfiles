@@ -13,6 +13,7 @@ child-process behavior): `tests/fixtures/pi-harness/raw/`.
 
 | Repo path                         | Deployed to                                | Mechanism                                     |
 | --------------------------------- | ------------------------------------------ | --------------------------------------------- |
+| `pi/APPEND_SYSTEM.md`             | `~/.pi/agent/APPEND_SYSTEM.md`             | dotfiles file symlink                         |
 | `pi/extensions/pi-harness`        | `~/.pi/agent/extensions/pi-harness`        | dotfiles directory symlink                    |
 | `pi/extensions/hearth-tools`      | `~/.pi/agent/extensions/hearth-tools`      | dotfiles directory symlink                    |
 | `pi/extensions/codex-web`         | `~/.pi/agent/extensions/codex-web`         | dotfiles directory symlink                    |
