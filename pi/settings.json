@@ -1,0 +1,10 @@
+{
+  "theme": "transparent-dark",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-sol",
+  "defaultThinkingLevel": "xhigh",
+  "hideThinkingBlock": false,
+  "skills": [
+    "!/Users/ushironoko/.agents/skills/**"
+  ]
+}

@@ -13,6 +13,8 @@
 #   claude-scrub : drop the machine/account-local top-level "remote" key that
 #                  Claude Code writes into claude/.claude/settings.json
 #                  (claude/scrub-settings.ts).
+#   pi-scrub     : drop machine/account-local fields, credentials, and unmanaged
+#                  absolute paths from pi/settings.json (pi/scrub-settings.ts).
 #   smudge       : identity (cat) — checkout writes the committed content verbatim.
 #   required     : true — if a scrubber ever errors, git fails the operation
 #                  loudly instead of silently staging unscrubbed content.
@@ -29,4 +31,8 @@ git config filter.claude-scrub.clean "bun claude/scrub-settings.ts"
 git config filter.claude-scrub.smudge "cat"
 git config filter.claude-scrub.required true
 
-echo "codex-scrub and claude-scrub git filters configured for $repo_root"
+git config filter.pi-scrub.clean "bun pi/scrub-settings.ts"
+git config filter.pi-scrub.smudge "cat"
+git config filter.pi-scrub.required true
+
+echo "codex-scrub, claude-scrub, and pi-scrub git filters configured for $repo_root"
