@@ -12,6 +12,7 @@ import {
   CHILD_PERMISSION_SIGNAL_ENV,
   formatChildPermissionSignal,
 } from "../permission-policy/block";
+import { CODEX_STAGE_CAPABILITY_ENV } from "../permission-policy/codex-stage-capability";
 
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 // Parser-protection ceiling: lines beyond this are dropped unparsed. Kept
@@ -277,6 +278,12 @@ const spawnAgent = async (
                 ...options.auditEnv,
                 PI_HARNESS_CHILD: "1",
                 [CHILD_PERMISSION_SIGNAL_ENV]: permissionSignalToken,
+                ...(agent.codexStageModes === undefined
+                  ? {}
+                  : {
+                      [CODEX_STAGE_CAPABILITY_ENV]:
+                        agent.codexStageModes.join(","),
+                    }),
               },
               { cwd: options.cwd },
             ),

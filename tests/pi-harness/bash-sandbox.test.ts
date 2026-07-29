@@ -9,6 +9,7 @@ import {
   type SandboxManagerLike,
 } from "../../pi/extensions/pi-harness/features/bash-sandbox";
 import {
+  BASH_SANDBOX_PROJECT_DISCOVERY_TIMEOUT_MS,
   buildBashSandboxProfile,
   type BashSandboxProfile,
 } from "../../pi/extensions/pi-harness/features/bash-sandbox/profile";
@@ -138,6 +139,10 @@ const setup = (
     makeTempDirectory: async () => "/private/scratch",
     chmodPath: async () => {},
     accessPath: async () => {},
+    pinScratchDirectory: async (path) => ({
+      path,
+      identity: "10:20",
+    }),
     removePath: async (path) => {
       removed.push(path);
     },
@@ -164,6 +169,8 @@ describe("Bash sandbox profile", () => {
   test("allows only the active worktree, verified Git metadata, scratch, and trusted additions", async () => {
     const sandboxConfig = structuredClone(DEFAULT_BASH_SANDBOX_CONFIG);
     sandboxConfig.filesystem.allowWrite.push("~/trusted-output");
+    let discoveryTimeoutMs: number | undefined;
+    let commonDirectoryTimeoutMs: number | undefined;
     const result = await buildBashSandboxProfile(
       "/repo/active/subdir",
       "/private/scratch",
@@ -172,19 +179,29 @@ describe("Bash sandbox profile", () => {
       {
         home: "/home/test",
         canonicalize: async () => "/repo/active/subdir",
-        discoverProject: async () => ({
-          kind: "git",
-          name: "repo",
-          cwd: "/repo/active/subdir",
-          activeWorktree: "/repo/active",
-          navigableRoots: ["/repo/active", "/repo/other-worktree"],
-          worktrees: ["/repo/active", "/repo/other-worktree"],
-          fingerprint: "project-fingerprint",
-        }),
-        discoverGitCommonDir: async () => "/repo/common.git",
+        discoverProject: async (_cwd, options) => {
+          discoveryTimeoutMs = options?.timeoutMs;
+          return {
+            kind: "git",
+            name: "repo",
+            cwd: "/repo/active/subdir",
+            activeWorktree: "/repo/active",
+            navigableRoots: ["/repo/active", "/repo/other-worktree"],
+            worktrees: ["/repo/active", "/repo/other-worktree"],
+            fingerprint: "project-fingerprint",
+          };
+        },
+        discoverGitCommonDir: async (_cwd, _signal, options) => {
+          commonDirectoryTimeoutMs = options?.timeoutMs;
+          return "/repo/common.git";
+        },
       },
     );
 
+    expect(discoveryTimeoutMs).toBe(BASH_SANDBOX_PROJECT_DISCOVERY_TIMEOUT_MS);
+    expect(commonDirectoryTimeoutMs).toBe(
+      BASH_SANDBOX_PROJECT_DISCOVERY_TIMEOUT_MS,
+    );
     expect(result.writableRoots).toEqual([
       "/repo/active",
       "/repo/common.git",
@@ -267,6 +284,13 @@ describe("Bash effect sandbox lifecycle", () => {
       mode: "sandboxed",
       network: "denied",
       profileFingerprint: "a".repeat(64),
+    });
+    expect(runtime.controller.scratchDirectoryFor("bash_escalated")).toBe(
+      "/private/scratch",
+    );
+    expect(runtime.controller.scratchBoundaryFor("bash_escalated")).toEqual({
+      path: "/private/scratch",
+      identity: "10:20",
     });
     expect(runtime.pi.tools.map((tool) => tool.name)).toContain(
       "bash_escalated",
@@ -509,6 +533,7 @@ describe("controlled Bash launcher", () => {
         BASH_ENV: "/tmp/startup.sh",
         DYLD_INSERT_LIBRARIES: "/tmp/inject.dylib",
         GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
+        PI_HARNESS_CODEX_STAGE_CAPABILITY: "prompt,review",
         GH_TOKEN: "secret",
         OPENAI_API_KEY: "secret",
         HTTPS_PROXY: "http://user:pass@example.test",
@@ -535,6 +560,7 @@ describe("controlled Bash launcher", () => {
       "BASH_ENV",
       "DYLD_INSERT_LIBRARIES",
       "GIT_CONFIG_GLOBAL",
+      "PI_HARNESS_CODEX_STAGE_CAPABILITY",
       "GH_TOKEN",
       "OPENAI_API_KEY",
       "HTTPS_PROXY",

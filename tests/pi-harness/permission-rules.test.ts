@@ -784,7 +784,7 @@ describe("explicit allow matching", () => {
 
   test("allows the documented codex-reviewer staging, prompt, and cleanup commands", () => {
     const instruction =
-      "printf '%s' 'Read /tmp/codex-reviewer-a1B2C3/prompt.md completely and follow it exactly.'";
+      "printf '%s' 'Read /PRINTED_PRIVATE_PROMPT_FILE completely and follow it exactly.'";
     for (const wrapper of [
       "~/.claude/hooks/lib/codex-stage.sh prompt --timeout 600",
       "~/.claude/hooks/lib/codex-stage.sh prompt --dir '/tmp/My Repo' --timeout 600",
@@ -796,9 +796,9 @@ describe("explicit allow matching", () => {
     }
 
     const staging =
-      'bun -e \'const { mkdtemp } = await import("node:fs/promises"); console.log(await mkdtemp("/tmp/codex-reviewer-"));\'';
+      'bun -e \'const { open } = await import("node:fs/promises"); const { randomUUID } = await import("node:crypto"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path"); const path = join(tmpdir(), "codex-reviewer-" + randomUUID() + ".md"); const file = await open(path, "wx", 0o600); await file.close(); console.log(path);\'';
     const cleanup =
-      'bun -e \'const { rm } = await import("node:fs/promises"); await rm("/tmp/codex-reviewer-a1B2C3", { recursive: true, force: true });\'';
+      'bun -e \'const { rm } = await import("node:fs/promises"); await rm("/PRINTED_PRIVATE_PROMPT_FILE", { force: true });\'';
     expect(evaluateCommand(staging, productionRules).verdict).toBe("allow");
     expect(evaluateCommand(cleanup, productionRules).verdict).toBe("allow");
   });

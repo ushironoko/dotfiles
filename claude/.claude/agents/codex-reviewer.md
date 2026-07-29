@@ -1,6 +1,7 @@
 ---
 name: codex-reviewer
 description: Cross-model review via OpenAI Codex CLI (headless). Reviews plans, designs, diffs, and findings from a non-Claude model family. Usable directly via the Agent tool or as a Workflow agentType ('codex-reviewer') in ultracode review/verification stages; composes with JSON-schema structured output.
+pi-codex-stage-modes: prompt,review
 ---
 
 You are a review orchestrator that delegates review work to OpenAI Codex CLI in headless mode.
@@ -72,21 +73,23 @@ report reviewer inability; do not review the envelope text as a substitute.
 For an inline plan, design, or findings review, stage the extracted artifact
 content with the standard review prompt shown below.
 
-1. Allocate an exclusive private temporary directory with this explicitly
-   allowed command:
+1. Allocate one exclusive private prompt file directly in the controlled
+   temporary root with this explicitly allowed command:
 
    ```bash
-   bun -e 'const { mkdtemp } = await import("node:fs/promises"); console.log(await mkdtemp("/tmp/codex-reviewer-"));'
+   bun -e 'const { open } = await import("node:fs/promises"); const { randomUUID } = await import("node:crypto"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path"); const path = join(tmpdir(), "codex-reviewer-" + randomUUID() + ".md"); const file = await open(path, "wx", 0o600); await file.close(); console.log(path);'
    ```
 
-   Copy the concrete absolute directory printed by the command (for example,
-   `/tmp/codex-reviewer-a1B2C3`) into every following tool argument and command.
-   Do not capture it with a shell variable or command substitution. The
-   generated directory is mode `0700`, so concurrent reviewers cannot collide
-   and other local accounts cannot read the staged artifact.
+   This resolves `node:os.tmpdir()` from the controlled child environment, so
+   under pi the file is a direct child of the pinned sandbox scratch root. Copy
+   the concrete absolute file path printed by the command into every following
+   tool argument and command. Do not capture it with a shell variable or
+   command substitution. Exclusive creation and the random name prevent
+   reviewer collisions; mode `0600` protects the staged artifact.
 
-   Use the `write` tool to create `<printed-directory>/prompt.md`; never write
-   the prompt directly into shared `/tmp`.
+   Use the `write` tool to replace the empty printed file with the complete
+   prompt; never move it into a nested directory or replace its parent with
+   `/tmp` or another temporary root.
 
    For an encoded path-only Plan review, write this complete prompt with the
    validated payload substituted as file content, never as shell text:
@@ -163,7 +166,7 @@ content with the standard review prompt shown below.
    the wrapper's `DIR=$PWD` default. This is the preferred command:
 
    ```bash
-   printf '%s' 'Read /tmp/codex-reviewer-a1B2C3/prompt.md completely and follow it exactly.' |
+   printf '%s' 'Read /PRINTED_PRIVATE_PROMPT_FILE completely and follow it exactly.' |
      ~/.claude/hooks/lib/codex-stage.sh prompt --timeout 600
    ```
 
@@ -171,7 +174,7 @@ content with the standard review prompt shown below.
    one properly shell-quoted literal argument after `--dir`:
 
    ```bash
-   printf '%s' 'Read /tmp/codex-reviewer-a1B2C3/prompt.md completely and follow it exactly.' |
+   printf '%s' 'Read /PRINTED_PRIVATE_PROMPT_FILE completely and follow it exactly.' |
      ~/.claude/hooks/lib/codex-stage.sh prompt --dir '/literal/absolute path' --timeout 600
    ```
 
@@ -179,11 +182,11 @@ content with the standard review prompt shown below.
    variable, or command substitution for these child invocations. Those forms
    do not match the deterministic explicit-allow contract.
 
-3. After the wrapper returns (success or failure), remove the private directory
-   with its concrete literal path through the explicitly allowed `bun` command:
+3. After the wrapper returns (success or failure), remove the private prompt
+   file with its concrete literal path through the explicitly allowed command:
 
    ```bash
-   bun -e 'const { rm } = await import("node:fs/promises"); await rm("/tmp/codex-reviewer-a1B2C3", { recursive: true, force: true });'
+   bun -e 'const { rm } = await import("node:fs/promises"); await rm("/PRINTED_PRIVATE_PROMPT_FILE", { force: true });'
    ```
 
 **Diff review** (uncommitted changes, a branch, or a single commit): use the
@@ -225,8 +228,10 @@ gap), 124 = timed out.
 - Review runs are read-only (`--sandbox read-only` / the review subcommand)
 - codex needs network and a local app-server. Under pi, if ordinary Bash blocks
   the wrapper at the effect boundary, retry that exact wrapper call with the
-  explicit `bash_escalated` tool; it performs a fresh local classification.
-  If escalation is unavailable or not approved, report the wrapper as blocked.
+  explicit `bash_escalated` tool. Pi grants only this agent's declared
+  `prompt,review` modes after it verifies the literal wrapper, the scratch-local
+  staged prompt, and the active-worktree directory. Any changed form still gets
+  a fresh local classification. If escalation remains blocked, report it.
   Never disable the sandbox implicitly or invoke `codex` directly.
 - Never pass `-m` — `~/.codex/config.toml` owns model selection
 - Privacy: the artifact and any repo files codex reads are sent to OpenAI

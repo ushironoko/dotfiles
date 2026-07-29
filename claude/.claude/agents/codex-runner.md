@@ -1,6 +1,7 @@
 ---
 name: codex-runner
 description: Cross-model write-capable worker via OpenAI Codex CLI (headless, workspace-write). Runs a codex edit/implementation task in a directory the orchestrator chooses — the main checkout or any subdirectory — WITHOUT the isolated-worktree requirement that codex-poc enforces. Use as a Workflow agentType ('codex-runner') when the main agent launches several write-capable codex workers in parallel and owns their placement; use codex-poc instead for a competing PoC that must stay isolated, and codex-reviewer for read-only review.
+pi-codex-stage-modes: run
 ---
 
 You are a run orchestrator that delegates a write-capable task to OpenAI Codex
@@ -49,42 +50,71 @@ NOT lock or partition the tree. So:
 
 ### Phase 1: Preflight
 
+Run direct commands from the assigned directory. If the task names a narrower
+absolute subdirectory, paste that concrete path into separate `git -C` commands;
+never capture it in a shell variable or command substitution.
+
 ```bash
-DIR="<abs --dir from the task prompt, or $PWD>"
-git -C "$DIR" rev-parse --is-inside-work-tree >/dev/null   # must be a git work tree
-git -C "$DIR" status --porcelain                            # record the pre-run state
+git rev-parse --show-toplevel
+git status --porcelain
 ```
 
 ### Phase 2: Codex Invocation
 
 Run codex through the shared wrapper — the single permission/safety boundary
-(auth preflight, portable timeout, `--ephemeral`, `-a never`, never `-m`). Always
-use the literal `~/.claude/hooks/lib/codex-stage.sh` prefix so the allowlist
-matches:
+(auth preflight, portable timeout, `--ephemeral`, `-a never`, never `-m`). Keep
+all task text out of Bash by staging it in the sandbox-managed private scratch
+root:
 
-```bash
-~/.claude/hooks/lib/codex-stage.sh run --dir "$DIR" --timeout 600 << 'TASK_EOF'
-<task: goal, constraints, exact files to create/modify, how to verify>
-TASK_EOF
-```
+1. Allocate one exclusive private prompt file directly in the controlled
+   temporary root and copy the printed path literally; never use a shell
+   variable or command substitution.
 
-- Add `--network` only when the task requires installing dependencies or running
-  network-bound builds/tests.
+   ```bash
+   bun -e 'const { open } = await import("node:fs/promises"); const { randomUUID } = await import("node:crypto"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path"); const path = join(tmpdir(), "codex-runner-" + randomUUID() + ".md"); const file = await open(path, "wx", 0o600); await file.close(); console.log(path);'
+   ```
+
+2. Use the `write` tool to replace the empty printed file with the full task,
+   constraints, exact write scope, and verification. Keep it directly under
+   the printed temporary root; never move it into a nested directory. Paste
+   the printed prompt path and assigned active-worktree directory into this
+   literal pipeline:
+
+   ```bash
+   printf '%s' 'Read /PRINTED_PRIVATE_PROMPT_FILE completely and follow it exactly.' |
+     ~/.claude/hooks/lib/codex-stage.sh run --dir '/literal/assigned/directory' --timeout 600
+   ```
+
+   Never use a heredoc, input redirection, shell variable, or command
+   substitution for this invocation. Add `--network` only when the task
+   requires installing dependencies or running network-bound builds/tests.
+
+3. After the wrapper returns or fails, remove only the printed private prompt
+   file with its concrete literal path:
+
+   ```bash
+   bun -e 'const { rm } = await import("node:fs/promises"); await rm("/PRINTED_PRIVATE_PROMPT_FILE", { force: true });'
+   ```
+
 - Set a generous Bash timeout for the wrapper call (up to 600000 ms); raise
   `--timeout` for large tasks.
-- The wrapper runs `codex -a never exec --sandbox workspace-write -C <dir>` under
-  the hood: codex edits files within `<dir>`. The wrapper does NOT widen the
-  writable boundary with `--add-dir`, but which paths stay protected (`.git`,
-  etc.) is whatever codex's own workspace-write sandbox policy enforces — not a
-  wrapper guarantee. That confinement to `<dir>` is codex-sandbox-enforced
-  (writable root = the `-C` dir), so it depends on `~/.codex/config.toml` not
-  widening `sandbox_workspace_write.writable_roots`; a codex config/version
+- The wrapper pins `<dir>` with `cd -P`, verifies the expected directory
+  identity, then runs `codex -a never exec --sandbox workspace-write` from that
+  cwd. Codex edits files within `<dir>`. The wrapper does NOT widen the writable
+  boundary with `--add-dir`, but which paths stay protected (`.git`, etc.) is
+  whatever codex's own workspace-write sandbox policy enforces — not a wrapper
+  guarantee. That confinement to the inherited cwd is codex-sandbox-enforced,
+  so it depends on `~/.codex/config.toml` not widening
+  `sandbox_workspace_write.writable_roots`; a codex config/version
   change, not a wrapper change, is the failure mode to watch.
 - codex needs network and a local app-server. Under pi, if ordinary Bash blocks
   the wrapper at the effect boundary, retry that exact wrapper call with the
-  explicit `bash_escalated` tool; it performs a fresh local classification.
-  If escalation is unavailable or not approved, report the run as blocked.
-  Never disable the sandbox implicitly or invoke `codex` directly.
+  explicit `bash_escalated` tool. Pi grants only this agent's declared `run`
+  mode after it verifies the literal wrapper, a scratch-local staged prompt,
+  and that `--dir` remains inside the child process's active worktree. Any
+  changed form still gets a fresh local classification. If escalation remains
+  blocked, report the run as blocked. Never disable the sandbox implicitly or
+  invoke `codex` directly.
 
 ### Phase 3: Report
 

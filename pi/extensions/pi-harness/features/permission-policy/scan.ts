@@ -95,6 +95,8 @@ export interface Segment {
   readonly topLevel: boolean;
   /** True only when the shell connector immediately after this segment is &&. */
   readonly followedByAnd: boolean;
+  /** True only when the shell connector immediately after this segment is |. */
+  readonly followedByPipe: boolean;
   /** Concrete pre-normalization command text, when safe for explicit allow. */
   readonly allowCandidate?: string;
 }
@@ -632,7 +634,10 @@ export const scanCommand = (command: string): ScanResult => {
     if (wordAnsiC) ansiC.add(index);
     resetWord();
   };
-  const flushSegment = (followedByAnd = false): void => {
+  const flushSegment = (
+    followedByAnd = false,
+    followedByPipe = false,
+  ): void => {
     flushWord();
     pendingRedirectTarget = false;
     pendingFdDuplicationTarget = false;
@@ -663,6 +668,7 @@ export const scanCommand = (command: string): ScanResult => {
         redirectionTargets,
         topLevel: groupDepth === 0,
         followedByAnd,
+        followedByPipe,
         ...(allowCandidate === undefined ? {} : { allowCandidate }),
       });
     }
@@ -900,7 +906,8 @@ export const scanCommand = (command: string): ScanResult => {
     }
 
     if (c === "|") {
-      flushSegment();
+      const followedByPipe = command[i + 1] !== "|" && command[i + 1] !== "&";
+      flushSegment(false, followedByPipe);
       i += 1;
       if (command[i] === "|" || command[i] === "&") i += 1;
       atWordStart = true;

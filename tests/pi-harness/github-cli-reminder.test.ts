@@ -6,6 +6,7 @@ import setupGitHubCliReminder, {
   GITHUB_CLI_REMINDER,
   GITHUB_CLI_REMINDER_TYPE,
 } from "../../pi/extensions/pi-harness/features/github-cli-reminder/index";
+import { COMMAND_HYGIENE_GUIDANCE } from "../../pi/extensions/pi-harness/features/permission-policy/command-hygiene";
 import setupHookBridge from "../../pi/extensions/pi-harness/features/hook-bridge/index";
 import type { BridgeHookSpec } from "../../pi/extensions/pi-harness/features/hook-bridge/registry";
 import { setupHarness } from "../../pi/extensions/pi-harness/index";
@@ -147,12 +148,12 @@ describe("pi-harness GitHub CLI reminder", () => {
 
     const child = createFakePi({ cwd: directory, hasUI: false });
     setupHarness(child, makeConfig(directory, true));
-    expect(
-      await child.emitBeforeAgentStart({
-        type: "before_agent_start",
-        prompt: "inspect GitHub",
-      }),
-    ).toBeUndefined();
+    const childInjection = await child.emitBeforeAgentStart({
+      type: "before_agent_start",
+      prompt: "inspect GitHub",
+    });
+    expect(childInjection?.message).toBeUndefined();
+    expect(childInjection?.systemPrompt).toBe(COMMAND_HYGIENE_GUIDANCE);
   });
 
   test("coexists with a hook-bridge before_agent_start message", async () => {

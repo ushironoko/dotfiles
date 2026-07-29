@@ -19,12 +19,12 @@
 #       Default selector: --uncommitted. Read-only by nature.
 #
 #   codex-stage.sh prompt [--dir <path>] [--timeout <sec>] [--out <file>] [--schema <file>]
-#       Read-only analysis/review with a custom prompt read from stdin
-#       (codex exec --sandbox read-only -C <dir> -).
+#       Read-only analysis/review with a custom prompt read from stdin.
+#       The wrapper pins <dir> with cd before running codex from that cwd.
 #
 #   codex-stage.sh poc --worktree <abs-path> [--timeout <sec>] [--network] [--out <file>]
 #       Implementation PoC read from stdin, confined to an isolated linked git
-#       worktree (codex -a never exec --sandbox workspace-write -C <worktree> -).
+#       worktree (codex -a never exec --sandbox workspace-write from <worktree>).
 #       Prints `git status --porcelain` + `git diff --stat` of the worktree after
 #       the run so callers get a machine-checkable change summary.
 #
@@ -36,8 +36,8 @@
 #       launches in parallel and places itself — the orchestrator owns
 #       collision-avoidance across concurrent runs (partition files/dirs so two
 #       runs never touch the same path). Same rails as poc (codex -a never exec
-#       --sandbox workspace-write -C <dir> -; no danger flags, no --add-dir, no
-#       -m). Prints a repo-wide `git status --porcelain` + `git diff --stat`
+#       --sandbox workspace-write from the pinned <dir>; no danger flags, no
+#       --add-dir, no -m). Prints a repo-wide `git status --porcelain` + `git diff --stat`
 #       after the run. Changes stay uncommitted for review. run does not accept
 #       --out (its output is returned on stdout) and uses exit 13, not poc's 14,
 #       for a non-git-work-tree target. Note: confinement of codex's edits to
@@ -73,6 +73,36 @@ die() {
   exit "${2:-13}"
 }
 
+directory_identity() {
+  local path=$1 identity
+  if identity=$(stat -c '%d:%i' -- "$path" 2>/dev/null); then
+    printf '%s' "$identity"
+    return 0
+  fi
+  if identity=$(stat -f '%d:%i' "$path" 2>/dev/null); then
+    printf '%s' "$identity"
+    return 0
+  fi
+  return 1
+}
+
+pin_directory() {
+  local path=$1 actual_path
+  cd -P -- "$path" || die "cannot enter directory: $path" 13
+  actual_path=$(pwd -P) || die "cannot resolve directory after entry: $path" 13
+  if [ -n "$EXPECTED_DIR_PATH" ]; then
+    [ "$actual_path" = "$EXPECTED_DIR_PATH" ] \
+      || die "directory path changed before execution: $path" 13
+  fi
+  if [ -n "$EXPECTED_DIR_IDENTITY" ]; then
+    local actual_identity
+    actual_identity=$(directory_identity .) \
+      || die "cannot verify directory identity: $path" 13
+    [ "$actual_identity" = "$EXPECTED_DIR_IDENTITY" ] \
+      || die "directory identity changed before execution: $path" 13
+  fi
+}
+
 # Portable timeout: background the command, kill it from a watchdog.
 # Background jobs get stdin rewired to /dev/null by the shell, so the prompt
 # is buffered to a temp file and redirected explicitly inside the job.
@@ -83,27 +113,36 @@ run_with_timeout() {
   local mark
   mark=$(mktemp "${TMPDIR:-/tmp}/codex-stage-timeout.XXXXXX")
   rm -f "$mark"
+  local monitor_was_enabled=0
+  case $- in *m*) monitor_was_enabled=1 ;; esac
+  set -m
   "$@" < "${stdin_file:-/dev/null}" &
-  local cmd_pid=$!
+  local cmd_pid=$! kill_target="-$!"
+  [ "$monitor_was_enabled" -eq 1 ] || set +m
   (
     sleep "$secs"
-    # Mark a timeout only when the process is still alive at the deadline: a
-    # command that finished right at the deadline stays a success, and a
-    # command that traps TERM and exits 0 is still classified as timed out.
-    # The mark is written BEFORE the kill so the parent (woken by the kill)
-    # can never observe the death without the mark.
-    if kill -0 "$cmd_pid" 2>/dev/null; then
+    # Mark a timeout only when the process group is still alive at the
+    # deadline. The mark is written BEFORE TERM so the parent, woken by the
+    # leader's exit, waits for the watchdog's group-wide KILL.
+    if kill -0 -- "$kill_target" 2>/dev/null; then
       touch "$mark"
-      kill -TERM "$cmd_pid" 2>/dev/null
+      kill -TERM -- "$kill_target" 2>/dev/null
       sleep 5
-      kill -KILL "$cmd_pid" 2>/dev/null
+      kill -KILL -- "$kill_target" 2>/dev/null
     fi
   ) &
   local watchdog_pid=$!
   local rc=0
   wait "$cmd_pid" || rc=$?
-  kill "$watchdog_pid" 2>/dev/null || true
-  wait "$watchdog_pid" 2>/dev/null || true
+  # A command leader may exit while a background descendant keeps the job's
+  # process group alive. In that case retain the watchdog through its deadline
+  # so TERM/KILL still reaches the whole group instead of returning early.
+  if kill -0 -- "$kill_target" 2>/dev/null; then
+    wait "$watchdog_pid" 2>/dev/null || true
+  else
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+  fi
   if [ -e "$mark" ]; then
     rm -f "$mark"
     return 124
@@ -193,6 +232,8 @@ SCHEMA=""
 TITLE=""
 WORKTREE=""
 NETWORK=0
+EXPECTED_DIR_IDENTITY=""
+EXPECTED_DIR_PATH=""
 SELECTOR=()
 
 while [ $# -gt 0 ]; do
@@ -209,11 +250,20 @@ while [ $# -gt 0 ]; do
     --schema) SCHEMA=${2:?--schema needs a file}; shift ;;
     --worktree) WORKTREE=${2:?--worktree needs an absolute path}; shift ;;
     --network) NETWORK=1 ;;
+    --expected-dir-identity) EXPECTED_DIR_IDENTITY=${2:?--expected-dir-identity needs device:inode}; shift ;;
+    --expected-dir-path) EXPECTED_DIR_PATH=${2:?--expected-dir-path needs an absolute path}; shift ;;
     -h|--help) usage ;;
     *) die "unknown argument: $1" 13 ;;
   esac
   shift
 done
+
+if [ -n "$EXPECTED_DIR_IDENTITY" ] && [ -z "$EXPECTED_DIR_PATH" ]; then
+  die "--expected-dir-identity requires --expected-dir-path" 13
+fi
+if [ -n "$EXPECTED_DIR_PATH" ] && [ -z "$EXPECTED_DIR_IDENTITY" ]; then
+  die "--expected-dir-path requires --expected-dir-identity" 13
+fi
 
 preflight
 
@@ -229,7 +279,8 @@ case $MODE in
   review)
     [ -d "$DIR" ] || die "no such directory: $DIR" 13
     [ ${#SELECTOR[@]} -gt 0 ] || SELECTOR=(--uncommitted)
-    cd "$DIR"
+    pin_directory "$DIR"
+    DIR=$PWD
     git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
       || die "review mode requires a git repository: $DIR" 13
     rc=0
@@ -242,11 +293,12 @@ case $MODE in
 
   prompt)
     [ -d "$DIR" ] || die "no such directory: $DIR" 13
+    pin_directory "$DIR"
+    DIR=$PWD
     buffer_stdin
     rc=0
     run_codex "$PROMPT_FILE" codex exec \
       --sandbox read-only \
-      -C "$DIR" \
       --ephemeral \
       --skip-git-repo-check \
       ${OUT:+-o "$OUT"} \
@@ -264,6 +316,8 @@ case $MODE in
     git -C "$WORKTREE" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
       || die "not a git work tree: $WORKTREE" 14
     TOPLEVEL=$(git -C "$WORKTREE" rev-parse --show-toplevel)
+    pin_directory "$TOPLEVEL"
+    TOPLEVEL=$PWD
     # A linked worktree has its own git-dir under <main>/.git/worktrees/<name>;
     # in a main checkout git-dir == git-common-dir. Refuse main checkouts so a
     # workspace-write codex run can never touch the primary working copy.
@@ -271,8 +325,8 @@ case $MODE in
     # handling: deriving one via --absolute-git-dir (canonicalized) and the
     # other via cd+pwd (not canonicalized) let a main checkout reached through
     # a symlinked path (e.g. macOS /tmp -> /private/tmp) pass as a worktree.
-    GIT_DIR=$(git -C "$WORKTREE" rev-parse --git-dir)
-    GIT_COMMON_DIR=$(git -C "$WORKTREE" rev-parse --git-common-dir)
+    GIT_DIR=$(git rev-parse --git-dir)
+    GIT_COMMON_DIR=$(git rev-parse --git-common-dir)
     [ "$GIT_DIR" != "$GIT_COMMON_DIR" ] \
       || die "refusing: $TOPLEVEL is a main repository checkout, not an isolated linked worktree" 14
     buffer_stdin
@@ -281,7 +335,6 @@ case $MODE in
     rc=0
     run_codex "$PROMPT_FILE" codex -a never exec \
       --sandbox workspace-write \
-      -C "$TOPLEVEL" \
       --ephemeral \
       ${NETWORK_OPT:+-c "$NETWORK_OPT"} \
       ${OUT:+-o "$OUT"} \
@@ -300,9 +353,11 @@ case $MODE in
     # Require a git work tree so writes stay reviewable — but, UNLIKE poc, the
     # main repository checkout is allowed: run mode deliberately drops the
     # isolated-linked-worktree refusal. Placement/isolation is the caller's job.
-    git -C "$DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    pin_directory "$DIR"
+    DIR=$PWD
+    git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
       || die "run mode requires a git work tree (for reviewability): $DIR" 13
-    TOPLEVEL=$(git -C "$DIR" rev-parse --show-toplevel)
+    TOPLEVEL=$(git rev-parse --show-toplevel)
     # run's write surface is strictly --dir. --out/-o would let codex write its
     # output file to a path absolutized against the caller's $PWD, outside that
     # boundary — so run does not accept it. The caller captures codex's output
@@ -315,7 +370,6 @@ case $MODE in
     rc=0
     run_codex "$PROMPT_FILE" codex -a never exec \
       --sandbox workspace-write \
-      -C "$DIR" \
       --ephemeral \
       ${NETWORK_OPT:+-c "$NETWORK_OPT"} \
       - || rc=$?

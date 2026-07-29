@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, chmod, mkdtemp, rm } from "node:fs/promises";
+import { access, chmod, lstat, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -53,6 +53,11 @@ export interface BashExecutionBoundary {
   readonly profileFingerprint: string;
 }
 
+export interface BashScratchBoundary {
+  readonly path: string;
+  readonly identity: string;
+}
+
 export const BASH_SANDBOX_PROVIDER_EVENT = "pi-harness:bash-sandbox-provider";
 
 export interface BashSandboxOperationsProvider {
@@ -63,6 +68,8 @@ export interface BashSandboxOperationsProvider {
 
 export interface BashSandboxController {
   boundaryFor(toolName: string): BashExecutionBoundary | undefined;
+  scratchDirectoryFor(toolName: string): string | undefined;
+  scratchBoundaryFor(toolName: string): BashScratchBoundary | undefined;
   registerExecutionBoundary(options: {
     blockToolCall: (reason: string) => PermissionBlockResult;
     permissionAudit?: PermissionAuditIntegration;
@@ -72,6 +79,7 @@ export interface BashSandboxController {
 interface BashSandboxState {
   readonly kind: "starting" | "ready" | "failed" | "stopped";
   readonly scratchDirectory?: string;
+  readonly scratchBoundary?: BashScratchBoundary;
   readonly manager?: SandboxManagerLike;
   readonly profile?: BashSandboxProfile;
   readonly reason?: string;
@@ -87,6 +95,7 @@ interface SetupBashSandboxOptions {
     options: { recursive: boolean; force: boolean },
   ) => Promise<void>;
   readonly accessPath?: (path: string, mode?: number) => Promise<void>;
+  readonly pinScratchDirectory?: (path: string) => Promise<BashScratchBoundary>;
   readonly spawnFn?: SpawnFunction;
   readonly baseEnv?: NodeJS.ProcessEnv;
 }
@@ -109,6 +118,20 @@ const cloneDefaultConfig = (): BashSandboxConfig => ({
 const failureReason = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+const pinScratchDirectory = async (
+  path: string,
+): Promise<BashScratchBoundary> => {
+  const canonicalPath = await realpath(path);
+  const stat = await lstat(canonicalPath);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error("bash sandbox scratch is not a safe directory");
+  }
+  return {
+    path: canonicalPath,
+    identity: `${stat.dev}:${stat.ino}`,
+  };
+};
+
 export const setupBashSandbox = (
   pi: PiLike,
   config: HarnessConfig,
@@ -120,6 +143,7 @@ export const setupBashSandbox = (
   const setMode = options.chmodPath ?? chmod;
   const remove = options.removePath ?? rm;
   const checkAccess = options.accessPath ?? access;
+  const pinScratch = options.pinScratchDirectory ?? pinScratchDirectory;
   let state: BashSandboxState = { kind: "stopped" };
   const approvedHosts = new Set<string>();
   const deniedHosts = new Set<string>();
@@ -201,7 +225,13 @@ export const setupBashSandbox = (
     try {
       scratch = await createTemp(join(tmpdir(), "pi-bash-sandbox-"));
       await setMode(scratch, 0o700);
-      state = { kind: "starting", scratchDirectory: scratch };
+      const scratchBoundary = await pinScratch(scratch);
+      scratch = scratchBoundary.path;
+      state = {
+        kind: "starting",
+        scratchDirectory: scratch,
+        scratchBoundary,
+      };
       await checkAccess(CONTROLLED_BASH_PATH, constants.X_OK);
       const runtime = await loadRuntime();
       const profile = await createProfile(
@@ -236,6 +266,7 @@ export const setupBashSandbox = (
       state = {
         kind: "ready",
         scratchDirectory: scratch,
+        scratchBoundary,
         manager: runtime.SandboxManager,
         profile,
       };
@@ -319,6 +350,24 @@ export const setupBashSandbox = (
         network: networkMode(),
         profileFingerprint: profile?.fingerprint ?? "unavailable",
       };
+    },
+    scratchDirectoryFor(toolName) {
+      if (
+        (toolName !== "bash" && toolName !== "bash_escalated") ||
+        state.kind !== "ready"
+      ) {
+        return undefined;
+      }
+      return state.scratchBoundary?.path;
+    },
+    scratchBoundaryFor(toolName) {
+      if (
+        (toolName !== "bash" && toolName !== "bash_escalated") ||
+        state.kind !== "ready"
+      ) {
+        return undefined;
+      }
+      return state.scratchBoundary;
     },
     registerExecutionBoundary({ blockToolCall, permissionAudit }) {
       pi.on("tool_call", async (event, ctx) => {
