@@ -16,6 +16,7 @@ import {
   buildPermissionCommand,
   fitPermissionDecisionRecord,
   type PermissionAuditStage,
+  type PermissionExecutionBoundaryAuditContext,
   type PermissionProjectAuditContext,
   type PermissionTaskAuditContext,
 } from "./model";
@@ -51,6 +52,7 @@ interface PermissionAuditTransaction {
   readonly cwd?: string;
   readonly task: PermissionTaskAuditContext;
   readonly runEvidence?: ReturnType<typeof derivePermissionRunEvidence>;
+  readonly executionBoundary: PermissionExecutionBoundaryAuditContext;
   readonly stages: PermissionAuditStage[];
   project?: PermissionProjectContext;
   leadingNavigation?: PermissionLeadingNavigation;
@@ -86,6 +88,9 @@ interface SetupPermissionAuditOptions {
   readonly env?: Record<string, string | undefined>;
   readonly randomUUID?: () => string;
   readonly onDisplayedConfirmation?: () => void;
+  readonly executionBoundary?: (
+    toolName: "bash" | "bash_escalated",
+  ) => { readonly profileFingerprint: string } | undefined;
 }
 
 const sessionId = (ctx: CtxLike): string => {
@@ -247,7 +252,7 @@ export const setupPermissionAudit = (
 
   const begin = (event: ToolCallEvent, ctx: CtxLike): void => {
     if (
-      event.toolName !== "bash" ||
+      (event.toolName !== "bash" && event.toolName !== "bash_escalated") ||
       transactions.has(event.toolCallId) ||
       completedFinalizations.has(event.toolCallId)
     ) {
@@ -255,6 +260,12 @@ export const setupPermissionAudit = (
     }
     const command = event.input?.command;
     const runEvidence = currentRunEvidence(ctx, event.toolCallId);
+    const resolvedBoundary = options.executionBoundary?.(event.toolName);
+    const fingerprint = resolvedBoundary?.profileFingerprint;
+    const profileFingerprint =
+      fingerprint !== undefined && /^[0-9a-f]{64}$/.test(fingerprint)
+        ? fingerprint
+        : "unavailable";
     transactions.set(event.toolCallId, {
       sessionId: sessionId(ctx),
       toolCallId: event.toolCallId,
@@ -262,6 +273,10 @@ export const setupPermissionAudit = (
       ...(ctx.cwd === undefined ? {} : { cwd: ctx.cwd }),
       task: taskContext(options.taskTracker),
       ...(runEvidence === undefined ? {} : { runEvidence }),
+      executionBoundary: {
+        mode: event.toolName === "bash" ? "sandboxed" : "escalated",
+        profileFingerprint,
+      },
       stages: [],
       context: ctx,
     });
@@ -303,6 +318,7 @@ export const setupPermissionAudit = (
             ...(transaction.gitCwd === undefined
               ? {}
               : { gitCwd: transaction.gitCwd }),
+            executionBoundary: transaction.executionBoundary,
             stages: transaction.stages,
             boundaryDisposition,
             terminalReasonCode,
@@ -331,7 +347,12 @@ export const setupPermissionAudit = (
   });
 
   pi.on("tool_call", (event, ctx) => {
-    if (shuttingDown || event.toolName !== "bash") return undefined;
+    if (
+      shuttingDown ||
+      (event.toolName !== "bash" && event.toolName !== "bash_escalated")
+    ) {
+      return undefined;
+    }
     begin(event, ctx);
     return undefined;
   });
@@ -370,7 +391,9 @@ export const setupPermissionAudit = (
     },
     registerTail(tailPi, blockToolCall) {
       tailPi.on("tool_call", async (event) => {
-        if (event.toolName !== "bash") return undefined;
+        if (event.toolName !== "bash" && event.toolName !== "bash_escalated") {
+          return undefined;
+        }
         const result = await finalize(
           event.toolCallId,
           "release",

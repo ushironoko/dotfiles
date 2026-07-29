@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import {
   createEventBus,
+  type BashOperations,
   type ExtensionAPI,
   type SessionStartEvent,
   type ToolDefinition,
@@ -17,10 +18,15 @@ import {
 import {
   COLLISION_ERROR,
   CONFIG_ERROR,
+  guardHearthBashOperations,
   HEARTH_TOOL_NAMES,
   RESTART_ERROR,
   setupHearthTools,
 } from "../../pi/extensions/hearth-tools/index";
+import {
+  BASH_SANDBOX_PROVIDER_EVENT,
+  type BashSandboxOperationsProvider,
+} from "../../pi/extensions/pi-harness/features/bash-sandbox";
 
 interface FakeEngineOptions {
   cwd?: string;
@@ -129,6 +135,29 @@ const fakePi = (
   };
 };
 
+const sandboxProvider = () => {
+  let attachments = 0;
+  let attachedCommandPrefix: string | undefined;
+  const operations: BashOperations = {
+    async exec() {
+      return { exitCode: 0 };
+    },
+  };
+  const provider: BashSandboxOperationsProvider = {
+    sandboxedOperations: operations,
+    userOperations: operations,
+    attach(options) {
+      attachments += 1;
+      attachedCommandPrefix = options?.commandPrefix;
+    },
+  };
+  return {
+    provider,
+    attachments: () => attachments,
+    attachedCommandPrefix: () => attachedCommandPrefix,
+  };
+};
+
 const settings = {
   getShellPath: () => "/bin/bash",
   getShellCommandPrefix: () => "set -e",
@@ -169,6 +198,40 @@ describe("hearth-tools config", () => {
 });
 
 describe("Hearth Engine access gate", () => {
+  test("guards provider Bash exclusively and clears caches after settlement", async () => {
+    const gate = new HearthEngineGate();
+    const engine = new FakeEngine();
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolveHeld) => {
+      release = resolveHeld;
+    });
+    const operations: BashOperations = {
+      async exec() {
+        await held;
+        return { exitCode: 0 };
+      },
+    };
+    const guarded = guardHearthBashOperations(
+      { engine: engine as never, gate, options: {} as never },
+      operations,
+    );
+    let readerRan = false;
+    const running = guarded.exec("printf ok", "/workspace", {
+      onData: () => {},
+    });
+    await Promise.resolve();
+    const reader = gate.shared(async () => {
+      readerRan = true;
+    });
+    await Promise.resolve();
+    expect(readerRan).toBe(false);
+
+    release?.();
+    await Promise.all([running, reader]);
+    expect(readerRan).toBe(true);
+    expect(FakeEngine.clearCount).toBe(1);
+  });
+
   test("an exclusive operation waits for readers and blocks later readers", async () => {
     const gate = new HearthEngineGate();
     const order: string[] = [];
@@ -247,6 +310,47 @@ describe("hearth-tools startup", () => {
       bashTimeoutMs: 2_147_483_647,
     });
     expect(fake.commands.has("hearth-clear-cache")).toBe(true);
+  });
+
+  test("attaches a sandbox provider published after Hearth loads", async () => {
+    const fake = fakePi();
+    await setupHearthTools(fake.pi, {
+      loadModule: async () => ({ HearthEngine: FakeEngine as never }),
+      getAgentDir: () => "/agent",
+      loadConfig: () => ({ ...DEFAULT_HEARTH_TOOLS_CONFIG }),
+      createSettings: (() => settings) as never,
+      fatal: (message) => {
+        throw new Error(message);
+      },
+    });
+    const sandbox = sandboxProvider();
+    fake.pi.events.emit(BASH_SANDBOX_PROVIDER_EVENT, sandbox.provider);
+
+    await fake.emit("session_start", { reason: "startup" });
+    expect(sandbox.attachments()).toBe(1);
+    expect(sandbox.attachedCommandPrefix()).toBe("set -e");
+  });
+
+  test("attaches the session replay when the sandbox publisher loads first", async () => {
+    const fake = fakePi();
+    const sandbox = sandboxProvider();
+    // The setup-time publication happened before Hearth registered a listener.
+    fake.pi.events.emit(BASH_SANDBOX_PROVIDER_EVENT, sandbox.provider);
+    await setupHearthTools(fake.pi, {
+      loadModule: async () => ({ HearthEngine: FakeEngine as never }),
+      getAgentDir: () => "/agent",
+      loadConfig: () => ({ ...DEFAULT_HEARTH_TOOLS_CONFIG }),
+      createSettings: (() => settings) as never,
+      fatal: (message) => {
+        throw new Error(message);
+      },
+    });
+    // pi-harness replays the same provider during session_start.
+    fake.pi.events.emit(BASH_SANDBOX_PROVIDER_EVENT, sandbox.provider);
+
+    await fake.emit("session_start", { reason: "startup" });
+    expect(sandbox.attachments()).toBe(1);
+    expect(sandbox.attachedCommandPrefix()).toBe("set -e");
   });
 
   test("reuses the process Engine across extension reloads", async () => {

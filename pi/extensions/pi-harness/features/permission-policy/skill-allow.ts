@@ -5,6 +5,7 @@ import {
   evaluateCommandWithAudit,
   type AllowRule,
   type AuditedVerdict,
+  type EvaluationOptions,
   isSkillOverridableAsk,
   type LoadedRules,
 } from "./rules";
@@ -289,8 +290,9 @@ const evaluateCommandWithSkillAllows = (
   command: string,
   rules: LoadedRules,
   skillAllows: readonly AllowRule[],
+  options: EvaluationOptions = {},
 ): SkillAwareVerdict => {
-  const base = evaluateCommandWithAudit(command, rules);
+  const base = evaluateCommandWithAudit(command, rules, options);
   const matchingSkill = matchingConcreteSkillAllow(command, skillAllows);
   // An authenticated active-skill grant is itself explicit user approval for a
   // plain push or a verified git -C location. Force, destructive Git, secrets,
@@ -318,10 +320,14 @@ const evaluateCommandWithSkillAllows = (
   if (base.verdict !== "default-continue" || skillAllows.length === 0) {
     return base;
   }
-  const withSkill = evaluateCommandWithAudit(command, {
-    ...rules,
-    allow: [...rules.allow, ...skillAllows],
-  });
+  const withSkill = evaluateCommandWithAudit(
+    command,
+    {
+      ...rules,
+      allow: [...rules.allow, ...skillAllows],
+    },
+    options,
+  );
   return withSkill.verdict === "allow"
     ? { ...withSkill, grantedBySkill: true }
     : base;

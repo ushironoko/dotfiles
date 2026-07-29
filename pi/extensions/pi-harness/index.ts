@@ -14,6 +14,7 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { delimiter } from "node:path";
 import type { PiLike } from "./lib/pi-like";
 import { loadConfig, type HarnessConfig } from "./config";
+import setupBashSandboxFeature from "./features/bash-sandbox/index";
 import setupPermissionPolicy from "./features/permission-policy/index";
 import { createPermissionTaskTracker } from "./features/permission-policy/context";
 import { setupPermissionAudit } from "./features/permission-audit/index";
@@ -54,24 +55,36 @@ const PERMISSION_PREFLIGHT_PATH = [
 // ExtensionAPI: pi invokes this default export at runtime (jiti, no type
 // boundary), and depending only on PiLike keeps pi 0.80.x API churn localized
 // to lib/pi-like.ts. Shapes verified against tests/fixtures/pi-harness/raw/.
+interface SetupHarnessOptions extends PermissionBlockerOptions {
+  readonly setupBashSandbox?: typeof setupBashSandboxFeature;
+}
+
 const setupHarness = (
   pi: PiLike,
   config: HarnessConfig,
-  options: PermissionBlockerOptions = {},
+  options: SetupHarnessOptions = {},
 ): void => {
+  const {
+    setupBashSandbox: createBashSandbox = setupBashSandboxFeature,
+    ...blockerOptions
+  } = options;
   // One blocker owns the child authenticator for every permission handler.
   // This preserves the parent observer's failure classification even when a
   // bridge hook rejects before (or after) the mandatory policy handler.
-  const blockToolCall = createPermissionBlocker(config.isChild, options);
+  const blockToolCall = createPermissionBlocker(config.isChild, blockerOptions);
   const permissionTaskTracker = createPermissionTaskTracker();
   const permissionAskReminder = config.isChild
     ? undefined
     : setupPermissionAskReminder(pi);
-  // The audit starter must be the first Bash tool_call observer. Every later
-  // permission handler enriches this transaction or block-finalizes it.
+  // Bash sandbox setup does not register its execution-boundary tool_call
+  // handler yet, so the audit starter below remains the first Bash observer.
+  // Creating the controller first lets audit begin capture the authenticated
+  // profile fingerprint even when an earlier preflight hook blocks the call.
+  const bashSandbox = createBashSandbox(pi, config);
   const permissionAudit = setupPermissionAudit(pi, config, {
     taskTracker: permissionTaskTracker,
     onDisplayedConfirmation: permissionAskReminder?.recordDisplayedConfirmation,
+    executionBoundary: (toolName) => bashSandbox.boundaryFor(toolName),
   });
   const bridgeRegistry = config.features["hook-bridge"]
     ? partitionBridgeRegistry(buildRegistry(config.paths))
@@ -115,6 +128,7 @@ const setupHarness = (
     blockToolCall,
     taskTracker: permissionTaskTracker,
     permissionAudit,
+    executionBoundary: (toolName) => bashSandbox.boundaryFor(toolName),
   });
 
   if (bridgeRegistry?.remaining.length) {
@@ -125,8 +139,10 @@ const setupHarness = (
       auditPhase: "remaining",
     });
   }
-  // This is the last pi-harness Bash permission handler. "release" here means
-  // only that pi-harness passed the call to any later third-party handlers.
+  // Every policy/hook above inspected the original command. Only now replace
+  // ordinary Bash with the OS-sandbox wrapper; audit release is recorded after
+  // successful readiness/wrapping and immediately before controlled execution.
+  bashSandbox.registerExecutionBoundary({ blockToolCall, permissionAudit });
   permissionAudit.registerTail(pi, blockToolCall);
   if (config.features.subagent) {
     setupSubagent(pi, config, { childRuns, permissionAudit });

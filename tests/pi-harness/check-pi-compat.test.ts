@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertNoLocalPiResolution } from "../../scripts/pi-compat/compile";
+import {
+  assertNoLocalPiResolution,
+  PI_HARNESS_RUNTIME_PACKAGES,
+} from "../../scripts/pi-compat/compile";
 import { checkPiCompatibility } from "../../scripts/pi-compat/index";
 import {
   satisfiesManifestRange,
@@ -155,14 +158,25 @@ describe("global declaration resolution guard", () => {
     ).toThrow("repository-local");
   });
 
-  test("accepts files from the captured global package roots", () => {
+  test("accepts global pi declarations and the deployed local runtime closure", () => {
     expect(() =>
       assertNoLocalPiResolution(
-        ["/global/node_modules/@earendil-works/pi-tui/dist/index.d.ts"],
+        [
+          "/global/node_modules/@earendil-works/pi-tui/dist/index.d.ts",
+          "/repo/node_modules/@anthropic-ai/sandbox-runtime/dist/index.d.ts",
+        ],
         "/repo",
         installation(),
       ),
     ).not.toThrow();
+    expect(PI_HARNESS_RUNTIME_PACKAGES).toEqual([
+      "@anthropic-ai/sandbox-runtime",
+      "@pondwader/socks5-server",
+      "commander",
+      "lodash-es",
+      "shell-quote",
+      "zod",
+    ]);
   });
 });
 

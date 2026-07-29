@@ -1,5 +1,6 @@
 import type {
   AgentToolResult,
+  BashOperations,
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -74,6 +75,23 @@ export interface ToolResultContentBlock {
   [key: string]: unknown;
 }
 
+export interface UserBashEvent {
+  type: "user_bash";
+  command: string;
+  excludeFromContext: boolean;
+  cwd: string;
+}
+
+export interface UserBashResult {
+  operations?: BashOperations;
+  result?: {
+    output: string;
+    exitCode: number | null;
+    cancelled: boolean;
+    truncated: boolean;
+  };
+}
+
 export interface ToolResultEvent {
   type: "tool_result";
   toolName: string;
@@ -95,6 +113,7 @@ export interface PiEventMap {
   context: ContextEvent;
   turn_end: TurnEndEvent;
   tool_call: ToolCallEvent;
+  user_bash: UserBashEvent;
   tool_result: ToolResultEvent;
   agent_settled: GenericEvent;
   session_before_tree: SessionBeforeTreeEvent;
@@ -138,6 +157,7 @@ export interface PiEventResultMap {
   context: ContextUpdate | undefined | void;
   turn_end: void;
   tool_call: ToolCallBlockResult | undefined | void;
+  user_bash: UserBashResult | undefined | void;
   tool_result: ToolResultPatch | undefined | void;
   agent_settled: void;
   session_before_tree: void;
@@ -215,6 +235,7 @@ export interface UiLike {
     dialogOptions?: DialogOptionsLike,
   ): Promise<string | undefined>;
   notify(message: string, level?: NotifyLevel): void;
+  setStatus?(key: string, text: string | undefined): void;
   setWidget?(key: string, lines: string[] | undefined): void;
   setFooter?(factory: FooterFactoryLike | undefined): void;
 }
@@ -260,6 +281,7 @@ export interface ToolDefLike {
 }
 
 export interface PiLike {
+  readonly events: Pick<ExtensionAPI["events"], "emit" | "on">;
   on<K extends PiEventName>(event: K, handler: PiEventHandler<K>): void;
   registerTool(tool: ToolDefLike): void;
   registerCommand: ExtensionAPI["registerCommand"];

@@ -694,6 +694,8 @@ const environment = (
 export interface HearthBashAdapterOptions {
   defaultTimeoutMs?: number;
   gate?: HearthAccessGate;
+  operations?: BashOperations;
+  commandPrefixHandled?: boolean;
 }
 
 export const createHearthBashOperations = (
@@ -757,13 +759,13 @@ export const createHearthBashDefinition = (
 ) =>
   withStatusTitle(
     createBashToolDefinition(cwd, {
-      commandPrefix: settings.shellCommandPrefix,
+      commandPrefix: adapterOptions.commandPrefixHandled
+        ? undefined
+        : settings.shellCommandPrefix,
       shellPath: settings.shellPath,
-      operations: createHearthBashOperations(
-        engine,
-        settings.shell,
-        adapterOptions,
-      ),
+      operations:
+        adapterOptions.operations ??
+        createHearthBashOperations(engine, settings.shell, adapterOptions),
     }),
     "all-content",
   );

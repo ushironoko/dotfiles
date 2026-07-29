@@ -12,6 +12,7 @@ import {
   loadRules,
 } from "../../pi/extensions/pi-harness/features/permission-policy/rules";
 import {
+  DEFAULT_BASH_SANDBOX_CONFIG,
   DEFAULT_PERMISSION_JUDGE_CONFIG,
   loadConfig,
   type HarnessConfig,
@@ -971,6 +972,86 @@ describe("permission judge config", () => {
     try {
       expect(loadConfig({}, paths).permissionJudge?.configurationError).toBe(
         "invalid permissionJudge fields: enabled, url, model, expectedDigest, timeoutMs, keepAlive",
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("bash sandbox config", () => {
+  test("uses deny-by-default network and credential path defaults", () => {
+    const paths = resolvePaths(
+      join(tmpdir(), `missing-sandbox-home-${Date.now()}`),
+    );
+    expect(loadConfig({}, paths).bashSandbox).toEqual(
+      DEFAULT_BASH_SANDBOX_CONFIG,
+    );
+  });
+
+  test("loads additive trusted-user overrides and deduplicates values", async () => {
+    const home = await mkdtemp(join(tmpdir(), "pi-sandbox-config-"));
+    const paths = resolvePaths(home);
+    await mkdir(join(home, ".pi", "agent"), { recursive: true });
+    await writeFile(
+      paths.localConfigFile,
+      JSON.stringify({
+        bashSandbox: {
+          network: {
+            allowedDomains: ["api.github.com", "api.github.com"],
+            deniedDomains: ["malicious.example"],
+          },
+          filesystem: {
+            denyRead: ["~/private"],
+            allowWrite: ["~/scratch"],
+            denyWrite: ["~/scratch/locked"],
+          },
+        },
+      }),
+    );
+
+    try {
+      const sandbox = loadConfig({}, paths, "darwin").bashSandbox;
+      expect(sandbox?.network).toEqual({
+        allowedDomains: ["api.github.com"],
+        deniedDomains: ["malicious.example"],
+      });
+      expect(sandbox?.filesystem.denyRead).toContain("~/.ssh");
+      expect(sandbox?.filesystem.denyRead).toContain("~/private");
+      expect(sandbox?.filesystem.allowWrite).toEqual(["~/scratch"]);
+      expect(sandbox?.filesystem.denyWrite).toContain("~/scratch/locked");
+      expect(sandbox?.configurationError).toBeUndefined();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed on nulls, unsafe domains, relative paths, and Linux globs", async () => {
+    const home = await mkdtemp(join(tmpdir(), "pi-sandbox-invalid-"));
+    const paths = resolvePaths(home);
+    await mkdir(join(home, ".pi", "agent"), { recursive: true });
+    await writeFile(
+      paths.localConfigFile,
+      JSON.stringify({
+        bashSandbox: {
+          network: {
+            allowedDomains: ["https://example.com"],
+            deniedDomains: null,
+          },
+          filesystem: {
+            denyRead: ["relative/path"],
+            allowWrite: ["~/src/*.ts"],
+            denyWrite: null,
+          },
+        },
+      }),
+    );
+
+    try {
+      expect(
+        loadConfig({}, paths, "linux").bashSandbox?.configurationError,
+      ).toBe(
+        "invalid bashSandbox fields: network.allowedDomains, network.deniedDomains, filesystem.denyRead, filesystem.allowWrite, filesystem.denyWrite",
       );
     } finally {
       await rm(home, { recursive: true, force: true });

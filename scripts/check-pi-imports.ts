@@ -40,7 +40,11 @@ export const EXTENSION_ROOTS = [
 const RUNTIME_IMPORTS_BY_ROOT = new Map<string, ReadonlySet<string>>([
   [
     EXTENSION_ROOT,
-    new Set(["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]),
+    new Set([
+      "@anthropic-ai/sandbox-runtime",
+      "@earendil-works/pi-coding-agent",
+      "@earendil-works/pi-tui",
+    ]),
   ],
   [
     HEARTH_TOOLS_EXTENSION_ROOT,

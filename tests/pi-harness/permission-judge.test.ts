@@ -9,6 +9,7 @@ import {
 import {
   createPermissionJudge,
   isLocalOllamaChatUrl,
+  PERMISSION_JUDGE_POLICY_VERSION,
 } from "../../pi/extensions/pi-harness/features/permission-policy/judge";
 import type {
   BoundedTaskContext,
@@ -232,7 +233,7 @@ describe("local Ollama permission judge", () => {
         source: "live",
         gates: { safety: "ALLOW", relevance: "ALLOW" },
         model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-        policyVersion: "permission-judge-v6-safety-relevance",
+        policyVersion: PERMISSION_JUDGE_POLICY_VERSION,
       },
     });
     expect(upstream.received.map((request) => request.path)).toEqual([
@@ -264,7 +265,7 @@ describe("local Ollama permission judge", () => {
       options: {
         temperature: 0,
         seed: 0,
-        num_ctx: 20_480,
+        num_ctx: 24_576,
         num_predict: 32,
       },
     });

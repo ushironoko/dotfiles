@@ -5,6 +5,7 @@ import {
   getAgentDir,
   getShellConfig,
   SettingsManager,
+  type BashOperations,
   type ExtensionAPI,
   type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
@@ -44,6 +45,13 @@ const COLLISION_ERROR = "pi-hearth-tools: competing tool override detected";
 const RESTART_ERROR =
   "pi-hearth-tools: Engine settings changed; restart pi to apply them";
 const CHILD_RUN_COMPLETION_ENTRY = "pi-harness/child-run-completion";
+const BASH_SANDBOX_PROVIDER_EVENT = "pi-harness:bash-sandbox-provider";
+
+interface BashSandboxOperationsProvider {
+  readonly sandboxedOperations: BashOperations;
+  readonly userOperations: BashOperations;
+  attach(options?: { readonly commandPrefix?: string }): void;
+}
 const HEARTH_ENTRY_PATH = fileURLToPath(import.meta.url);
 const POST_TOOL_INVALIDATION = new Set([
   "write",
@@ -85,11 +93,27 @@ const shellSpec = (shellPath?: string): ShellSpec => {
   } as ShellSpec;
 };
 
+export const guardHearthBashOperations = (
+  runtime: HearthEngineRuntime,
+  operations: BashOperations,
+): BashOperations => ({
+  exec(command, cwd, options) {
+    return runtime.gate.exclusive(async () => {
+      try {
+        return await operations.exec(command, cwd, options);
+      } finally {
+        runtime.engine.clearCaches();
+      }
+    });
+  },
+});
+
 const definitions = (
   cwd: string,
   runtime: HearthEngineRuntime,
   settings: PiToolSettings,
   config: HearthToolsConfig,
+  bashOperations?: BashOperations,
 ) =>
   [
     createHearthReadDefinition(cwd, runtime.engine, settings, runtime.gate),
@@ -98,6 +122,12 @@ const definitions = (
     createHearthBashDefinition(cwd, runtime.engine, settings, {
       defaultTimeoutMs: config.bashTimeoutMs,
       gate: runtime.gate,
+      ...(bashOperations === undefined
+        ? {}
+        : {
+            operations: guardHearthBashOperations(runtime, bashOperations),
+            commandPrefixHandled: true,
+          }),
     }),
     createHearthGrepDefinition(cwd, runtime.engine, runtime.gate),
   ] as const;
@@ -239,6 +269,19 @@ export const setupHearthTools = async (
 
   let state: RuntimeState | undefined;
   let registered = false;
+  let bashSandboxProvider: BashSandboxOperationsProvider | undefined;
+  pi.events.on(BASH_SANDBOX_PROVIDER_EVENT, (value: unknown) => {
+    if (value === null || typeof value !== "object") return;
+    const candidate = value as Partial<BashSandboxOperationsProvider>;
+    if (
+      candidate.sandboxedOperations === undefined ||
+      candidate.userOperations === undefined ||
+      typeof candidate.attach !== "function"
+    ) {
+      return;
+    }
+    bashSandboxProvider = candidate as BashSandboxOperationsProvider;
+  });
   const service = registerHearthReadService(pi, () => state);
   const invalidation = registerHearthInvalidationService(pi);
   const clearCaches = async (): Promise<void> => {
@@ -288,6 +331,7 @@ export const setupHearthTools = async (
         runtime,
         settings,
         config,
+        bashSandboxProvider?.sandboxedOperations,
       );
       pi.registerTool(read);
       pi.registerTool(write);
@@ -296,6 +340,9 @@ export const setupHearthTools = async (
       pi.registerTool(grep);
       pi.setActiveTools(activeBefore);
       assertHearthOwnership(pi);
+      bashSandboxProvider?.attach({
+        commandPrefix: settings.shellCommandPrefix,
+      });
 
       registered = true;
       service.announce();
@@ -345,14 +392,20 @@ export const setupHearthTools = async (
   pi.on("user_bash", () => {
     if (state === undefined) return;
     return {
-      operations: createHearthBashOperations(
-        state.runtime.engine,
-        state.settings.shell,
-        {
-          defaultTimeoutMs: state.config.bashTimeoutMs,
-          gate: state.runtime.gate,
-        },
-      ),
+      operations:
+        bashSandboxProvider === undefined
+          ? createHearthBashOperations(
+              state.runtime.engine,
+              state.settings.shell,
+              {
+                defaultTimeoutMs: state.config.bashTimeoutMs,
+                gate: state.runtime.gate,
+              },
+            )
+          : guardHearthBashOperations(
+              state.runtime,
+              bashSandboxProvider.userOperations,
+            ),
     };
   });
 

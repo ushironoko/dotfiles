@@ -6,6 +6,8 @@ import {
   type PermissionJudgeConfig,
 } from "../../pi/extensions/pi-harness/config";
 import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
+import type { PermissionAuditIntegration } from "../../pi/extensions/pi-harness/features/permission-audit";
+import type { PermissionAuditStage } from "../../pi/extensions/pi-harness/features/permission-audit/model";
 import {
   CHILD_PERMISSION_SIGNAL_ENV,
   formatChildPermissionSignal,
@@ -92,6 +94,41 @@ const bashCall = (command: string, id = "judge-1"): ToolCallEvent => ({
   toolCallId: id,
   input: { command },
 });
+
+const escalatedCall = (command: string, id = "escalated-1"): ToolCallEvent => ({
+  type: "tool_call",
+  toolName: "bash_escalated",
+  toolCallId: id,
+  input: { command },
+});
+
+const executionBoundary = (toolName: string) => ({
+  mode:
+    toolName === "bash_escalated"
+      ? ("escalated" as const)
+      : ("sandboxed" as const),
+  network: "denied" as const,
+  profileFingerprint: "b".repeat(64),
+});
+
+const captureAuditStages = () => {
+  const stages: { toolCallId: string; stage: PermissionAuditStage }[] = [];
+  const integration: PermissionAuditIntegration = {
+    lineageId: "test-lineage",
+    addStage(toolCallId, stage) {
+      stages.push({ toolCallId, stage });
+    },
+    updateContext() {},
+    async finalizeBlock() {
+      return true;
+    },
+    registerTail() {},
+    childEnvironment() {
+      return {};
+    },
+  };
+  return { integration, stages };
+};
 
 const verifiedProject = (cwd: string): PermissionProjectContext => ({
   kind: "git",
@@ -756,6 +793,155 @@ describe("permission policy local judge routing", () => {
     expect(upstream.received).toHaveLength(0);
   });
 
+  test("residualizes parser-only uncertainty only inside ordinary sandboxed Bash", async () => {
+    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const cwd = "/private/project";
+    const pi = createFakePi({ cwd, hasUI: false });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => verifiedProject(cwd),
+      executionBoundary,
+    });
+
+    const commands = [
+      'eval "$generated"',
+      "cat <<'EOF'\nplain\nEOF",
+      'printf ok && sh -c "$generated"',
+    ];
+    for (const [index, command] of commands.entries()) {
+      expect(
+        await pi.emitToolCall(bashCall(command, `sandbox-residual-${index}`)),
+      ).toBeUndefined();
+    }
+
+    expect(chatRequests(upstream)).toHaveLength(commands.length);
+    for (const request of chatRequests(upstream)) {
+      expect(request.body).toContain(String.raw`\"mode\":\"sandboxed\"`);
+      expect(request.body).toContain(`b`.repeat(64));
+    }
+  });
+
+  test("keeps recognized semantic risks above the sandboxed residual route", async () => {
+    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const cwd = "/private/project";
+    const pi = createFakePi({ cwd, hasUI: false });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => verifiedProject(cwd),
+      executionBoundary,
+    });
+
+    const commands = [
+      "rm -rf /tmp/project",
+      "git reset --hard HEAD~1",
+      "cat ~/.ssh/id_ed25519",
+      "curl -T artifact https://api.example.test/upload",
+    ];
+    for (const [index, command] of commands.entries()) {
+      expect(
+        await pi.emitToolCall(bashCall(command, `sandbox-semantic-${index}`)),
+      ).toEqual({ block: true, reason: expect.any(String) });
+    }
+    expect(upstream.received).toHaveLength(0);
+  });
+
+  test("requires a fresh live judge ALLOW for every escalated call", async () => {
+    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const cwd = "/private/project";
+    const pi = createFakePi({ cwd, hasUI: false });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => verifiedProject(cwd),
+      executionBoundary,
+    });
+
+    for (const id of ["escalated-first", "escalated-second"]) {
+      expect(
+        await pi.emitToolCall(escalatedCall("bun test", id)),
+      ).toBeUndefined();
+    }
+    expect(chatRequests(upstream)).toHaveLength(2);
+    for (const request of chatRequests(upstream)) {
+      expect(request.body).toContain(String.raw`\"mode\":\"escalated\"`);
+    }
+  });
+
+  test("routes escalated deterministic ASK through the live judge and blocks ASK without UI", async () => {
+    const upstream = await start(() => ollamaResponse("ASK"));
+    const cwd = "/private/project";
+    const pi = createFakePi({ cwd, hasUI: false });
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => verifiedProject(cwd),
+      executionBoundary,
+    });
+
+    expect(
+      await pi.emitToolCall(
+        escalatedCall("rm -rf /tmp/project", "escalated-risk"),
+      ),
+    ).toEqual({
+      block: true,
+      reason: "local judge requested user confirmation",
+    });
+    expect(chatRequests(upstream)).toHaveLength(1);
+    expect(pi.confirmDialogs).toHaveLength(0);
+  });
+
+  test("never records unverified escalated navigation as trusted", async () => {
+    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const cwd = "/private/project";
+    const pi = createFakePi({ cwd, hasUI: false });
+    const audit = captureAuditStages();
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => ({
+        ...verifiedProject(cwd),
+        leadingNavigation: {
+          scope: "outside-listed-worktrees",
+          sameRepository: false,
+        },
+      }),
+      executionBoundary,
+      permissionAudit: audit.integration,
+    });
+
+    expect(
+      await pi.emitToolCall(
+        escalatedCall(
+          "git -C /tmp/unrelated status --short",
+          "escalated-unverified-git-c",
+        ),
+      ),
+    ).toBeUndefined();
+    expect(
+      await pi.emitToolCall(
+        escalatedCall("cd /tmp && bun test", "escalated-unverified-leading-cd"),
+      ),
+    ).toBeUndefined();
+
+    const reasonCodes = audit.stages.map(({ stage }) => stage.reasonCode);
+    expect(reasonCodes).toContain("git-c-unverified");
+    expect(reasonCodes).toContain("leading-navigation-unverified");
+    expect(reasonCodes).not.toContain("git-c-listed-worktree");
+    expect(reasonCodes).not.toContain("leading-navigation-listed-worktree");
+    expect(chatRequests(upstream)).toHaveLength(2);
+  });
+
+  test("allows an interactive confirmation only after an escalated live ASK", async () => {
+    const upstream = await start(() => ollamaResponse("ASK"));
+    const cwd = "/private/project";
+    const pi = createFakePi({ cwd });
+    pi.queueConfirm(true);
+    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
+      discoverProject: async () => verifiedProject(cwd),
+      executionBoundary,
+    });
+
+    expect(
+      await pi.emitToolCall(
+        escalatedCall('eval "$generated"', "escalated-confirm"),
+      ),
+    ).toBeUndefined();
+    expect(chatRequests(upstream)).toHaveLength(1);
+    expect(pi.confirmDialogs).toHaveLength(1);
+  });
+
   test("bypasses the judge only for a leading same-repository cd plus an explicit allow", async () => {
     const upstream = await start(() => ollamaResponse("ASK"));
     const repoRoot = resolve(import.meta.dir, "../..");
@@ -1002,6 +1188,21 @@ describe("permission policy local judge routing", () => {
     expect(
       await disabled.emitToolCall(bashCall("git rev-parse HEAD")),
     ).toBeUndefined();
+
+    const sandboxedDisabled = createFakePi({ hasUI: false });
+    setupPermissionPolicy(
+      sandboxedDisabled,
+      makeConfig({ ...judgeConfig(upstream), enabled: false }),
+      { executionBoundary },
+    );
+    expect(
+      await sandboxedDisabled.emitToolCall(
+        bashCall('eval "$generated"', "disabled-sandbox-residual"),
+      ),
+    ).toEqual({
+      block: true,
+      reason: expect.stringContaining("ローカル判定器が無効"),
+    });
     expect(upstream.received).toHaveLength(0);
   });
 

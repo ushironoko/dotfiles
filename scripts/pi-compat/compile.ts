@@ -11,6 +11,15 @@ export interface CompileGlobalOptions {
   keepTemp?: boolean;
 }
 
+export const PI_HARNESS_RUNTIME_PACKAGES = [
+  "@anthropic-ai/sandbox-runtime",
+  "@pondwader/socks5-server",
+  "commander",
+  "lodash-es",
+  "shell-quote",
+  "zod",
+] as const;
+
 export const assertNoLocalPiResolution = (
   files: string[],
   repoRoot: string,
@@ -85,13 +94,15 @@ export const compileExtensionsAgainstGlobalPi = async (
       await mkdir(resolve(target, ".."), { recursive: true });
       await symlink(pkg.root, target, "dir");
     }
-    const hearthTarget = join(tempModules, "@hearthdev", "napi");
-    await mkdir(resolve(hearthTarget, ".."), { recursive: true });
-    await symlink(
-      join(repoRoot, "node_modules/@hearthdev/napi"),
-      hearthTarget,
-      "dir",
-    );
+    const localRuntimePackages = [
+      "@hearthdev/napi",
+      ...PI_HARNESS_RUNTIME_PACKAGES,
+    ];
+    for (const name of localRuntimePackages) {
+      const target = join(tempModules, ...name.split("/"));
+      await mkdir(resolve(target, ".."), { recursive: true });
+      await symlink(join(repoRoot, "node_modules", name), target, "dir");
+    }
 
     const tsconfigPath = join(tempRoot, "tsconfig.json");
     await writeFile(

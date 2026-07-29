@@ -73,6 +73,11 @@ export interface PermissionNavigationAuditContext {
   readonly sameRepository: boolean;
 }
 
+export interface PermissionExecutionBoundaryAuditContext {
+  readonly mode: "sandboxed" | "escalated";
+  readonly profileFingerprint: string;
+}
+
 export interface DeterministicPermissionStage {
   readonly type: "deterministic";
   readonly phase: string;
@@ -183,6 +188,7 @@ export interface PermissionDecisionRecordV1 {
   readonly project?: PermissionProjectAuditContext;
   readonly leadingNavigation?: PermissionNavigationAuditContext;
   readonly gitCwd?: PermissionNavigationAuditContext;
+  readonly executionBoundary?: PermissionExecutionBoundaryAuditContext;
   readonly stages: readonly PermissionAuditStage[];
   readonly effectiveDecision: PermissionAuditDecision;
   readonly boundaryDisposition: PermissionBoundaryDisposition;
@@ -206,6 +212,7 @@ export interface PermissionDecisionRecordInput {
   readonly project?: PermissionProjectAuditContext;
   readonly leadingNavigation?: PermissionNavigationAuditContext;
   readonly gitCwd?: PermissionNavigationAuditContext;
+  readonly executionBoundary?: PermissionExecutionBoundaryAuditContext;
   readonly stages: readonly PermissionAuditStage[];
   readonly boundaryDisposition: PermissionBoundaryDisposition;
   readonly terminalReasonCode: string;
@@ -290,6 +297,9 @@ export const buildPermissionDecisionRecord = (
     ? {}
     : { leadingNavigation: input.leadingNavigation }),
   ...(input.gitCwd === undefined ? {} : { gitCwd: input.gitCwd }),
+  ...(input.executionBoundary === undefined
+    ? {}
+    : { executionBoundary: input.executionBoundary }),
   stages: [...input.stages],
   effectiveDecision: derivePermissionDecision(input.stages),
   boundaryDisposition: input.boundaryDisposition,

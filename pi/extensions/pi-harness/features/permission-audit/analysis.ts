@@ -37,6 +37,13 @@ const validNavigation = (value: unknown): boolean =>
   ) &&
   typeof value.sameRepository === "boolean";
 
+const validExecutionBoundary = (value: unknown): boolean =>
+  isRecord(value) &&
+  (value.mode === "sandboxed" || value.mode === "escalated") &&
+  (value.profileFingerprint === "unavailable" ||
+    (typeof value.profileFingerprint === "string" &&
+      SHA256_PATTERN.test(value.profileFingerprint)));
+
 const validProject = (value: unknown): boolean => {
   if (
     !isRecord(value) ||
@@ -220,6 +227,8 @@ export const isPermissionDecisionRecordV1 = (
     (value.leadingNavigation !== undefined &&
       !validNavigation(value.leadingNavigation)) ||
     (value.gitCwd !== undefined && !validNavigation(value.gitCwd)) ||
+    (value.executionBoundary !== undefined &&
+      !validExecutionBoundary(value.executionBoundary)) ||
     !Array.isArray(value.stages) ||
     !value.stages.every(validStage) ||
     !["allow", "ask", "deny"].includes(String(value.effectiveDecision)) ||
@@ -354,6 +363,7 @@ export interface PermissionQualificationCandidate {
   readonly project?: PermissionDecisionRecordV1["project"];
   readonly leadingNavigation?: PermissionDecisionRecordV1["leadingNavigation"];
   readonly gitCwd?: PermissionDecisionRecordV1["gitCwd"];
+  readonly executionBoundary?: PermissionDecisionRecordV1["executionBoundary"];
   readonly observedDecision: PermissionDecisionRecordV1["effectiveDecision"];
   readonly boundaryDisposition: PermissionDecisionRecordV1["boundaryDisposition"];
   readonly stages: PermissionDecisionRecordV1["stages"];
@@ -382,6 +392,9 @@ export const buildPermissionQualificationCandidates = (
           ? {}
           : { leadingNavigation: record.leadingNavigation }),
         ...(record.gitCwd === undefined ? {} : { gitCwd: record.gitCwd }),
+        ...(record.executionBoundary === undefined
+          ? {}
+          : { executionBoundary: record.executionBoundary }),
         observedDecision: record.effectiveDecision,
         boundaryDisposition: record.boundaryDisposition,
         stages: record.stages,
