@@ -1,13 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import {
   assertNoLocalPiResolution,
   PI_HARNESS_RUNTIME_PACKAGES,
 } from "../../scripts/pi-compat/compile";
+import { PI_BASELINE_PACKAGES } from "../../scripts/pi-compat/baseline";
 import { checkPiCompatibility } from "../../scripts/pi-compat/index";
 import {
+  discoverPiInstallation,
   satisfiesManifestRange,
   type PiInstallation,
 } from "../../scripts/pi-compat/installation";
@@ -95,6 +105,102 @@ describe("pi compatibility policy", () => {
       }),
     ).rejects.toThrow("stale baseline");
     expect(discovered).toBe(false);
+  });
+});
+
+describe("global pi installation discovery", () => {
+  test("uses the non-project pi on PATH when sandbox cache isolation breaks Bun global discovery", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "pi-installation-"));
+    try {
+      const localModules = join(root, "repo", "node_modules");
+      const localBin = join(localModules, ".bin");
+      await mkdir(localBin, { recursive: true });
+      await writeFile(join(localBin, "pi"), "#!/bin/sh\nexit 0\n");
+      await chmod(join(localBin, "pi"), 0o755);
+
+      const globalRoot = join(root, "global");
+      const globalModules = join(globalRoot, "node_modules");
+      const packageVersion = "0.83.0";
+      let codingAgentRoot = "";
+      for (const name of PI_BASELINE_PACKAGES) {
+        const packageRoot = join(globalModules, ...name.split("/"));
+        const version = name === "typebox" ? "1.3.7" : packageVersion;
+        await mkdir(packageRoot, { recursive: true });
+        const manifest: Record<string, unknown> = { name, version };
+        if (name === "@earendil-works/pi-coding-agent") {
+          codingAgentRoot = packageRoot;
+          manifest.bin = { pi: "dist/cli.js" };
+          await mkdir(join(packageRoot, "dist"), { recursive: true });
+          await writeFile(
+            join(packageRoot, "dist/cli.js"),
+            "#!/usr/bin/env node\n",
+          );
+          await chmod(join(packageRoot, "dist/cli.js"), 0o755);
+        }
+        await writeFile(
+          join(packageRoot, "package.json"),
+          JSON.stringify(manifest),
+        );
+      }
+
+      const globalBin = join(globalRoot, "bin");
+      await mkdir(globalBin, { recursive: true });
+      await symlink(
+        join(codingAgentRoot, "dist/cli.js"),
+        join(globalBin, "pi"),
+      );
+
+      const calls: string[][] = [];
+      const discovered = await discoverPiInstallation({
+        bunExecutable: "/tools/bun",
+        environment: {
+          PATH: `${localBin}${delimiter}${globalBin}`,
+          XDG_CACHE_HOME: join(root, "sandbox-cache"),
+        },
+        excludedPackageRoots: [localModules],
+        run: async (argv) => {
+          calls.push([...argv]);
+          return {
+            argv: [...argv],
+            exitCode: 0,
+            stdout: `${packageVersion}\n`,
+            stderr: "",
+            timedOut: false,
+            truncated: false,
+          };
+        },
+      });
+
+      expect(discovered.binaryPath).toBe(join(globalBin, "pi"));
+      expect(discovered.packageVersion).toBe(packageVersion);
+      expect(calls).toEqual([[join(globalBin, "pi"), "--version"]]);
+
+      const aliasBin = join(root, "alias-bin");
+      await mkdir(aliasBin);
+      await symlink(join(codingAgentRoot, "dist/cli.js"), join(aliasBin, "pi"));
+      await expect(
+        discoverPiInstallation({
+          environment: { PATH: aliasBin },
+          excludedPackageRoots: [codingAgentRoot],
+          run: async (argv) => {
+            if (argv[1] !== "pm") {
+              throw new Error("version command must not run");
+            }
+            return {
+              argv: [...argv],
+              exitCode: 0,
+              stdout: `${aliasBin}\n`,
+              stderr: "",
+              timedOut: false,
+              truncated: false,
+            };
+          },
+        }),
+      ).rejects.toThrow("excluded package root");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

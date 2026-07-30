@@ -5,7 +5,6 @@ import type {
   ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import {
-  AuthStorage,
   buildSessionContext,
   createAgentSession,
   DefaultResourceLoader,
@@ -139,6 +138,23 @@ const defaultForkDependencies: BtwForkDependencies = {
   },
 };
 
+// Pi 0.80 accepts ModelRegistry directly. Pi 0.83 requires the ModelRuntime
+// behind that extension-facing compatibility facade, so validate its nominal
+// runtime type before sharing the parent's provider/auth state with the child.
+const getParentModelRuntime = async (modelRegistry: ModelRegistry) => {
+  const codingAgentSdk = await import("@earendil-works/pi-coding-agent");
+  if (!("ModelRuntime" in codingAgentSdk)) return undefined;
+  const { ModelRuntime } = codingAgentSdk;
+  if (typeof ModelRuntime !== "function") {
+    throw new Error("BTW cannot identify the pi ModelRuntime constructor");
+  }
+  const modelRuntime: unknown = Reflect.get(modelRegistry, "runtime");
+  if (!(modelRuntime instanceof ModelRuntime)) {
+    throw new Error("BTW cannot access the parent pi model runtime");
+  }
+  return modelRuntime;
+};
+
 const byteLength = (value: string): number => Buffer.byteLength(value, "utf8");
 
 const truncateUtf8 = (
@@ -245,12 +261,13 @@ const answerFromReadOnlyFork = async (
       : { parentSession: snapshot.parentSession },
   );
   seedSessionManager(sessionManager, snapshot.messages);
-  const session = await dependencies.createSession({
+  const modelRuntime = await getParentModelRuntime(snapshot.modelRegistry);
+  const sessionOptions = {
     cwd: snapshot.cwd,
     agentDir,
     model: snapshot.model,
     modelRegistry: snapshot.modelRegistry,
-    authStorage: AuthStorage.inMemory(),
+    ...(modelRuntime === undefined ? {} : { modelRuntime }),
     thinkingLevel: snapshot.thinkingLevel,
     tools: [...BTW_READ_ONLY_TOOLS],
     excludeTools: [...BTW_DENIED_TOOLS],
@@ -258,7 +275,8 @@ const answerFromReadOnlyFork = async (
     resourceLoader,
     sessionManager,
     settingsManager,
-  });
+  };
+  const session = await dependencies.createSession(sessionOptions);
 
   let latestAssistant: Extract<AgentMessage, { role: "assistant" }> | undefined;
   const unsubscribeSession = session.subscribe((event) => {
