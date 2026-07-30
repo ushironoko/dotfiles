@@ -56,6 +56,7 @@ The judge is enabled by default. Override it in the machine-local
     "model": "granite4.1:3b",
     "expectedDigest": "6fd349357287c7ffc9e38189a93b48ea175d24fc566b38f09cfc564fb7f303eb",
     "timeoutMs": 10000,
+    "confirmTimeoutMs": 10000,
     "keepAlive": "30m"
   }
 }
@@ -77,8 +78,10 @@ properties. The response parser requires exactly that two-key object. Only
 `{"safety":"ALLOW","relevance":"ALLOW"}` approves. Either `ASK`, plain text,
 alternate casing, missing or extra keys, tool calls, truncation, and malformed
 JSON require confirmation or block.
-Interactive permission confirmations have no countdown: they remain open until
-the user responds or aborts the active pi operation (for example with Esc).
+Interactive permission confirmations default to a ten-second countdown and
+fail closed when it expires. Set `confirmTimeoutMs` from 1,000 through 300,000
+milliseconds to override that window; aborting the active pi operation (for
+example with Esc) also closes the dialog.
 
 The permission audit is mandatory and has no feature toggle. Disabling the
 local judge changes residual command routing but does not disable deterministic,
@@ -173,7 +176,7 @@ deterministic floor, explicit confirmation, or local judge.
     authenticated current-run assistant evidence to its agent run, then discover
     canonical cwd/project/worktree context locally. Async child-environment
     sanitization, Git probes, cwd/worktree/leading-target canonicalization, and
-    common-directory checks share one cumulative 250 ms deadline and abort
+    common-directory checks share one cumulative 1,000 ms deadline and abort
     signal.
 11. Reuse an unexpired completed `ALLOW` cache entry only when the command, raw
     cwd, complete raw-task fingerprint, complete current-run-evidence
@@ -279,7 +282,7 @@ worktree metadata. `/api/status` and `/api/tags` contain no command or context.
 Direct numeric-loopback TCP ignores ambient `HTTP_PROXY`/`HTTPS_PROXY`, and
 redirects are not followed.
 
-The complete permission-discovery phase has a separate cumulative 250 ms cap,
+The complete permission-discovery phase has a separate cumulative 1,000 ms cap,
 including async PATH sanitization, all Git processes, and every filesystem
 canonicalization; status, tags, and chat then share one `timeoutMs` budget. If
 preflight consumes that budget, chat is not started. Literal commands over

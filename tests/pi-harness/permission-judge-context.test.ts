@@ -15,6 +15,7 @@ import { promisify } from "node:util";
 import {
   boundTaskContext,
   createPermissionTaskTracker,
+  DEFAULT_GIT_TIMEOUT_MS,
   derivePermissionRunEvidence,
   discoverProjectContext,
   runGitWorktreeList,
@@ -438,6 +439,10 @@ describe("current permission run evidence", () => {
 });
 
 describe("permission judge project context", () => {
+  test("uses a one-second default Git probe timeout", () => {
+    expect(DEFAULT_GIT_TIMEOUT_MS).toBe(1_000);
+  });
+
   test("discovers the real active linked worktree", async () => {
     const repoRoot = await realpath(resolve(import.meta.dir, "../.."));
     const context = await discoverProjectContext(repoRoot);

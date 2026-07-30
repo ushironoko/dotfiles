@@ -187,7 +187,7 @@ task text, authenticated same-turn assistant text, preceding tool names plus
 success/failure status, and locally verified cwd/project/worktree context. It
 never receives assistant thinking, tool arguments, tool output content/details,
 expanded skills, prior-turn conversation, repository contents, remotes, or
-environment. One cumulative 250 ms local discovery deadline covers async child-
+environment. One cumulative 1,000 ms local discovery deadline covers async child-
 env sanitization, Git probing, per-root registered-worktree/common-dir
 validation, and path canonicalization before each fallback/cache lookup. Queued
 expanded inputs without an exact delivery match become uncorrelated and cannot

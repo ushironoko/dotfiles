@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { InputEvent, PiLike } from "../../lib/pi-like";
-import type { HarnessConfig } from "../../config";
+import {
+  DEFAULT_PERMISSION_JUDGE_CONFIG,
+  type HarnessConfig,
+} from "../../config";
 import type {
   BashExecutionBoundary,
   BashScratchBoundary,
@@ -544,6 +547,9 @@ const setupPermissionPolicy = (
           ctx.hasUI && !isAborted()
             ? await ctx.ui.confirm(title, `${reason}\n\n${command}`, {
                 signal,
+                timeout:
+                  judgeConfig?.confirmTimeoutMs ??
+                  DEFAULT_PERMISSION_JUDGE_CONFIG.confirmTimeoutMs,
               })
             : false;
         let status: "not-shown" | "aborted" | "accepted" | "rejected";
