@@ -145,10 +145,10 @@ export default defineConfig({
       include: sharedAgentSkills,
     },
     {
-      // Pi appends this file to its built-in system prompt. Publish only the
-      // child file so machine-local auth and sessions stay intact.
-      source: "./pi/APPEND_SYSTEM.md",
-      target: "~/.pi/agent/APPEND_SYSTEM.md",
+      // Replace Pi's built-in prompt with the curated global prompt. Publish
+      // only the child file so machine-local auth and sessions stay intact.
+      source: "./pi/SYSTEM.md",
+      target: "~/.pi/agent/SYSTEM.md",
       type: "file",
     },
     {
