@@ -42,6 +42,8 @@ const setupReminderHarness = (
 ): void => {
   setupHarness(pi, value, {
     setupBashSandbox: () => ({
+      async registerWritableWorktree() {},
+      async revokeWritableWorktree() {},
       boundaryFor: (toolName) => ({
         mode: toolName === "bash" ? "sandboxed" : "escalated",
         network: "denied",

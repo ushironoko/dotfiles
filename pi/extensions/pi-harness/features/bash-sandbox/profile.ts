@@ -34,6 +34,33 @@ const expandHome = (path: string, home: string): string => {
 
 const unique = (values: readonly string[]): string[] => [...new Set(values)];
 
+const profileFingerprint = (runtimeConfig: SandboxRuntimeConfig): string =>
+  createHash("sha256")
+    .update("pi-harness-bash-sandbox-v1")
+    .update("\0")
+    .update(JSON.stringify(runtimeConfig))
+    .digest("hex");
+
+export const withBashSandboxWritableRoots = (
+  profile: BashSandboxProfile,
+  writableRoots: readonly string[],
+): BashSandboxProfile => {
+  const nextWritableRoots = unique(writableRoots);
+  const runtimeConfig: SandboxRuntimeConfig = {
+    ...profile.runtimeConfig,
+    filesystem: {
+      ...profile.runtimeConfig.filesystem,
+      allowWrite: nextWritableRoots,
+    },
+  };
+  return {
+    ...profile,
+    writableRoots: nextWritableRoots,
+    fingerprint: profileFingerprint(runtimeConfig),
+    runtimeConfig,
+  };
+};
+
 export const buildBashSandboxProfile = async (
   cwd: string,
   scratchDirectory: string,
@@ -104,11 +131,7 @@ export const buildBashSandboxProfile = async (
     enableWeakerNestedSandbox: false,
     mandatoryDenySearchDepth: 5,
   };
-  const fingerprint = createHash("sha256")
-    .update("pi-harness-bash-sandbox-v1")
-    .update("\0")
-    .update(JSON.stringify(runtimeConfig))
-    .digest("hex");
+  const fingerprint = profileFingerprint(runtimeConfig);
 
   return {
     cwd: canonicalCwd,

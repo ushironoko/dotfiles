@@ -63,10 +63,13 @@ describe.skipIf(smokeUnavailable !== undefined)(
     test("enforces write, read, symlink, network, and outer-shell boundaries", async () => {
       const root = await setupTestDirectory("pi-bash-sandbox-smoke");
       const workspace = join(root, "workspace");
+      const dynamicWorkspace = join(root, "dynamic-workspace");
       const outside = join(root, "outside");
       const scratch = join(root, "scratch");
       const home = join(root, "home");
       const allowedFile = join(workspace, "allowed.txt");
+      const dynamicFile = join(dynamicWorkspace, "dynamic.txt");
+      const revokedFile = join(dynamicWorkspace, "revoked.txt");
       const blockedFile = join(outside, "blocked.txt");
       const escapedFile = join(outside, "escaped.txt");
       const secretFile = join(outside, "credential.txt");
@@ -80,9 +83,14 @@ describe.skipIf(smokeUnavailable !== undefined)(
 
       try {
         await Promise.all(
-          [workspace, outside, scratch, home, protectedHooks].map((path) =>
-            mkdir(path, { recursive: true }),
-          ),
+          [
+            workspace,
+            dynamicWorkspace,
+            outside,
+            scratch,
+            home,
+            protectedHooks,
+          ].map((path) => mkdir(path, { recursive: true })),
         );
         await writeFile(secretFile, "credential-canary", "utf8");
         await writeFile(protectedConfig, "protected-config", "utf8");
@@ -150,6 +158,28 @@ describe.skipIf(smokeUnavailable !== undefined)(
         );
         expect(blockedWrite.exitCode).not.toBe(0);
         expect(await pathExists(blockedFile)).toBe(false);
+
+        const dynamicWriteBeforeGrant = await run(
+          `printf denied > ${shellQuote(dynamicFile)}`,
+        );
+        expect(dynamicWriteBeforeGrant.exitCode).not.toBe(0);
+        SandboxManager.updateConfig({
+          ...runtimeConfig,
+          filesystem: {
+            ...runtimeConfig.filesystem,
+            allowWrite: [workspace, scratch, dynamicWorkspace],
+          },
+        });
+        expect(
+          await run(`printf dynamic > ${shellQuote(dynamicFile)}`),
+        ).toMatchObject({ exitCode: 0 });
+        expect(await readFile(dynamicFile, "utf8")).toBe("dynamic");
+        SandboxManager.updateConfig(runtimeConfig);
+        const dynamicWriteAfterRevoke = await run(
+          `printf revoked > ${shellQuote(revokedFile)}`,
+        );
+        expect(dynamicWriteAfterRevoke.exitCode).not.toBe(0);
+        expect(await pathExists(revokedFile)).toBe(false);
 
         const deniedRead = await run(`cat ${shellQuote(secretFile)}`);
         expect(deniedRead.exitCode).not.toBe(0);

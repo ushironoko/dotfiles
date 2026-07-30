@@ -254,8 +254,12 @@ describe("bit-task tool registration", () => {
       const hookEnvs: (Record<string, string | undefined> | undefined)[] = [];
       const commandEnvs: (Record<string, string | undefined> | undefined)[] =
         [];
+      const registeredWorktrees: string[] = [];
       const pi = createFakePi({ cwd: directory });
       setupBitTask(pi, makeConfig(), {
+        onWorktreeCreated: (path) => {
+          registeredWorktrees.push(path);
+        },
         env: { PI_HARNESS_CHILD: "0" },
         runHook: async (_script, _stdin, options) => {
           hookEnvs.push(options?.env);
@@ -301,6 +305,7 @@ describe("bit-task tool registration", () => {
       for (const env of commandEnvs) {
         expect(env?.PI_HARNESS_CHILD).toBe("1");
       }
+      expect(registeredWorktrees).toEqual([created]);
     } finally {
       await cleanupTestDirectory(directory);
     }
@@ -359,8 +364,12 @@ describe("bit-task tool registration", () => {
     try {
       const created = await fs.realpath(join(directory, "created"));
       let commandCalls = 0;
+      const registeredWorktrees: string[] = [];
       const pi = createFakePi({ cwd: directory });
       setupBitTask(pi, makeConfig(), {
+        onWorktreeCreated: (path) => {
+          registeredWorktrees.push(path);
+        },
         runHook: async () => ({
           exitCode: 0,
           timedOut: false,
@@ -383,6 +392,7 @@ describe("bit-task tool registration", () => {
       expect(error.message).toContain("omitted its creation identity");
       expect(error.message).toContain(created);
       expect(commandCalls).toBe(0);
+      expect(registeredWorktrees).toEqual([]);
     } finally {
       await cleanupTestDirectory(directory);
     }
@@ -433,8 +443,12 @@ describe("bit-task tool registration", () => {
       const created = await fs.realpath(join(directory, "created"));
       const publication = await mockWorktreePublication(created);
       let commandCalls = 0;
+      const registeredWorktrees: string[] = [];
       const pi = createFakePi({ cwd: directory });
       setupBitTask(pi, makeConfig(), {
+        onWorktreeCreated: (path) => {
+          registeredWorktrees.push(path);
+        },
         runHook: async () => {
           await fs.rm(created, { recursive: true, force: true });
           await fs.mkdir(created);
@@ -465,6 +479,7 @@ describe("bit-task tool registration", () => {
       expect(error.message).toContain("filesystem identity changed");
       expect(error.message).toContain(created);
       expect(commandCalls).toBe(0);
+      expect(registeredWorktrees).toEqual([]);
     } finally {
       await cleanupTestDirectory(directory);
     }
@@ -717,9 +732,13 @@ describe("bit-task tool registration", () => {
       const target = await fs.realpath(join(directory, "target"));
       const common = await fs.realpath(join(directory, "common.git"));
       let listCalls = 0;
+      const revokedWorktrees: string[] = [];
       const pi = createFakePi({ cwd: repo });
       setupBitTask(pi, makeConfig(), {
         cwd: repo,
+        onWorktreeRemoved: (path) => {
+          revokedWorktrees.push(path);
+        },
         runHook: async () => ({
           exitCode: 0,
           timedOut: false,
@@ -753,6 +772,7 @@ describe("bit-task tool registration", () => {
           pi.ctx,
         ),
       ).rejects.toThrow(/postcondition failed; directory still exists/i);
+      expect(revokedWorktrees).toEqual([target]);
     } finally {
       await cleanupTestDirectory(directory);
     }
@@ -819,9 +839,13 @@ describe("bit-task tool registration", () => {
       const linkedB = await fs.realpath(join(directory, "linkedB"));
       const common = await fs.realpath(join(directory, "common.git"));
       let removedB = false;
+      const revokedWorktrees: string[] = [];
       const pi = createFakePi({ cwd: linkedA });
       setupBitTask(pi, makeConfig(), {
         cwd: linkedA,
+        onWorktreeRemoved: (path) => {
+          revokedWorktrees.push(path);
+        },
         runHook: async () => {
           await fs.rm(linkedB, { recursive: true, force: true });
           removedB = true;
@@ -852,6 +876,7 @@ describe("bit-task tool registration", () => {
       );
       expect(readTextResult(result)).toContain("Removed worktree");
       expect(removedB).toBe(true);
+      expect(revokedWorktrees).toEqual([linkedB]);
     } finally {
       await cleanupTestDirectory(directory);
     }

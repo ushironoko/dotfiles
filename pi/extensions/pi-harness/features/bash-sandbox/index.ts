@@ -16,12 +16,17 @@ import {
   type HarnessConfig,
 } from "../../config";
 import type { PiLike, ToolDefLike } from "../../lib/pi-like";
+import { validateCwdInSameRepo } from "../../lib/repo-boundary";
 import {
   PERMISSION_AUDIT_UNAVAILABLE_REASON,
   type PermissionAuditIntegration,
 } from "../permission-audit";
 import type { PermissionBlockResult } from "../permission-policy/block";
-import { buildBashSandboxProfile, type BashSandboxProfile } from "./profile";
+import {
+  buildBashSandboxProfile,
+  type BashSandboxProfile,
+  withBashSandboxWritableRoots,
+} from "./profile";
 import {
   CONTROLLED_BASH_PATH,
   createControlledBashOperations,
@@ -40,6 +45,7 @@ interface SandboxManagerLike {
     customConfig?: Partial<SandboxRuntimeConfig>,
     signal?: AbortSignal,
   ): Promise<string>;
+  updateConfig(config: SandboxRuntimeConfig): void;
   reset(): Promise<void>;
 }
 
@@ -67,6 +73,8 @@ export interface BashSandboxOperationsProvider {
 }
 
 export interface BashSandboxController {
+  registerWritableWorktree(path: string): Promise<void>;
+  revokeWritableWorktree(path: string): Promise<void>;
   boundaryFor(toolName: string): BashExecutionBoundary | undefined;
   scratchDirectoryFor(toolName: string): string | undefined;
   scratchBoundaryFor(toolName: string): BashScratchBoundary | undefined;
@@ -96,6 +104,7 @@ interface SetupBashSandboxOptions {
   ) => Promise<void>;
   readonly accessPath?: (path: string, mode?: number) => Promise<void>;
   readonly pinScratchDirectory?: (path: string) => Promise<BashScratchBoundary>;
+  readonly validateWritableWorktree?: typeof validateCwdInSameRepo;
   readonly spawnFn?: SpawnFunction;
   readonly baseEnv?: NodeJS.ProcessEnv;
 }
@@ -144,7 +153,11 @@ export const setupBashSandbox = (
   const remove = options.removePath ?? rm;
   const checkAccess = options.accessPath ?? access;
   const pinScratch = options.pinScratchDirectory ?? pinScratchDirectory;
+  const validateWritableWorktree =
+    options.validateWritableWorktree ?? validateCwdInSameRepo;
   let state: BashSandboxState = { kind: "stopped" };
+  let sessionGeneration = 0;
+  const dynamicWritableWorktrees = new Set<string>();
   const approvedHosts = new Set<string>();
   const deniedHosts = new Set<string>();
   let backendAttached = false;
@@ -217,7 +230,9 @@ export const setupBashSandbox = (
   } as unknown as ToolDefLike);
 
   pi.on("session_start", async (_event, ctx) => {
+    sessionGeneration += 1;
     sessionCwd = ctx.cwd ?? cwd;
+    dynamicWritableWorktrees.clear();
     approvedHosts.clear();
     deniedHosts.clear();
     state = { kind: "starting" };
@@ -299,7 +314,9 @@ export const setupBashSandbox = (
 
   pi.on("session_shutdown", async (_event, ctx) => {
     const previous = state;
+    sessionGeneration += 1;
     state = { kind: "stopped" };
+    dynamicWritableWorktrees.clear();
     backendAttached = false;
     backendCommandPrefix = undefined;
     sessionCwd = cwd;
@@ -340,6 +357,64 @@ export const setupBashSandbox = (
   });
 
   return {
+    async registerWritableWorktree(path) {
+      const initial = state;
+      if (initial.kind !== "ready" || initial.profile === undefined) {
+        throw new Error("bash sandbox is not ready for worktree registration");
+      }
+      const generation = sessionGeneration;
+      const boundary = await validateWritableWorktree(
+        path,
+        initial.profile.cwd,
+      );
+      if (!boundary.ok) {
+        throw new Error(
+          `bash sandbox rejected writable worktree: ${boundary.reason}`,
+        );
+      }
+      if (sessionGeneration !== generation) {
+        throw new Error(
+          "bash sandbox session changed during worktree registration",
+        );
+      }
+
+      const current = state;
+      if (
+        current.kind !== "ready" ||
+        current.manager === undefined ||
+        current.profile === undefined
+      ) {
+        throw new Error("bash sandbox is not ready for worktree registration");
+      }
+      const canonicalPath = boundary.canonicalCwd;
+      if (current.profile.writableRoots.includes(canonicalPath)) return;
+
+      const profile = withBashSandboxWritableRoots(current.profile, [
+        ...current.profile.writableRoots,
+        canonicalPath,
+      ]);
+      current.manager.updateConfig(profile.runtimeConfig);
+      dynamicWritableWorktrees.add(canonicalPath);
+      state = { ...current, profile };
+    },
+    async revokeWritableWorktree(path) {
+      if (!dynamicWritableWorktrees.has(path)) return;
+      const current = state;
+      if (
+        current.kind !== "ready" ||
+        current.manager === undefined ||
+        current.profile === undefined
+      ) {
+        throw new Error("bash sandbox is not ready for worktree revocation");
+      }
+      const profile = withBashSandboxWritableRoots(
+        current.profile,
+        current.profile.writableRoots.filter((root) => root !== path),
+      );
+      current.manager.updateConfig(profile.runtimeConfig);
+      dynamicWritableWorktrees.delete(path);
+      state = { ...current, profile };
+    },
     boundaryFor(toolName) {
       if (toolName !== "bash" && toolName !== "bash_escalated") {
         return undefined;
