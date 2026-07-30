@@ -1,4 +1,5 @@
 import type { CtxLike, PiLike } from "../../lib/pi-like";
+import { createBundledAskUserQuestionProvenance } from "../permission-policy/context";
 import { AskUserQuestionParameters } from "./parameters.generated";
 
 interface QuestionOption {
@@ -757,6 +758,10 @@ const resultSegment = (question: Question, answer: QuestionAnswer): string => {
 };
 
 const setupAskUserQuestion = (pi: PiLike): void => {
+  const provenance = createBundledAskUserQuestionProvenance();
+  pi.on("agent_settled", provenance.clear);
+  pi.on("session_shutdown", provenance.clear);
+
   pi.registerTool({
     name: "AskUserQuestion",
     label: "Ask User Question",
@@ -771,7 +776,7 @@ const setupAskUserQuestion = (pi: PiLike): void => {
     executionMode: "sequential",
     parameters: AskUserQuestionParameters,
     async execute(
-      _toolCallId: string,
+      toolCallId: string,
       params: unknown,
       signal: AbortSignal | undefined,
       _onUpdate: unknown,
@@ -821,13 +826,14 @@ const setupAskUserQuestion = (pi: PiLike): void => {
         .map(({ question: item, answer }) => resultSegment(item, answer))
         .join(", ");
 
+      const resultText = `Your questions have been answered: ${summary}. You can now continue with these answers in mind.`;
+      provenance.record(
+        ctx.sessionManager?.getBranch() ?? [],
+        toolCallId,
+        resultText,
+      );
       return {
-        content: [
-          {
-            type: "text",
-            text: `Your questions have been answered: ${summary}. You can now continue with these answers in mind.`,
-          },
-        ],
+        content: [{ type: "text", text: resultText }],
         details: {
           questions: input.questions,
           answers,

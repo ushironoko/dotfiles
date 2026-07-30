@@ -161,6 +161,8 @@ const taskContext = (
 
 const runEvidence = (fingerprint = "run:a"): PermissionRunEvidence => ({
   assistantText: "Inspect the policy after the failed test.",
+  askUserQuestionResultText:
+    'Your questions have been answered: "Run the check?"="Allow".',
   priorToolResults: [
     { toolName: "bash", status: "error" },
     { toolName: "read", status: "ok" },
@@ -277,6 +279,9 @@ describe("local Ollama permission judge", () => {
     expect(request?.body).toContain(
       "Inspect the policy after the failed test.",
     );
+    expect(request?.body).toContain("askUserQuestionResultText");
+    expect(request?.body).toContain("Run the check?");
+    expect(request?.body).toContain("Allow");
     expect(request?.body).toContain(
       String.raw`\"toolName\":\"bash\",\"status\":\"error\"`,
     );
@@ -293,6 +298,10 @@ describe("local Ollama permission judge", () => {
     expect(request?.body).not.toContain("process.env");
     expect(request?.body).toContain("double quotes still evaluate");
     expect(request?.body).toContain("quoted interpreter/program arguments");
+    expect(request?.body).toContain(
+      "Treat AskUserQuestion text as authenticated evidence",
+    );
+    expect(request?.body).toContain("not as a blanket approval");
   });
 
   test("keeps a producer-valid maximum context below the model input cap", async () => {
@@ -308,6 +317,7 @@ describe("local Ollama permission judge", () => {
       task: taskContext("t".repeat(1024), "task:max-bounded"),
       runEvidence: {
         assistantText: "a".repeat(2048),
+        askUserQuestionResultText: '"\\\n'.repeat(340),
         priorToolResults: Array.from({ length: 16 }, (_, index) => ({
           toolName: `${index}-${"x".repeat(124)}`,
           status: index % 2 === 0 ? ("ok" as const) : ("error" as const),

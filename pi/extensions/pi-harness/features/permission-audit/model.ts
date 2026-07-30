@@ -50,6 +50,7 @@ export interface PermissionTaskAuditContext {
 
 export interface PermissionRunAuditContext {
   readonly assistantText?: string;
+  readonly askUserQuestionResultText?: string;
   readonly priorToolResults: readonly {
     readonly toolName: string;
     readonly status: "ok" | "error" | "unknown";

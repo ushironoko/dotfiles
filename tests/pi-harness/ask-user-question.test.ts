@@ -8,6 +8,7 @@ import {
   type HarnessConfig,
 } from "../../pi/extensions/pi-harness/config";
 import setupAskUserQuestion from "../../pi/extensions/pi-harness/features/ask-user-question/index";
+import { derivePermissionRunEvidence } from "../../pi/extensions/pi-harness/features/permission-policy/context";
 import { setupHarness } from "../../pi/extensions/pi-harness/index";
 import type {
   CtxLike,
@@ -98,6 +99,7 @@ type AskFakePi = FakePi & {
 };
 
 const tempDirectories: string[] = [];
+const activePis: AskFakePi[] = [];
 const KEY_UP = "\u001b[A";
 const KEY_DOWN = "\u001b[B";
 const KEY_SPACE = " ";
@@ -105,6 +107,7 @@ const KEY_ENTER = "\r";
 const KEY_ESCAPE = "\u001b";
 
 afterEach(async () => {
+  await Promise.all(activePis.splice(0).map((pi) => pi.emitSessionShutdown()));
   await Promise.all(
     tempDirectories
       .splice(0)
@@ -162,7 +165,11 @@ const getTool = (pi: FakePi): ToolDefLike => {
 const execute = async (
   pi: FakePi,
   questions: Question[],
-  options: { signal?: AbortSignal; ctx?: CtxLike } = {},
+  options: {
+    signal?: AbortSignal;
+    ctx?: CtxLike;
+    toolCallId?: string;
+  } = {},
 ): Promise<AskResult> => {
   const tool = getTool(pi);
   type ValidateArgs = Parameters<typeof validateToolArguments>;
@@ -178,7 +185,7 @@ const execute = async (
     } as unknown as ValidateArgs[1],
   );
   const result = await tool.execute(
-    "ask-1",
+    options.toolCallId ?? "ask-1",
     validated as never,
     options.signal,
     undefined,
@@ -242,6 +249,7 @@ const setup = (
     customDialogs,
   });
   setupAskUserQuestion(pi);
+  activePis.push(pi);
   return pi;
 };
 
@@ -676,6 +684,154 @@ describe("pi-harness AskUserQuestion answers", () => {
       "Which mode?": "Fast",
     });
     expect(pi.selectDialogs).toHaveLength(2);
+  });
+});
+
+describe("pi-harness AskUserQuestion permission evidence provenance", () => {
+  const askCallEntryFor = (askToolCallId: string): Record<string, unknown> => ({
+    type: "message",
+    message: {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: askToolCallId,
+          name: "AskUserQuestion",
+        },
+      ],
+    },
+  });
+  const callBranchFor = (askCallEntry: Record<string, unknown>): unknown[] => [
+    { type: "message", message: { role: "user", content: "task" } },
+    askCallEntry,
+  ];
+  const branchFor = (
+    resultText: string,
+    askToolCallId: string,
+    askCallEntry: Record<string, unknown>,
+  ): unknown[] => [
+    ...callBranchFor(askCallEntry),
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: askToolCallId,
+        toolName: "AskUserQuestion",
+        content: [{ type: "text", text: resultText }],
+        isError: false,
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "bash-1", name: "bash" }],
+      },
+    },
+  ];
+
+  test("accepts only the unmodified bundled result during the active agent run", async () => {
+    const pi = setup();
+    const askCallEntry = askCallEntryFor("ask-1");
+    const activeBranchFor = (resultText: string): unknown[] =>
+      branchFor(resultText, "ask-1", askCallEntry);
+    pi.setSessionBranch(callBranchFor(askCallEntry));
+    expect(
+      derivePermissionRunEvidence(activeBranchFor("OVERRIDE RESULT"), "bash-1")
+        ?.askUserQuestionResultText,
+    ).toBeUndefined();
+
+    pi.queueSelectIndex(0);
+    const result = await execute(pi, [question()]);
+    const resultText = result.content[0]?.text;
+    if (resultText === undefined) throw new Error("missing question result");
+
+    expect(
+      derivePermissionRunEvidence(activeBranchFor(resultText), "bash-1")
+        ?.askUserQuestionResultText,
+    ).toBe(resultText);
+    expect(
+      derivePermissionRunEvidence(
+        activeBranchFor(`${resultText} MUTATED BY TOOL_RESULT`),
+        "bash-1",
+      )?.askUserQuestionResultText,
+    ).toBeUndefined();
+
+    await pi.emitAgentSettled();
+    expect(
+      derivePermissionRunEvidence(activeBranchFor(resultText), "bash-1")
+        ?.askUserQuestionResultText,
+    ).toBeUndefined();
+  });
+
+  test("binds matching evidence to its harness session entry identity", async () => {
+    const firstPi = setup();
+    const secondPi = setup();
+    const sharedToolCallId = "shared-question";
+    const firstCallEntry = askCallEntryFor(sharedToolCallId);
+    const secondCallEntry = askCallEntryFor(sharedToolCallId);
+    firstPi.setSessionBranch(callBranchFor(firstCallEntry));
+    secondPi.setSessionBranch(callBranchFor(secondCallEntry));
+    firstPi.queueSelectIndex(0);
+    secondPi.queueSelectIndex(1);
+    const first = await execute(firstPi, [question()], {
+      toolCallId: sharedToolCallId,
+    });
+    const second = await execute(secondPi, [question()], {
+      toolCallId: sharedToolCallId,
+    });
+    const firstText = first.content[0]?.text;
+    const secondText = second.content[0]?.text;
+    if (firstText === undefined || secondText === undefined) {
+      throw new Error("missing question result");
+    }
+
+    expect(
+      derivePermissionRunEvidence(
+        branchFor(firstText, sharedToolCallId, firstCallEntry),
+        "bash-1",
+      )?.askUserQuestionResultText,
+    ).toBe(firstText);
+    expect(
+      derivePermissionRunEvidence(
+        branchFor(secondText, sharedToolCallId, secondCallEntry),
+        "bash-1",
+      )?.askUserQuestionResultText,
+    ).toBe(secondText);
+    expect(
+      derivePermissionRunEvidence(
+        branchFor(firstText, sharedToolCallId, secondCallEntry),
+        "bash-1",
+      )?.askUserQuestionResultText,
+    ).toBeUndefined();
+
+    await firstPi.emitAgentSettled();
+    expect(
+      derivePermissionRunEvidence(
+        branchFor(secondText, sharedToolCallId, secondCallEntry),
+        "bash-1",
+      )?.askUserQuestionResultText,
+    ).toBe(secondText);
+  });
+
+  test("invalidates the agent-run provenance store on a duplicate tool id", async () => {
+    const pi = setup();
+    const askCallEntry = askCallEntryFor("ask-1");
+    pi.setSessionBranch(callBranchFor(askCallEntry));
+    pi.queueSelectIndex(0);
+    const first = await execute(pi, [question()]);
+    const resultText = first.content[0]?.text;
+    if (resultText === undefined) throw new Error("missing question result");
+
+    pi.queueSelectIndex(0);
+    await execute(pi, [question()]);
+
+    expect(
+      derivePermissionRunEvidence(
+        branchFor(resultText, "ask-1", askCallEntry),
+        "bash-1",
+      )?.askUserQuestionResultText,
+    ).toBeUndefined();
   });
 });
 

@@ -198,10 +198,15 @@ can execute programs. A literal single-command `git -C` status/diff/log/show
 reaches that same residual judge path only after the effective cwd is verified
 inside a listed same-repository worktree; tilde-prefixed and `..`-containing
 location spellings remain unverified, and unverified locations still ask before
-Ollama. Residual commands use a bounded JSON envelope containing the command, raw current-turn
-task text, authenticated same-turn assistant text, preceding tool names plus
-success/failure status, and locally verified cwd/project/worktree context. It
-never receives assistant thinking, tool arguments, tool output content/details,
+Ollama. Residual commands use a bounded JSON envelope containing the command,
+raw current-turn task text, authenticated same-turn assistant text, preceding
+tool names plus success/failure status, the latest successful same-turn bundled
+`AskUserQuestion` result when its provenance is verified and its complete JSON
+string fits within 2 KiB, and locally verified cwd/project/worktree context.
+Over-limit answers are omitted rather than partially retained. No other tool
+output content/details is sent. The Ask result is untrusted evidence of the
+user's specific choice, not blanket approval and never an override of the
+safety gate. The judge never receives assistant thinking, tool arguments,
 expanded skills, prior-turn conversation, repository contents, remotes, or
 environment. One cumulative 1,000 ms local discovery deadline covers async child-
 env sanitization, Git probing, per-root registered-worktree/common-dir
@@ -222,8 +227,9 @@ worktree scope, the `sandboxed|escalated` execution mode and profile fingerprint
 hook stages, confirmation outcome, and the final pi-harness boundary disposition.
 ALLOW or an accepted ASK is not released unless that record append succeeds;
 an unavailable sink blocks the command. These records intentionally retain the
-raw shell command and bounded task/run/project context for corpus review, so
-they are sensitive local data. See
+raw shell command and bounded task/run/project context, including the optional
+provenance-verified `AskUserQuestion` result sent to the judge, for corpus
+review, so they are sensitive local data. See
 [`LOCAL_PERMISSION_JUDGE.md`](./LOCAL_PERMISSION_JUDGE.md) for storage,
 retention, schema, analysis, limitations, judge setup, and qualification steps.
 

@@ -175,6 +175,37 @@ describe("permission audit record model", () => {
     ).toEqual([{ line: 1, code: "invalid-record" }]);
   });
 
+  test("validates optional AskUserQuestion result evidence", () => {
+    const record = buildPermissionDecisionRecord(
+      baseInput([allowedStage], {
+        runEvidence: {
+          assistantText: "I asked before continuing.",
+          askUserQuestionResultText:
+            'Your questions have been answered: "Run tests?"="Allow".',
+          priorToolResults: [{ toolName: "AskUserQuestion", status: "ok" }],
+          fingerprint: "question-run",
+        },
+      }),
+    );
+    const parsed = parsePermissionAuditJsonl(`${JSON.stringify(record)}\n`);
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.records[0]?.runEvidence).toMatchObject({
+      askUserQuestionResultText:
+        'Your questions have been answered: "Run tests?"="Allow".',
+    });
+
+    const malformed = {
+      ...record,
+      runEvidence: {
+        ...record.runEvidence,
+        askUserQuestionResultText: { answer: "Allow" },
+      },
+    };
+    expect(
+      parsePermissionAuditJsonl(`${JSON.stringify(malformed)}\n`).diagnostics,
+    ).toEqual([{ line: 1, code: "invalid-record" }]);
+  });
+
   test("retains full corpus canaries and emits a bounded oversized marker", () => {
     const canary = "secret-token-CANARY";
     const record = buildPermissionDecisionRecord(
@@ -186,6 +217,7 @@ describe("permission audit record model", () => {
         },
         runEvidence: {
           assistantText: `assistant ${canary}`,
+          askUserQuestionResultText: `question result ${canary}`,
           priorToolResults: [],
           fingerprint: "canary-run",
         },
