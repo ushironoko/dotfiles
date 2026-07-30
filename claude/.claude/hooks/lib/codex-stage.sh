@@ -13,16 +13,16 @@
 #
 # Modes:
 #   codex-stage.sh review [--uncommitted | --base <branch> | --commit <sha>]
-#                         [--dir <path>] [--timeout <sec>] [--title <t>] [--out <file>]
+#                         [--dir <path>] [--timeout <sec>] [--title <t>]
 #       First-class diff review (codex exec review). `codex exec review` accepts
 #       no -C/--sandbox flags, so the target directory is entered with cd.
 #       Default selector: --uncommitted. Read-only by nature.
 #
-#   codex-stage.sh prompt [--dir <path>] [--timeout <sec>] [--out <file>] [--schema <file>]
+#   codex-stage.sh prompt [--dir <path>] [--timeout <sec>] [--schema <file>]
 #       Read-only analysis/review with a custom prompt read from stdin.
 #       The wrapper pins <dir> with cd before running codex from that cwd.
 #
-#   codex-stage.sh poc --worktree <abs-path> [--timeout <sec>] [--network] [--out <file>]
+#   codex-stage.sh poc --worktree <abs-path> [--timeout <sec>] [--network]
 #       Implementation PoC read from stdin, confined to an isolated linked git
 #       worktree (codex -a never exec --sandbox workspace-write from <worktree>).
 #       Prints `git status --porcelain` + `git diff --stat` of the worktree after
@@ -38,9 +38,9 @@
 #       runs never touch the same path). Same rails as poc (codex -a never exec
 #       --sandbox workspace-write from the pinned <dir>; no danger flags, no
 #       --add-dir, no -m). Prints a repo-wide `git status --porcelain` + `git diff --stat`
-#       after the run. Changes stay uncommitted for review. run does not accept
-#       --out (its output is returned on stdout) and uses exit 13, not poc's 14,
-#       for a non-git-work-tree target. Note: confinement of codex's edits to
+#       after the run. Changes stay uncommitted for review. Output is returned
+#       on stdout. run uses exit 13, not poc's 14, for a non-git-work-tree target.
+#       Note: confinement of codex's edits to
 #       <dir> is codex's own workspace-write sandbox (writable root = the -C dir),
 #       not something this wrapper enforces beyond withholding --add-dir.
 #
@@ -73,34 +73,21 @@ die() {
   exit "${2:-13}"
 }
 
-directory_identity() {
-  local path=$1 identity
-  if identity=$(stat -c '%d:%i' -- "$path" 2>/dev/null); then
-    printf '%s' "$identity"
+validate_bounded_integer() {
+  local name=$1 value=$2 minimum=$3 maximum=$4
+  case $value in
+    ""|*[!0-9]*|0[0-9]*) die "$name must be a canonical decimal integer" 13 ;;
+  esac
+  if [ "$value" -ge "$minimum" ] && [ "$value" -le "$maximum" ]; then
     return 0
   fi
-  if identity=$(stat -f '%d:%i' "$path" 2>/dev/null); then
-    printf '%s' "$identity"
-    return 0
-  fi
-  return 1
+  die "$name must be between $minimum and $maximum" 13
 }
 
 pin_directory() {
-  local path=$1 actual_path
+  local path=$1
   cd -P -- "$path" || die "cannot enter directory: $path" 13
-  actual_path=$(pwd -P) || die "cannot resolve directory after entry: $path" 13
-  if [ -n "$EXPECTED_DIR_PATH" ]; then
-    [ "$actual_path" = "$EXPECTED_DIR_PATH" ] \
-      || die "directory path changed before execution: $path" 13
-  fi
-  if [ -n "$EXPECTED_DIR_IDENTITY" ]; then
-    local actual_identity
-    actual_identity=$(directory_identity .) \
-      || die "cannot verify directory identity: $path" 13
-    [ "$actual_identity" = "$EXPECTED_DIR_IDENTITY" ] \
-      || die "directory identity changed before execution: $path" 13
-  fi
+  pwd -P >/dev/null || die "cannot resolve directory after entry: $path" 13
 }
 
 # Portable timeout: background the command, kill it from a watchdog.
@@ -227,13 +214,10 @@ TIMEOUT=600
 RETRY=1
 RETRY_WAIT=30
 DIR=$PWD
-OUT=""
 SCHEMA=""
 TITLE=""
 WORKTREE=""
 NETWORK=0
-EXPECTED_DIR_IDENTITY=""
-EXPECTED_DIR_PATH=""
 SELECTOR=()
 
 while [ $# -gt 0 ]; do
@@ -246,34 +230,20 @@ while [ $# -gt 0 ]; do
     --retry) RETRY=${2:?--retry needs a count}; shift ;;
     --retry-wait) RETRY_WAIT=${2:?--retry-wait needs seconds}; shift ;;
     --title) TITLE=${2:?--title needs text}; shift ;;
-    --out) OUT=${2:?--out needs a file}; shift ;;
     --schema) SCHEMA=${2:?--schema needs a file}; shift ;;
     --worktree) WORKTREE=${2:?--worktree needs an absolute path}; shift ;;
     --network) NETWORK=1 ;;
-    --expected-dir-identity) EXPECTED_DIR_IDENTITY=${2:?--expected-dir-identity needs device:inode}; shift ;;
-    --expected-dir-path) EXPECTED_DIR_PATH=${2:?--expected-dir-path needs an absolute path}; shift ;;
     -h|--help) usage ;;
     *) die "unknown argument: $1" 13 ;;
   esac
   shift
 done
 
-if [ -n "$EXPECTED_DIR_IDENTITY" ] && [ -z "$EXPECTED_DIR_PATH" ]; then
-  die "--expected-dir-identity requires --expected-dir-path" 13
-fi
-if [ -n "$EXPECTED_DIR_PATH" ] && [ -z "$EXPECTED_DIR_IDENTITY" ]; then
-  die "--expected-dir-path requires --expected-dir-identity" 13
-fi
+validate_bounded_integer "--timeout" "$TIMEOUT" 1 3600
+validate_bounded_integer "--retry" "$RETRY" 0 10
+validate_bounded_integer "--retry-wait" "$RETRY_WAIT" 0 300
 
 preflight
-
-# Absolutize --out before any cd/-C changes what "relative" means.
-if [ -n "$OUT" ]; then
-  case $OUT in
-    /*) ;;
-    *) OUT="$PWD/$OUT" ;;
-  esac
-fi
 
 case $MODE in
   review)
@@ -286,8 +256,7 @@ case $MODE in
     rc=0
     run_codex "" codex exec review "${SELECTOR[@]}" \
       --ephemeral \
-      ${TITLE:+--title "$TITLE"} \
-      ${OUT:+-o "$OUT"} || rc=$?
+      ${TITLE:+--title "$TITLE"} || rc=$?
     [ "$rc" -eq 0 ] || { report_failure "$rc"; exit "$rc"; }
     ;;
 
@@ -301,7 +270,6 @@ case $MODE in
       --sandbox read-only \
       --ephemeral \
       --skip-git-repo-check \
-      ${OUT:+-o "$OUT"} \
       ${SCHEMA:+--output-schema "$SCHEMA"} \
       - || rc=$?
     [ "$rc" -eq 0 ] || { report_failure "$rc"; exit "$rc"; }
@@ -337,7 +305,6 @@ case $MODE in
       --sandbox workspace-write \
       --ephemeral \
       ${NETWORK_OPT:+-c "$NETWORK_OPT"} \
-      ${OUT:+-o "$OUT"} \
       - || rc=$?
     [ "$rc" -eq 0 ] || { report_failure "$rc"; exit "$rc"; }
     echo ""
@@ -358,12 +325,6 @@ case $MODE in
     git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
       || die "run mode requires a git work tree (for reviewability): $DIR" 13
     TOPLEVEL=$(git rev-parse --show-toplevel)
-    # run's write surface is strictly --dir. --out/-o would let codex write its
-    # output file to a path absolutized against the caller's $PWD, outside that
-    # boundary — so run does not accept it. The caller captures codex's output
-    # from this wrapper's stdout instead.
-    [ -z "$OUT" ] \
-      || die "run mode does not support --out — codex output is returned on stdout" 13
     buffer_stdin
     NETWORK_OPT=""
     [ "$NETWORK" -eq 1 ] && NETWORK_OPT="sandbox_workspace_write.network_access=true"

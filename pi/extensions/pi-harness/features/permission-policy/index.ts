@@ -1,22 +1,18 @@
 import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { InputEvent, PiLike } from "../../lib/pi-like";
 import {
   DEFAULT_PERMISSION_JUDGE_CONFIG,
   type HarnessConfig,
 } from "../../config";
-import type {
-  BashExecutionBoundary,
-  BashScratchBoundary,
-} from "../bash-sandbox";
+import type { BashExecutionBoundary } from "../bash-sandbox";
 import { createPermissionBlocker, type PermissionBlockResult } from "./block";
 import { appendCommandHygiene } from "./command-hygiene";
 import {
   authorizeCodexStageEscalation,
   consumeCodexStageCapability,
-  createCodexStageCapabilityRuntime,
-  type CodexStageCapabilityRuntime,
+  pinCodexStageCommand,
 } from "./codex-stage-capability";
 import type { CodexStageMode } from "../../lib/agent-md";
 import {
@@ -167,9 +163,8 @@ interface SetupPermissionPolicyOptions {
   taskTracker?: PermissionTaskTracker;
   permissionAudit?: PermissionAuditIntegration;
   executionBoundary?: (toolName: string) => BashExecutionBoundary | undefined;
-  scratchBoundaryFor?: (toolName: string) => BashScratchBoundary | undefined;
   codexStageModes?: ReadonlySet<CodexStageMode>;
-  codexStageRuntime?: CodexStageCapabilityRuntime;
+  codexStageExecutablePath?: string;
 }
 
 const setupPermissionPolicy = (
@@ -186,20 +181,7 @@ const setupPermissionPolicy = (
   const taskTracker = options.taskTracker ?? createPermissionTaskTracker();
   const consumedCodexStageModes = consumeCodexStageCapability(config.isChild);
   const codexStageModes = options.codexStageModes ?? consumedCodexStageModes;
-  const { codexStageRuntime: configuredCodexStageRuntime, permissionAudit } =
-    options;
-  let codexStageRuntime = configuredCodexStageRuntime;
-  const codexStageArtifacts = new Map<string, readonly string[]>();
-  if (codexStageRuntime === undefined && codexStageModes.size > 0) {
-    try {
-      codexStageRuntime = createCodexStageCapabilityRuntime(
-        join(config.paths.claudeHooksDir, "lib", "codex-stage.sh"),
-      );
-    } catch {
-      // A missing or unsafe trusted wrapper disables only the capability. The
-      // command still follows the ordinary live-judge escalation path.
-    }
-  }
+  const { permissionAudit } = options;
   const discoverProject =
     options.discoverProject ??
     ((cwd: string, signal?: AbortSignal, leadingCdTarget?: string) =>
@@ -413,21 +395,10 @@ const setupPermissionPolicy = (
     clearSkillLifecycle();
   });
 
-  pi.on("tool_result", (event) => {
-    const { toolCallId } = event;
-    if (toolCallId === undefined) return;
-    const artifacts = codexStageArtifacts.get(toolCallId);
-    if (artifacts === undefined) return;
-    codexStageArtifacts.delete(toolCallId);
-    codexStageRuntime?.releaseFiles(artifacts);
-  });
-
   pi.on("session_shutdown", () => {
     taskTracker.clear();
     clearSkillLifecycle();
     judge?.clear();
-    codexStageArtifacts.clear();
-    codexStageRuntime?.dispose();
   });
 
   pi.on("tool_call", async (event, ctx) => {
@@ -536,6 +507,35 @@ const setupPermissionPolicy = (
           result.audit.reasonCode,
           result.reason,
         );
+      }
+      const codexStageAuthorization = isEscalated
+        ? authorizeCodexStageEscalation(command, codexStageModes)
+        : undefined;
+      if (codexStageAuthorization !== undefined) {
+        const pinnedCommand =
+          options.codexStageExecutablePath === undefined
+            ? command
+            : pinCodexStageCommand(
+                command,
+                options.codexStageExecutablePath,
+                codexStageAuthorization.wrapperIndex,
+              );
+        if (pinnedCommand === undefined) {
+          return finalizeBlocked(
+            event.toolCallId,
+            "codex-stage-pin-failed",
+            "codex-stage executable pin could not be applied",
+          );
+        }
+        permissionAudit?.addStage(event.toolCallId, {
+          type: "deterministic",
+          phase: "codex-stage-capability",
+          verdict: "allow",
+          basis: "agent-capability",
+          reasonCode: "codex-stage-capability",
+        });
+        event.input.command = pinnedCommand;
+        return undefined;
       }
       const confirm = async (
         title: string,
@@ -838,34 +838,6 @@ const setupPermissionPolicy = (
           );
         }
         if (result.verdict === "allow" && !isEscalated) return undefined;
-      }
-      if (
-        isEscalated &&
-        result.verdict !== "ask" &&
-        ctx.cwd !== undefined &&
-        project !== undefined
-      ) {
-        const authorization = await authorizeCodexStageEscalation(command, {
-          modes: codexStageModes,
-          cwd: ctx.cwd,
-          scratchBoundary: options.scratchBoundaryFor?.(event.toolName),
-          project,
-          runtime: codexStageRuntime,
-        });
-        if (authorization !== undefined) {
-          event.input.command = authorization.command;
-          if (authorization.artifacts.length > 0) {
-            codexStageArtifacts.set(event.toolCallId, authorization.artifacts);
-          }
-          permissionAudit?.addStage(event.toolCallId, {
-            type: "deterministic",
-            phase: "codex-stage-capability",
-            verdict: "allow",
-            basis: "agent-capability",
-            reasonCode: "codex-stage-capability",
-          });
-          return undefined;
-        }
       }
       if (judge === undefined) {
         if (isEscalated) {

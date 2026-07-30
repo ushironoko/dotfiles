@@ -121,6 +121,23 @@ deterministic floor, explicit confirmation, or local judge.
 ## Decision order
 
 1. Mandatory deny rule: block.
+
+Managed Codex children have one explicit exception before the remaining steps.
+When trusted agent frontmatter declared the requested mode, a literal
+`codex-stage.sh` direct review call or documented `printf` prompt pipeline sent
+through `bash_escalated` is released without project discovery or Ollama. Pi
+does not inspect wrapper arguments, copy/pin staged files, verify cwd/worktree
+identity, or add its OS sandbox. It pins only the trusted wrapper bytes in a
+private read-only executable at child startup, then substitutes that launcher
+without changing Codex arguments. If snapshot creation fails, the capability is
+disabled while the normal fail-closed policy remains registered. The wrapper
+rejects `--out` and validates its timeout/retry numeric controls; the wrapper,
+Codex sandbox, and workflow
+isolation/write-scope contracts own the remaining checks. The shell-envelope
+recognizer still rejects undeclared modes, active substitutions, redirects,
+extra commands, non-literal wrapper paths, and malformed pipelines, which
+continue through the ordinary escalated policy below.
+
 2. Mandatory structural risk floor: ask the user, or block without UI. This
    includes destructive/force Git and filesystem operations, unverified Git
    location or transport overrides, privilege/secrets (including input
@@ -213,6 +230,12 @@ but not package runners; an unknown manager option before a later runner token
 stays conservative. In child profiles, preflight and policy rejections share the
 same authenticated permission-block signal so a blocked child cannot be
 reported as successful. Claude Code and Codex keep their existing hook behavior.
+
+The managed-child `codex-stage.sh` exception above is capability-based rather
+than a checked-in Bash allow: the parent derives its modes from trusted agent
+frontmatter, passes them through the sanitized child environment, and the child
+consumes them once. Parent sessions and arbitrary child task text cannot mint
+that capability.
 
 The checked-in allow entries mirror the broad Bash grants in
 `claude/.claude/settings.json`. They represent explicit user trust, not a claim

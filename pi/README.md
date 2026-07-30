@@ -61,9 +61,11 @@ The harness stays a single umbrella extension (`extensions/pi-harness/index.ts`)
 composing compatibility features in a fixed order. Bash audit starts first;
 the non-executing npm-script preflight may short-circuit next; permission-policy
 then remains the mandatory safety floor before the remaining hook-bridge
-features. Every handler evaluates the original command. Only after they pass is
-ordinary Bash replaced with an OS-sandbox wrapper and the audit record released
-to controlled execution. The preflight uses `/bin/bash` with a fixed root-owned
+features. Permission handlers evaluate the original command. Only after they
+pass is ordinary Bash replaced with an OS-sandbox wrapper and the audit record
+released to controlled execution. The managed Codex exception instead replaces
+only the already-validated wrapper token with a private read-only snapshot of
+that wrapper's bytes. The preflight uses `/bin/bash` with a fixed root-owned
 system `PATH`, never the repository-influenced inherited path. The
 `hearth-tools` extension is separate so native-addon preflight cannot partially
 initialize the permission/audit extension. It replaces pi's `read`, `write`,
@@ -152,10 +154,24 @@ confirmation and block without UI instead of becoming less restrictive.
 
 `bash_escalated` is the only explicit sandbox escape. It is intended only when
 the requested operation genuinely needs an effect blocked by ordinary Bash.
-Every call ignores configured/skill automatic allows, bypasses the ALLOW cache,
-and requires a fresh local classifier ALLOW; any other outcome confirms with an
-interactive user or blocks in no-UI children. Hard-denied relay/import commands
-remain denied before both execution paths.
+Calls normally ignore configured/skill automatic allows, bypass the ALLOW
+cache, and require a fresh local classifier ALLOW; any other outcome confirms
+with an interactive user or blocks in no-UI children. The one managed-child
+exception is a literal `codex-stage.sh` launch whose mode was declared by the
+trusted Codex agent definition. Pi admits that call before project discovery or
+the local judge and does not wrap it in Pi's OS sandbox, copy/pin its staged
+files, or constrain its wrapper arguments. It snapshots only the trusted
+wrapper executable into a private read-only file at child startup, preventing
+the child from replacing the home symlink before its authorized launch; the
+wrapper token changes, while every Codex argument remains intact. If that
+snapshot cannot be created, Pi disables the managed capability but still
+registers the normal fail-closed permission policy. `codex-stage.sh`, Codex's
+own read-only/workspace-write sandbox, and the workflow
+isolation/write-scope contracts are authoritative. The wrapper rejects
+sandbox-external `--out` files and validates timeout/retry controls before shell
+arithmetic. Pi still rejects an undeclared mode or a shell envelope containing
+substitutions, redirects, extra commands, or a non-literal wrapper. Hard-denied
+relay/import commands remain denied before both execution paths.
 
 The safety layer also appends soft command-hygiene guidance to every parent and
 child system prompt: prefer dedicated file tools, literal project-bounded
@@ -451,6 +467,11 @@ hook is advisory):
   validated linked worktree per task (bit-task creator, S1 postconditions)
   and leaves it in place — no auto merge, no auto remove.
 - Parallel `codex-runner` tasks must declare disjoint `writeScope`s.
+- Managed Codex agents invoke `codex-stage.sh` directly through
+  `bash_escalated`. Pi validates only the trusted agent's declared mode and the
+  literal shell envelope, then delegates execution safety to the wrapper and
+  Codex sandbox instead of nesting Codex inside Pi's effect sandbox or local
+  judge.
 - A failing task degrades the stage (reported as FAILED) instead of aborting
   the workflow — synthesis/judging stays with the parent agent.
 

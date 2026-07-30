@@ -10,7 +10,6 @@ import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permi
 import {
   CODEX_STAGE_CAPABILITY_ENV,
   consumeCodexStageCapability,
-  createCodexStageCapabilityRuntime,
 } from "../../pi/extensions/pi-harness/features/permission-policy/codex-stage-capability";
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
 import type { PermissionAuditIntegration } from "../../pi/extensions/pi-harness/features/permission-audit/index";
@@ -301,6 +300,23 @@ describe("pi-harness subagent", () => {
         systemPrompt: "Review carefully.",
       },
     ]);
+  });
+
+  test("requires managed Codex agents to launch the wrapper directly outside Pi sandbox", () => {
+    for (const name of ["codex-reviewer", "codex-poc", "codex-runner"]) {
+      const definition = readFileSync(
+        join(import.meta.dir, "../../claude/.claude/agents", `${name}.md`),
+        "utf8",
+      );
+      expect(definition).toContain(
+        "always invoke the\n  wrapper with `bash_escalated`; never try ordinary Bash first",
+      );
+      expect(definition).not.toContain("if ordinary Bash blocks");
+      expect(definition).toContain("does not re-sandbox the wrapper");
+      expect(definition).toContain(
+        "snapshots only the trusted wrapper executable",
+      );
+    }
   });
 
   test("returns an empty agent list for a missing directory", async () => {
@@ -656,13 +672,7 @@ describe("pi-harness subagent", () => {
     await fs.mkdir(agentsDirectory, { recursive: true });
     await fs.mkdir(wrapperDirectory, { recursive: true });
     await fs.mkdir(sandboxScratch, { mode: 0o700 });
-    const canonicalScratch = await fs.realpath(sandboxScratch);
-    const scratchStat = await fs.stat(canonicalScratch);
-    const scratchBoundary = {
-      path: canonicalScratch,
-      identity: `${scratchStat.dev}:${scratchStat.ino}`,
-    };
-    const promptArtifact = join(canonicalScratch, "codex-reviewer-a1B2C3.md");
+    const promptArtifact = join(sandboxScratch, "codex-reviewer-a1B2C3.md");
     await fs.copyFile(
       join(import.meta.dir, "../../claude/.claude/agents/codex-reviewer.md"),
       join(agentsDirectory, "codex-reviewer.md"),
@@ -679,10 +689,6 @@ describe("pi-harness subagent", () => {
       ].join("\n"),
       { mode: 0o755 },
     );
-    const codexStageRuntime = createCodexStageCapabilityRuntime(wrapperPath, {
-      temporaryDirectory: home,
-    });
-
     let policyDecision: Awaited<
       ReturnType<ReturnType<typeof createFakePi>["emitToolCall"]>
     > = undefined;
@@ -734,7 +740,6 @@ describe("pi-harness subagent", () => {
                 codexStageModes: consumeCodexStageCapability(true, {
                   ...launchOptions.env,
                 }),
-                codexStageRuntime,
                 discoverProject: async () => ({
                   kind: "git",
                   cwd: home,
@@ -749,7 +754,6 @@ describe("pi-harness subagent", () => {
                   network: "denied",
                   profileFingerprint: "c".repeat(64),
                 }),
-                scratchBoundaryFor: () => scratchBoundary,
                 permissionSignalToken:
                   launchOptions.env[CHILD_PERMISSION_SIGNAL_ENV],
                 writePermissionSignal: (text) => controller.emitStderr(text),
@@ -819,10 +823,9 @@ describe("pi-harness subagent", () => {
     expect(result.permissionBlocked).toBeUndefined();
     expect(result.failed).toBe(false);
     expect(result.output).toContain("mock codex reached");
-    expect(await fs.readFile(receivedPrompt, "utf8")).toMatch(
-      /^Read \/.*\/pi-codex-stage-artifact-.*\/prompt\.md completely and follow it exactly\.$/,
+    expect(await fs.readFile(receivedPrompt, "utf8")).toBe(
+      `Read ${promptArtifact} completely and follow it exactly.`,
     );
-    codexStageRuntime.dispose();
   });
 
   test("treats a child permission block as failure even when pi exits zero", async () => {

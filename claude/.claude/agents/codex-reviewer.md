@@ -162,8 +162,11 @@ content with the standard review prompt shown below.
    <extracted artifact content here>
    ```
 
-2. When the child process already has the desired working directory, rely on
-   the wrapper's `DIR=$PWD` default. This is the preferred command:
+2. Submit the wrapper pipeline directly through the `bash_escalated` tool. Do
+   not try ordinary `bash` first: Codex initializes its own app-server and
+   sandbox, which are intentionally run outside Pi's effect sandbox. When the
+   child process already has the desired working directory, rely on the
+   wrapper's `DIR=$PWD` default:
 
    ```bash
    printf '%s' 'Read /PRINTED_PRIVATE_PROMPT_FILE completely and follow it exactly.' |
@@ -226,13 +229,15 @@ gap), 124 = timed out.
 
 - The actual review is performed by Codex CLI; this agent only orchestrates
 - Review runs are read-only (`--sandbox read-only` / the review subcommand)
-- codex needs network and a local app-server. Under pi, if ordinary Bash blocks
-  the wrapper at the effect boundary, retry that exact wrapper call with the
-  explicit `bash_escalated` tool. Pi grants only this agent's declared
-  `prompt,review` modes after it verifies the literal wrapper, the scratch-local
-  staged prompt, and the active-worktree directory. Any changed form still gets
-  a fresh local classification. If escalation remains blocked, report it.
-  Never disable the sandbox implicitly or invoke `codex` directly.
+- codex needs network and a local app-server. Under pi, always invoke the
+  wrapper with `bash_escalated`; never try ordinary Bash first. For a managed
+  child, Pi checks only that the literal wrapper mode is one this agent declared
+  and that the shell envelope is the documented direct call or prompt pipeline.
+  It does not re-sandbox the wrapper, pin or copy its prompt/cwd, or send the
+  launch to the local judge. Pi snapshots only the trusted wrapper executable so
+  this child cannot replace its launcher before the call. `codex-stage.sh` and
+  Codex's own read-only sandbox are the execution boundary. Never disable that
+  Codex sandbox or invoke `codex` directly.
 - Never pass `-m` — `~/.codex/config.toml` owns model selection
 - Privacy: the artifact and any repo files codex reads are sent to OpenAI
 - If the wrapper is missing, report that failure; never bypass it by invoking

@@ -76,9 +76,11 @@ root:
 
 2. Use the `write` tool to replace the empty printed file with the full task,
    constraints, exact write scope, and verification. Keep it directly under
-   the printed temporary root; never move it into a nested directory. Paste
-   the printed prompt path and assigned active-worktree directory into this
-   literal pipeline:
+   the printed temporary root; never move it into a nested directory. Submit
+   this literal pipeline directly through the `bash_escalated` tool, pasting
+   the printed prompt path and assigned directory. Do not try ordinary `bash`
+   first: Codex initializes its own app-server and sandbox outside Pi's effect
+   sandbox.
 
    ```bash
    printf '%s' 'Read /PRINTED_PRIVATE_PROMPT_FILE completely and follow it exactly.' |
@@ -98,23 +100,24 @@ root:
 
 - Set a generous Bash timeout for the wrapper call (up to 600000 ms); raise
   `--timeout` for large tasks.
-- The wrapper pins `<dir>` with `cd -P`, verifies the expected directory
-  identity, then runs `codex -a never exec --sandbox workspace-write` from that
-  cwd. Codex edits files within `<dir>`. The wrapper does NOT widen the writable
-  boundary with `--add-dir`, but which paths stay protected (`.git`, etc.) is
-  whatever codex's own workspace-write sandbox policy enforces — not a wrapper
-  guarantee. That confinement to the inherited cwd is codex-sandbox-enforced,
-  so it depends on `~/.codex/config.toml` not widening
-  `sandbox_workspace_write.writable_roots`; a codex config/version
-  change, not a wrapper change, is the failure mode to watch.
-- codex needs network and a local app-server. Under pi, if ordinary Bash blocks
-  the wrapper at the effect boundary, retry that exact wrapper call with the
-  explicit `bash_escalated` tool. Pi grants only this agent's declared `run`
-  mode after it verifies the literal wrapper, a scratch-local staged prompt,
-  and that `--dir` remains inside the child process's active worktree. Any
-  changed form still gets a fresh local classification. If escalation remains
-  blocked, report the run as blocked. Never disable the sandbox implicitly or
-  invoke `codex` directly.
+- The wrapper canonicalizes `<dir>` with `cd -P`, verifies that it is inside a
+  git work tree, then runs `codex -a never exec --sandbox workspace-write` from
+  that cwd. Codex edits files within `<dir>`. The wrapper does NOT widen the
+  writable boundary with `--add-dir`, but which paths stay protected (`.git`,
+  etc.) is whatever codex's own workspace-write sandbox policy enforces — not a
+  wrapper guarantee. That confinement to the inherited cwd is
+  codex-sandbox-enforced, so it depends on `~/.codex/config.toml` not widening
+  `sandbox_workspace_write.writable_roots`; a codex config/version change, not
+  a wrapper change, is the failure mode to watch.
+- codex needs network and a local app-server. Under pi, always invoke the
+  wrapper with `bash_escalated`; never try ordinary Bash first. For a managed
+  child, Pi checks only that the literal wrapper uses this agent's declared
+  `run` mode and that the shell envelope is the documented prompt pipeline. It
+  does not re-sandbox the wrapper, pin or copy its prompt/directory, or send the
+  launch to the local judge. Pi snapshots only the trusted wrapper executable so
+  this child cannot replace its launcher before the call. The workflow
+  write-scope contract, wrapper Git check, and Codex workspace-write sandbox are
+  authoritative. Never disable that Codex sandbox or invoke `codex` directly.
 
 ### Phase 3: Report
 

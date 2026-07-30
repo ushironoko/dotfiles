@@ -51,8 +51,11 @@ spec out of Bash by staging it in the sandbox-managed private scratch root:
 
 2. Use the `write` tool to replace the empty printed file with the complete
    implementation spec. Keep it directly under the printed temporary root;
-   never move it into a nested directory. Then paste the printed prompt path
-   and the canonical active worktree from Phase 1 into this literal pipeline:
+   never move it into a nested directory. Then submit this literal pipeline
+   directly through the `bash_escalated` tool, pasting the printed prompt path
+   and the canonical active worktree from Phase 1. Do not try ordinary `bash`
+   first: Codex initializes its own app-server and sandbox outside Pi's effect
+   sandbox.
 
    ```bash
    printf '%s' 'Read /PRINTED_PRIVATE_PROMPT_FILE completely and follow it exactly.' |
@@ -72,18 +75,20 @@ spec out of Bash by staging it in the sandbox-managed private scratch root:
 
 - Set a generous Bash timeout for the wrapper call (up to 600000 ms); raise
   `--timeout` for large specs.
-- The wrapper pins the validated worktree with `cd -P`, verifies the expected
-  directory identity, then runs `codex -a never exec --sandbox workspace-write`
-  from that cwd: codex edits files directly in the worktree; `.git`,
-  `.codex` and `.agents` stay read-only by codex policy.
-- codex needs network and a local app-server. Under pi, if ordinary Bash blocks
-  the wrapper at the effect boundary, retry that exact wrapper call with the
-  explicit `bash_escalated` tool. Pi grants only this agent's declared `poc`
-  mode after it verifies the literal wrapper, a scratch-local staged prompt,
-  and that `--worktree` equals the child process's active linked worktree. Any
-  changed form still gets a fresh local classification. If escalation remains
-  blocked, report the PoC as blocked. Never disable the sandbox implicitly or
-  invoke `codex` directly.
+- The wrapper canonicalizes the target with `cd -P`, verifies that it is an
+  isolated linked worktree, then runs
+  `codex -a never exec --sandbox workspace-write` from that cwd: codex edits
+  files directly in the worktree; `.git`, `.codex` and `.agents` stay read-only
+  by codex policy.
+- codex needs network and a local app-server. Under pi, always invoke the
+  wrapper with `bash_escalated`; never try ordinary Bash first. For a managed
+  child, Pi checks only that the literal wrapper uses this agent's declared
+  `poc` mode and that the shell envelope is the documented prompt pipeline. It
+  does not re-sandbox the wrapper, pin or copy its prompt/worktree, or send the
+  launch to the local judge. Pi snapshots only the trusted wrapper executable so
+  this child cannot replace its launcher before the call. The wrapper's
+  linked-worktree validation and Codex's workspace-write sandbox are
+  authoritative. Never disable that Codex sandbox or invoke `codex` directly.
 
 ### Phase 3: Report
 

@@ -143,6 +143,40 @@ describe("pi-harness coordination browser composition", () => {
     expect(registered.shortcuts.has("ctrl+alt+i")).toBe(false);
   });
 
+  test("keeps the mandatory permission policy when Codex launcher pinning fails", async () => {
+    const value = {
+      ...config("pi-composition-codex-pin-failure", {
+        subagent: false,
+        workflow: false,
+        "bit-task": false,
+      }),
+      isChild: true,
+    };
+    const pi = createFakePi({ cwd: value.paths.home, hasUI: false });
+    let pinAttempts = 0;
+
+    expect(() =>
+      setupHarness(pi, value, {
+        consumeCodexStageCapability: () => new Set(["review"] as const),
+        createCodexStageExecutablePin: () => {
+          pinAttempts += 1;
+          throw new Error("simulated pin failure");
+        },
+      }),
+    ).not.toThrow();
+    expect(pinAttempts).toBe(1);
+    expect(
+      await pi.emitToolCall({
+        type: "tool_call",
+        toolName: "bash_escalated",
+        toolCallId: "codex-pin-failure",
+        input: {
+          command: "~/.claude/hooks/lib/codex-stage.sh review --uncommitted",
+        },
+      }),
+    ).toEqual({ block: true, reason: expect.any(String) });
+  });
+
   test("PI_HARNESS_CHILD=1 disables both resident sources", () => {
     const childConfig = loadConfig(
       { PI_HARNESS_CHILD: "1" },
