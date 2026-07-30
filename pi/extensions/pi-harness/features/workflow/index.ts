@@ -55,6 +55,7 @@ interface SetupWorkflowOptions {
     signal?: AbortSignal,
     onCreated?: (path: string) => void,
   ) => Promise<string>;
+  onWorktreeCreated?: (path: string) => Promise<void> | void;
   validateCwd?: (
     candidateCwd: string,
     rootCwd: string,
@@ -439,6 +440,7 @@ const setupWorkflow = (
                       }
                     },
                   );
+                  await options.onWorktreeCreated?.(worktree);
                   worktrees[taskIndex] = worktree;
                   if (runId !== undefined) {
                     childRuns?.registry.setRunWorktree(runId, worktree);

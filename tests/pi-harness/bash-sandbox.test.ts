@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
-import type { SandboxAskCallback } from "@anthropic-ai/sandbox-runtime";
+import type {
+  SandboxAskCallback,
+  SandboxRuntimeConfig,
+} from "@anthropic-ai/sandbox-runtime";
 import {
   BASH_SANDBOX_PROVIDER_EVENT,
   setupBashSandbox,
@@ -64,12 +67,14 @@ const profile = (cwd = "/repo"): BashSandboxProfile => ({
 interface FakeManager extends SandboxManagerLike {
   asks: SandboxAskCallback[];
   wrapped: string[];
+  updates: SandboxRuntimeConfig[];
   resets: number;
 }
 
 const manager = (): FakeManager => ({
   asks: [],
   wrapped: [],
+  updates: [],
   resets: 0,
   async initialize(_config, ask) {
     if (ask !== undefined) this.asks.push(ask);
@@ -77,6 +82,9 @@ const manager = (): FakeManager => ({
   async wrapWithSandbox(command) {
     this.wrapped.push(command);
     return `sandbox(${command})`;
+  },
+  updateConfig(config) {
+    this.updates.push(config);
   },
   async reset() {
     this.resets += 1;
@@ -90,6 +98,12 @@ const setup = (
     commandPrefix?: string;
     spawnFn?: SpawnFunction;
     userOwnerOrder?: "before" | "after";
+    validateWritableWorktree?: (
+      path: string,
+      root: string,
+    ) => Promise<
+      { ok: true; canonicalCwd: string } | { ok: false; reason: string }
+    >;
   } = {},
 ) => {
   const pi = createFakePi({ cwd: "/repo", hasUI: options.hasUI });
@@ -146,6 +160,9 @@ const setup = (
     removePath: async (path) => {
       removed.push(path);
     },
+    ...(options.validateWritableWorktree === undefined
+      ? {}
+      : { validateWritableWorktree: options.validateWritableWorktree }),
     ...(options.spawnFn === undefined ? {} : { spawnFn: options.spawnFn }),
   });
   controller.registerExecutionBoundary({
@@ -299,6 +316,123 @@ describe("Bash effect sandbox lifecycle", () => {
     await runtime.pi.emitSessionShutdown();
     expect(runtime.fakeManager.resets).toBe(1);
     expect(runtime.removed).toEqual(["/private/scratch"]);
+  });
+
+  test("registers and revokes a validated worktree", async () => {
+    const validations: { path: string; root: string }[] = [];
+    const runtime = setup({
+      validateWritableWorktree: async (path, root) => {
+        validations.push({ path, root });
+        return { ok: true, canonicalCwd: "/repo/linked" };
+      },
+    });
+    await runtime.pi.emitSessionStart({
+      type: "session_start",
+      reason: "startup",
+    });
+
+    const initialFingerprint =
+      runtime.controller.boundaryFor("bash")?.profileFingerprint;
+    await runtime.controller.registerWritableWorktree("/alias/linked");
+    expect(validations).toEqual([{ path: "/alias/linked", root: "/repo" }]);
+    expect(runtime.fakeManager.updates).toHaveLength(1);
+    expect(runtime.fakeManager.updates[0]?.filesystem.allowWrite).toEqual([
+      "/repo",
+      "/private/scratch",
+      "/repo/linked",
+    ]);
+    expect(runtime.controller.boundaryFor("bash")?.profileFingerprint).not.toBe(
+      initialFingerprint,
+    );
+
+    await runtime.controller.registerWritableWorktree("/repo/linked");
+    expect(runtime.fakeManager.updates).toHaveLength(1);
+
+    await runtime.controller.revokeWritableWorktree("/repo/linked");
+    expect(runtime.fakeManager.updates).toHaveLength(2);
+    expect(runtime.fakeManager.updates[1]?.filesystem.allowWrite).toEqual([
+      "/repo",
+      "/private/scratch",
+    ]);
+  });
+
+  test("merges concurrent registrations in the same session", async () => {
+    interface AllowedWorktree {
+      ok: true;
+      canonicalCwd: string;
+    }
+    const finishValidation = new Map<
+      string,
+      (value: AllowedWorktree) => void
+    >();
+    const runtime = setup({
+      validateWritableWorktree: (path) =>
+        new Promise<AllowedWorktree>((resolve) => {
+          finishValidation.set(path, resolve);
+        }),
+    });
+    await runtime.pi.emitSessionStart({
+      type: "session_start",
+      reason: "startup",
+    });
+
+    const first = runtime.controller.registerWritableWorktree("/repo/one");
+    const second = runtime.controller.registerWritableWorktree("/repo/two");
+    finishValidation.get("/repo/one")?.({
+      ok: true,
+      canonicalCwd: "/repo/one",
+    });
+    await first;
+    finishValidation.get("/repo/two")?.({
+      ok: true,
+      canonicalCwd: "/repo/two",
+    });
+    await second;
+
+    expect(runtime.fakeManager.updates).toHaveLength(2);
+    expect(runtime.fakeManager.updates[1]?.filesystem.allowWrite).toEqual([
+      "/repo",
+      "/private/scratch",
+      "/repo/one",
+      "/repo/two",
+    ]);
+  });
+
+  test("fails closed on invalid worktrees and session changes", async () => {
+    const rejected = setup({
+      validateWritableWorktree: async () => ({
+        ok: false,
+        reason: "different repository",
+      }),
+    });
+    await rejected.pi.emitSessionStart({
+      type: "session_start",
+      reason: "startup",
+    });
+    await expect(
+      rejected.controller.registerWritableWorktree("/outside"),
+    ).rejects.toThrow("different repository");
+    expect(rejected.fakeManager.updates).toEqual([]);
+
+    let finishValidation:
+      | ((value: { ok: true; canonicalCwd: string }) => void)
+      | undefined;
+    const changing = setup({
+      validateWritableWorktree: () =>
+        new Promise((resolve) => {
+          finishValidation = resolve;
+        }),
+    });
+    await changing.pi.emitSessionStart({
+      type: "session_start",
+      reason: "startup",
+    });
+    const registration =
+      changing.controller.registerWritableWorktree("/repo/linked");
+    await changing.pi.emitSessionShutdown();
+    finishValidation?.({ ok: true, canonicalCwd: "/repo/linked" });
+    await expect(registration).rejects.toThrow("session changed");
+    expect(changing.fakeManager.updates).toEqual([]);
   });
 
   test("includes the trusted shell prefix inside the sandbox wrapper", async () => {

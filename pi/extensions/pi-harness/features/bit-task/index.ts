@@ -51,6 +51,8 @@ interface BitTaskDeps {
   runCommand?: RunCommand;
   cwd?: string;
   env?: Record<string, string | undefined>;
+  onWorktreeCreated?: (path: string) => Promise<void> | void;
+  onWorktreeRemoved?: (path: string) => Promise<void> | void;
 }
 
 const COMMAND_TIMEOUT_MS = 10_000;
@@ -593,6 +595,7 @@ export default function setupBitTask(
             "worktree_create postcondition failed: validated identity was not published",
           );
         }
+        await deps.onWorktreeCreated?.(path);
         return textResult(path, worktreeIdentityDetails(identity));
       } catch (error) {
         if (createdPath === undefined) throw error;
@@ -830,6 +833,7 @@ export default function setupBitTask(
           `worktree_remove postcondition failed; worktree is still registered: ${canonicalPath}`,
         );
       }
+      await deps.onWorktreeRemoved?.(canonicalPath);
 
       try {
         await lstat(canonicalPath);

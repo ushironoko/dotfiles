@@ -149,9 +149,18 @@ const setupHarness = (
     setupSubagent(pi, config, { childRuns, permissionAudit });
   }
   if (config.features.workflow) {
-    setupWorkflow(pi, config, { childRuns, permissionAudit });
+    setupWorkflow(pi, config, {
+      childRuns,
+      permissionAudit,
+      onWorktreeCreated: (path) => bashSandbox.registerWritableWorktree(path),
+    });
   }
-  if (config.features["bit-task"]) setupBitTask(pi, config);
+  if (config.features["bit-task"]) {
+    setupBitTask(pi, config, {
+      onWorktreeCreated: (path) => bashSandbox.registerWritableWorktree(path),
+      onWorktreeRemoved: (path) => bashSandbox.revokeWritableWorktree(path),
+    });
+  }
   if (config.features.statusline) setupStatusline(pi, config);
   if (config.features["provider-log"]) setupProviderLog(pi, config);
   if (config.features["asuku-notify"]) setupAsukuNotify(pi, config);

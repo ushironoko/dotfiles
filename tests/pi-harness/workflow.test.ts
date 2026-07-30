@@ -669,6 +669,7 @@ describe("pi-harness workflow", () => {
     const home = await makeTempDirectory("pi-workflow-poc");
     await writeAgents(home, ["codex-poc"]);
     const created: { cwd: string; name: string }[] = [];
+    const registered: string[] = [];
     const workflowRoot = join(home, "repository");
     const rootAlias = join(home, "repository-alias");
     await fs.mkdir(workflowRoot);
@@ -681,6 +682,9 @@ describe("pi-harness workflow", () => {
       createWorktree: async (cwd, name) => {
         created.push({ cwd, name });
         return worktreePath;
+      },
+      onWorktreeCreated: (path) => {
+        registered.push(path);
       },
     });
 
@@ -707,12 +711,55 @@ describe("pi-harness workflow", () => {
     expect(created).toHaveLength(1);
     expect(created[0]?.cwd).toBe(await fs.realpath(workflowRoot));
     expect(created[0]?.name).not.toBe("");
+    expect(registered).toEqual([worktreePath]);
     expect(records).toHaveLength(1);
     expect(records[0]?.options.cwd).toBe(worktreePath);
     expect(text).toContain(worktreePath);
     expect(text).toContain("left in place");
     const [report] = getStageTaskReports(details, 0);
     expect(report?.worktree).toBe(worktreePath);
+  });
+
+  test("does not register a failed provisional worktree", async () => {
+    const home = await makeTempDirectory("pi-workflow-provisional");
+    await writeAgents(home, ["codex-poc"]);
+    const published = join(home, "worktrees", "provisional");
+    const registered: string[] = [];
+    const { records, spawnFn } = makeSpawnFn(() => ({ text: "never" }));
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      createWorktree: async (_cwd, _name, _signal, onCreated) => {
+        onCreated?.(published);
+        throw new Error("worktree validation failed");
+      },
+      onWorktreeCreated: (path) => {
+        registered.push(path);
+      },
+    });
+
+    await expect(
+      executeTool(
+        findWorkflowTool(pi.tools),
+        {
+          stages: [
+            {
+              mode: "fanout",
+              tasks: [
+                {
+                  agentType: "codex-poc",
+                  task: "build the poc",
+                  isolation: "worktree",
+                },
+              ],
+            },
+          ],
+        },
+        pi.ctx,
+      ),
+    ).rejects.toThrow("worktree validation failed");
+    expect(registered).toEqual([]);
+    expect(records).toEqual([]);
   });
 
   test("rejects an invalid plan before any execution", async () => {
