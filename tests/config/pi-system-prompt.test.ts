@@ -3,15 +3,35 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import config from "../../dotfiles.config";
 
-const PROMPT_PATH = resolve(import.meta.dir, "../../pi/APPEND_SYSTEM.md");
+const PROMPT_PATH = resolve(import.meta.dir, "../../pi/SYSTEM.md");
 
-describe("global pi appended system prompt", () => {
-  test("is deployed as a child file without replacing the agent directory", () => {
+describe("global pi system prompt", () => {
+  test("replaces the built-in prompt without replacing the agent directory", () => {
     expect(config.mappings).toContainEqual({
-      source: "./pi/APPEND_SYSTEM.md",
-      target: "~/.pi/agent/APPEND_SYSTEM.md",
+      source: "./pi/SYSTEM.md",
+      target: "~/.pi/agent/SYSTEM.md",
       type: "file",
     });
+    expect(
+      config.mappings.some(({ source }) => source.includes("APPEND_SYSTEM")),
+    ).toBe(false);
+  });
+
+  test("retains useful coding guidance without the pi documentation section", async () => {
+    const prompt = await readFile(PROMPT_PATH, "utf8");
+
+    expect(prompt).toContain("expert coding assistant operating inside pi");
+    expect(prompt).toContain("Available tools:");
+    expect(prompt).toContain(
+      "Use read to examine files instead of cat or sed.",
+    );
+    expect(prompt).toContain("Use edit for precise changes");
+    expect(prompt).toContain("Be concise in your responses.");
+    expect(prompt).toContain(
+      "Show file paths clearly when working with files.",
+    );
+    expect(prompt).not.toContain("Pi documentation");
+    expect(prompt).not.toContain("@earendil-works/pi-coding-agent");
   });
 
   test("requires autonomous execution, retry, and complete reporting", async () => {
