@@ -271,6 +271,10 @@ The command-bearing `/api/chat` request receives only:
 - up to 2 KiB of authenticated assistant text from that same active user turn;
 - up to 16 authenticated preceding tool-result records containing only tool name
   and `ok`/`error`/`unknown` status;
+- as the only tool-result body exception, the latest successful same-turn bundled
+  `AskUserQuestion` result when its provenance is verified and its complete JSON
+  string, including quotes and escapes, is at most 2 KiB; an over-limit answer is
+  omitted rather than prefix-truncated;
 - canonical cwd plus a tagged Git/non-Git/unavailable project result;
 - for Git, bounded project name, active worktree, and a display-only subset of
   canonical non-bare worktree roots (up to 16 roots / 2 KiB total); boundary
@@ -284,10 +288,16 @@ The command-bearing `/api/chat` request receives only:
 
 Task context comes from pi's raw `input` event. Current-run evidence is accepted
 only from the active branch after an exact current Bash `toolCallId` match and a
-unique latest user-turn boundary. Assistant thinking, tool-call arguments, tool-
-result content/details, unauthenticated or later results, expanded skill/template
-text, system prompts, prior-turn conversation, context files, environment,
-repository file contents, Git remotes, and credentials are not sent. Pending
+unique latest user-turn boundary. The Ask exception additionally requires an
+exact-name, unique, successful call-before-result pair whose unmodified result
+matches the bundled UI execution recorded for that exact session entry. A later
+missing, failed, duplicated, reordered, or modified Ask cannot fall back to an
+older answer. The answer is untrusted evidence of the user's specific choice;
+it may establish relevance but cannot act as blanket approval or override the
+safety gate. Assistant thinking, tool-call arguments, all other tool-result
+content/details, unauthenticated or later results, expanded skill/template text,
+system prompts, prior-turn conversation, context files, environment, repository
+file contents, Git remotes, and credentials are not sent. Pending
 input becomes active only after an established append-only message baseline,
 a positive user-message delta, Pi's steering-before-follow-up delivery order,
 and a unique exact positional match prove correlation. Baseline loss,
@@ -328,11 +338,14 @@ are never cached.
 
 The cache privacy statement above does not apply to the separate corpus audit.
 The audit intentionally stores raw commands and the bounded task/run/project
-context used for classification, plus deterministic route basis, rule source,
-verified navigation, exact live judge gates, cache source, hook stages, and
-confirmation outcome. This makes the records useful for replay-free offline
-analysis, but it also means they may contain credentials, private paths, and
-other sensitive text.
+context used for classification, including the optional provenance-verified
+`AskUserQuestion` result sent to the judge, plus deterministic route basis, rule
+source, verified navigation, exact live judge gates, cache source, hook stages,
+and confirmation outcome. Free-form Ask answers can therefore be retained as
+sensitive local data alongside credentials, private paths, and other sensitive
+text. Over-limit answer text is retained only indirectly through the complete
+run-evidence fingerprint; separate Ask tool name/status metadata remains subject
+to the normal 16-record cap.
 
 Records use schema `pi-harness/bash-permission`, version 1, and are written to:
 
@@ -399,9 +412,10 @@ routing, update rules, or promote observed approval into qualification corpus.
 ## Security limitations
 
 A small LLM is a best-effort classifier, not a proof of safety. Current-task and
-assistant text, tool-result names/statuses, project/path names, comments, quoted
-strings, and here-documents can be adversarial. Double quotes do not neutralize
-command substitutions, backticks, or expansions, and quoted arguments to
+assistant text, bounded Ask-answer text, tool-result names/statuses, project/path
+names, comments, quoted strings, and here-documents can be adversarial. Double
+quotes do not neutralize command substitutions, backticks, or expansions, and
+quoted arguments to
 interpreters such as `python -c` remain executable code; the prompt and residual
 corpus preserve those semantics. Project identity plus leading-`cd` and narrow
 `git -C` scopes are computed locally, but they establish relevance/scope only

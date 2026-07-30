@@ -288,7 +288,7 @@ describe("current permission task context", () => {
 });
 
 describe("current permission run evidence", () => {
-  test("binds active-turn assistant text and metadata-only prior results to the exact tool call", () => {
+  test("binds assistant text, AskUserQuestion results, and prior metadata to the exact tool call", () => {
     const evidence = derivePermissionRunEvidence(
       [
         {
@@ -343,6 +343,36 @@ describe("current permission run evidence", () => {
           message: {
             role: "assistant",
             content: [
+              {
+                type: "toolCall",
+                id: "question-call",
+                name: "AskUserQuestion",
+                arguments: { questions: "PRIVATE QUESTION ARGUMENTS" },
+              },
+            ],
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "question-call",
+            toolName: "AskUserQuestion",
+            content: [
+              {
+                type: "text",
+                text: 'Your questions have been answered: "Run tests?"="Allow".',
+              },
+            ],
+            details: { secret: "PRIVATE ASK DETAILS" },
+            isError: false,
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
               { type: "thinking", thinking: "PRIVATE THINKING" },
               { type: "text", text: "Now inspect the local judge logs." },
               {
@@ -356,20 +386,265 @@ describe("current permission run evidence", () => {
         },
       ],
       "current-call",
+      {
+        matchesAskUserQuestionResult: (id, text) =>
+          id === "question-call" &&
+          text === 'Your questions have been answered: "Run tests?"="Allow".',
+      },
     );
 
     expect(evidence).toMatchObject({
       assistantText:
         "Inspect the policy implementation.\nNow inspect the local judge logs.",
-      priorToolResults: [{ toolName: "read", status: "ok" }],
+      askUserQuestionResultText:
+        'Your questions have been answered: "Run tests?"="Allow".',
+      priorToolResults: [
+        { toolName: "read", status: "ok" },
+        { toolName: "AskUserQuestion", status: "ok" },
+      ],
     });
     const serialized = JSON.stringify(evidence);
     expect(serialized).not.toContain("OLD ASSISTANT CONTEXT");
     expect(serialized).not.toContain("PRIVATE ARGUMENT");
+    expect(serialized).not.toContain("PRIVATE QUESTION ARGUMENTS");
     expect(serialized).not.toContain("PRIVATE TOOL OUTPUT");
     expect(serialized).not.toContain("PRIVATE DETAILS");
+    expect(serialized).not.toContain("PRIVATE ASK DETAILS");
     expect(serialized).not.toContain("PRIVATE THINKING");
   });
+
+  test("excludes failed, reordered, lookalike, orphaned, and duplicate AskUserQuestion results", () => {
+    const evidence = derivePermissionRunEvidence(
+      [
+        { type: "message", message: { role: "user", content: "task" } },
+        {
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "reordered-question",
+            toolName: "AskUserQuestion",
+            content: [{ type: "text", text: "REORDERED PRIVATE RESULT" }],
+            isError: false,
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "reordered-question",
+                name: "AskUserQuestion",
+              },
+              {
+                type: "toolCall",
+                id: "failed-question",
+                name: "AskUserQuestion",
+              },
+            ],
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "failed-question",
+            toolName: "AskUserQuestion",
+            content: [{ type: "text", text: "FAILED PRIVATE RESULT" }],
+            isError: true,
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "lookalike-question",
+            toolName: "askUserQuestion",
+            content: [{ type: "text", text: "LOOKALIKE PRIVATE RESULT" }],
+            isError: false,
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "orphan-question",
+            toolName: "AskUserQuestion",
+            content: [{ type: "text", text: "ORPHAN PRIVATE RESULT" }],
+            isError: false,
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "duplicate-question",
+                name: "AskUserQuestion",
+              },
+            ],
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "duplicate-question",
+            toolName: "AskUserQuestion",
+            content: [{ type: "text", text: "DUPLICATE PRIVATE RESULT 1" }],
+            isError: false,
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "duplicate-question",
+            toolName: "AskUserQuestion",
+            content: [{ type: "text", text: "DUPLICATE PRIVATE RESULT 2" }],
+            isError: false,
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "current", name: "bash" }],
+          },
+        },
+      ],
+      "current",
+      { matchesAskUserQuestionResult: () => true },
+    );
+
+    expect(evidence?.askUserQuestionResultText).toBeUndefined();
+    expect(JSON.stringify(evidence)).not.toContain("PRIVATE RESULT");
+  });
+
+  test("retains only the latest authenticated AskUserQuestion result", () => {
+    const questionTurn = (id: string, result: string): unknown[] => [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id, name: "AskUserQuestion" }],
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolCallId: id,
+          toolName: "AskUserQuestion",
+          content: [{ type: "text", text: result }],
+          isError: false,
+        },
+      },
+    ];
+    const evidence = derivePermissionRunEvidence(
+      [
+        { type: "message", message: { role: "user", content: "task" } },
+        ...questionTurn("first-question", "STALE RESULT"),
+        ...questionTurn("latest-question", "LATEST RESULT"),
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "current", name: "bash" }],
+          },
+        },
+      ],
+      "current",
+      {
+        matchesAskUserQuestionResult: (id, text) =>
+          (id === "first-question" && text === "STALE RESULT") ||
+          (id === "latest-question" && text === "LATEST RESULT"),
+      },
+    );
+
+    expect(evidence?.askUserQuestionResultText).toBe("LATEST RESULT");
+  });
+
+  test.each(["missing", "modified"] as const)(
+    "does not fall back to older approval when a later result is %s",
+    (laterResult) => {
+      const laterQuestion: unknown[] = [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "later-question",
+                name: "AskUserQuestion",
+              },
+            ],
+          },
+        },
+        ...(laterResult === "missing"
+          ? []
+          : [
+              {
+                type: "message",
+                message: {
+                  role: "toolResult",
+                  toolCallId: "later-question",
+                  toolName: "AskUserQuestion",
+                  content: [{ type: "text", text: "MODIFIED RESULT" }],
+                  isError: false,
+                },
+              },
+            ]),
+      ];
+      const evidence = derivePermissionRunEvidence(
+        [
+          { type: "message", message: { role: "user", content: "task" } },
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "approved-question",
+                  name: "AskUserQuestion",
+                },
+              ],
+            },
+          },
+          {
+            type: "message",
+            message: {
+              role: "toolResult",
+              toolCallId: "approved-question",
+              toolName: "AskUserQuestion",
+              content: [{ type: "text", text: "APPROVED RESULT" }],
+              isError: false,
+            },
+          },
+          ...laterQuestion,
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: [{ type: "toolCall", id: "current", name: "bash" }],
+            },
+          },
+        ],
+        "current",
+        {
+          matchesAskUserQuestionResult: (id, text) =>
+            id === "approved-question" && text === "APPROVED RESULT",
+        },
+      );
+
+      expect(evidence?.askUserQuestionResultText).toBeUndefined();
+    },
+  );
 
   test("fails closed on a missing or duplicate current tool identity", () => {
     const assistant = {
@@ -388,7 +663,12 @@ describe("current permission run evidence", () => {
     ).toBeUndefined();
   });
 
-  test("bounds visible evidence while fingerprinting omitted assistant text and tool results", () => {
+  test("omits serialized-overlimit question text while fingerprinting complete evidence", () => {
+    const boundedQuestionResult = `QUESTION="APPROVED" ${'"\\\n'.repeat(2_000)}`;
+    const matchesBoundedQuestionResult = (expected: string) => ({
+      matchesAskUserQuestionResult: (id: string, text: string): boolean =>
+        id === "bounded-question" && text === expected,
+    });
     const entries: unknown[] = [
       { type: "message", message: { role: "user", content: "task" } },
       {
@@ -413,17 +693,45 @@ describe("current permission run evidence", () => {
       type: "message",
       message: {
         role: "assistant",
+        content: [
+          { type: "toolCall", id: "bounded-question", name: "AskUserQuestion" },
+        ],
+      },
+    });
+    const questionResultIndex = entries.length;
+    entries.push({
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "bounded-question",
+        toolName: "AskUserQuestion",
+        content: [{ type: "text", text: boundedQuestionResult }],
+        isError: false,
+      },
+    });
+    entries.push({
+      type: "message",
+      message: {
+        role: "assistant",
         content: [{ type: "toolCall", id: "current", name: "bash" }],
       },
     });
 
-    const first = derivePermissionRunEvidence(entries, "current");
+    const first = derivePermissionRunEvidence(
+      entries,
+      "current",
+      matchesBoundedQuestionResult(boundedQuestionResult),
+    );
     expect(Buffer.byteLength(first?.assistantText ?? "")).toBeLessThanOrEqual(
       2 * 1_024,
     );
     expect(first?.assistantText).toEndWith("TAIL");
+    expect(
+      Buffer.byteLength(JSON.stringify(boundedQuestionResult)),
+    ).toBeGreaterThan(2 * 1_024);
+    expect(first?.askUserQuestionResultText).toBeUndefined();
     expect(first?.priorToolResults).toHaveLength(16);
-    expect(first?.priorToolResults[0]?.toolName).toBe("tool-4");
+    expect(first?.priorToolResults[0]?.toolName).toBe("tool-5");
 
     const changed = structuredClone(entries) as Record<string, unknown>[];
     const assistantEntry = changed[1] as {
@@ -433,7 +741,30 @@ describe("current permission run evidence", () => {
     if (!assistantBlock) throw new Error("missing assistant content block");
     assistantBlock.text = `${"b".repeat(3_000)}TAIL`;
     expect(
-      derivePermissionRunEvidence(changed, "current")?.fingerprint,
+      derivePermissionRunEvidence(
+        changed,
+        "current",
+        matchesBoundedQuestionResult(boundedQuestionResult),
+      )?.fingerprint,
+    ).not.toBe(first?.fingerprint);
+
+    const changedQuestion = structuredClone(entries) as Record<
+      string,
+      unknown
+    >[];
+    const questionEntry = changedQuestion[questionResultIndex] as {
+      message: { content: { text: string }[] };
+    };
+    const [questionBlock] = questionEntry.message.content;
+    if (!questionBlock) throw new Error("missing question result block");
+    const changedQuestionResult = `QUESTION="APPROVED" ${'"\\\n'.repeat(1_999)}r`;
+    questionBlock.text = changedQuestionResult;
+    expect(
+      derivePermissionRunEvidence(
+        changedQuestion,
+        "current",
+        matchesBoundedQuestionResult(changedQuestionResult),
+      )?.fingerprint,
     ).not.toBe(first?.fingerprint);
   });
 });

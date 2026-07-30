@@ -181,6 +181,7 @@ const validTask = (value: unknown): boolean => {
 const validRunEvidence = (value: unknown): boolean =>
   isRecord(value) &&
   optionalString(value.assistantText) &&
+  optionalString(value.askUserQuestionResultText) &&
   typeof value.fingerprint === "string" &&
   Array.isArray(value.priorToolResults) &&
   value.priorToolResults.every(

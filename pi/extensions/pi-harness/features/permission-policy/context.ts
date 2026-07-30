@@ -288,8 +288,120 @@ export const createPermissionTaskTracker = (): PermissionTaskTracker => {
 };
 
 const MAX_ASSISTANT_CONTEXT_BYTES = 2 * 1_024;
+const MAX_ASK_USER_QUESTION_RESULT_JSON_BYTES = 2 * 1_024;
+const MAX_RECORDED_ASK_USER_QUESTION_RESULTS = 8;
 const MAX_PRIOR_TOOL_RESULTS = 16;
 const MAX_TOOL_NAME_BYTES = 128;
+
+const bundledAskUserQuestionResults = new WeakMap<
+  object,
+  Map<string, Map<symbol, string>>
+>();
+
+const findUniqueAskUserQuestionCallEntry = (
+  entries: readonly unknown[],
+  toolCallId: string,
+): object | undefined => {
+  const matches = entries.filter((entry) => {
+    const message = sessionMessage(entry);
+    return (
+      isRecord(entry) &&
+      message !== undefined &&
+      namedToolCallIds(message, "AskUserQuestion").filter(
+        (id) => id === toolCallId,
+      ).length === 1
+    );
+  });
+  return matches.length === 1 && isRecord(matches[0]) ? matches[0] : undefined;
+};
+
+interface OwnedAskUserQuestionRecord {
+  readonly callEntry: object;
+  readonly toolCallId: string;
+}
+
+export interface BundledAskUserQuestionProvenance {
+  record(
+    entries: readonly unknown[],
+    toolCallId: string,
+    resultText: string,
+  ): void;
+  clear(): void;
+}
+
+/** Create provenance state owned by one pi-harness extension instance. */
+export const createBundledAskUserQuestionProvenance =
+  (): BundledAskUserQuestionProvenance => {
+    const scope = Symbol("bundled-ask-user-question");
+    const ownedRecords: OwnedAskUserQuestionRecord[] = [];
+    const ownedToolCallIds = new Set<string>();
+    let healthy = true;
+
+    const removeOwnedRecords = (): void => {
+      for (const { callEntry, toolCallId } of ownedRecords) {
+        const byToolCallId = bundledAskUserQuestionResults.get(callEntry);
+        const records = byToolCallId?.get(toolCallId);
+        records?.delete(scope);
+        if (records?.size === 0) byToolCallId?.delete(toolCallId);
+        if (byToolCallId?.size === 0) {
+          bundledAskUserQuestionResults.delete(callEntry);
+        }
+      }
+      ownedRecords.length = 0;
+      ownedToolCallIds.clear();
+    };
+
+    return {
+      record(entries, toolCallId, resultText) {
+        if (!healthy) return;
+        const callEntry = findUniqueAskUserQuestionCallEntry(
+          entries,
+          toolCallId,
+        );
+        if (
+          callEntry === undefined ||
+          toolCallId === "" ||
+          ownedToolCallIds.has(toolCallId) ||
+          ownedToolCallIds.size >= MAX_RECORDED_ASK_USER_QUESTION_RESULTS
+        ) {
+          removeOwnedRecords();
+          healthy = false;
+          return;
+        }
+        const byToolCallId =
+          bundledAskUserQuestionResults.get(callEntry) ??
+          new Map<string, Map<symbol, string>>();
+        const records =
+          byToolCallId.get(toolCallId) ?? new Map<symbol, string>();
+        records.set(
+          scope,
+          fingerprint("ask-user-question-result-v2", toolCallId, resultText),
+        );
+        byToolCallId.set(toolCallId, records);
+        bundledAskUserQuestionResults.set(callEntry, byToolCallId);
+        ownedRecords.push({ callEntry, toolCallId });
+        ownedToolCallIds.add(toolCallId);
+      },
+      clear() {
+        removeOwnedRecords();
+        healthy = true;
+      },
+    };
+  };
+
+export const matchesBundledAskUserQuestionResult = (
+  callEntry: object,
+  toolCallId: string,
+  resultText: string,
+): boolean => {
+  const records = bundledAskUserQuestionResults.get(callEntry)?.get(toolCallId);
+  if (records?.size !== 1) return false;
+  const [recorded] = records.values();
+  return (
+    recorded ===
+    fingerprint("ask-user-question-result-v2", toolCallId, resultText)
+  );
+};
 
 export interface PermissionToolResultEvidence {
   readonly toolName: string;
@@ -299,10 +411,20 @@ export interface PermissionToolResultEvidence {
 export interface PermissionRunEvidence {
   /** Bounded text blocks from assistant messages in the active user turn. */
   readonly assistantText?: string;
-  /** Result metadata only; tool arguments, output, and details are excluded. */
+  /** Bounded latest provenance-verified AskUserQuestion result. */
+  readonly askUserQuestionResultText?: string;
+  /** Metadata for prior results; all other output bodies and details are excluded. */
   readonly priorToolResults: readonly PermissionToolResultEvidence[];
   /** Hash of the complete untruncated evidence for cache isolation. */
   readonly fingerprint: string;
+}
+
+interface PermissionRunEvidenceOptions {
+  readonly matchesAskUserQuestionResult?: (
+    toolCallId: string,
+    resultText: string,
+    callEntry: object,
+  ) => boolean;
 }
 
 const sessionMessage = (entry: unknown): Record<string, unknown> | undefined =>
@@ -310,8 +432,11 @@ const sessionMessage = (entry: unknown): Record<string, unknown> | undefined =>
     ? entry.message
     : undefined;
 
-const assistantTextBlocks = (message: Record<string, unknown>): string[] => {
-  if (message.role !== "assistant" || !Array.isArray(message.content))
+const textBlocks = (
+  message: Record<string, unknown>,
+  expectedRole: "assistant" | "toolResult",
+): string[] => {
+  if (message.role !== expectedRole || !Array.isArray(message.content))
     return [];
   return message.content.flatMap((block) =>
     isRecord(block) && block.type === "text" && typeof block.text === "string"
@@ -331,6 +456,23 @@ const containsToolCall = (
       isRecord(block) && block.type === "toolCall" && block.id === toolCallId,
   );
 
+const namedToolCallIds = (
+  message: Record<string, unknown>,
+  toolName: string,
+): string[] => {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return [];
+  }
+  return message.content.flatMap((block) =>
+    isRecord(block) &&
+    block.type === "toolCall" &&
+    block.name === toolName &&
+    typeof block.id === "string"
+      ? [block.id]
+      : [],
+  );
+};
+
 const truncateUtf8Tail = (value: string, maxBytes: number): string => {
   const encoded = Buffer.from(value, "utf8");
   if (encoded.byteLength <= maxBytes) return value;
@@ -348,6 +490,14 @@ const truncateUtf8Tail = (value: string, maxBytes: number): string => {
   return `${marker.toString("utf8")}${encoded.subarray(start).toString("utf8")}`;
 };
 
+const boundedJsonString = (
+  value: string,
+  maxBytes: number,
+): string | undefined =>
+  Buffer.byteLength(JSON.stringify(value), "utf8") <= maxBytes
+    ? value
+    : undefined;
+
 /**
  * Derive evidence only from the active user turn containing the exact tool call.
  * Pi synchronizes SessionManager through the current assistant message before
@@ -357,8 +507,13 @@ const truncateUtf8Tail = (value: string, maxBytes: number): string => {
 export const derivePermissionRunEvidence = (
   entries: readonly unknown[],
   toolCallId: string,
+  options: PermissionRunEvidenceOptions = {},
 ): PermissionRunEvidence | undefined => {
   if (toolCallId === "") return undefined;
+  const matchesAskUserQuestionResult =
+    options.matchesAskUserQuestionResult ??
+    ((id: string, text: string, callEntry: object) =>
+      matchesBundledAskUserQuestionResult(callEntry, id, text));
 
   const matches: number[] = [];
   for (const [index, entry] of entries.entries()) {
@@ -376,16 +531,52 @@ export const derivePermissionRunEvidence = (
     if (sessionMessage(entries[index])?.role === "user") turnStart = index + 1;
   }
 
+  const askUserQuestionCallCounts = new Map<string, number>();
+  const askUserQuestionCallPositions = new Map<string, number>();
+  const askUserQuestionCallEntries = new Map<string, object>();
+  const askUserQuestionResultCounts = new Map<string, number>();
+  for (let index = turnStart; index <= currentAssistantIndex; index += 1) {
+    const message = sessionMessage(entries[index]);
+    if (message === undefined) continue;
+    for (const id of namedToolCallIds(message, "AskUserQuestion")) {
+      askUserQuestionCallCounts.set(
+        id,
+        (askUserQuestionCallCounts.get(id) ?? 0) + 1,
+      );
+      if (!askUserQuestionCallPositions.has(id)) {
+        askUserQuestionCallPositions.set(id, index);
+        const entry = entries[index];
+        if (isRecord(entry)) askUserQuestionCallEntries.set(id, entry);
+      }
+    }
+    if (
+      message.role === "toolResult" &&
+      message.toolName === "AskUserQuestion" &&
+      typeof message.toolCallId === "string"
+    ) {
+      askUserQuestionResultCounts.set(
+        message.toolCallId,
+        (askUserQuestionResultCounts.get(message.toolCallId) ?? 0) + 1,
+      );
+    }
+  }
+
   const rawAssistantText: string[] = [];
+  let rawAskUserQuestionResultText: string | undefined;
   const allToolResults: PermissionToolResultEvidence[] = [];
-  const fingerprintParts: string[] = ["run-evidence-v1"];
+  const fingerprintParts: string[] = ["run-evidence-v2"];
   for (let index = turnStart; index <= currentAssistantIndex; index += 1) {
     const message = sessionMessage(entries[index]);
     if (message === undefined) continue;
     if (message.role === "assistant") {
-      const text = assistantTextBlocks(message);
+      const text = textBlocks(message, "assistant");
       rawAssistantText.push(...text);
       fingerprintParts.push("assistant", ...text);
+      if (namedToolCallIds(message, "AskUserQuestion").length > 0) {
+        // A later question supersedes earlier approval evidence even when its
+        // result is missing or malformed.
+        rawAskUserQuestionResultText = undefined;
+      }
       continue;
     }
     if (message.role !== "toolResult") continue;
@@ -402,11 +593,53 @@ export const derivePermissionRunEvidence = (
       status,
     });
     fingerprintParts.push("tool-result", rawToolName, status);
+    if (rawToolName === "AskUserQuestion") {
+      // Never fall back to an older answer when the latest exact-name result
+      // fails provenance, ordering, uniqueness, or success checks.
+      rawAskUserQuestionResultText = undefined;
+      const rawToolCallId =
+        typeof message.toolCallId === "string" ? message.toolCallId : undefined;
+      const text = textBlocks(message, "toolResult");
+      const resultText = text.join("\n");
+      const callPosition =
+        rawToolCallId === undefined
+          ? undefined
+          : askUserQuestionCallPositions.get(rawToolCallId);
+      const callEntry =
+        rawToolCallId === undefined
+          ? undefined
+          : askUserQuestionCallEntries.get(rawToolCallId);
+      const authenticated =
+        rawToolCallId !== undefined &&
+        askUserQuestionCallCounts.get(rawToolCallId) === 1 &&
+        askUserQuestionResultCounts.get(rawToolCallId) === 1 &&
+        callPosition !== undefined &&
+        callPosition < index &&
+        callEntry !== undefined &&
+        matchesAskUserQuestionResult(rawToolCallId, resultText, callEntry);
+      if (authenticated && status === "ok") {
+        rawAskUserQuestionResultText = resultText;
+        fingerprintParts.push("ask-user-question-result", ...text);
+      }
+    }
   }
 
   const assistantText = sanitizeTaskText(rawAssistantText.join("\n"));
+  const askUserQuestionResultText = sanitizeTaskText(
+    rawAskUserQuestionResultText ?? "",
+  );
+  const boundedAskUserQuestionResultText = boundedJsonString(
+    askUserQuestionResultText,
+    MAX_ASK_USER_QUESTION_RESULT_JSON_BYTES,
+  );
   const priorToolResults = allToolResults.slice(-MAX_PRIOR_TOOL_RESULTS);
-  if (assistantText === "" && priorToolResults.length === 0) return undefined;
+  if (
+    assistantText === "" &&
+    askUserQuestionResultText === "" &&
+    priorToolResults.length === 0
+  ) {
+    return undefined;
+  }
   return {
     ...(assistantText === ""
       ? {}
@@ -416,6 +649,10 @@ export const derivePermissionRunEvidence = (
             MAX_ASSISTANT_CONTEXT_BYTES,
           ),
         }),
+    ...(askUserQuestionResultText === "" ||
+    boundedAskUserQuestionResultText === undefined
+      ? {}
+      : { askUserQuestionResultText: boundedAskUserQuestionResultText }),
     priorToolResults,
     fingerprint: fingerprint(...fingerprintParts),
   };
