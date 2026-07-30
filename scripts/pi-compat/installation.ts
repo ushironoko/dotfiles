@@ -1,5 +1,15 @@
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { readFile, realpath } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, readFile, realpath } from "node:fs/promises";
+import {
+  basename,
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { PI_BASELINE_PACKAGES } from "./baseline";
 import {
   runCommand,
@@ -38,12 +48,47 @@ export interface DiscoverInstallationOptions {
   platform?: NodeJS.Platform;
   run?: CommandRunner;
   commandOptions?: RunCommandOptions;
+  environment?: NodeJS.ProcessEnv;
+  excludedPackageRoots?: string[];
 }
 
 const readManifest = async (root: string): Promise<PackageManifest> =>
   JSON.parse(
     await readFile(join(root, "package.json"), "utf8"),
   ) as PackageManifest;
+
+const isWithin = (root: string, target: string): boolean => {
+  const relation = relative(resolve(root), resolve(target));
+  return (
+    relation === "" ||
+    (relation !== ".." &&
+      !relation.startsWith(`..${sep}`) &&
+      !isAbsolute(relation))
+  );
+};
+
+const findPiOnPath = async (
+  pathValue: string | undefined,
+  executable: string,
+  excludedRoots: string[],
+  platform: NodeJS.Platform,
+): Promise<string | undefined> => {
+  for (const entry of pathValue?.split(delimiter) ?? []) {
+    const candidate = resolve(entry === "" ? "." : entry, executable);
+    try {
+      await access(
+        candidate,
+        platform === "win32" ? constants.F_OK : constants.X_OK,
+      );
+      const target = await realpath(candidate);
+      if (excludedRoots.some((root) => isWithin(root, target))) continue;
+      return candidate;
+    } catch {
+      // Continue to the next PATH entry.
+    }
+  }
+  return undefined;
+};
 
 const findPackageRoot = async (
   entry: string,
@@ -130,21 +175,53 @@ export const discoverPiInstallation = async (
   const bunExecutable = resolve(options.bunExecutable ?? process.execPath);
   const platform = options.platform ?? process.platform;
   const run = options.run ?? runCommand;
-  const globalBin = assertSuccess(
-    "bun global bin discovery",
-    await run([bunExecutable, "pm", "bin", "--global"], options.commandOptions),
+  const environment =
+    options.environment ?? options.commandOptions?.env ?? process.env;
+  const configuredExcludedRoots = options.excludedPackageRoots ?? [
+    resolve(import.meta.dir, "../../node_modules"),
+  ];
+  const excludedPackageRoots = await Promise.all(
+    configuredExcludedRoots.map(async (root) => {
+      try {
+        return await realpath(root);
+      } catch {
+        return resolve(root);
+      }
+    }),
   );
-  if (!isAbsolute(globalBin)) {
-    throw new Error("Bun global bin directory is not absolute");
-  }
-
   const executable = platform === "win32" ? "pi.exe" : "pi";
-  const binaryPath = join(globalBin, executable);
+  const pathBinary = await findPiOnPath(
+    environment.PATH,
+    executable,
+    excludedPackageRoots,
+    platform,
+  );
+  let binaryPath: string;
+  let globalBin: string;
+  if (pathBinary !== undefined) {
+    binaryPath = pathBinary;
+    globalBin = dirname(pathBinary);
+  } else {
+    globalBin = assertSuccess(
+      "bun global bin discovery",
+      await run(
+        [bunExecutable, "pm", "bin", "--global"],
+        options.commandOptions,
+      ),
+    );
+    if (!isAbsolute(globalBin)) {
+      throw new Error("Bun global bin directory is not absolute");
+    }
+    binaryPath = join(globalBin, executable);
+  }
   const binaryRealPath = await realpath(binaryPath);
   const packageRoot = await findPackageRoot(
     binaryRealPath,
     "@earendil-works/pi-coding-agent",
   );
+  if (excludedPackageRoots.some((root) => isWithin(root, packageRoot))) {
+    throw new Error("discovered pi resolved to an excluded package root");
+  }
   const codingManifest = await readManifest(packageRoot);
   const packageName = codingManifest.name;
   const packageVersion = codingManifest.version;

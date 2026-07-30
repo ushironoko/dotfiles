@@ -237,8 +237,7 @@ describe("BTW read-only fork runner", () => {
       ...BTW_DENIED_TOOLS,
     ]);
     expect(harness.createOptions[0].model).toBe(parentModel);
-    expect(harness.createOptions[0].authStorage).toBeDefined();
-    expect(harness.createOptions[0].authStorage?.list()).toEqual([]);
+    expect(harness.createOptions[0].modelRegistry).toBe(parent.modelRegistry);
     expect(harness.createOptions[0].thinkingLevel).toBe("low");
     expect(harness.loaderOptions[0].settingsManager).toBe(
       harness.createOptions[0].settingsManager,
