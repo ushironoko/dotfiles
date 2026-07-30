@@ -48,6 +48,7 @@ export interface PermissionJudgeConfig {
   model: string;
   expectedDigest: string;
   timeoutMs: number;
+  confirmTimeoutMs: number;
   keepAlive: string;
   configurationError?: string;
 }
@@ -60,6 +61,7 @@ export const DEFAULT_PERMISSION_JUDGE_CONFIG: Readonly<PermissionJudgeConfig> =
     expectedDigest:
       "6fd349357287c7ffc9e38189a93b48ea175d24fc566b38f09cfc564fb7f303eb",
     timeoutMs: 10_000,
+    confirmTimeoutMs: 10_000,
     keepAlive: "30m",
   };
 
@@ -234,6 +236,10 @@ const readPermissionJudgeConfig = (
     value.timeoutMs === undefined
       ? DEFAULT_PERMISSION_JUDGE_CONFIG.timeoutMs
       : value.timeoutMs;
+  const confirmTimeoutMs =
+    value.confirmTimeoutMs === undefined
+      ? DEFAULT_PERMISSION_JUDGE_CONFIG.confirmTimeoutMs
+      : value.confirmTimeoutMs;
   const keepAlive =
     value.keepAlive === undefined
       ? DEFAULT_PERMISSION_JUDGE_CONFIG.keepAlive
@@ -252,6 +258,14 @@ const readPermissionJudgeConfig = (
     timeoutMs > 10_000
   ) {
     errors.push("timeoutMs");
+  }
+  if (
+    typeof confirmTimeoutMs !== "number" ||
+    !Number.isInteger(confirmTimeoutMs) ||
+    confirmTimeoutMs < 1_000 ||
+    confirmTimeoutMs > 300_000
+  ) {
+    errors.push("confirmTimeoutMs");
   }
   if (typeof keepAlive !== "string" || !validKeepAlive(keepAlive)) {
     errors.push("keepAlive");
@@ -281,6 +295,13 @@ const readPermissionJudgeConfig = (
       timeoutMs <= 10_000
         ? timeoutMs
         : DEFAULT_PERMISSION_JUDGE_CONFIG.timeoutMs,
+    confirmTimeoutMs:
+      typeof confirmTimeoutMs === "number" &&
+      Number.isInteger(confirmTimeoutMs) &&
+      confirmTimeoutMs >= 1_000 &&
+      confirmTimeoutMs <= 300_000
+        ? confirmTimeoutMs
+        : DEFAULT_PERMISSION_JUDGE_CONFIG.confirmTimeoutMs,
     keepAlive:
       typeof keepAlive === "string" && validKeepAlive(keepAlive)
         ? keepAlive

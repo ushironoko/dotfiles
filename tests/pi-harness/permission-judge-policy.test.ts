@@ -1446,13 +1446,19 @@ describe("permission policy local judge routing", () => {
     });
   });
 
-  test("keeps confirmation abortable without a timeout", async () => {
+  test("bounds confirmation with the active signal and configured timeout", async () => {
     const upstream = await start(() => ollamaResponse("ASK"));
     const pi = createFakePi();
     const controller = createTestAbortController();
     Object.assign(pi.ctx, { signal: controller.signal });
     pi.queueConfirm(false);
-    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
+    setupPermissionPolicy(
+      pi,
+      makeConfig({
+        ...judgeConfig(upstream),
+        confirmTimeoutMs: 1_234,
+      }),
+    );
 
     expect(await pi.emitToolCall(bashCall("git rev-parse HEAD"))).toEqual({
       block: true,
@@ -1461,8 +1467,8 @@ describe("permission policy local judge routing", () => {
     expect(pi.confirmDialogs).toHaveLength(1);
     expect(pi.confirmDialogs[0]?.dialogOptions).toEqual({
       signal: controller.signal,
+      timeout: 1_234,
     });
-    expect(pi.confirmDialogs[0]?.dialogOptions).not.toHaveProperty("timeout");
   });
 
   test("blocks non-interactively when the judge does not allow", async () => {

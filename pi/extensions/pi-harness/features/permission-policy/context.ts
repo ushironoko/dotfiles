@@ -13,7 +13,7 @@ const MAX_DISCOVERED_PATH_BYTES = 1_024;
 const MAX_VISIBLE_WORKTREES = 16;
 const MAX_VISIBLE_PATH_BYTES = 512;
 const MAX_VISIBLE_PROJECT_BYTES = 2_048;
-const DEFAULT_GIT_TIMEOUT_MS = 250;
+export const DEFAULT_GIT_TIMEOUT_MS = 1_000;
 
 const fingerprint = (...parts: readonly string[]): string => {
   const hash = createHash("sha256");
