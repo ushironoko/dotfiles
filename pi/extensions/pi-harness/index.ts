@@ -11,11 +11,15 @@
  * active — see config.ts.
  */
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { delimiter } from "node:path";
+import { delimiter, join } from "node:path";
 import type { PiLike } from "./lib/pi-like";
 import { loadConfig, type HarnessConfig } from "./config";
 import setupBashSandboxFeature from "./features/bash-sandbox/index";
 import setupPermissionPolicy from "./features/permission-policy/index";
+import {
+  consumeCodexStageCapability,
+  createCodexStageExecutablePin,
+} from "./features/permission-policy/codex-stage-capability";
 import { createPermissionTaskTracker } from "./features/permission-policy/context";
 import { setupPermissionAudit } from "./features/permission-audit/index";
 import {
@@ -57,6 +61,8 @@ const PERMISSION_PREFLIGHT_PATH = [
 // to lib/pi-like.ts. Shapes verified against tests/fixtures/pi-harness/raw/.
 interface SetupHarnessOptions extends PermissionBlockerOptions {
   readonly setupBashSandbox?: typeof setupBashSandboxFeature;
+  readonly consumeCodexStageCapability?: typeof consumeCodexStageCapability;
+  readonly createCodexStageExecutablePin?: typeof createCodexStageExecutablePin;
 }
 
 const setupHarness = (
@@ -66,8 +72,31 @@ const setupHarness = (
 ): void => {
   const {
     setupBashSandbox: createBashSandbox = setupBashSandboxFeature,
+    consumeCodexStageCapability:
+      consumeCodexStageModes = consumeCodexStageCapability,
+    createCodexStageExecutablePin:
+      createCodexStagePin = createCodexStageExecutablePin,
     ...blockerOptions
   } = options;
+  let codexStageModes = consumeCodexStageModes(config.isChild);
+  let codexStageExecutable:
+    | ReturnType<typeof createCodexStageExecutablePin>
+    | undefined;
+  if (codexStageModes.size > 0) {
+    try {
+      codexStageExecutable = createCodexStagePin(
+        join(config.paths.claudeHooksDir, "lib", "codex-stage.sh"),
+      );
+    } catch {
+      // The managed bypass is optional; the mandatory permission policy is
+      // not. Disable the capability and continue registering the normal
+      // fail-closed boundary when launcher pinning is unavailable.
+      codexStageModes = new Set();
+    }
+  }
+  if (codexStageExecutable !== undefined) {
+    pi.on("session_shutdown", () => codexStageExecutable.dispose());
+  }
   // One blocker owns the child authenticator for every permission handler.
   // This preserves the parent observer's failure classification even when a
   // bridge hook rejects before (or after) the mandatory policy handler.
@@ -129,7 +158,8 @@ const setupHarness = (
     taskTracker: permissionTaskTracker,
     permissionAudit,
     executionBoundary: (toolName) => bashSandbox.boundaryFor(toolName),
-    scratchBoundaryFor: (toolName) => bashSandbox.scratchBoundaryFor(toolName),
+    codexStageModes,
+    codexStageExecutablePath: codexStageExecutable?.executablePath,
   });
 
   if (bridgeRegistry?.remaining.length) {

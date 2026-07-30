@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   DEFAULT_PERMISSION_JUDGE_CONFIG,
@@ -16,23 +17,17 @@ import {
 import {
   CODEX_STAGE_CAPABILITY_ENV,
   consumeCodexStageCapability,
-  createCodexStageCapabilityRuntime,
-  type CodexStageCapabilityRuntime,
+  createCodexStageExecutablePin,
+  pinCodexStageCommand,
 } from "../../pi/extensions/pi-harness/features/permission-policy/codex-stage-capability";
 import type { PermissionProjectContext } from "../../pi/extensions/pi-harness/features/permission-policy/context";
 import { loadRules } from "../../pi/extensions/pi-harness/features/permission-policy/rules";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import type { ToolCallEvent } from "../../pi/extensions/pi-harness/lib/pi-like";
-import {
-  cleanupTestDirectory,
-  setupTestDirectory,
-  startMockUpstream,
-  type MockUpstream,
-} from "../test-helpers";
+import { startMockUpstream, type MockUpstream } from "../test-helpers";
 import { createFakePi } from "./fake-pi";
 
 const upstreams: MockUpstream[] = [];
-const tempDirectories: string[] = [];
 
 const start = async (
   chatHandler: Parameters<typeof startMockUpstream>[0],
@@ -63,7 +58,6 @@ const chatRequests = (upstream: MockUpstream) =>
 
 afterEach(async () => {
   await Promise.all(upstreams.splice(0).map((upstream) => upstream.close()));
-  await Promise.all(tempDirectories.splice(0).map(cleanupTestDirectory));
 });
 
 const ollamaResponse = (verdict: string): Response =>
@@ -161,26 +155,6 @@ const verifiedGitCwdProject = (cwd: string): PermissionProjectContext => ({
     sameRepository: true,
   },
 });
-
-const makeCodexStageRuntime =
-  async (): Promise<CodexStageCapabilityRuntime> => {
-    const directory = await setupTestDirectory("codex-stage-runtime");
-    tempDirectories.push(directory);
-    const source = join(directory, "codex-stage-source.sh");
-    await fs.writeFile(source, "#!/bin/bash\ncat\n", { mode: 0o700 });
-    return createCodexStageCapabilityRuntime(source, {
-      temporaryDirectory: directory,
-    });
-  };
-
-const makeScratchBoundary = async (path: string) => {
-  const canonicalPath = await fs.realpath(path);
-  const stat = await fs.stat(canonicalPath);
-  return {
-    path: canonicalPath,
-    identity: `${stat.dev}:${stat.ino}`,
-  };
-};
 
 const createTestAbortController = (): {
   signal: AbortSignal;
@@ -900,243 +874,126 @@ describe("permission policy local judge routing", () => {
     expect(malformedEnv[CODEX_STAGE_CAPABILITY_ENV]).toBeUndefined();
   });
 
-  test("pins the trusted wrapper and staged artifacts into non-writable private copies", async () => {
-    const scratch = await setupTestDirectory("codex-stage-runtime-scratch");
-    tempDirectories.push(scratch);
-    const scratchBoundary = await makeScratchBoundary(scratch);
-    const prompt = join(scratchBoundary.path, "prompt.md");
-    await fs.writeFile(prompt, "private staged prompt");
-    const runtime = await makeCodexStageRuntime();
+  test("pins trusted wrapper bytes without pinning Codex activity", async () => {
+    const directory = await fs.mkdtemp(join(tmpdir(), "codex-stage-pin-test-"));
+    const source = join(directory, "source.sh");
+    let pin: ReturnType<typeof createCodexStageExecutablePin> | undefined;
+    try {
+      await fs.writeFile(source, "#!/bin/sh\necho trusted\n", { mode: 0o700 });
+      pin = createCodexStageExecutablePin(source, directory);
+      await fs.writeFile(source, "#!/bin/sh\necho replaced\n", { mode: 0o700 });
 
-    const staged = await runtime.stageFile(
-      prompt,
-      scratchBoundary,
-      "prompt.md",
-    );
-    expect(staged).toBeDefined();
-    if (staged === undefined) throw new Error("expected staged prompt copy");
-    expect(staged.startsWith(scratch)).toBe(false);
-    expect(await fs.readFile(staged, "utf8")).toBe("private staged prompt");
-    const stagedStat = await fs.stat(staged);
-    const { executablePath } = runtime;
-    const executableStat = await fs.stat(executablePath);
-    expect(stagedStat.mode & 0o222).toBe(0);
-    expect(executableStat.mode & 0o222).toBe(0);
+      expect(await fs.readFile(pin.executablePath, "utf8")).toContain(
+        "echo trusted",
+      );
+      const pinnedStat = await fs.stat(pin.executablePath);
+      expect(pinnedStat.mode & 0o777).toBe(0o500);
+      const command =
+        "printf '%s' 'Read /tmp/prompt.md completely and follow it exactly.' | ~/.claude/hooks/lib/codex-stage.sh prompt --dir '/outside/repository' --network";
+      const wrapperIndex = command.indexOf(
+        "~/.claude/hooks/lib/codex-stage.sh",
+      );
+      expect(
+        pinCodexStageCommand(command, pin.executablePath, wrapperIndex),
+      ).toBe(
+        command.replace(
+          "~/.claude/hooks/lib/codex-stage.sh",
+          `'${pin.executablePath}'`,
+        ),
+      );
+      expect(
+        pinCodexStageCommand("bun test", pin.executablePath, 0),
+      ).toBeUndefined();
+      expect(
+        pinCodexStageCommand(
+          "~/.claude/hooks/lib/codex-stage.sh review",
+          "/tmp/a'b/codex-stage.sh",
+          0,
+        ),
+      ).toBe(String.raw`'/tmp/a'\''b/codex-stage.sh' review`);
 
-    const outsideDirectory = await setupTestDirectory(
-      "codex-stage-runtime-outside",
-    );
-    tempDirectories.push(outsideDirectory);
-    const outside = join(outsideDirectory, "outside-prompt.md");
-    await fs.writeFile(outside, "outside");
-    const symlink = join(scratchBoundary.path, "symlink.md");
-    await fs.symlink(outside, symlink);
-    expect(
-      await runtime.stageFile(symlink, scratchBoundary, "prompt.md"),
-    ).toBeUndefined();
-    const nestedDirectory = join(scratchBoundary.path, "nested");
-    await fs.mkdir(nestedDirectory);
-    const nestedPrompt = join(nestedDirectory, "prompt.md");
-    await fs.writeFile(nestedPrompt, "nested prompt");
-    expect(
-      await runtime.stageFile(nestedPrompt, scratchBoundary, "prompt.md"),
-    ).toBeUndefined();
-    const fifo = join(scratchBoundary.path, "prompt.fifo");
-    const mkfifo = Bun.spawnSync(["mkfifo", fifo]);
-    expect(mkfifo.exitCode).toBe(0);
-    const fifoStage = await Promise.race([
-      runtime.stageFile(fifo, scratchBoundary, "prompt.md"),
-      Bun.sleep(1_000).then(() => "timed out" as const),
-    ]);
-    expect(fifoStage).toBeUndefined();
-
-    const originalScratch = `${scratchBoundary.path}-original`;
-    await fs.rename(scratchBoundary.path, originalScratch);
-    await fs.symlink(outsideDirectory, scratchBoundary.path);
-    expect(
-      await runtime.stageFile(
-        join(scratchBoundary.path, "outside-prompt.md"),
-        scratchBoundary,
-        "prompt.md",
-      ),
-    ).toBeUndefined();
-    await fs.rm(scratchBoundary.path);
-    await fs.rename(originalScratch, scratchBoundary.path);
-
-    runtime.dispose();
-    await expect(fs.access(staged)).rejects.toThrow();
-    await expect(fs.access(executablePath)).rejects.toThrow();
-  });
-
-  test("reserves aggregate staging capacity before concurrent reads and cleans disposal races", async () => {
-    const scratch = await setupTestDirectory("codex-stage-runtime-cap");
-    tempDirectories.push(scratch);
-    const scratchBoundary = await makeScratchBoundary(scratch);
-    const runtime = await makeCodexStageRuntime();
-    const sources: string[] = [];
-    for (let index = 0; index < 5; index += 1) {
-      const source = join(scratchBoundary.path, `prompt-${index}.md`);
-      await fs.writeFile(source, Buffer.alloc(8 * 1024 * 1024, index));
-      sources.push(source);
+      const pinnedPath = pin.executablePath;
+      pin.dispose();
+      pin = undefined;
+      expect(await Bun.file(pinnedPath).exists()).toBe(false);
+    } finally {
+      pin?.dispose();
+      await fs.rm(directory, { recursive: true, force: true });
     }
-
-    const staged = await Promise.all(
-      sources.map((source) =>
-        runtime.stageFile(source, scratchBoundary, "prompt.md"),
-      ),
-    );
-    expect(staged.filter((path) => path !== undefined)).toHaveLength(4);
-    expect(staged.filter((path) => path === undefined)).toHaveLength(1);
-    runtime.dispose();
-
-    const disposingRuntime = await makeCodexStageRuntime();
-    const pending = disposingRuntime.stageFile(
-      sources[0] ?? "",
-      scratchBoundary,
-      "prompt.md",
-    );
-    const runtimeRoot = resolve(disposingRuntime.executablePath, "../..");
-    disposingRuntime.dispose();
-    expect(await pending).toBeUndefined();
-    const runtimeEntries = await fs.readdir(runtimeRoot);
-    expect(
-      runtimeEntries.filter((entry) =>
-        entry.startsWith("pi-codex-stage-artifact-"),
-      ),
-    ).toEqual([]);
   });
 
-  test("allows only an agent-declared path-validated codex-stage escalation without the judge", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
-    const cwd = await setupTestDirectory("codex-stage-capability");
-    tempDirectories.push(cwd);
-    const scratch = join(cwd, "sandbox-scratch");
-    await fs.mkdir(scratch, { recursive: true });
-    const scratchBoundary = await makeScratchBoundary(scratch);
-    const prompt = join(scratchBoundary.path, "codex-reviewer-a1B2C3.md");
-    await fs.writeFile(prompt, "Review the assigned artifact.");
-    const runtime = await makeCodexStageRuntime();
-
+  test("delegates declared codex-stage modes without Pi sandbox or judge checks", async () => {
+    const cwd = "/private/project";
+    const { integration, stages } = captureAuditStages();
+    let discoveries = 0;
     const pi = createFakePi({ cwd, hasUI: false });
-    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream), true), {
-      codexStageModes: new Set(["prompt", "review"]),
-      discoverProject: async () => verifiedProject(cwd),
-      executionBoundary,
-      scratchBoundaryFor: () => scratchBoundary,
-      codexStageRuntime: runtime,
-      permissionSignalToken: "123e4567-e89b-42d3-a456-426614174000",
-      writePermissionSignal: () => {},
-    });
-
-    const command = [
-      `printf '%s' 'Read ${prompt} completely and follow it exactly.' |`,
-      "  ~/.claude/hooks/lib/codex-stage.sh prompt --timeout 600",
-    ].join("\n");
-    const promptCall = escalatedCall(command, "codex-stage-capability");
-    expect(await pi.emitToolCall(promptCall)).toBeUndefined();
-    expect(promptCall.input.command).toContain(runtime.executablePath);
-    expect(promptCall.input.command).toContain("--expected-dir-identity");
-    expect(promptCall.input.command).toContain("--expected-dir-path");
-    expect(promptCall.input.command).not.toContain(
-      "~/.claude/hooks/lib/codex-stage.sh",
-    );
-    expect(promptCall.input.command).not.toContain(prompt);
-    const privatePromptMatch = /Read ([^ ]+) completely/.exec(
-      String(promptCall.input.command),
-    );
-    const privatePrompt = privatePromptMatch?.[1];
-    if (privatePrompt === undefined) {
-      throw new Error("rewritten private prompt path was not found");
-    }
-    await fs.access(privatePrompt);
-    await pi.emitToolResult({
-      type: "tool_result",
-      toolName: "bash_escalated",
-      toolCallId: "codex-stage-capability",
-      content: [],
-      isError: false,
-    });
-    await expect(fs.access(privatePrompt)).rejects.toThrow();
-
-    const reviewCall = escalatedCall(
-      `~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir '${cwd}' --timeout 600`,
-      "codex-stage-review-capability",
-    );
-    expect(await pi.emitToolCall(reviewCall)).toBeUndefined();
-    expect(reviewCall.input.command).toContain(runtime.executablePath);
-    expect(reviewCall.input.command).toContain("--expected-dir-identity");
-    expect(reviewCall.input.command).toContain("--expected-dir-path");
-
-    for (const [mode, wrapper] of [
-      [
-        "poc",
-        `~/.claude/hooks/lib/codex-stage.sh poc --worktree '${cwd}' --network --timeout 600`,
-      ],
-      [
-        "run",
-        `~/.claude/hooks/lib/codex-stage.sh run --dir '${cwd}' --network --timeout 600`,
-      ],
-    ] as const) {
-      const workerPi = createFakePi({ cwd, hasUI: false });
-      setupPermissionPolicy(workerPi, makeConfig(judgeConfig(upstream), true), {
-        codexStageModes: new Set([mode]),
-        discoverProject: async () => verifiedProject(cwd),
+    setupPermissionPolicy(
+      pi,
+      makeConfig({ ...DEFAULT_PERMISSION_JUDGE_CONFIG, enabled: false }, true),
+      {
+        codexStageModes: new Set(["prompt", "review", "poc", "run"]),
+        codexStageExecutablePath: "/private/pinned/codex-stage.sh",
+        discoverProject: async () => {
+          discoveries += 1;
+          return verifiedProject(cwd);
+        },
         executionBoundary,
-        scratchBoundaryFor: () => scratchBoundary,
-        codexStageRuntime: runtime,
+        permissionAudit: integration,
         permissionSignalToken: "123e4567-e89b-42d3-a456-426614174000",
         writePermissionSignal: () => {},
-      });
-      const workerCommand = [
-        `printf '%s' 'Read ${prompt} completely and follow it exactly.' |`,
-        `  ${wrapper}`,
-      ].join("\n");
-      expect(
-        await workerPi.emitToolCall(
-          escalatedCall(workerCommand, `codex-stage-${mode}-capability`),
-        ),
-      ).toBeUndefined();
+      },
+    );
+
+    const wrapper = "~/.claude/hooks/lib/codex-stage.sh";
+    const commands = [
+      `# | ${wrapper} ignored\nprintf '%s' 'Read /tmp/${wrapper}/review.md completely and follow it exactly.' | ${wrapper} prompt --dir '/outside/repository' --timeout 600`,
+      `${wrapper} review --commit deadbeef --dir '/outside/repository' --title 'mention ${wrapper}' # ${wrapper}`,
+      `printf '%s' 'Read /outside/poc.md completely and follow it exactly.' | ${wrapper} poc --worktree '/outside/worktree' --network`,
+      `printf '%s' 'Read /outside/run.md completely and follow it exactly.' | ${wrapper} run --dir '/outside/repository' --network`,
+    ];
+    for (const [index, command] of commands.entries()) {
+      const call = escalatedCall(command, `codex-stage-delegated-${index}`);
+      expect(await pi.emitToolCall(call)).toBeUndefined();
+      const executableIndex = command.startsWith(wrapper)
+        ? 0
+        : command.lastIndexOf(`| ${wrapper}`) + 2;
+      expect(call.input.command).toBe(
+        `${command.slice(0, executableIndex)}'/private/pinned/codex-stage.sh'${command.slice(executableIndex + wrapper.length)}`,
+      );
     }
-    expect(upstream.received).toHaveLength(0);
-    runtime.dispose();
+
+    expect(discoveries).toBe(0);
+    expect(
+      stages.filter(
+        ({ stage }) => stage.reasonCode === "codex-stage-capability",
+      ),
+    ).toHaveLength(commands.length);
   });
 
-  test("keeps malformed, over-broad, and mode-mismatched codex-stage calls on the live judge route", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
-    const cwd = await setupTestDirectory("codex-stage-holdouts");
-    tempDirectories.push(cwd);
-    const scratch = join(cwd, "sandbox-scratch");
-    const outsidePrompt = join(cwd, "outside-prompt.md");
-    await fs.mkdir(scratch, { recursive: true });
-    const scratchBoundary = await makeScratchBoundary(scratch);
-    const prompt = join(scratchBoundary.path, "codex-reviewer-a1B2C3.md");
-    await fs.writeFile(prompt, "Review the assigned artifact.");
-    await fs.writeFile(outsidePrompt, "Must not cross the staging boundary.");
-    const runtime = await makeCodexStageRuntime();
-
+  test("keeps arbitrary shell and undeclared codex-stage modes outside the capability", async () => {
+    const cwd = "/private/project";
     const pi = createFakePi({ cwd, hasUI: false });
-    setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream), true), {
-      codexStageModes: new Set(["prompt", "review"]),
-      discoverProject: async () => verifiedProject(cwd),
-      executionBoundary,
-      scratchBoundaryFor: () => scratchBoundary,
-      codexStageRuntime: runtime,
-      permissionSignalToken: "123e4567-e89b-42d3-a456-426614174000",
-      writePermissionSignal: () => {},
-    });
+    setupPermissionPolicy(
+      pi,
+      makeConfig({ ...DEFAULT_PERMISSION_JUDGE_CONFIG, enabled: false }, true),
+      {
+        codexStageModes: new Set(["prompt", "review"]),
+        discoverProject: async () => verifiedProject(cwd),
+        executionBoundary,
+        permissionSignalToken: "123e4567-e89b-42d3-a456-426614174000",
+        writePermissionSignal: () => {},
+      },
+    );
 
+    const prompt = "/tmp/claude/codex-reviewer-observed.md";
     const commands = [
-      `printf '%s' 'Read ${outsidePrompt} completely and follow it exactly.' | ~/.claude/hooks/lib/codex-stage.sh prompt --timeout 600`,
-      `printf '%s' 'Read ${prompt} completely and follow it exactly.' | ~/.claude/hooks/lib/codex-stage.sh poc --worktree '${cwd}' --timeout 600`,
-      `~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir '${cwd}' --out '${join(scratch, "review.md")}' --timeout 600`,
-      `printf '%s' 'Read ${prompt} completely and follow it exactly.' ; ~/.claude/hooks/lib/codex-stage.sh prompt --timeout 600`,
-      `printf '%s' 'Read ${prompt} completely and follow it exactly.' && ~/.claude/hooks/lib/codex-stage.sh prompt --timeout 600`,
-      `printf '%s' 'Read ${prompt} completely and follow it exactly.' |& ~/.claude/hooks/lib/codex-stage.sh prompt --timeout 600`,
-      `printf '%s' 'Read ${prompt} completely and follow it exactly.' | /tmp/codex-stage.sh prompt --timeout 600`,
-      `'~/.claude/hooks/lib/codex-stage.sh' review --uncommitted --dir '${cwd}'`,
-      `"~/.claude/hooks/lib/codex-stage.sh" review --uncommitted --dir '${cwd}'`,
-      String.raw`\~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir '${cwd}'`,
-      `~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir '${cwd}' |`,
+      `~/.claude/hooks/lib/codex-stage.sh prompt --timeout 600`,
+      `printf '%s' 'Read ${prompt} completely and follow it exactly.' | ~/.claude/hooks/lib/codex-stage.sh poc --worktree '/outside/worktree'`,
+      `printf '%s' 'Read ${prompt} completely and follow it exactly.' ; ~/.claude/hooks/lib/codex-stage.sh prompt`,
+      `printf '%s' 'Read ${prompt} completely and follow it exactly.' | /tmp/codex-stage.sh prompt`,
+      `"~/.claude/hooks/lib/codex-stage.sh" review --uncommitted`,
+      `printf '%s' "$(cat ~/.ssh/id_ed25519)" | ~/.claude/hooks/lib/codex-stage.sh prompt`,
+      `printf '%s' 'Read ${prompt} completely and follow it exactly.' | ~/.claude/hooks/lib/codex-stage.sh prompt ; bun test`,
       "bun test",
     ];
     for (const [index, command] of commands.entries()) {
@@ -1144,60 +1001,27 @@ describe("permission policy local judge routing", () => {
         await pi.emitToolCall(
           escalatedCall(command, `codex-stage-holdout-${index}`),
         ),
-      ).toEqual({
-        block: true,
-        reason: "local judge requested user confirmation",
-      });
+      ).toEqual({ block: true, reason: expect.any(String) });
     }
-    expect(chatRequests(upstream)).toHaveLength(commands.length);
-
-    const outsideDirectory = await setupTestDirectory("codex-stage-outside");
-    tempDirectories.push(outsideDirectory);
-    const allModesPi = createFakePi({ cwd, hasUI: false });
-    setupPermissionPolicy(allModesPi, makeConfig(judgeConfig(upstream), true), {
-      codexStageModes: new Set(["prompt", "review", "poc", "run"]),
-      discoverProject: async () => verifiedProject(cwd),
-      executionBoundary,
-      scratchBoundaryFor: () => scratchBoundary,
-      codexStageRuntime: runtime,
-      permissionSignalToken: "123e4567-e89b-42d3-a456-426614174000",
-      writePermissionSignal: () => {},
-    });
-    for (const [index, wrapper] of [
-      `~/.claude/hooks/lib/codex-stage.sh poc --worktree '${scratch}' --timeout 600`,
-      `~/.claude/hooks/lib/codex-stage.sh run --dir '${outsideDirectory}' --timeout 600`,
-    ].entries()) {
-      const command = `printf '%s' 'Read ${prompt} completely and follow it exactly.' | ${wrapper}`;
-      expect(
-        await allModesPi.emitToolCall(
-          escalatedCall(command, `codex-stage-path-holdout-${index}`),
-        ),
-      ).toEqual({
-        block: true,
-        reason: "local judge requested user confirmation",
-      });
-    }
-    expect(chatRequests(upstream)).toHaveLength(commands.length + 2);
-    runtime.dispose();
   });
 
-  test("keeps configured ASK and DENY above the codex-stage capability", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
-    const cwd = await setupTestDirectory("codex-stage-policy-floor");
-    tempDirectories.push(cwd);
-    const runtime = await makeCodexStageRuntime();
+  test("bypasses configured ASK but keeps DENY above managed codex-stage", async () => {
+    const cwd = "/private/project";
     const command = `~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir '${cwd}'`;
     const baseOptions = {
       codexStageModes: new Set(["review"] as const),
       discoverProject: async () => verifiedProject(cwd),
       executionBoundary,
-      codexStageRuntime: runtime,
       permissionSignalToken: "123e4567-e89b-42d3-a456-426614174000",
       writePermissionSignal: () => {},
     };
+    const config = makeConfig(
+      { ...DEFAULT_PERMISSION_JUDGE_CONFIG, enabled: false },
+      true,
+    );
 
     const askPi = createFakePi({ cwd, hasUI: false });
-    setupPermissionPolicy(askPi, makeConfig(judgeConfig(upstream), true), {
+    setupPermissionPolicy(askPi, config, {
       ...baseOptions,
       rules: loadRules(
         JSON.stringify({
@@ -1213,15 +1037,11 @@ describe("permission policy local judge routing", () => {
       ),
     });
     expect(
-      await askPi.emitToolCall(escalatedCall(command, "codex-stage-ask-floor")),
-    ).toEqual({
-      block: true,
-      reason: "local judge requested user confirmation",
-    });
-    expect(chatRequests(upstream)).toHaveLength(1);
+      await askPi.emitToolCall(escalatedCall(command, "codex-stage-ask")),
+    ).toBeUndefined();
 
     const denyPi = createFakePi({ cwd, hasUI: false });
-    setupPermissionPolicy(denyPi, makeConfig(judgeConfig(upstream), true), {
+    setupPermissionPolicy(denyPi, config, {
       ...baseOptions,
       rules: loadRules(
         JSON.stringify({
@@ -1237,12 +1057,8 @@ describe("permission policy local judge routing", () => {
       ),
     });
     expect(
-      await denyPi.emitToolCall(
-        escalatedCall(command, "codex-stage-deny-floor"),
-      ),
+      await denyPi.emitToolCall(escalatedCall(command, "codex-stage-deny")),
     ).toEqual({ block: true, reason: expect.any(String) });
-    expect(chatRequests(upstream)).toHaveLength(1);
-    runtime.dispose();
   });
 
   test("requires a fresh live judge ALLOW for every escalated call", async () => {

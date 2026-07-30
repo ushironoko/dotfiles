@@ -33,16 +33,25 @@ const setupFixture = async () => {
   return { root, target, bin, temporaryDirectory };
 };
 
-const directoryPin = async (
-  path: string,
-): Promise<{ path: string; identity: string }> => {
-  const canonicalPath = await fs.realpath(path);
-  const stat = await fs.stat(canonicalPath);
-  return {
-    path: canonicalPath,
-    identity: `${stat.dev}:${stat.ino}`,
-  };
-};
+type Fixture = Awaited<ReturnType<typeof setupFixture>>;
+
+const runPrompt = (
+  fixture: Fixture,
+  args: string[],
+  env: Record<string, string> = {},
+) =>
+  Bun.spawnSync(["bash", WRAPPER, "prompt", ...args], {
+    cwd: fixture.root,
+    env: {
+      HOME: fixture.root,
+      PATH: `${fixture.bin}:${process.env.PATH ?? ""}`,
+      TMPDIR: fixture.temporaryDirectory,
+      ...env,
+    },
+    stdin: Buffer.from("Return a smoke result."),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
 
 const isProcessAlive = (pid: number): boolean => {
   try {
@@ -68,128 +77,57 @@ afterEach(async () => {
   await Promise.all(tempDirectories.splice(0).map(cleanupTestDirectory));
 });
 
-describe("codex-stage pinned directory execution", () => {
-  test("validates the directory identity and runs Codex from the pinned cwd without -C", async () => {
+describe("codex-stage execution boundary", () => {
+  test("runs Codex from the requested canonical cwd without -C", async () => {
     const fixture = await setupFixture();
-    const pin = await directoryPin(fixture.target);
-    const result = Bun.spawnSync(
-      [
-        "bash",
-        WRAPPER,
-        "prompt",
-        "--dir",
-        fixture.target,
-        "--timeout",
-        "10",
-        "--expected-dir-identity",
-        pin.identity,
-        "--expected-dir-path",
-        pin.path,
-      ],
-      {
-        cwd: fixture.root,
-        env: {
-          HOME: fixture.root,
-          PATH: `${fixture.bin}:${process.env.PATH ?? ""}`,
-          TMPDIR: fixture.temporaryDirectory,
-        },
-        stdin: Buffer.from("Return a smoke result."),
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
+    const result = runPrompt(fixture, [
+      "--dir",
+      fixture.target,
+      "--timeout",
+      "10",
+    ]);
 
     expect(result.exitCode).toBe(0);
     const stdout = result.stdout.toString();
-    expect(stdout).toContain(`PWD=${pin.path}`);
+    expect(stdout).toContain(`PWD=${await fs.realpath(fixture.target)}`);
     expect(stdout).toContain("<exec> <--sandbox> <read-only>");
     expect(stdout).not.toContain("<-C>");
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("rejects a directory replaced after policy identity capture", async () => {
+  test("rejects sandbox-external output and unsafe numeric controls", async () => {
     const fixture = await setupFixture();
-    const pin = await directoryPin(fixture.target);
-    await fs.rename(fixture.target, join(fixture.root, "original-target"));
-    await fs.mkdir(fixture.target);
+    const output = join(fixture.root, "review-output.md");
+    const injected = join(fixture.root, "injected");
+    const cases: { args: string[]; error: string }[] = [
+      { args: ["--out", output], error: "unknown argument: --out" },
+      { args: ["--timeout", "0"], error: "must be between 1 and 3600" },
+      { args: ["--timeout", "01"], error: "canonical decimal integer" },
+      { args: ["--timeout", "10x"], error: "canonical decimal integer" },
+      { args: ["--timeout", "10 "], error: "canonical decimal integer" },
+      { args: ["--timeout", "3601"], error: "must be between 1 and 3600" },
+      { args: ["--retry", "-1"], error: "canonical decimal integer" },
+      { args: ["--retry", "1x"], error: "canonical decimal integer" },
+      { args: ["--retry", "11"], error: "must be between 0 and 10" },
+      { args: ["--retry-wait", "30x"], error: "canonical decimal integer" },
+      { args: ["--retry-wait", "301"], error: "must be between 0 and 300" },
+      { args: ["--retry-wait", "LANG"], error: "canonical decimal integer" },
+    ];
 
-    const result = Bun.spawnSync(
-      [
-        "bash",
-        WRAPPER,
-        "prompt",
-        "--dir",
-        fixture.target,
-        "--timeout",
-        "10",
-        "--expected-dir-identity",
-        pin.identity,
-        "--expected-dir-path",
-        pin.path,
-      ],
-      {
-        cwd: fixture.root,
-        env: {
-          HOME: fixture.root,
-          PATH: `${fixture.bin}:${process.env.PATH ?? ""}`,
-          TMPDIR: fixture.temporaryDirectory,
-        },
-        stdin: Buffer.from("Must not reach Codex."),
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-
-    expect(result.exitCode).toBe(13);
-    expect(result.stdout.toString()).toBe("");
-    expect(result.stderr.toString()).toContain("directory identity changed");
-  });
-
-  test("rejects the same directory inode relocated behind a symlink", async () => {
-    const fixture = await setupFixture();
-    const pin = await directoryPin(fixture.target);
-    const relocatedTarget = join(
-      fixture.temporaryDirectory,
-      "relocated-target",
-    );
-    await fs.rename(fixture.target, relocatedTarget);
-    await fs.symlink(relocatedTarget, fixture.target);
-
-    const result = Bun.spawnSync(
-      [
-        "bash",
-        WRAPPER,
-        "prompt",
-        "--dir",
-        fixture.target,
-        "--timeout",
-        "10",
-        "--expected-dir-identity",
-        pin.identity,
-        "--expected-dir-path",
-        pin.path,
-      ],
-      {
-        cwd: fixture.root,
-        env: {
-          HOME: fixture.root,
-          PATH: `${fixture.bin}:${process.env.PATH ?? ""}`,
-          TMPDIR: fixture.temporaryDirectory,
-        },
-        stdin: Buffer.from("Must not follow the relocated inode."),
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-
-    expect(result.exitCode).toBe(13);
-    expect(result.stdout.toString()).toBe("");
-    expect(result.stderr.toString()).toContain("directory path changed");
+    for (const value of cases) {
+      const result = runPrompt(fixture, value.args, {
+        LANG: `x[$(touch ${injected})]`,
+      });
+      expect(result.exitCode).toBe(13);
+      expect(result.stdout.toString()).toBe("");
+      expect(result.stderr.toString()).toContain(value.error);
+    }
+    expect(await Bun.file(output).exists()).toBe(false);
+    expect(await Bun.file(injected).exists()).toBe(false);
   });
 
   test("kills a TERM-ignoring Codex grandchild process group on timeout", async () => {
     const fixture = await setupFixture();
-    const pin = await directoryPin(fixture.target);
     const grandchildPidFile = join(fixture.root, "grandchild.pid");
     await fs.writeFile(
       join(fixture.bin, "codex"),
@@ -205,19 +143,7 @@ describe("codex-stage pinned directory execution", () => {
     );
 
     const result = Bun.spawnSync(
-      [
-        "bash",
-        WRAPPER,
-        "prompt",
-        "--dir",
-        fixture.target,
-        "--timeout",
-        "1",
-        "--expected-dir-identity",
-        pin.identity,
-        "--expected-dir-path",
-        pin.path,
-      ],
+      ["bash", WRAPPER, "prompt", "--dir", fixture.target, "--timeout", "1"],
       {
         cwd: fixture.root,
         env: {
@@ -243,7 +169,6 @@ describe("codex-stage pinned directory execution", () => {
 
   test("retains the watchdog when the Codex leader exits before its grandchild", async () => {
     const fixture = await setupFixture();
-    const pin = await directoryPin(fixture.target);
     const grandchildPidFile = join(fixture.root, "early-exit-grandchild.pid");
     await fs.writeFile(
       join(fixture.bin, "codex"),
@@ -262,19 +187,7 @@ describe("codex-stage pinned directory execution", () => {
     });
 
     const result = Bun.spawnSync(
-      [
-        "bash",
-        WRAPPER,
-        "prompt",
-        "--dir",
-        fixture.target,
-        "--timeout",
-        "1",
-        "--expected-dir-identity",
-        pin.identity,
-        "--expected-dir-path",
-        pin.path,
-      ],
+      ["bash", WRAPPER, "prompt", "--dir", fixture.target, "--timeout", "1"],
       {
         cwd: fixture.root,
         env: {

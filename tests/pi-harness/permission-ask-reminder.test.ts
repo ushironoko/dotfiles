@@ -49,11 +49,6 @@ const setupReminderHarness = (
         network: "denied",
         profileFingerprint: "e".repeat(64),
       }),
-      scratchDirectoryFor: () => "/private/scratch",
-      scratchBoundaryFor: () => ({
-        path: "/private/scratch",
-        identity: "10:20",
-      }),
       registerExecutionBoundary() {},
     }),
   });

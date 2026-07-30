@@ -302,15 +302,14 @@ describe("Bash effect sandbox lifecycle", () => {
       network: "denied",
       profileFingerprint: "a".repeat(64),
     });
-    expect(runtime.controller.scratchDirectoryFor("bash_escalated")).toBe(
-      "/private/scratch",
-    );
-    expect(runtime.controller.scratchBoundaryFor("bash_escalated")).toEqual({
-      path: "/private/scratch",
-      identity: "10:20",
-    });
     expect(runtime.pi.tools.map((tool) => tool.name)).toContain(
       "bash_escalated",
+    );
+    const escalated = runtime.pi.tools.find(
+      (tool) => tool.name === "bash_escalated",
+    );
+    expect(escalated?.promptGuidelines?.join("\n")).toContain(
+      "Use bash_escalated directly for managed codex-stage launches",
     );
 
     await runtime.pi.emitSessionShutdown();

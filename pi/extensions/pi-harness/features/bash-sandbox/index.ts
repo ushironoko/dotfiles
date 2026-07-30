@@ -76,8 +76,6 @@ export interface BashSandboxController {
   registerWritableWorktree(path: string): Promise<void>;
   revokeWritableWorktree(path: string): Promise<void>;
   boundaryFor(toolName: string): BashExecutionBoundary | undefined;
-  scratchDirectoryFor(toolName: string): string | undefined;
-  scratchBoundaryFor(toolName: string): BashScratchBoundary | undefined;
   registerExecutionBoundary(options: {
     blockToolCall: (reason: string) => PermissionBlockResult;
     permissionAudit?: PermissionAuditIntegration;
@@ -221,11 +219,11 @@ export const setupBashSandbox = (
     name: "bash_escalated",
     label: "Bash (outside effect sandbox)",
     description:
-      "Execute a shell command outside the OS effect sandbox. Use only when ordinary bash was blocked by the sandbox and the requested effect is required. Every call is independently classified and may require user confirmation.",
+      "Execute a shell command outside the OS effect sandbox. Use when the requested effect is already known to require execution outside that sandbox (including managed codex-stage launches), or after ordinary bash is blocked. Calls normally require independent classification or user confirmation.",
     promptSnippet:
-      "Execute a classifier-gated command outside the OS effect sandbox",
+      "Execute a permission-gated command outside the OS effect sandbox",
     promptGuidelines: [
-      "Use bash_escalated only after ordinary bash fails because an explicitly requested effect is outside the sandbox; never use it merely to avoid a sandbox restriction.",
+      "Use bash_escalated directly for managed codex-stage launches and other effects already known to require execution outside Pi's sandbox; otherwise use it only after ordinary bash is blocked, never merely to avoid a sandbox restriction.",
     ],
   } as unknown as ToolDefLike);
 
@@ -425,24 +423,6 @@ export const setupBashSandbox = (
         network: networkMode(),
         profileFingerprint: profile?.fingerprint ?? "unavailable",
       };
-    },
-    scratchDirectoryFor(toolName) {
-      if (
-        (toolName !== "bash" && toolName !== "bash_escalated") ||
-        state.kind !== "ready"
-      ) {
-        return undefined;
-      }
-      return state.scratchBoundary?.path;
-    },
-    scratchBoundaryFor(toolName) {
-      if (
-        (toolName !== "bash" && toolName !== "bash_escalated") ||
-        state.kind !== "ready"
-      ) {
-        return undefined;
-      }
-      return state.scratchBoundary;
     },
     registerExecutionBoundary({ blockToolCall, permissionAudit }) {
       pi.on("tool_call", async (event, ctx) => {
