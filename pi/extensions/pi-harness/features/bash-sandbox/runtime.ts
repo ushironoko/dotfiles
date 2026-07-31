@@ -39,6 +39,8 @@ export const buildControlledBashEnv = (
       ? "/usr/bin:/bin:/usr/sbin:/sbin"
       : sanitized.PATH;
   env.SHELL = CONTROLLED_BASH_PATH;
+  // Read-only Git commands must not refresh sibling-worktree indexes.
+  env.GIT_OPTIONAL_LOCKS = "0";
   env.TMPDIR = scratchDirectory;
   env.TMP = scratchDirectory;
   env.TEMP = scratchDirectory;

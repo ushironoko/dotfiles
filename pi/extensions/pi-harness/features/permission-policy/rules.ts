@@ -56,6 +56,8 @@ export type PermissionVerdictBasis =
   | "configured-ask"
   | "speculative-ask"
   | "builtin-read-allow"
+  | "sandbox-git-allow"
+  | "sandbox-read-allow"
   | "sandbox-residual"
   | "default-continue"
   | "combined-allow"
@@ -98,6 +100,10 @@ interface EvaluationOptions {
   readonly trustedLeadingCdTarget?: string;
   /** Literal git -C target verified as a same-repository listed worktree path. */
   readonly trustedGitCwdTarget?: string;
+  /** Canonical worktree roots writable in the active sandbox profile. */
+  readonly trustedWritableWorktrees?: readonly string[];
+  /** Canonical configured roots that may contain a newly created worktree. */
+  readonly trustedWorktreeCreateRoots?: readonly string[];
   /** Filesystem-verified scope used only by narrow mechanical read allows. */
   readonly trustedReadContext?: TrustedReadContext;
 }
@@ -490,11 +496,28 @@ const abbreviatesLongOption = (
   return name !== "" && options.some((option) => option.startsWith(name));
 };
 
+const STANDARD_GIT_URL_SCHEMES: ReadonlySet<string> = new Set([
+  "file",
+  "ftp",
+  "ftps",
+  "git",
+  "http",
+  "https",
+  "git+ssh",
+  "ssh",
+  "ssh+git",
+]);
+
+const gitUrlScheme = (word: string): string | undefined =>
+  /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(word)?.[1]?.toLowerCase();
+
 const remoteHelperExec = (word: string): boolean => {
   const repository = word.startsWith("--repo=")
     ? word.slice("--repo=".length)
     : word;
-  return /^[A-Za-z0-9][A-Za-z0-9+.-]*::/.test(repository);
+  if (/^[A-Za-z0-9][A-Za-z0-9+.-]*::/.test(repository)) return true;
+  const scheme = gitUrlScheme(repository);
+  return scheme !== undefined && !STANDARD_GIT_URL_SCHEMES.has(scheme);
 };
 
 const clusteredPushRisk = (
@@ -545,6 +568,352 @@ const gitPushRisk = (rest: readonly string[]): string | undefined => {
   return undefined;
 };
 
+const FORCE_FETCH_LONG_OPTIONS = ["force"] as const;
+const HELPER_FETCH_LONG_OPTIONS = ["server-option", "upload-pack"] as const;
+const DYNAMIC_FETCH_LONG_OPTIONS = ["refmap", "stdin"] as const;
+const DESTRUCTIVE_FETCH_LONG_OPTIONS = [
+  "prune",
+  "prune-tags",
+  "update-head-ok",
+] as const;
+
+type FetchRisk = "destructive" | "force" | "helper";
+
+const clusteredFetchRisk = (word: string): FetchRisk | undefined => {
+  if (!/^-[^-]/.test(word)) return undefined;
+  for (const option of word.slice(1)) {
+    if (option === "f") return "force";
+    if (option === "o") return "helper";
+    if (option === "p" || option === "P" || option === "u") {
+      return "destructive";
+    }
+    // -j consumes the remainder as its jobs value.
+    if (option === "j") return undefined;
+  }
+  return undefined;
+};
+
+const FETCH_LONG_OPTIONS_WITH_VALUE = [
+  "deepen",
+  "depth",
+  "filter",
+  "jobs",
+  "negotiation-tip",
+  "refmap",
+  "server-option",
+  "shallow-exclude",
+  "shallow-since",
+  "submodule-prefix",
+  "upload-pack",
+] as const;
+const FETCH_SHORT_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set(["j", "o"]);
+
+const shortOptionConsumesNext = (
+  word: string,
+  optionsWithValue: ReadonlySet<string>,
+): boolean => {
+  if (!/^-[^-]/.test(word)) return false;
+  for (let index = 1; index < word.length; index += 1) {
+    if (optionsWithValue.has(word[index] ?? "")) {
+      return index === word.length - 1;
+    }
+  }
+  return false;
+};
+
+const gitFetchRisk = (rest: readonly string[]): string | undefined => {
+  let parsingOptions = true;
+  let multipleRepositories = false;
+  let positionalCount = 0;
+  for (let index = 0; index < rest.length; index += 1) {
+    const word = rest[index];
+    if (word === undefined) break;
+    if (word === "--" && parsingOptions) {
+      parsingOptions = false;
+      continue;
+    }
+    const shortRisk = parsingOptions ? clusteredFetchRisk(word) : undefined;
+    if (
+      (parsingOptions &&
+        abbreviatesLongOption(word, FORCE_FETCH_LONG_OPTIONS)) ||
+      shortRisk === "force"
+    ) {
+      return "強制 git fetch には確認が必要です";
+    }
+    if (
+      (parsingOptions &&
+        abbreviatesLongOption(word, HELPER_FETCH_LONG_OPTIONS)) ||
+      shortRisk === "helper"
+    ) {
+      return "外部helperまたはtransport overrideを使う git fetch には確認が必要です";
+    }
+    if (
+      parsingOptions &&
+      abbreviatesLongOption(word, DYNAMIC_FETCH_LONG_OPTIONS)
+    ) {
+      return "動的なrefspecを使う git fetch には確認が必要です";
+    }
+    if (
+      (parsingOptions &&
+        abbreviatesLongOption(word, DESTRUCTIVE_FETCH_LONG_OPTIONS)) ||
+      shortRisk === "destructive"
+    ) {
+      return "refを削除・直接更新する git fetch には確認が必要です";
+    }
+    if (parsingOptions && abbreviatesLongOption(word, ["multiple"])) {
+      multipleRepositories = true;
+    }
+    if (
+      parsingOptions &&
+      !word.includes("=") &&
+      (abbreviatesLongOption(word, FETCH_LONG_OPTIONS_WITH_VALUE) ||
+        shortOptionConsumesNext(word, FETCH_SHORT_OPTIONS_WITH_VALUE))
+    ) {
+      index += 1;
+      continue;
+    }
+    if (parsingOptions && word.startsWith("-")) continue;
+
+    const isRepository = multipleRepositories || positionalCount === 0;
+    positionalCount += 1;
+    if (isRepository) {
+      if (remoteHelperExec(word)) {
+        return "外部helperまたはtransport overrideを使う git fetch には確認が必要です";
+      }
+      continue;
+    }
+    if (word.startsWith("+")) {
+      return "強制 git fetch には確認が必要です";
+    }
+    if (word.includes(":")) {
+      return "refを削除・直接更新する git fetch には確認が必要です";
+    }
+  }
+  return undefined;
+};
+
+const clusteredSwitchRisk = (
+  word: string,
+  subcommand: "checkout" | "switch",
+): boolean => {
+  if (!/^-[^-]/.test(word)) return false;
+  for (const option of word.slice(1)) {
+    if (option === "f" || option === "m") return true;
+    if (subcommand === "switch") {
+      if (option === "C") return true;
+      // -c consumes the remainder as the new branch name.
+      if (option === "c") return false;
+    } else {
+      if (option === "B") return true;
+      // -b consumes the remainder as the new branch name.
+      if (option === "b") return false;
+    }
+  }
+  return false;
+};
+
+const gitSwitchRisk = (
+  subcommand: "checkout" | "switch",
+  rest: readonly string[],
+): string | undefined => {
+  const destructiveLongOptions = [
+    "conflict",
+    "discard-changes",
+    "force",
+    "force-create",
+    "ignore-other-worktrees",
+    "merge",
+    "orphan",
+  ] as const;
+  for (const word of rest) {
+    if (word === "--") return undefined;
+    if (
+      abbreviatesLongOption(word, destructiveLongOptions) ||
+      clusteredSwitchRisk(word, subcommand)
+    ) {
+      return `git ${subcommand} による変更破棄・branch強制更新には確認が必要です`;
+    }
+  }
+  return undefined;
+};
+
+const COMMIT_LONG_OPTIONS_WITH_VALUE = [
+  "author",
+  "cleanup",
+  "date",
+  "file",
+  "fixup",
+  "message",
+  "reedit-message",
+  "reuse-message",
+  "squash",
+  "template",
+  "trailer",
+] as const;
+const COMMIT_SHORT_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set([
+  "C",
+  "F",
+  "c",
+  "m",
+  "t",
+]);
+const LOG_SHOW_LONG_OPTIONS_WITH_VALUE = [
+  "after",
+  "anchored",
+  "author",
+  "before",
+  "committer",
+  "date",
+  "decorate-refs",
+  "decorate-refs-exclude",
+  "diff-algorithm",
+  "diff-filter",
+  "dst-prefix",
+  "encoding",
+  "exclude",
+  "exclude-hidden",
+  "find-object",
+  "glob",
+  "grep",
+  "grep-reflog",
+  "ignore-matching-lines",
+  "inter-hunk-context",
+  "line-prefix",
+  "max-count",
+  "max-parents",
+  "min-parents",
+  "output",
+  "output-indicator-context",
+  "output-indicator-new",
+  "output-indicator-old",
+  "rotate-to",
+  "since",
+  "since-as-filter",
+  "skip",
+  "skip-to",
+  "src-prefix",
+  "stat-count",
+  "stat-name-width",
+  "stat-width",
+  "until",
+  "word-diff-regex",
+  "ws-error-highlight",
+] as const;
+const LOG_SHOW_SHORT_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set([
+  "G",
+  "L",
+  "O",
+  "S",
+  "U",
+  "l",
+  "n",
+]);
+const MERGE_LONG_OPTIONS_WITH_VALUE = [
+  "cleanup",
+  "file",
+  "into-name",
+  "message",
+  "strategy",
+  "strategy-option",
+] as const;
+const MERGE_SHORT_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set([
+  "F",
+  "X",
+  "m",
+  "s",
+]);
+
+const gitCommitRisk = (rest: readonly string[]): string | undefined => {
+  let parsingOptions = true;
+  for (let index = 0; index < rest.length; index += 1) {
+    const word = rest[index];
+    if (word === undefined) break;
+    if (word === "--" && parsingOptions) {
+      parsingOptions = false;
+      continue;
+    }
+    if (!parsingOptions) continue;
+    if (abbreviatesLongOption(word, ["amend"])) {
+      return "git commit --amend による履歴変更には確認が必要です";
+    }
+    if (
+      abbreviatesLongOption(word, ["pathspec-file-nul", "pathspec-from-file"])
+    ) {
+      return "外部入力からpathspecを読む git commit には確認が必要です";
+    }
+    if (
+      !word.includes("=") &&
+      (abbreviatesLongOption(word, COMMIT_LONG_OPTIONS_WITH_VALUE) ||
+        shortOptionConsumesNext(word, COMMIT_SHORT_OPTIONS_WITH_VALUE))
+    ) {
+      index += 1;
+    }
+  }
+  return undefined;
+};
+
+const gitMergeRisk = (rest: readonly string[]): string | undefined => {
+  let parsingOptions = true;
+  for (let index = 0; index < rest.length; index += 1) {
+    const word = rest[index];
+    if (word === undefined) break;
+    if (word === "--" && parsingOptions) {
+      parsingOptions = false;
+      continue;
+    }
+    if (!parsingOptions) continue;
+    if (abbreviatesLongOption(word, ["abort", "quit"])) {
+      return "git merge の中断による作業ツリー・状態変更には確認が必要です";
+    }
+    if (
+      !word.includes("=") &&
+      (abbreviatesLongOption(word, MERGE_LONG_OPTIONS_WITH_VALUE) ||
+        shortOptionConsumesNext(word, MERGE_SHORT_OPTIONS_WITH_VALUE))
+    ) {
+      index += 1;
+    }
+  }
+  return undefined;
+};
+
+const gitPathspecOperands = (
+  subcommand: string,
+  rest: readonly string[],
+): readonly string[] => {
+  if (!["add", "commit", "log", "show"].includes(subcommand)) return [];
+  let longOptionsWithValue: readonly string[] = [];
+  let shortOptionsWithValue: ReadonlySet<string> = new Set();
+  if (subcommand === "commit") {
+    longOptionsWithValue = COMMIT_LONG_OPTIONS_WITH_VALUE;
+    shortOptionsWithValue = COMMIT_SHORT_OPTIONS_WITH_VALUE;
+  } else if (subcommand === "log" || subcommand === "show") {
+    longOptionsWithValue = LOG_SHOW_LONG_OPTIONS_WITH_VALUE;
+    shortOptionsWithValue = LOG_SHOW_SHORT_OPTIONS_WITH_VALUE;
+  }
+  const operands: string[] = [];
+  let parsingOptions = true;
+  for (let index = 0; index < rest.length; index += 1) {
+    const word = rest[index];
+    if (word === undefined) break;
+    if (word === "--" && parsingOptions) {
+      parsingOptions = false;
+      continue;
+    }
+    if (
+      parsingOptions &&
+      !word.includes("=") &&
+      (abbreviatesLongOption(word, longOptionsWithValue) ||
+        shortOptionConsumesNext(word, shortOptionsWithValue))
+    ) {
+      index += 1;
+      continue;
+    }
+    if (parsingOptions && word.startsWith("-")) continue;
+    operands.push(word);
+  }
+  return operands;
+};
+
 const gitSubcommandAsk = (
   subcommand: string,
   rest: readonly string[],
@@ -587,22 +956,49 @@ const gitSubcommandAsk = (
   ) {
     return "Git worktree の削除・移動・修復には確認が必要です";
   }
-  if (
-    subcommand === "fetch" &&
-    rest.some(
-      (word) =>
-        optionIs(word, "-f", "--force") ||
-        word.startsWith("+") ||
-        remoteHelperExec(word),
-    )
-  ) {
-    return "強制または外部helper経由の git fetch には確認が必要です";
+  if (subcommand === "fetch") {
+    const risk = gitFetchRisk(rest);
+    if (risk !== undefined) return risk;
+  }
+  if (subcommand === "switch" || subcommand === "checkout") {
+    const risk = gitSwitchRisk(subcommand, rest);
+    if (risk !== undefined) return risk;
   }
   if (
-    (subcommand === "switch" || subcommand === "checkout") &&
-    rest.some((word) => optionIs(word, "-f", "--force", "--discard-changes"))
+    gitPathspecOperands(subcommand, rest).some(
+      (word) => word.startsWith(":(") || /^:[!/^]/.test(word),
+    )
   ) {
-    return `git ${subcommand} による変更破棄には確認が必要です`;
+    return `git ${subcommand} のpathspec magicには確認が必要です`;
+  }
+  if (subcommand === "add") {
+    let parsingOptions = true;
+    for (const word of rest) {
+      if (word === "--") {
+        parsingOptions = false;
+        continue;
+      }
+      if (
+        parsingOptions &&
+        (abbreviatesLongOption(word, ["force"]) || /^-[^-]*f/.test(word))
+      ) {
+        return "ignored fileを強制追加する git add には確認が必要です";
+      }
+      if (
+        parsingOptions &&
+        abbreviatesLongOption(word, ["pathspec-file-nul", "pathspec-from-file"])
+      ) {
+        return "外部入力からpathspecを読む git add には確認が必要です";
+      }
+    }
+  }
+  if (subcommand === "commit") {
+    const risk = gitCommitRisk(rest);
+    if (risk !== undefined) return risk;
+  }
+  if (subcommand === "merge") {
+    const risk = gitMergeRisk(rest);
+    if (risk !== undefined) return risk;
   }
   if (subcommand === "add" && rest.some(hasPathTraversal)) {
     return "worktree 外を参照する git add には確認が必要です";
@@ -700,11 +1096,24 @@ const SENSITIVE_PATH_COMPONENTS: readonly (readonly string[])[] = [
   ["etc", "sudoers"],
 ];
 
+const stripGitPathspecMagic = (word: string): string => {
+  if (word.startsWith(":(")) {
+    const end = word.indexOf(")", 2);
+    return end === -1 ? word : word.slice(end + 1);
+  }
+  return /^:[!/^]/.test(word) ? word.slice(2) : word;
+};
+
 const containsSensitivePath = (words: readonly string[]): boolean =>
   words.some((word) => {
     // `:` is also a boundary for Git revision paths such as
     // `HEAD:.ssh/id_ed25519`; `/` covers absolute, home, and relative paths.
-    const components = word.toLowerCase().split(/[/:]/).filter(Boolean);
+    // Strip Git's leading pathspec magic so `:(top).ssh/...` cannot hide the
+    // sensitive component from deterministic inspection.
+    const components = stripGitPathspecMagic(word)
+      .toLowerCase()
+      .split(/[/:]/)
+      .filter(Boolean);
     return SENSITIVE_PATH_COMPONENTS.some((sensitive) =>
       components.some((_, start) =>
         sensitive.every(
@@ -1139,6 +1548,689 @@ const isHelperCapableGitRead = (normalized: NormalizedSegment): boolean => {
   return subcommand !== undefined && HELPER_CAPABLE_GIT_READS.has(subcommand);
 };
 
+interface KnownGitArgSpec {
+  readonly longFlags?: ReadonlySet<string>;
+  /** Optional values are accepted only in attached `--name=value` form. */
+  readonly longOptionalValues?: ReadonlySet<string>;
+  readonly longValues?: ReadonlySet<string>;
+  readonly shortFlags?: ReadonlySet<string>;
+  readonly shortValues?: ReadonlySet<string>;
+  readonly numericShort?: boolean;
+}
+
+const parseKnownGitArgs = (
+  rest: readonly string[],
+  spec: KnownGitArgSpec,
+): readonly string[] | undefined => {
+  const positionals: string[] = [];
+  let parsingOptions = true;
+  for (let index = 0; index < rest.length; index += 1) {
+    const word = rest[index];
+    if (word === undefined) return undefined;
+    if (parsingOptions && word === "--") {
+      parsingOptions = false;
+      continue;
+    }
+    if (!parsingOptions || !word.startsWith("-") || word === "-") {
+      positionals.push(word);
+      continue;
+    }
+    if (spec.numericShort === true && /^-\d+$/.test(word)) continue;
+    if (word.startsWith("--")) {
+      const equals = word.indexOf("=");
+      const name = equals === -1 ? word : word.slice(0, equals);
+      if (equals !== -1) {
+        if (
+          (!spec.longValues?.has(name) &&
+            !spec.longOptionalValues?.has(name)) ||
+          equals === word.length - 1
+        ) {
+          return undefined;
+        }
+        continue;
+      }
+      if (spec.longFlags?.has(name) || spec.longOptionalValues?.has(name)) {
+        continue;
+      }
+      const value = rest[index + 1];
+      if (
+        !spec.longValues?.has(name) ||
+        value === undefined ||
+        (value.startsWith("-") && !/^-\d+$/.test(value))
+      ) {
+        return undefined;
+      }
+      index += 1;
+      continue;
+    }
+    for (let offset = 1; offset < word.length; offset += 1) {
+      const option = word[offset] ?? "";
+      if (spec.shortFlags?.has(option)) continue;
+      if (!spec.shortValues?.has(option)) return undefined;
+      if (offset === word.length - 1) {
+        const value = rest[index + 1];
+        if (
+          value === undefined ||
+          (value.startsWith("-") && !/^-\d+$/.test(value))
+        ) {
+          return undefined;
+        }
+        index += 1;
+      }
+      break;
+    }
+  }
+  return positionals;
+};
+
+const set = (...values: readonly string[]): ReadonlySet<string> =>
+  new Set(values);
+
+const GIT_DIFF_ARG_SPEC: KnownGitArgSpec = {
+  longFlags: set(
+    "--binary",
+    "--cached",
+    "--check",
+    "--compact-summary",
+    "--exit-code",
+    "--find-copies-harder",
+    "--full-index",
+    "--histogram",
+    "--ignore-all-space",
+    "--ignore-blank-lines",
+    "--ignore-cr-at-eol",
+    "--ignore-space-at-eol",
+    "--ignore-space-change",
+    "--irreversible-delete",
+    "--minimal",
+    "--name-only",
+    "--name-status",
+    "--no-ext-diff",
+    "--no-patch",
+    "--no-renames",
+    "--no-textconv",
+    "--numstat",
+    "--patch",
+    "--patience",
+    "--pickaxe-all",
+    "--pickaxe-regex",
+    "--quiet",
+    "--raw",
+    "--relative",
+    "--shortstat",
+    "--stat",
+    "--staged",
+    "--summary",
+  ),
+  longValues: set(
+    "--abbrev",
+    "--anchored",
+    "--break-rewrites",
+    "--diff-algorithm",
+    "--diff-filter",
+    "--dirstat",
+    "--dst-prefix",
+    "--find-copies",
+    "--find-object",
+    "--find-renames",
+    "--inter-hunk-context",
+    "--line-prefix",
+    "--output-indicator-context",
+    "--output-indicator-new",
+    "--output-indicator-old",
+    "--rotate-to",
+    "--skip-to",
+    "--src-prefix",
+    "--stat-count",
+    "--stat-name-width",
+    "--stat-width",
+    "--submodule",
+    "--unified",
+    "--word-diff",
+    "--word-diff-regex",
+    "--ws-error-highlight",
+  ),
+  shortFlags: set("b", "c", "m", "p", "s", "u", "w"),
+  shortValues: set("G", "O", "S", "U", "l"),
+};
+
+const PURE_GIT_READ_SUBCOMMANDS: ReadonlySet<string> = set(
+  "describe",
+  "for-each-ref",
+  "ls-files",
+  "ls-tree",
+  "merge-base",
+  "name-rev",
+  "rev-list",
+  "rev-parse",
+  "show-ref",
+);
+
+const pureGitReadSpec = (subcommand: string): KnownGitArgSpec | undefined => {
+  switch (subcommand) {
+    case "rev-parse": {
+      return {
+        longFlags: set(
+          "--absolute-git-dir",
+          "--all",
+          "--branches",
+          "--end-of-options",
+          "--flags",
+          "--git-common-dir",
+          "--git-dir",
+          "--is-bare-repository",
+          "--is-inside-git-dir",
+          "--is-inside-work-tree",
+          "--is-shallow-repository",
+          "--local-env-vars",
+          "--no-flags",
+          "--no-revs",
+          "--quiet",
+          "--remotes",
+          "--revs-only",
+          "--show-cdup",
+          "--show-prefix",
+          "--show-superproject-working-tree",
+          "--show-toplevel",
+          "--show-object-format",
+          "--sq",
+          "--symbolic",
+          "--symbolic-full-name",
+          "--tags",
+          "--verify",
+        ),
+        longValues: set(
+          "--abbrev-ref",
+          "--branches",
+          "--default",
+          "--disambiguate",
+          "--exclude",
+          "--git-path",
+          "--glob",
+          "--path-format",
+          "--prefix",
+          "--remotes",
+          "--short",
+          "--tags",
+        ),
+        shortFlags: set("q"),
+      };
+    }
+    case "merge-base": {
+      return {
+        longFlags: set(
+          "--all",
+          "--fork-point",
+          "--independent",
+          "--is-ancestor",
+          "--octopus",
+        ),
+        shortFlags: set("a"),
+      };
+    }
+    case "ls-files": {
+      return {
+        longFlags: set(
+          "--cached",
+          "--debug",
+          "--deleted",
+          "--directory",
+          "--empty-directory",
+          "--eol",
+          "--error-unmatch",
+          "--ignored",
+          "--killed",
+          "--modified",
+          "--others",
+          "--recurse-submodules",
+          "--resolve-undo",
+          "--stage",
+          "--unmerged",
+          "--verbose",
+        ),
+        longValues: set("--abbrev", "--format", "--with-tree"),
+        shortFlags: set("c", "d", "i", "k", "m", "o", "s", "t", "u", "v"),
+      };
+    }
+    case "ls-tree": {
+      return {
+        longFlags: set(
+          "--full-name",
+          "--full-tree",
+          "--long",
+          "--name-only",
+          "--name-status",
+          "--object-only",
+        ),
+        longValues: set("--abbrev", "--format"),
+        shortFlags: set("d", "l", "r", "t", "z"),
+      };
+    }
+    case "show-ref": {
+      return {
+        longFlags: set(
+          "--dereference",
+          "--exists",
+          "--head",
+          "--heads",
+          "--quiet",
+          "--tags",
+          "--verify",
+        ),
+        longValues: set("--abbrev", "--hash"),
+        shortFlags: set("d", "q", "s"),
+      };
+    }
+    case "for-each-ref": {
+      return {
+        longFlags: set(
+          "--ignore-case",
+          "--omit-empty",
+          "--perl",
+          "--python",
+          "--shell",
+          "--tcl",
+        ),
+        longValues: set(
+          "--contains",
+          "--count",
+          "--format",
+          "--merged",
+          "--no-contains",
+          "--no-merged",
+          "--points-at",
+          "--sort",
+        ),
+      };
+    }
+    case "describe": {
+      return {
+        longFlags: set(
+          "--all",
+          "--always",
+          "--contains",
+          "--debug",
+          "--exact-match",
+          "--first-parent",
+          "--long",
+          "--tags",
+        ),
+        longValues: set(
+          "--abbrev",
+          "--broken",
+          "--candidates",
+          "--dirty",
+          "--exclude",
+          "--match",
+        ),
+      };
+    }
+    case "name-rev": {
+      return {
+        longFlags: set("--all", "--always", "--name-only", "--tags"),
+        longValues: set("--exclude", "--refs"),
+      };
+    }
+    case "rev-list": {
+      return {
+        longFlags: set(
+          "--all",
+          "--alternate-refs",
+          "--author-date-order",
+          "--boundary",
+          "--branches",
+          "--cherry-mark",
+          "--cherry-pick",
+          "--children",
+          "--count",
+          "--date-order",
+          "--do-walk",
+          "--first-parent",
+          "--full-history",
+          "--header",
+          "--ignore-missing",
+          "--left-only",
+          "--left-right",
+          "--no-object-names",
+          "--no-walk",
+          "--objects",
+          "--objects-edge",
+          "--objects-edge-aggressive",
+          "--parents",
+          "--quiet",
+          "--remotes",
+          "--reverse",
+          "--right-only",
+          "--single-worktree",
+          "--tags",
+          "--timestamp",
+          "--topo-order",
+        ),
+        longValues: set(
+          "--after",
+          "--before",
+          "--exclude",
+          "--filter",
+          "--glob",
+          "--max-count",
+          "--max-parents",
+          "--min-parents",
+          "--missing",
+          "--pretty",
+          "--since",
+          "--skip",
+          "--until",
+        ),
+        shortValues: set("n"),
+        numericShort: true,
+      };
+    }
+    default: {
+      return undefined;
+    }
+  }
+};
+
+const optionWordsBeforeTerminator = (
+  rest: readonly string[],
+): readonly string[] => {
+  const terminator = rest.indexOf("--");
+  return terminator === -1 ? rest : rest.slice(0, terminator);
+};
+
+const gitReadOnlyModeEligible = (
+  subcommand: string,
+  rest: readonly string[],
+): boolean => {
+  if (PURE_GIT_READ_SUBCOMMANDS.has(subcommand)) {
+    const spec = pureGitReadSpec(subcommand);
+    return spec !== undefined && parseKnownGitArgs(rest, spec) !== undefined;
+  }
+  if (subcommand === "diff") {
+    return parseKnownGitArgs(rest, GIT_DIFF_ARG_SPEC) !== undefined;
+  }
+  if (subcommand === "branch") {
+    const args = parseKnownGitArgs(rest, {
+      longFlags: set(
+        "--all",
+        "--ignore-case",
+        "--list",
+        "--omit-empty",
+        "--remotes",
+        "--show-current",
+        "--verbose",
+      ),
+      longOptionalValues: set(
+        "--abbrev",
+        "--color",
+        "--column",
+        "--contains",
+        "--merged",
+        "--no-contains",
+        "--no-merged",
+      ),
+      longValues: set("--format", "--points-at", "--sort"),
+      shortFlags: set("a", "r", "v"),
+    });
+    if (args === undefined) return false;
+    if (rest.length === 0) return true;
+    if (rest.length === 1 && rest[0] === "--show-current") return true;
+    return optionWordsBeforeTerminator(rest).includes("--list");
+  }
+  if (subcommand === "remote") return rest.length === 0;
+  if (subcommand === "stash") {
+    const [mode, ...args] = rest;
+    if (mode === "list") {
+      return (
+        parseKnownGitArgs(args, {
+          longFlags: set("--oneline"),
+          longValues: set("--format", "--max-count"),
+          shortValues: set("n"),
+          numericShort: true,
+        })?.length === 0
+      );
+    }
+    if (mode === "show") {
+      return parseKnownGitArgs(args, GIT_DIFF_ARG_SPEC) !== undefined;
+    }
+    return false;
+  }
+  if (subcommand === "tag") {
+    const args = parseKnownGitArgs(rest, {
+      longFlags: set("--ignore-case", "--list", "--omit-empty"),
+      longOptionalValues: set(
+        "--color",
+        "--column",
+        "--contains",
+        "--merged",
+        "--no-contains",
+        "--no-merged",
+      ),
+      longValues: set("--format", "--points-at", "--sort"),
+      shortFlags: set("l", "n"),
+    });
+    if (args === undefined) return false;
+    if (rest.length === 0) return true;
+    return optionWordsBeforeTerminator(rest).some(
+      (word) => word === "--list" || /^-[^-]*l/.test(word),
+    );
+  }
+  return false;
+};
+
+const pathInsideRoots = (
+  operand: string,
+  cwd: string,
+  roots: readonly string[],
+  allowMissing: boolean,
+): boolean => {
+  if (operand === "" || operand.startsWith("~") || hasPathTraversal(operand)) {
+    return false;
+  }
+  const candidate = isAbsolute(operand) ? operand : resolve(cwd, operand);
+  if (allowMissing) return canonicalOrAncestorInsideRoots(candidate, roots);
+  try {
+    return pathInsideVerifiedRoots(realpathSync(candidate), roots);
+  } catch {
+    return false;
+  }
+};
+
+const effectiveGitCwd = (options: EvaluationOptions): string | undefined => {
+  const context = options.trustedReadContext;
+  if (context === undefined) return undefined;
+  if (options.trustedGitCwdTarget === undefined) return context.cwd;
+  const candidate = isAbsolute(options.trustedGitCwdTarget)
+    ? options.trustedGitCwdTarget
+    : resolve(context.cwd, options.trustedGitCwdTarget);
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return undefined;
+  }
+};
+
+const gitWorktreeModeEligible = (
+  rest: readonly string[],
+  options: EvaluationOptions,
+): boolean => {
+  const [mode, ...args] = rest;
+  if (mode === "list") {
+    return (
+      parseKnownGitArgs(args, {
+        longFlags: set("--porcelain", "--verbose", "--zero"),
+        longValues: set("--expire"),
+        shortFlags: set("v", "z"),
+      })?.length === 0
+    );
+  }
+  const context = options.trustedReadContext;
+  const gitCwd = effectiveGitCwd(options);
+  if (context === undefined || gitCwd === undefined) return false;
+  if (mode === "add") {
+    const positionals = parseKnownGitArgs(args, {
+      longFlags: set(
+        "--checkout",
+        "--detach",
+        "--guess-remote",
+        "--lock",
+        "--no-checkout",
+        "--no-guess-remote",
+        "--no-track",
+        "--orphan",
+        "--quiet",
+        "--track",
+      ),
+      longValues: set("--reason"),
+      shortFlags: set("d", "q"),
+      shortValues: set("b"),
+    });
+    const target = positionals?.[0];
+    return (
+      target !== undefined &&
+      (positionals?.length ?? 0) <= 2 &&
+      (options.trustedWorktreeCreateRoots?.length ?? 0) > 0 &&
+      pathInsideRoots(
+        target,
+        gitCwd,
+        options.trustedWorktreeCreateRoots ?? [],
+        true,
+      )
+    );
+  }
+  if (mode === "lock" || mode === "unlock") {
+    const positionals = parseKnownGitArgs(
+      args,
+      mode === "lock" ? { longValues: set("--reason") } : {},
+    );
+    const target = positionals?.[0];
+    return (
+      target !== undefined &&
+      positionals?.length === 1 &&
+      pathInsideRoots(
+        target,
+        gitCwd,
+        options.trustedWritableWorktrees ?? [],
+        false,
+      )
+    );
+  }
+  return false;
+};
+
+const BASE_SANDBOX_GIT_SUBCOMMANDS: ReadonlySet<string> = set(
+  "add",
+  "commit",
+  "fetch",
+  "log",
+  "merge",
+  "merge-tree",
+  "show",
+  "status",
+  "switch",
+);
+const MUTATING_SANDBOX_GIT_SUBCOMMANDS: ReadonlySet<string> = set(
+  "add",
+  "commit",
+  "fetch",
+  "merge",
+  "merge-tree",
+  "pull",
+  "switch",
+);
+const SANDBOX_GIT_CANDIDATE_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  ...BASE_SANDBOX_GIT_SUBCOMMANDS,
+  ...PURE_GIT_READ_SUBCOMMANDS,
+  "branch",
+  "diff",
+  "pull",
+  "remote",
+  "stash",
+  "tag",
+  "worktree",
+]);
+
+const gitSubcommandModeEligible = (
+  subcommand: string,
+  rest: readonly string[],
+  options: EvaluationOptions,
+): boolean => {
+  if (BASE_SANDBOX_GIT_SUBCOMMANDS.has(subcommand)) return true;
+  if (gitReadOnlyModeEligible(subcommand, rest)) return true;
+  if (subcommand === "worktree") return gitWorktreeModeEligible(rest, options);
+  // Pull may be rewritten through repository url.*.insteadOf/protocol config.
+  // Keep every form residual until the resolved transport is pinned at runtime.
+  return false;
+};
+
+const gitModeMutates = (subcommand: string, rest: readonly string[]): boolean =>
+  MUTATING_SANDBOX_GIT_SUBCOMMANDS.has(subcommand) ||
+  (subcommand === "worktree" &&
+    ["add", "lock", "unlock"].includes(rest[0] ?? ""));
+
+const gitCwdIsWritable = (
+  target: string,
+  options: EvaluationOptions,
+): boolean => {
+  const context = options.trustedReadContext;
+  if (context === undefined) return false;
+  return pathInsideRoots(
+    target,
+    context.cwd,
+    options.trustedWritableWorktrees ?? [],
+    false,
+  );
+};
+
+const isSandboxAllowedGitCommand = (
+  segment: Segment,
+  normalized: NormalizedSegment,
+  options: EvaluationOptions,
+): boolean => {
+  if (
+    segment.allowCandidate === undefined ||
+    segment.hasAnsiC ||
+    segment.words[0] !== normalized.words[0] ||
+    normalized.words[0] !== "git" ||
+    normalized.opaque.size !== 0 ||
+    hasGitReadExecutionOption(normalized.words)
+  ) {
+    return false;
+  }
+  const position = gitSubcommandPosition(normalized.words);
+  if (
+    position === undefined ||
+    position.ambiguousOption ||
+    normalized.opaque.has(position.index)
+  ) {
+    return false;
+  }
+  const target = literalGitCwdTarget(normalized, position);
+  if (position.riskyGlobalOption) {
+    if (
+      !position.cOnlyGlobalOption ||
+      target === undefined ||
+      target !== options.trustedGitCwdTarget
+    ) {
+      return false;
+    }
+  }
+  const subcommand = normalized.words[position.index];
+  if (subcommand === undefined) return false;
+  const rest = normalized.words.slice(position.index + 1);
+  if (!gitSubcommandModeEligible(subcommand, rest, options)) return false;
+  if (gitModeMutates(subcommand, rest)) {
+    if (target !== undefined && options.trustedReadContext === undefined) {
+      return false;
+    }
+    if (options.trustedReadContext !== undefined) {
+      const effectiveCwd = target ?? options.trustedReadContext.cwd;
+      if (!gitCwdIsWritable(effectiveCwd, options)) return false;
+    }
+  }
+  return true;
+};
+
 const gitReadCwdTarget = (command: string): string | undefined => {
   const scanned = scanCommand(command);
   if (
@@ -1164,16 +2256,360 @@ const gitReadCwdTarget = (command: string): string | undefined => {
     normalized.opaque.size !== 0 ||
     segment.words[0] !== normalized.words[0] ||
     hasGitReadExecutionOption(normalized.words) ||
-    !isHelperCapableGitRead(normalized) ||
     structuralKnownRisk(segment, normalized)?.reason !==
       GIT_GLOBAL_OPTION_REASON
   ) {
     return undefined;
   }
   const position = gitSubcommandPosition(normalized.words);
-  return position === undefined
-    ? undefined
-    : literalGitCwdTarget(normalized, position);
+  const subcommand =
+    position === undefined ? undefined : normalized.words[position.index];
+  if (
+    position === undefined ||
+    subcommand === undefined ||
+    !SANDBOX_GIT_CANDIDATE_SUBCOMMANDS.has(subcommand)
+  ) {
+    return undefined;
+  }
+  return literalGitCwdTarget(normalized, position);
+};
+
+const commandPositionals = (
+  rest: readonly string[],
+  spec: KnownGitArgSpec,
+): readonly string[] | undefined => parseKnownGitArgs(rest, spec);
+
+const grepFileOperands = (
+  rest: readonly string[],
+): readonly string[] | undefined => {
+  const hasExplicitPattern = rest.some(
+    (word) =>
+      word === "-e" ||
+      word === "--regexp" ||
+      word.startsWith("--regexp=") ||
+      /^-[^-]*e/.test(word),
+  );
+  const positionals = commandPositionals(rest, {
+    longFlags: set(
+      "--basic-regexp",
+      "--binary-files-without-match",
+      "--byte-offset",
+      "--count",
+      "--extended-regexp",
+      "--files-with-matches",
+      "--files-without-match",
+      "--fixed-strings",
+      "--ignore-case",
+      "--invert-match",
+      "--line-number",
+      "--line-regexp",
+      "--no-filename",
+      "--no-messages",
+      "--only-matching",
+      "--quiet",
+      "--text",
+      "--with-filename",
+      "--word-regexp",
+    ),
+    longOptionalValues: set("--color"),
+    longValues: set(
+      "--after-context",
+      "--before-context",
+      "--binary-files",
+      "--context",
+      "--max-count",
+      "--regexp",
+    ),
+    shortFlags: set(
+      "E",
+      "F",
+      "G",
+      "H",
+      "I",
+      "L",
+      "P",
+      "Z",
+      "a",
+      "b",
+      "c",
+      "h",
+      "i",
+      "l",
+      "n",
+      "o",
+      "q",
+      "s",
+      "v",
+      "w",
+      "x",
+      "z",
+    ),
+    shortValues: set("A", "B", "C", "e", "m"),
+  });
+  if (positionals === undefined) return undefined;
+  if (hasExplicitPattern) return positionals;
+  return positionals.length === 0 ? undefined : positionals.slice(1);
+};
+
+const stripJqStrings = (filter: string): string => {
+  let output = "";
+  let quoted = false;
+  let escaped = false;
+  for (const character of filter) {
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+      output += " ";
+      continue;
+    }
+    if (character === '"') {
+      quoted = true;
+      output += " ";
+    } else {
+      output += character;
+    }
+  }
+  return output;
+};
+
+const jqFilterAllowed = (filter: string): boolean => {
+  // jq executes expressions inside string interpolation. Reject interpolation
+  // wholesale rather than trying to parse nested jq syntax here.
+  if (filter.includes(String.raw`\(`)) return false;
+  const code = stripJqStrings(filter);
+  return !(
+    /\$ENV\b/.test(code) ||
+    /(^|[^.$A-Za-z0-9_])(env|include|import|input|inputs|module|modulemeta)\b/.test(
+      code,
+    )
+  );
+};
+
+interface JqReadArgs {
+  readonly files: readonly string[];
+  readonly noInput: boolean;
+}
+
+const jqReadArgs = (rest: readonly string[]): JqReadArgs | undefined => {
+  let parsingOptions = true;
+  let noInput = false;
+  const positionals: string[] = [];
+  for (let index = 0; index < rest.length; index += 1) {
+    const word = rest[index];
+    if (word === undefined) return undefined;
+    if (parsingOptions && word === "--") {
+      parsingOptions = false;
+      continue;
+    }
+    if (!parsingOptions || !word.startsWith("-") || word === "-") {
+      positionals.push(word);
+      continue;
+    }
+    if (/^-[acejMnrRsSV0]+$/.test(word)) {
+      if (word.includes("n")) noInput = true;
+      continue;
+    }
+    if (
+      [
+        "--compact-output",
+        "--exit-status",
+        "--join-output",
+        "--monochrome-output",
+        "--null-input",
+        "--raw-input",
+        "--raw-output",
+        "--slurp",
+        "--sort-keys",
+        "--version",
+      ].includes(word)
+    ) {
+      if (word === "--null-input") noInput = true;
+      continue;
+    }
+    if (word === "--indent") {
+      if (rest[index + 1] === undefined) return undefined;
+      index += 1;
+      continue;
+    }
+    if (word === "--arg" || word === "--argjson") {
+      if (rest[index + 1] === undefined || rest[index + 2] === undefined) {
+        return undefined;
+      }
+      index += 2;
+      continue;
+    }
+    return undefined;
+  }
+  const [filter, ...files] = positionals;
+  if (filter === undefined || !jqFilterAllowed(filter)) return undefined;
+  return { files, noInput };
+};
+
+const sandboxProjectReadAllowed = (
+  segment: Segment,
+  normalized: NormalizedSegment,
+  context: TrustedReadContext | undefined,
+): boolean => {
+  if (
+    segment.allowCandidate === undefined ||
+    segment.hasAnsiC ||
+    segment.words[0] !== normalized.words[0] ||
+    normalized.opaque.size !== 0 ||
+    segment.redirectionTargets.length !== 0
+  ) {
+    return false;
+  }
+  const [command, ...rest] = normalized.words;
+  if (context === undefined) return false;
+  if (command === "pwd") {
+    return (
+      commandPositionals(rest, { shortFlags: set("L", "P") })?.length === 0
+    );
+  }
+
+  let operands: readonly string[] | undefined;
+  let safeWithoutOperands = false;
+  if (command === "ls") {
+    operands = commandPositionals(rest, {
+      longFlags: set(
+        "--all",
+        "--almost-all",
+        "--classify",
+        "--directory",
+        "--group-directories-first",
+        "--human-readable",
+        "--inode",
+        "--literal",
+        "--long",
+        "--numeric-uid-gid",
+        "--quote-name",
+        "--reverse",
+        "--size",
+      ),
+      longOptionalValues: set("--color"),
+      longValues: set(
+        "--block-size",
+        "--format",
+        "--hide",
+        "--ignore",
+        "--indicator-style",
+        "--quoting-style",
+        "--sort",
+        "--time",
+        "--time-style",
+        "--width",
+      ),
+      shortFlags: set(
+        "1",
+        "A",
+        "F",
+        "G",
+        "H",
+        "S",
+        "U",
+        "a",
+        "d",
+        "f",
+        "g",
+        "h",
+        "i",
+        "k",
+        "l",
+        "m",
+        "n",
+        "o",
+        "p",
+        "q",
+        "r",
+        "s",
+        "t",
+        "u",
+        "v",
+        "x",
+      ),
+    });
+  } else if (command === "stat") {
+    operands = commandPositionals(rest, {
+      longFlags: set("--dereference", "--file-system", "--terse"),
+      longValues: set("--format", "--printf"),
+      shortFlags: set("L", "t"),
+    });
+  } else if (command === "readlink") {
+    operands = commandPositionals(rest, {
+      longFlags: set(
+        "--canonicalize",
+        "--canonicalize-existing",
+        "--canonicalize-missing",
+        "--no-newline",
+        "--quiet",
+        "--verbose",
+        "--zero",
+      ),
+      shortFlags: set("e", "f", "m", "n", "q", "s", "v", "z"),
+    });
+  } else if (command === "realpath") {
+    operands = commandPositionals(rest, {
+      longFlags: set(
+        "--canonicalize-existing",
+        "--canonicalize-missing",
+        "--logical",
+        "--physical",
+        "--quiet",
+        "--strip",
+        "--zero",
+      ),
+      shortFlags: set("L", "P", "e", "m", "q", "s", "z"),
+    });
+  } else if (command === "cat") {
+    operands = commandPositionals(rest, {
+      longFlags: set(
+        "--number",
+        "--number-nonblank",
+        "--show-all",
+        "--show-ends",
+        "--show-nonprinting",
+        "--show-tabs",
+        "--squeeze-blank",
+      ),
+      shortFlags: set("A", "E", "T", "b", "e", "n", "s", "t", "u", "v"),
+    });
+  } else if (command === "head" || command === "tail") {
+    operands = commandPositionals(rest, {
+      longFlags: set("--quiet", "--verbose", "--zero-terminated"),
+      longValues: set("--bytes", "--lines"),
+      shortFlags: set("q", "v", "z"),
+      shortValues: set("c", "n"),
+      numericShort: true,
+    });
+  } else if (command === "wc") {
+    operands = commandPositionals(rest, {
+      longFlags: set(
+        "--bytes",
+        "--chars",
+        "--lines",
+        "--max-line-length",
+        "--words",
+      ),
+      shortFlags: set("L", "c", "l", "m", "w"),
+    });
+  } else if (command === "grep") {
+    operands = grepFileOperands(rest);
+  } else if (command === "jq") {
+    const jqArgs = jqReadArgs(rest);
+    operands = jqArgs?.files;
+    safeWithoutOperands = jqArgs?.noInput === true;
+  } else {
+    return false;
+  }
+  if (operands === undefined) return false;
+  if (operands.length === 0 && safeWithoutOperands) return true;
+
+  // Pre-execution path validation cannot pin a pathname until Bash opens it.
+  // The runtime has denyRead but no project read allowlist, so another process
+  // could swap any validated path to an outside symlink. Keep every pathname
+  // reader residual until execution can consume a pinned object/path.
+  return false;
 };
 
 const structuralKnownAllow = (
@@ -1236,6 +2672,8 @@ const evaluateNormalized = (
   allowCandidate: string | undefined,
   trustedLeadingCdTarget: string | undefined,
   trustedGitCwdTarget: string | undefined,
+  trustedWritableWorktrees: readonly string[] | undefined,
+  trustedWorktreeCreateRoots: readonly string[] | undefined,
   trustedReadContext: TrustedReadContext | undefined,
   effectSandboxed: boolean,
 ): AuditedVerdict => {
@@ -1356,6 +2794,35 @@ const evaluateNormalized = (
     );
   }
 
+  // The OS sandbox confines filesystem/network effects, so these common Git
+  // operations can bypass the residual model route when their command shape is
+  // fully concrete. Deterministic deny/ask rules above still win for force,
+  // destructive checkout, sensitive paths, path traversal, risky global
+  // options, and any configured confirmation rule.
+  if (
+    effectSandboxed &&
+    isSandboxAllowedGitCommand(segment, normalized, {
+      effectSandboxed,
+      ...(trustedGitCwdTarget === undefined ? {} : { trustedGitCwdTarget }),
+      ...(trustedWritableWorktrees === undefined
+        ? {}
+        : { trustedWritableWorktrees }),
+      ...(trustedWorktreeCreateRoots === undefined
+        ? {}
+        : { trustedWorktreeCreateRoots }),
+      ...(trustedReadContext === undefined ? {} : { trustedReadContext }),
+    })
+  ) {
+    return audited({ verdict: "allow" }, "sandbox-git-allow");
+  }
+
+  if (
+    effectSandboxed &&
+    sandboxProjectReadAllowed(segment, normalized, trustedReadContext)
+  ) {
+    return audited({ verdict: "allow" }, "sandbox-read-allow");
+  }
+
   if (structuralKnownAllow(segment, normalized, trustedReadContext)) {
     return audited({ verdict: "allow" }, "builtin-read-allow");
   }
@@ -1434,20 +2901,32 @@ const evaluateCommandInner = (
       : audited({ verdict: "deny", reason: UNPARSEABLE_REASON }, "parse-error");
   }
   const verdicts: AuditedVerdict[] = [];
+  let readerPathsStable = true;
   for (const [index, segment] of scanned.segments.entries()) {
     const normalized = normalizeSegment(segment);
-    verdicts.push(
-      evaluateNormalized(
-        segment,
-        normalized,
-        rules,
-        segment.allowCandidate,
-        depth === 0 && index === 0 ? options.trustedLeadingCdTarget : undefined,
-        depth === 0 && index === 0 ? options.trustedGitCwdTarget : undefined,
-        depth === 0 ? options.trustedReadContext : undefined,
-        options.effectSandboxed === true,
-      ),
+    const verdict = evaluateNormalized(
+      segment,
+      normalized,
+      rules,
+      segment.allowCandidate,
+      depth === 0 && index === 0 ? options.trustedLeadingCdTarget : undefined,
+      depth === 0 && index === 0 ? options.trustedGitCwdTarget : undefined,
+      depth === 0 ? options.trustedWritableWorktrees : undefined,
+      depth === 0 ? options.trustedWorktreeCreateRoots : undefined,
+      depth === 0 && readerPathsStable ? options.trustedReadContext : undefined,
+      options.effectSandboxed === true,
     );
+    verdicts.push(verdict);
+    if (
+      depth === 0 &&
+      ![
+        "builtin-read-allow",
+        "sandbox-read-allow",
+        "trusted-leading-cd",
+      ].includes(verdict.audit.basis)
+    ) {
+      readerPathsStable = false;
+    }
     // `sh -c '<script>'` runs exactly <script>; evaluate it so a denied body
     // (e.g. `bit relay sync`) is denied instead of downgraded to an opaque ask.
     const inner = interpreterConcreteArg(normalized);
@@ -1481,8 +2960,10 @@ const PROJECT_SENSITIVE_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "clean",
   "commit",
   "config",
+  "fetch",
   "init",
   "merge",
+  "merge-tree",
   "mv",
   "notes",
   "pull",
@@ -1514,10 +2995,13 @@ const segmentHasProjectSensitiveMutation = (segment: Segment): boolean => {
     return false;
   }
   const subcommand = normalized.words[position.index];
-  return (
-    subcommand !== undefined &&
-    PROJECT_SENSITIVE_GIT_SUBCOMMANDS.has(subcommand)
-  );
+  if (subcommand === undefined) return false;
+  const rest = normalized.words.slice(position.index + 1);
+  if (gitReadOnlyModeEligible(subcommand, rest)) return false;
+  if (subcommand === "worktree" && gitWorktreeModeEligible(rest, {})) {
+    return false;
+  }
+  return PROJECT_SENSITIVE_GIT_SUBCOMMANDS.has(subcommand);
 };
 
 const hasProjectSensitiveMutationInner = (
