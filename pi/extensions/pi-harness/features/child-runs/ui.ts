@@ -30,6 +30,7 @@ import {
   setFocusSafely,
   type FocusTuiLike,
 } from "./focus-capability";
+import type { ChildRunKillResult } from "./background";
 import { statusIcon, type ComponentLike } from "./presentation";
 import { ChildRunRegistry } from "./registry";
 
@@ -224,6 +225,7 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
     private readonly onHide: () => void,
     private readonly bitIssues?: BitIssueBrowserBindings,
     theme?: unknown,
+    private readonly onKill?: (runId: string) => void,
   ) {
     this.theme = resolveTheme(theme);
     this.unsubscribeChild = registry.subscribe(() => this.requestRender());
@@ -275,6 +277,12 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
     }
     if (data === "r" && this.bitIssues !== undefined) {
       void this.bitIssues.onRefresh();
+      return;
+    }
+    if (data === "x") {
+      if (this.selection?.kind === "child") {
+        this.onKill?.(this.selection.id);
+      }
       return;
     }
     if (this.matches(data, "tui.select.cancel")) {
@@ -634,6 +642,7 @@ export class ChildRunDetailComponent implements ComponentLike {
     private readonly keybindings: KeybindingsLike,
     private readonly onClose: () => void,
     theme?: unknown,
+    private readonly onKill?: (runId: string) => void,
   ) {
     this.theme = resolveTheme(theme);
     const initialStatus = findRun(this.registry.getSnapshots(), this.runId)?.run
@@ -691,9 +700,13 @@ export class ChildRunDetailComponent implements ComponentLike {
     }
     output.push(...visible.map((item) => styledLine(item, safeWidth)));
     if (showHint) {
+      const killHint =
+        selected?.run.status === "queued" || selected?.run.status === "running"
+          ? "x kill  "
+          : "";
       const hint = this.theme.fg(
         "dim",
-        "↑↓ scroll  PgUp/PgDn page  Home/End  Esc/←/b close  ",
+        `↑↓ scroll  PgUp/PgDn page  Home/End  ${killHint}Esc/←/b close  `,
       );
       output.push(
         styledLine(`${hint}${this.theme.fg("muted", position)}`, safeWidth),
@@ -703,6 +716,10 @@ export class ChildRunDetailComponent implements ComponentLike {
   }
 
   handleInput(data: string): void {
+    if (data === "x") {
+      this.onKill?.(this.runId);
+      return;
+    }
     if (
       data === "q" ||
       data === "b" ||
@@ -1101,6 +1118,7 @@ const sameCursor = (
 export interface ChildRunsPanelOptions {
   readonly bitIssues?: BitIssueRegistry;
   readonly refreshBitIssues?: () => void | Promise<unknown>;
+  readonly killRun?: (runId: string) => ChildRunKillResult;
 }
 
 export class ChildRunsPanelController {
@@ -1211,6 +1229,7 @@ export class ChildRunsPanelController {
             () => this.hide(),
             this.bitIssueBindings(),
             theme,
+            (runId) => this.killRun(runId),
           );
           if (preferred !== undefined) component.prefer(preferred);
           this.component = component;
@@ -1275,6 +1294,7 @@ export class ChildRunsPanelController {
             },
             this.bitIssueBindings(),
             theme,
+            (runId) => this.killRun(runId),
           );
           if (preferred !== undefined) component.prefer(preferred);
           if (refreshOnFocus) void this.options.refreshBitIssues?.();
@@ -1342,6 +1362,7 @@ export class ChildRunsPanelController {
             keybindings,
             close,
             theme,
+            (selectedRunId) => this.killRun(selectedRunId),
           );
         },
         {
@@ -1456,6 +1477,34 @@ export class ChildRunsPanelController {
         this.detailClose = undefined;
         this.detailIssueId = undefined;
       });
+  }
+
+  private killRun(runId: string): void {
+    const result = this.options.killRun?.(runId);
+    if (result === undefined) {
+      this.ui?.notify(
+        "Child-session kill is unavailable in this runtime.",
+        "warning",
+      );
+      return;
+    }
+    if (result.status === "requested") {
+      const runs = result.affectedRuns === 1 ? "run" : "runs";
+      this.ui?.notify(
+        `Kill requested for child invocation ${result.invocationId.slice(0, 8)} (${result.affectedRuns} active ${runs}).`,
+        "warning",
+      );
+      return;
+    }
+    if (result.status === "already-requested") {
+      this.ui?.notify("Kill was already requested for this child invocation.");
+      return;
+    }
+    if (result.status === "not-active") {
+      this.ui?.notify("The selected child invocation is no longer active.");
+      return;
+    }
+    this.ui?.notify("The selected child session is no longer available.");
   }
 
   private bitIssueBindings(): BitIssueBrowserBindings | undefined {

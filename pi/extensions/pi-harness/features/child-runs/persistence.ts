@@ -60,6 +60,7 @@ const terminalReasons: ReadonlySet<string> = new Set([
   "setup-error",
   "fail-fast",
   "parent-abort",
+  "user-killed",
   "branch-change",
   "shutdown",
   "dependency-failed",

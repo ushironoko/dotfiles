@@ -132,6 +132,7 @@ const setup = (rows = 20, theme?: unknown) => {
     },
   };
   const inspected: string[] = [];
+  const killed: string[] = [];
   let unfocused = 0;
   let hidden = 0;
   const component = new ChildRunsBrowserComponent(
@@ -143,6 +144,7 @@ const setup = (rows = 20, theme?: unknown) => {
     () => hidden++,
     undefined,
     theme,
+    (runId) => killed.push(runId),
   );
   return {
     registry,
@@ -151,6 +153,7 @@ const setup = (rows = 20, theme?: unknown) => {
     keybindings,
     renders,
     inspected,
+    killed,
     getUnfocused: () => unfocused,
     getHidden: () => hidden,
   };
@@ -242,6 +245,18 @@ describe("child-session browser component", () => {
     component.handleInput("\r");
     expect(inspected).toEqual([runIds[1]]);
     expect(component.getSelectedRunId()).toBe(runIds[1]);
+  });
+
+  test("routes x to the selected child without changing its registry state", () => {
+    const { registry, component, killed } = setup();
+    const runIds = addRuns(registry, 2);
+    component.render(80);
+    component.handleInput("down");
+    component.handleInput("x");
+
+    expect(killed).toEqual([runIds[1]]);
+    expect(component.getSelectedRunId()).toBe(runIds[1]);
+    expect(registry.getRunStatus(runAt(runIds, 1))).toBe("queued");
   });
 
   test("keeps selection stable by run id while opening its detail viewer", () => {
@@ -618,7 +633,7 @@ describe("child-session detail component", () => {
       keybindings,
       () => {},
     );
-    detail.render(40);
+    expect(detail.render(80).at(-1)).toContain("x kill");
 
     detail.handleInput("up");
     expect(detail.render(40)[0]).toContain("PAUSED");
@@ -626,22 +641,27 @@ describe("child-session detail component", () => {
     expect(detail.render(40)[0]).toContain("LIVE");
   });
 
-  test("Escape, Left, and b close the detail viewer", () => {
+  test("x kills the fixed run while Escape, Left, and b close the detail", () => {
     const { registry, tui, keybindings } = setup();
     const [runId] = addRuns(registry, 1);
     if (runId === undefined) throw new Error("run did not initialize");
     let closes = 0;
+    const killed: string[] = [];
     const detail = new ChildRunDetailComponent(
       registry,
       runId,
       tui,
       keybindings,
       () => closes++,
+      undefined,
+      (selectedRunId) => killed.push(selectedRunId),
     );
 
+    detail.handleInput("x");
     detail.handleInput("escape");
     detail.handleInput("left");
     detail.handleInput("b");
+    expect(killed).toEqual([runId]);
     expect(closes).toBe(3);
   });
 });
@@ -708,6 +728,8 @@ const setupCombined = async (issueIds: string[], childCount = 0) => {
         refreshes += 1;
       },
     },
+    undefined,
+    (runId) => base.killed.push(runId),
   );
   return {
     ...base,
@@ -749,13 +771,17 @@ describe("combined coordination browser", () => {
     expect(combined.component.getSelectedRunId()).toBe(runId?.runId);
 
     combined.component.handleInput("down");
+    combined.component.handleInput("x");
     combined.component.handleInput("enter");
     expect(combined.inspectedIssues).toEqual(["issue-a"]);
     expect(combined.inspected).toEqual([]);
+    expect(combined.killed).toEqual([]);
 
     combined.component.handleInput("up");
+    combined.component.handleInput("x");
     combined.component.handleInput("right");
     expect(combined.inspected).toEqual([runId?.runId]);
+    expect(combined.killed).toEqual([runId?.runId]);
   });
 
   test("keeps issue-id selection stable and chooses the nearby row after close", async () => {

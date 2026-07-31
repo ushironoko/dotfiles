@@ -146,6 +146,7 @@ const setupChildRuns = (
     : undefined;
   let activeContext: RuntimeContextLike | undefined;
   let lastExplicitWarning: string | undefined;
+  let panel: ChildRunsPanelController;
   const refreshBitIssues = async (
     ctx: RuntimeContextLike,
     explicit = false,
@@ -169,12 +170,6 @@ const setupChildRuns = (
       }
     }
   };
-  const panel = new ChildRunsPanelController(registry, {
-    bitIssues,
-    refreshBitIssues: async () => {
-      if (activeContext !== undefined) await refreshBitIssues(activeContext);
-    },
-  });
   const invalidateHearthCaches = async (): Promise<void> => {
     const pending: Promise<void>[] = [];
     runtime.events?.emit(HEARTH_INVALIDATE_REQUEST, {
@@ -225,6 +220,16 @@ const setupChildRuns = (
             : { drainTimeoutMs: options.backgroundDrainTimeoutMs },
         )
       : undefined;
+  panel = new ChildRunsPanelController(registry, {
+    bitIssues,
+    refreshBitIssues: async () => {
+      if (activeContext !== undefined) await refreshBitIssues(activeContext);
+    },
+    killRun:
+      background === undefined
+        ? undefined
+        : (runId) => background.killInvocationForRun(runId),
+  });
   const pendingTreeTransitions: PendingTreeTransition[] = [];
   const releaseTreeTransition = (entry: PendingTreeTransition): void => {
     if (entry.released) return;

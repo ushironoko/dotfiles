@@ -31,6 +31,7 @@ export type ChildRunTerminalReason =
   | "setup-error"
   | "fail-fast"
   | "parent-abort"
+  | "user-killed"
   | "branch-change"
   | "shutdown"
   | "dependency-failed";

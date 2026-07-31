@@ -381,6 +381,7 @@ const controlledSpawn = () => {
     startedResolve = resolve;
   });
   let finished = false;
+  const killSignals: NodeJS.Signals[] = [];
   const spawnFn: SpawnFunction = () => {
     startedResolve();
     return {
@@ -400,7 +401,10 @@ const controlledSpawn = () => {
         if (event === "close") close.push(listener as never);
         return this;
       },
-      kill: () => true,
+      kill: (signal = "SIGTERM") => {
+        killSignals.push(signal);
+        return true;
+      },
       killed: false,
     };
   };
@@ -408,6 +412,7 @@ const controlledSpawn = () => {
     spawnFn,
     started,
     isFinished: () => finished,
+    getKillSignals: () => [...killSignals],
     finish(text: string) {
       finished = true;
       const line = JSON.stringify({
@@ -743,6 +748,59 @@ describe("child-run subagent integration", () => {
     expect(notification).toContain(invocationId);
     expect(notification).toContain("background answer 界");
     expect(notification).toContain("untrusted child output");
+  });
+
+  test("kills a production subagent with x from the child-session browser", async () => {
+    const home = await setupTestDirectory("pi-child-background-tui-kill");
+    tempDirectories.push(home);
+    await writeAgent(home);
+    const runtime = createRuntime(home, { background: true });
+    const childRuns = setupChildRuns(runtime.pi);
+    const controlled = controlledSpawn();
+    setupSubagent(runtime.pi, makeConfig(home), {
+      childRuns,
+      spawnFn: controlled.spawnFn,
+      termGraceMs: 0,
+    });
+    const { background } = childRuns;
+    if (background === undefined) throw new Error("background unavailable");
+    const tool = findTool(runtime.tools, "subagent");
+    await runtime.emit("agent_start", { type: "agent_start" });
+
+    const accepted = (await Reflect.apply(tool.execute, undefined, [
+      "tui-kill-parent",
+      { agent: "worker", task: "wait until killed" },
+      undefined,
+      undefined,
+      runtime.ctx,
+    ])) as { details: { background: { invocationId: string } } };
+    const { invocationId } = accepted.details.background;
+    await controlled.started;
+    await runtime.emit("message_end", {
+      type: "message_end",
+      message: { role: "toolResult", toolCallId: "tui-kill-parent" },
+    });
+
+    const command = runtime.commands.get("subagents");
+    if (command === undefined) throw new Error("subagents command missing");
+    await command.handler("", runtime.ctx);
+    const panel = runtime.getComponent();
+    if (panel === undefined) throw new Error("child-run panel did not mount");
+    panel.handleInput?.("x");
+
+    expect(runtime.getNotifications()).toContain(
+      `Kill requested for child invocation ${invocationId.slice(0, 8)} (1 active run).`,
+    );
+    await background.drain(invocationId);
+    expect(controlled.getKillSignals()).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(JSON.stringify(runtime.getAppendedEntries())).toContain(
+      "user-killed",
+    );
+    expect(background.hasActiveInvocations()).toBe(false);
+
+    await runtime.emit("agent_settled", { type: "agent_settled" });
+    expect(runtime.getSentMessages()).toHaveLength(1);
+    expect(JSON.stringify(runtime.getSentMessages())).toContain("was aborted");
   });
 
   test("cancels tree navigation while a handed-off completion turn is active", async () => {

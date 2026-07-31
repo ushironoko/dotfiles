@@ -305,6 +305,10 @@ export class ChildRunRegistry {
     return this.toolCallToInvocation.get(toolCallId);
   }
 
+  getInvocationIdForRun(runId: string): string | undefined {
+    return this.runToInvocation.get(runId);
+  }
+
   getRunIds(invocationId: string): string[] {
     return (
       this.invocations.get(invocationId)?.runs.map((run) => run.runId) ?? []

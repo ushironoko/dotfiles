@@ -44,6 +44,18 @@ export interface BackgroundSchedule {
   run(signal: AbortSignal): Promise<BackgroundWorkResult>;
 }
 
+export type ChildRunKillResult =
+  | {
+      status: "requested";
+      invocationId: string;
+      affectedRuns: number;
+    }
+  | { status: "not-found" }
+  | {
+      status: "not-active" | "already-requested";
+      invocationId: string;
+    };
+
 interface AbortControllerLike {
   signal: AbortSignal;
   abort(): void;
@@ -408,6 +420,30 @@ export class BackgroundInvocationManager {
 
   hasActiveInvocations(): boolean {
     return this.records.size > 0;
+  }
+
+  killInvocationForRun(runId: string): ChildRunKillResult {
+    const invocationId = this.registry.getInvocationIdForRun(runId);
+    if (invocationId === undefined) return { status: "not-found" };
+
+    const record = this.records.get(invocationId);
+    if (record === undefined) return { status: "not-active", invocationId };
+    if (isAborted(record.controller.signal)) {
+      return { status: "already-requested", invocationId };
+    }
+
+    const activeRunIds = this.registry.getNonTerminalRunIds(invocationId);
+    if (activeRunIds.length === 0) {
+      return { status: "not-active", invocationId };
+    }
+    record.abortRunIds = activeRunIds;
+    record.abortReason = "user-killed";
+    record.controller.abort();
+    return {
+      status: "requested",
+      invocationId,
+      affectedRuns: activeRunIds.length,
+    };
   }
 
   async acquireChildSlot(signal?: AbortSignal): Promise<() => void> {
