@@ -20,7 +20,10 @@ import {
   type PermissionAuditFileHandle,
   type PermissionAuditWriter,
 } from "../../pi/extensions/pi-harness/features/permission-audit/writer";
-import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
+import {
+  DEFAULT_PERMISSION_JUDGE_CONFIG,
+  type HarnessConfig,
+} from "../../pi/extensions/pi-harness/config";
 import {
   PERMISSION_AUDIT_INVOCATION_ENV,
   PERMISSION_AUDIT_LINEAGE_ENV,
@@ -125,6 +128,25 @@ describe("permission audit record model", () => {
       buildPermissionDecisionRecord(baseInput([intermediateAsk, accepted]))
         .effectiveDecision,
     ).toBe("ask");
+
+    const timedOut: PermissionAuditStage = {
+      ...accepted,
+      status: "timed-out",
+    };
+    const timedOutRecord = buildPermissionDecisionRecord(
+      baseInput([intermediateAsk, timedOut], {
+        boundaryDisposition: "block",
+        terminalReasonCode: "judge-ask",
+      }),
+    );
+    const parsedTimedOut = parsePermissionAuditJsonl(
+      `${JSON.stringify(timedOutRecord)}\n`,
+    );
+    expect(parsedTimedOut.diagnostics).toEqual([]);
+    expect(parsedTimedOut.records[0]?.effectiveDecision).toBe("ask");
+    expect(
+      summarizePermissionAudit(parsedTimedOut.records).byConfirmation,
+    ).toEqual({ "timed-out": 1 });
 
     const denied: PermissionAuditStage = {
       type: "deterministic",
@@ -822,6 +844,59 @@ describe("permission audit policy lifecycle", () => {
     expect(parsed.records[0]?.stages).toContainEqual(
       expect.objectContaining({ type: "confirmation", status: "rejected" }),
     );
+  });
+
+  test("records timed-out ASK separately from explicit rejection", async () => {
+    const home = await tempRoot("pi-permission-audit-timeout");
+    const baseConfig = harnessConfig(home);
+    const config: HarnessConfig = {
+      ...baseConfig,
+      permissionJudge: {
+        ...DEFAULT_PERMISSION_JUDGE_CONFIG,
+        enabled: false,
+        confirmTimeoutMs: 10,
+      },
+    };
+    const pi = createFakePi({ cwd: home });
+    const taskTracker = createPermissionTaskTracker();
+    const audit = setupPermissionAudit(pi, config, { taskTracker });
+    const blocker = (reason: string) => ({ block: true as const, reason });
+    setupPermissionPolicy(pi, config, {
+      taskTracker,
+      permissionAudit: audit,
+      blockToolCall: blocker,
+    });
+    audit.registerTail(pi, blocker);
+    await activateTask(pi);
+    pi.queueConfirmUntilAborted();
+
+    expect(
+      await pi.emitToolCall({
+        type: "tool_call",
+        toolName: "bash",
+        toolCallId: "ask-timeout",
+        input: { command: "git push origin main" },
+      }),
+    ).toEqual({
+      block: true,
+      reason: expect.stringContaining("Permission confirmation timed out"),
+    });
+    await pi.emitSessionShutdown();
+
+    const [file] = await fs.readdir(config.paths.logDir);
+    const parsed = parsePermissionAuditJsonl(
+      await fs.readFile(join(config.paths.logDir, file ?? ""), "utf8"),
+    );
+    expect(parsed.records).toHaveLength(1);
+    expect(parsed.records[0]?.stages).toContainEqual(
+      expect.objectContaining({
+        type: "confirmation",
+        status: "timed-out",
+      }),
+    );
+    expect(summarizePermissionAudit(parsed.records).byConfirmation).toEqual({
+      "timed-out": 1,
+    });
   });
 
   test("propagates real parent-child audit env without recording the permission token", async () => {

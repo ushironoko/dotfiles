@@ -79,7 +79,11 @@ properties. The response parser requires exactly that two-key object. Only
 alternate casing, missing or extra keys, tool calls, truncation, and malformed
 JSON require confirmation or block.
 Interactive permission confirmations default to a ten-second countdown and
-fail closed when it expires. Set `confirmTimeoutMs` from 1,000 through 300,000
+fail closed when it expires. The policy keeps `rejected`, `timed-out`,
+`aborted`, and UI-less `not-shown` outcomes distinct. A timeout tells the agent
+that the user is unavailable, not to wait for another response, and to follow
+the system prompt while continuing without that command; explicit rejection is
+reported as a user denial. Set `confirmTimeoutMs` from 1,000 through 300,000
 milliseconds to override that window; aborting the active pi operation (for
 example with Esc) also closes the dialog.
 
@@ -209,7 +213,9 @@ continue through the ordinary escalated policy below.
     configured response model, no remote metadata, a completed non-truncated
     response, and exactly one structured decision containing only `safety` and
     `relevance`. Both must be `ALLOW`; either `ASK` or any invalid response asks
-    the user or blocks without UI.
+    the user or blocks without UI. When a live `ASK` is accepted, the matching
+    Bash tool result receives one model-visible note that the local verifier
+    returned `ASK` and that the approval covers only that execution.
 15. Append one terminal V1 audit record after every pi-harness permission stage
     has passed, or at the exact stage that blocks. A successful ALLOW or accepted
     ASK is released only after the append succeeds. `release` describes the
@@ -376,8 +382,8 @@ identity checks.
 The pure helpers in `features/permission-audit/analysis.ts` validate V1 JSONL,
 report malformed/truncated tails, aggregate decisions/routes/reasons/gates/cache
 and confirmations, and emit qualification candidates. A confirmation stage
-normally makes the effective decision `ask`, including rejected, UI-less, and
-aborted challenges; however, a separate later explicit deny or internal error
+normally makes the effective decision `ask`, including rejected, timed-out,
+UI-less, and aborted challenges; however, a separate later explicit deny or internal error
 is terminal and takes precedence as `deny`. Candidates deliberately
 have no `expected` verdict: model output and user approval are observations, not
 ground truth. Review a candidate manually before adding it to the qualification
@@ -403,7 +409,7 @@ is not made.
 
 Repeated confirmation is also used as bounded usability feedback, not as a
 safety label. After every three Bash confirmations actually displayed in one
-parent session (`accepted`, `rejected`, or `aborted`), pi-harness injects one
+parent session (`accepted`, `rejected`, `timed-out`, or `aborted`), pi-harness injects one
 hidden transient reminder asking the agent to narrow or split later command
 shapes without changing their intent. Intermediate ASK verdicts and UI-less
 `not-shown` outcomes do not count. This reminder cannot alter permission

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { InputEvent, PiLike } from "../../lib/pi-like";
+import type { CtxLike, InputEvent, PiLike } from "../../lib/pi-like";
 import {
   DEFAULT_PERMISSION_JUDGE_CONFIG,
   type HarnessConfig,
@@ -24,7 +24,11 @@ import {
   type PermissionRunEvidence,
   type PermissionTaskTracker,
 } from "./context";
-import { createPermissionJudge, type JudgeOutcome } from "./judge";
+import {
+  createPermissionJudge,
+  type JudgeOutcome,
+  type PermissionJudge,
+} from "./judge";
 import {
   evaluateCommandWithAudit,
   gitReadCwdTarget,
@@ -65,6 +69,123 @@ const MALFORMED_REASON =
   "permission-policy: bash ツール入力が不正なため実行をブロックしました（command が文字列ではありません）";
 const JUDGE_DISABLED_RESIDUAL_REASON =
   "ローカル判定器が無効なため、sandbox内でも動的・不透明なコマンドには確認が必要です";
+const LOCAL_JUDGE_ASK_FEEDBACK =
+  "[pi-harness permission feedback] The local verifier returned ASK for this command. The user approved this one execution; do not treat that approval as an automatic ALLOW label for later commands.";
+
+type PermissionConfirmationOutcome =
+  | "accepted"
+  | "rejected"
+  | "timed-out"
+  | "not-shown"
+  | "aborted";
+
+interface ActiveAbortSignal {
+  readonly aborted: boolean;
+  addEventListener(
+    type: "abort",
+    listener: () => void,
+    options?: { once?: boolean },
+  ): void;
+  removeEventListener(type: "abort", listener: () => void): void;
+}
+
+interface AbortControllerLike {
+  readonly signal: ActiveAbortSignal;
+  abort(): void;
+}
+
+const isActiveAbortSignal = (value: unknown): value is ActiveAbortSignal =>
+  typeof value === "object" &&
+  value !== null &&
+  "aborted" in value &&
+  typeof value.aborted === "boolean" &&
+  "addEventListener" in value &&
+  typeof value.addEventListener === "function" &&
+  "removeEventListener" in value &&
+  typeof value.removeEventListener === "function";
+
+const signalIsAborted = (signal: ActiveAbortSignal | undefined): boolean =>
+  signal?.aborted === true;
+
+const createAbortController = (): AbortControllerLike => {
+  const value: unknown = new AbortController();
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("abort" in value) ||
+    typeof value.abort !== "function" ||
+    !("signal" in value) ||
+    !isActiveAbortSignal(value.signal)
+  ) {
+    throw new Error("AbortController is unavailable");
+  }
+  const { abort, signal } = value;
+  return {
+    signal,
+    abort: () => Reflect.apply(abort, value, []),
+  };
+};
+
+const requestPermissionConfirmation = async (
+  ctx: CtxLike,
+  title: string,
+  message: string,
+  timeoutMs: number,
+): Promise<PermissionConfirmationOutcome> => {
+  if (!ctx.hasUI) return "not-shown";
+  const parentSignal = isActiveAbortSignal(ctx.signal) ? ctx.signal : undefined;
+  if (signalIsAborted(parentSignal)) return "aborted";
+
+  // Pi intentionally collapses UI rejection, cancellation, and timeout into
+  // false. Own the deadline signal here so policy can distinguish an expired
+  // prompt while preserving Pi's native countdown/timeout metadata.
+  const confirmationController = createAbortController();
+  let timedOut = false;
+  const abortFromParent = (): void => confirmationController.abort();
+  parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    confirmationController.abort();
+  }, timeoutMs);
+
+  try {
+    const confirmed = await ctx.ui.confirm(title, message, {
+      signal: confirmationController.signal,
+      timeout: timeoutMs,
+    });
+    if (signalIsAborted(parentSignal)) return "aborted";
+    if (timedOut) return "timed-out";
+    return confirmed ? "accepted" : "rejected";
+  } catch (error) {
+    if (signalIsAborted(parentSignal)) return "aborted";
+    if (timedOut) return "timed-out";
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    parentSignal?.removeEventListener("abort", abortFromParent);
+  }
+};
+
+const confirmationBlockReason = (
+  outcome: Exclude<PermissionConfirmationOutcome, "accepted">,
+  reason: string,
+): string => {
+  let feedback: string;
+  if (outcome === "timed-out") {
+    feedback =
+      "Permission confirmation timed out. The user is unavailable to respond. Do not wait for or request another confirmation; follow the system prompt instructions and continue handling the task without executing this command.";
+  } else if (outcome === "rejected") {
+    feedback =
+      "Permission confirmation was denied by the user. Do not execute this command.";
+  } else if (outcome === "aborted") {
+    feedback =
+      "The active pi operation was cancelled before permission was granted. Do not execute this command.";
+  } else {
+    feedback =
+      "Permission confirmation could not be shown because interactive UI is unavailable. Do not execute this command.";
+  }
+  return `${feedback}\n\nConfirmation reason: ${reason}`;
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -162,6 +283,7 @@ interface SetupPermissionPolicyOptions {
   ) => Promise<PermissionProjectContext>;
   taskTracker?: PermissionTaskTracker;
   permissionAudit?: PermissionAuditIntegration;
+  judge?: PermissionJudge;
   executionBoundary?: (toolName: string) => BashExecutionBoundary | undefined;
   codexStageModes?: ReadonlySet<CodexStageMode>;
   codexStageExecutablePath?: string;
@@ -175,9 +297,10 @@ const setupPermissionPolicy = (
   const rules = options.rules ?? loadRules(readPermissionRules());
   const judgeConfig = config.permissionJudge;
   const judge =
-    judgeConfig?.enabled === true
+    options.judge ??
+    (judgeConfig?.enabled === true
       ? createPermissionJudge(judgeConfig)
-      : undefined;
+      : undefined);
   const taskTracker = options.taskTracker ?? createPermissionTaskTracker();
   const consumedCodexStageModes = consumeCodexStageCapability(config.isChild);
   const codexStageModes = options.codexStageModes ?? consumedCodexStageModes;
@@ -191,6 +314,7 @@ const setupPermissionPolicy = (
         signal,
       ));
   let judgeWarningShown = false;
+  const acceptedLocalJudgeAskCalls = new Map<string, string>();
   let activeSkillBashAllows: readonly AllowRule[] = [];
   let resolveActiveSkillBashAllows: ActiveSkillBashAllowResolver = () => [];
   let lifecycleEventsAvailable = false;
@@ -398,7 +522,23 @@ const setupPermissionPolicy = (
   pi.on("session_shutdown", () => {
     taskTracker.clear();
     clearSkillLifecycle();
+    acceptedLocalJudgeAskCalls.clear();
     judge?.clear();
+  });
+
+  pi.on("tool_result", (event) => {
+    if (
+      (event.toolName !== "bash" && event.toolName !== "bash_escalated") ||
+      event.toolCallId === undefined
+    ) {
+      return undefined;
+    }
+    const feedback = acceptedLocalJudgeAskCalls.get(event.toolCallId);
+    if (feedback === undefined) return undefined;
+    acceptedLocalJudgeAskCalls.delete(event.toolCallId);
+    return {
+      content: [{ type: "text", text: feedback }, ...(event.content ?? [])],
+    };
   });
 
   pi.on("tool_call", async (event, ctx) => {
@@ -542,21 +682,15 @@ const setupPermissionPolicy = (
         reason: string,
         reasonCode: string,
         challengeSource: string,
+        feedbackOnAccept?: string,
       ): Promise<{ block: true; reason: string } | undefined> => {
-        const confirmed =
-          ctx.hasUI && !isAborted()
-            ? await ctx.ui.confirm(title, `${reason}\n\n${command}`, {
-                signal,
-                timeout:
-                  judgeConfig?.confirmTimeoutMs ??
-                  DEFAULT_PERMISSION_JUDGE_CONFIG.confirmTimeoutMs,
-              })
-            : false;
-        let status: "not-shown" | "aborted" | "accepted" | "rejected";
-        if (!ctx.hasUI) status = "not-shown";
-        else if (isAborted()) status = "aborted";
-        else if (confirmed) status = "accepted";
-        else status = "rejected";
+        const status = await requestPermissionConfirmation(
+          ctx,
+          title,
+          `${reason}\n\n${command}`,
+          judgeConfig?.confirmTimeoutMs ??
+            DEFAULT_PERMISSION_JUDGE_CONFIG.confirmTimeoutMs,
+        );
         permissionAudit?.addStage(event.toolCallId, {
           type: "confirmation",
           phase: "permission-policy",
@@ -565,9 +699,22 @@ const setupPermissionPolicy = (
           reasonCode,
           reason,
         });
-        return confirmed && !isAborted()
-          ? undefined
-          : finalizeBlocked(event.toolCallId, reasonCode, reason);
+        if (status === "accepted") {
+          if (feedbackOnAccept !== undefined) {
+            if (acceptedLocalJudgeAskCalls.size >= 4096) {
+              const oldest = acceptedLocalJudgeAskCalls.keys().next().value;
+              if (oldest !== undefined)
+                acceptedLocalJudgeAskCalls.delete(oldest);
+            }
+            acceptedLocalJudgeAskCalls.set(event.toolCallId, feedbackOnAccept);
+          }
+          return undefined;
+        }
+        return finalizeBlocked(
+          event.toolCallId,
+          reasonCode,
+          confirmationBlockReason(status, reason),
+        );
       };
 
       if (result.verdict === "ask") {
@@ -934,6 +1081,7 @@ const setupPermissionPolicy = (
         outcome.reason,
         `judge-${outcome.kind}`,
         "local-judge",
+        outcome.kind === "ask" ? LOCAL_JUDGE_ASK_FEEDBACK : undefined,
       );
     } catch (error) {
       // Any evaluation or audit-integration failure blocks rather than failing open.

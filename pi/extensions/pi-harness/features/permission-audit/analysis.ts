@@ -85,7 +85,7 @@ const validStage = (value: unknown): value is PermissionAuditStage => {
       typeof value.phase === "string" &&
       typeof value.challengeSource === "string" &&
       typeof value.reasonCode === "string" &&
-      ["accepted", "rejected", "not-shown", "aborted"].includes(
+      ["accepted", "rejected", "timed-out", "not-shown", "aborted"].includes(
         String(value.status),
       )
     );
