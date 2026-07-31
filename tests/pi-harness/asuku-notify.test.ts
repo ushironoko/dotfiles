@@ -3,7 +3,9 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import settings from "../../pi/settings.json";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
-import setupAsukuNotify from "../../pi/extensions/pi-harness/features/asuku-notify/index";
+import setupAsukuNotify, {
+  runPermissionRequest,
+} from "../../pi/extensions/pi-harness/features/asuku-notify/index";
 import type { DetachedSpawnFunction } from "../../pi/extensions/pi-harness/lib/detached";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import { cleanupTestDirectory, setupTestDirectory } from "../test-helpers";
@@ -122,12 +124,20 @@ describe("pi-harness asuku-notify", () => {
     expect(payload.message.length).toBeGreaterThan(0);
   });
 
-  test("routes an allowed confirmation through asuku without opening the TUI dialog", async () => {
+  test("shows the native TUI while asuku can allow the request", async () => {
     const home = await makeTempDirectory("pi-asuku-permission-allow");
-    const captureFile = join(home, "permission.txt");
-    const binary = await writePermissionStub(home, captureFile, "allow");
+    const binary = join(home, "asuku-hook");
+    await fs.writeFile(binary, "#!/bin/bash\n", { mode: 0o755 });
+    const capturedPayloads: string[] = [];
     const pi = createFakePi({ cwd: home, sessionId: "pi-session-1" });
-    setupAsukuNotify(pi, makeConfig(home), { binaryPath: binary });
+    pi.queueConfirmUntilAborted();
+    setupAsukuNotify(pi, makeConfig(home), {
+      binaryPath: binary,
+      requestPermission: async (_command, payload) => {
+        capturedPayloads.push(JSON.stringify(payload));
+        return true;
+      },
+    });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
     const accepted = await pi.ctx.ui.confirm(
@@ -137,11 +147,8 @@ describe("pi-harness asuku-notify", () => {
     );
 
     expect(accepted).toBe(true);
-    expect(pi.confirmDialogs).toHaveLength(0);
-    const captured = await fs.readFile(captureFile, "utf8");
-    const [argLine, ...payloadLines] = captured.split("\n");
-    expect(argLine).toBe("permission-request");
-    const payload = JSON.parse(payloadLines.join("\n"));
+    expect(pi.confirmDialogs).toHaveLength(1);
+    const payload = JSON.parse(capturedPayloads[0] ?? "{}");
     expect(payload.session_id).toBe("pi-session-1");
     expect(payload.hook_event_name).toBe("PermissionRequest");
     expect(payload.tool_name).toBe("PiConfirm");
@@ -149,13 +156,16 @@ describe("pi-harness asuku-notify", () => {
     expect(payload.tool_input.message).toContain("rm -rf build");
   });
 
-  test("routes an asuku denial without falling back to an approving TUI answer", async () => {
+  test("shows the native TUI while asuku can deny the request", async () => {
     const home = await makeTempDirectory("pi-asuku-permission-deny");
-    const captureFile = join(home, "permission.txt");
-    const binary = await writePermissionStub(home, captureFile, "deny");
+    const binary = join(home, "asuku-hook");
+    await fs.writeFile(binary, "#!/bin/bash\n", { mode: 0o755 });
     const pi = createFakePi({ cwd: home });
-    pi.queueConfirm(true);
-    setupAsukuNotify(pi, makeConfig(home), { binaryPath: binary });
+    pi.queueConfirmUntilAborted();
+    setupAsukuNotify(pi, makeConfig(home), {
+      binaryPath: binary,
+      requestPermission: async () => false,
+    });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
     const accepted = await pi.ctx.ui.confirm("Permission", "run command", {
@@ -163,27 +173,91 @@ describe("pi-harness asuku-notify", () => {
     });
 
     expect(accepted).toBe(false);
+    expect(pi.confirmDialogs).toHaveLength(1);
+  });
+
+  test("does not leave a stale native request when asuku decides in RPC mode", async () => {
+    const home = await makeTempDirectory("pi-asuku-rpc");
+    const binary = join(home, "asuku-hook");
+    await fs.writeFile(binary, "#!/bin/bash\n", { mode: 0o755 });
+    const pi = createFakePi({ cwd: home, mode: "rpc" });
+    setupAsukuNotify(pi, makeConfig(home), {
+      binaryPath: binary,
+      requestPermission: async () => true,
+    });
+
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    expect(await pi.ctx.ui.confirm("Permission", "run command")).toBe(true);
     expect(pi.confirmDialogs).toHaveLength(0);
   });
 
-  test("falls back to the original TUI confirmation for malformed asuku output", async () => {
+  test("serializes native TUI confirmations while preserving each result", async () => {
+    const home = await makeTempDirectory("pi-asuku-native-queue");
+    const binary = join(home, "asuku-hook");
+    await fs.writeFile(binary, "#!/bin/bash\n", { mode: 0o755 });
+    const pi = createFakePi({ cwd: home });
+    const openedTitles: string[] = [];
+    const nativeResolvers: ((accepted: boolean) => void)[] = [];
+    pi.ctx.ui.confirm = async (title) => {
+      openedTitles.push(title);
+      return new Promise<boolean>((resolve) => nativeResolvers.push(resolve));
+    };
+    setupAsukuNotify(pi, makeConfig(home), {
+      binaryPath: binary,
+      requestPermission: async () => undefined,
+    });
+
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    const first = pi.ctx.ui.confirm("First", "first command");
+    const second = pi.ctx.ui.confirm("Second", "second command");
+    await waitFor(async () => openedTitles.length === 1);
+    expect(openedTitles).toEqual(["First"]);
+
+    nativeResolvers[0]?.(true);
+    expect(await first).toBe(true);
+    await waitFor(async () => openedTitles.length === 2);
+    expect(openedTitles).toEqual(["First", "Second"]);
+
+    nativeResolvers[1]?.(false);
+    expect(await second).toBe(false);
+  });
+
+  test("keeps the native confirmation open for malformed asuku output", async () => {
     const home = await makeTempDirectory("pi-asuku-permission-fallback");
     const captureFile = join(home, "permission.txt");
     const binary = await writePermissionStub(home, captureFile, "malformed");
     const pi = createFakePi({ cwd: home });
-    pi.queueConfirm(true);
-    setupAsukuNotify(pi, makeConfig(home), { binaryPath: binary });
-
-    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
-    const accepted = await pi.ctx.ui.confirm("Permission", "run command", {
-      timeout: 1_000,
+    let nativeOpened = false;
+    let bridgeSettled = false;
+    let resolveNative: ((accepted: boolean) => void) | undefined;
+    pi.ctx.ui.confirm = async () => {
+      nativeOpened = true;
+      return new Promise<boolean>((resolve) => {
+        resolveNative = resolve;
+      });
+    };
+    setupAsukuNotify(pi, makeConfig(home), {
+      binaryPath: binary,
+      requestPermission: async (command, payload, options) => {
+        const decision = await runPermissionRequest(command, payload, options);
+        bridgeSettled = true;
+        return decision;
+      },
     });
 
-    expect(accepted).toBe(true);
-    expect(pi.confirmDialogs).toHaveLength(1);
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    const accepted = pi.ctx.ui.confirm("Permission", "run command", {
+      timeout: 1_000,
+    });
+    await waitFor(async () => nativeOpened && bridgeSettled);
+    resolveNative?.(true);
+
+    expect(await accepted).toBe(true);
+    expect(nativeOpened).toBe(true);
+    expect(bridgeSettled).toBe(true);
   });
 
-  test("preserves the caller timeout budget when asuku falls back to the TUI", async () => {
+  test("gives asuku and the native TUI the same remaining timeout budget", async () => {
     const home = await makeTempDirectory("pi-asuku-timeout-budget");
     const binary = join(home, "asuku-hook");
     await fs.writeFile(binary, "#!/bin/bash\n", { mode: 0o755 });
@@ -208,23 +282,35 @@ describe("pi-harness asuku-notify", () => {
 
     expect(accepted).toBe(true);
     expect(observedTimeouts).toEqual([5_000]);
-    expect(pi.confirmDialogs[0]?.dialogOptions?.timeout).toBe(2_000);
+    expect(pi.confirmDialogs[0]?.dialogOptions?.timeout).toBe(5_000);
   });
 
-  test("fails closed instead of reopening the TUI after asuku exhausts the timeout", async () => {
-    const home = await makeTempDirectory("pi-asuku-timeout-exhausted");
+  test("aborts a pending asuku request when the native TUI decides first", async () => {
+    const home = await makeTempDirectory("pi-asuku-native-first");
     const binary = join(home, "asuku-hook");
     await fs.writeFile(binary, "#!/bin/bash\n", { mode: 0o755 });
-    let clock = 1_000;
+    let requestAborted = false;
     const pi = createFakePi({ cwd: home });
     pi.queueConfirm(true);
     setupAsukuNotify(pi, makeConfig(home), {
       binaryPath: binary,
-      now: () => clock,
-      requestPermission: async () => {
-        clock = 6_000;
-        return undefined;
-      },
+      requestPermission: async (_command, _payload, options) =>
+        new Promise<boolean | undefined>((resolve) => {
+          if (
+            options.signal !== undefined &&
+            "addEventListener" in options.signal &&
+            typeof options.signal.addEventListener === "function"
+          ) {
+            options.signal.addEventListener(
+              "abort",
+              () => {
+                requestAborted = true;
+                resolve(undefined);
+              },
+              { once: true },
+            );
+          }
+        }),
     });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
@@ -232,8 +318,9 @@ describe("pi-harness asuku-notify", () => {
       timeout: 5_000,
     });
 
-    expect(accepted).toBe(false);
-    expect(pi.confirmDialogs).toHaveLength(0);
+    expect(accepted).toBe(true);
+    expect(pi.confirmDialogs).toHaveLength(1);
+    expect(requestAborted).toBe(true);
   });
 
   test("replaces a prior reload wrapper and restores the native confirmation on shutdown", async () => {
@@ -267,7 +354,7 @@ describe("pi-harness asuku-notify", () => {
     pi.queueConfirm(false);
     expect(await pi.ctx.ui.confirm("Native", "after shutdown")).toBe(false);
     expect(newRequests).toBe(1);
-    expect(pi.confirmDialogs).toHaveLength(1);
+    expect(pi.confirmDialogs).toHaveLength(2);
   });
 
   test("a disabled reload removes the prior asuku confirmation wrapper", async () => {

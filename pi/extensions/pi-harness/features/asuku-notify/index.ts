@@ -1,8 +1,8 @@
 /**
  * asuku-notify feature — bridges pi's confirmations and completion state to
- * the asuku desktop app. Permission requests wait for asuku's Allow/Deny
- * response and fall back to pi's original TUI dialog whenever the bridge is
- * unavailable. Completion notifications remain detached and best-effort.
+ * the asuku desktop app. Permission requests keep pi's original TUI dialog
+ * visible while asuku handles the same request; the first explicit decision
+ * wins. Completion notifications remain detached and best-effort.
  */
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
@@ -76,6 +76,55 @@ interface ConfirmBridgeRegistration {
   bridgedConfirm: ConfirmFunction;
   ctx: CtxLike;
 }
+
+interface ActiveAbortSignal {
+  readonly aborted: boolean;
+  addEventListener(
+    type: "abort",
+    listener: () => void,
+    options?: { once?: boolean },
+  ): void;
+  removeEventListener(type: "abort", listener: () => void): void;
+}
+
+interface AbortControllerLike {
+  readonly signal: ActiveAbortSignal;
+  abort(): void;
+}
+
+const isActiveAbortSignal = (value: unknown): value is ActiveAbortSignal =>
+  typeof value === "object" &&
+  value !== null &&
+  "aborted" in value &&
+  typeof value.aborted === "boolean" &&
+  "addEventListener" in value &&
+  typeof value.addEventListener === "function" &&
+  "removeEventListener" in value &&
+  typeof value.removeEventListener === "function";
+
+const createAbortController = (): AbortControllerLike | undefined => {
+  let value: unknown;
+  try {
+    value = new AbortController();
+  } catch {
+    return undefined;
+  }
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("abort" in value) ||
+    typeof value.abort !== "function" ||
+    !("signal" in value) ||
+    !isActiveAbortSignal(value.signal)
+  ) {
+    return undefined;
+  }
+  const { abort, signal } = value;
+  return {
+    signal,
+    abort: () => Reflect.apply(abort, value, []),
+  };
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -402,10 +451,12 @@ export default function setupAsukuNotify(
 
     const originalConfirm = ui.confirm;
     let registration: ConfirmBridgeRegistration;
-    const bridgedConfirm: ConfirmFunction = async (
+    let nativeConfirmationQueue = Promise.resolve();
+    const runConfirm = async (
       title: string,
       message: string,
-      dialogOptions?: DialogOptionsLike,
+      dialogOptions: DialogOptionsLike | undefined,
+      startedAt: number,
     ): Promise<boolean> => {
       const activeCtx = registration.ctx;
       if (!activeCtx.hasUI) {
@@ -418,24 +469,31 @@ export default function setupAsukuNotify(
         dialogOptions.timeout > 0
           ? dialogOptions.timeout
           : undefined;
-      const startedAt = now();
       const remainingTimeout = (): number | undefined => {
         if (configuredTimeout === undefined) return undefined;
         return Math.max(0, configuredTimeout - Math.max(0, now() - startedAt));
       };
-      const fallbackToTui = (): Promise<boolean> => {
-        const remaining = remainingTimeout();
-        if (remaining === undefined) {
-          return originalConfirm.call(ui, title, message, dialogOptions);
+      const openNativeConfirm = (
+        options: DialogOptionsLike | undefined,
+      ): Promise<boolean> => {
+        try {
+          return Promise.resolve(
+            originalConfirm.call(ui, title, message, options),
+          ).catch(() => false);
+        } catch {
+          return Promise.resolve(false);
         }
-        if (remaining <= 0) return Promise.resolve(false);
-        return originalConfirm.call(ui, title, message, {
-          ...dialogOptions,
-          timeout: remaining,
-        });
       };
+      const bridgeAvailable = await executable(binary);
+      const remaining = remainingTimeout();
+      const nativeOptions =
+        remaining === undefined
+          ? dialogOptions
+          : { ...dialogOptions, timeout: remaining };
 
-      if (!(await executable(binary))) return fallbackToTui();
+      if (remaining !== undefined && remaining <= 0) return false;
+      if (!bridgeAvailable) return openNativeConfirm(nativeOptions);
+
       const cwd = activeCtx.cwd ?? process.cwd();
       const payload: AsukuPermissionPayload = {
         session_id: sessionId(activeCtx),
@@ -445,21 +503,90 @@ export default function setupAsukuNotify(
         cwd,
         permission_mode: "default",
       };
-      const bridgeTimeout = remainingTimeout() ?? DEFAULT_PERMISSION_TIMEOUT_MS;
-      if (bridgeTimeout <= 0) return false;
-      let decision: boolean | undefined;
-      try {
-        decision = await requestPermission(binary, payload, {
-          cwd,
-          ...(dialogOptions?.signal === undefined
-            ? {}
-            : { signal: dialogOptions.signal }),
-          timeoutMs: bridgeTimeout,
-        });
-      } catch {
-        return fallbackToTui();
+      const bridgeTimeout = remaining ?? DEFAULT_PERMISSION_TIMEOUT_MS;
+      const callerSignal = isActiveAbortSignal(dialogOptions?.signal)
+        ? dialogOptions.signal
+        : undefined;
+      if (callerSignal?.aborted === true) return false;
+
+      // RPC clients have no cancellation event for an extension_ui_request.
+      // Keep the native/asuku race TUI-only so an asuku-first decision cannot
+      // leave a stale confirmation visible in an RPC client.
+      if (activeCtx.mode !== "tui") {
+        try {
+          const decision = await requestPermission(binary, payload, {
+            cwd,
+            ...(callerSignal === undefined ? {} : { signal: callerSignal }),
+            timeoutMs: bridgeTimeout,
+          });
+          return decision ?? openNativeConfirm(nativeOptions);
+        } catch {
+          return openNativeConfirm(nativeOptions);
+        }
       }
-      return decision ?? fallbackToTui();
+
+      const bridgeAbort = createAbortController();
+      if (bridgeAbort === undefined) return openNativeConfirm(nativeOptions);
+
+      let callerAbortListener: (() => void) | undefined;
+      const noDecision = new Promise<boolean>(() => {});
+      const callerAbortDecision =
+        callerSignal === undefined
+          ? noDecision
+          : new Promise<boolean>((resolve) => {
+              callerAbortListener = () => {
+                bridgeAbort.abort();
+                resolve(false);
+              };
+              callerSignal.addEventListener("abort", callerAbortListener, {
+                once: true,
+              });
+            });
+      const sharedDialogOptions: DialogOptionsLike = {
+        ...nativeOptions,
+        signal: bridgeAbort.signal,
+      };
+      const asukuDecision = (async (): Promise<boolean> => {
+        try {
+          const decision = await requestPermission(binary, payload, {
+            cwd,
+            signal: bridgeAbort.signal,
+            timeoutMs: bridgeTimeout,
+          });
+          return decision ?? noDecision;
+        } catch {
+          return noDecision;
+        }
+      })();
+      const nativeDecision = openNativeConfirm(sharedDialogOptions);
+
+      try {
+        return await Promise.race([
+          nativeDecision,
+          asukuDecision,
+          callerAbortDecision,
+        ]);
+      } finally {
+        bridgeAbort.abort();
+        if (callerSignal !== undefined && callerAbortListener !== undefined) {
+          callerSignal.removeEventListener("abort", callerAbortListener);
+        }
+      }
+    };
+    const bridgedConfirm: ConfirmFunction = (title, message, dialogOptions) => {
+      const startedAt = now();
+      if (registration.ctx.mode !== "tui") {
+        return runConfirm(title, message, dialogOptions, startedAt);
+      }
+
+      const result = nativeConfirmationQueue.then(() =>
+        runConfirm(title, message, dialogOptions, startedAt),
+      );
+      nativeConfirmationQueue = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
     };
     registration = {
       owner,
