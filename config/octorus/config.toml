@@ -9,7 +9,7 @@ theme = "base16-eighties.dark"
 tab_width = 4
 
 [layout]
-left_panel_width = 30
+left_panel_width = 15
 zen_mode = false
 
 [keybindings]
