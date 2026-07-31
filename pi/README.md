@@ -389,24 +389,24 @@ typebox baseline + acceptance/rejection through pi's real `validateToolArguments
 
 ## Claude hook lifecycle mapping
 
-| Claude Code                          | pi-harness                                                                    |
-| ------------------------------------ | ----------------------------------------------------------------------------- |
-| PreToolUse (Bash matcher)            | `tool_call` via hook-bridge                                                   |
-| PreToolUse (Workflow matcher)        | `tool_call` — plan serialized into `script` so codex_stage_guard can grep it  |
-| PostToolUse (Write\|Edit\|MultiEdit) | `tool_result` via hook-bridge (trust-gated)                                   |
-| UserPromptSubmit                     | `before_agent_start` message injection                                        |
-| SessionStart / Stop                  | `session_start` / `agent_settled`                                             |
-| Task tool (subagents)                | `subagent` tool (single / parallel / chain)                                   |
-| Workflow tool (ultracode)            | `workflow` tool (declarative JSON plan)                                       |
-| TaskCompleted                        | `task_completed` tool (bit-task, codex-side hook)                             |
-| WorktreeCreate / WorktreeRemove      | `worktree_create` / `worktree_remove` tools                                   |
-| AskUserQuestion                      | exact-name `AskUserQuestion` compatibility tool                               |
-| PermissionRequest (asuku)            | asuku-notify wraps `ui.confirm`; unavailable/invalid bridge falls back to TUI |
-| Notification (asuku)                 | detached `agent_settled`; Codex 5h/7d headers and HTTP 429 join the message   |
-| permissions.deny / auto fallback     | permission-policy rules + local Ollama judge (fail-closed)                    |
-| permission decision corpus           | always-on private versioned JSONL audit (parent + child lineage)              |
-| statusLine                           | statusline feature (Claude-equivalent custom footer)                          |
-| logproxy                             | provider-log feature (opt-in, reduced scope)                                  |
+| Claude Code                          | pi-harness                                                                   |
+| ------------------------------------ | ---------------------------------------------------------------------------- |
+| PreToolUse (Bash matcher)            | `tool_call` via hook-bridge                                                  |
+| PreToolUse (Workflow matcher)        | `tool_call` — plan serialized into `script` so codex_stage_guard can grep it |
+| PostToolUse (Write\|Edit\|MultiEdit) | `tool_result` via hook-bridge (trust-gated)                                  |
+| UserPromptSubmit                     | `before_agent_start` message injection                                       |
+| SessionStart / Stop                  | `session_start` / `agent_settled`                                            |
+| Task tool (subagents)                | `subagent` tool (single / parallel / chain)                                  |
+| Workflow tool (ultracode)            | `workflow` tool (declarative JSON plan)                                      |
+| TaskCompleted                        | `task_completed` tool (bit-task, codex-side hook)                            |
+| WorktreeCreate / WorktreeRemove      | `worktree_create` / `worktree_remove` tools                                  |
+| AskUserQuestion                      | exact-name `AskUserQuestion` compatibility tool                              |
+| PermissionRequest (asuku)            | TUI shows native + asuku; RPC avoids uncancellable duplicate requests        |
+| Notification (asuku)                 | detached `agent_settled`; Codex 5h/7d headers and HTTP 429 join the message  |
+| permissions.deny / auto fallback     | permission-policy rules + local Ollama judge (fail-closed)                   |
+| permission decision corpus           | always-on private versioned JSONL audit (parent + child lineage)             |
+| statusLine                           | statusline feature (Claude-equivalent custom footer)                         |
+| logproxy                             | provider-log feature (opt-in, reduced scope)                                 |
 
 Known gaps vs Claude Code: this is a local effect-sandbox plus local-classifier
 implementation rather than Claude's server-side auto mode; there are no LSP
@@ -574,8 +574,10 @@ extra-usage balance). Records store sha256 + metadata only; log dir
 ## Smoke checklist
 
 Automated coverage lives in `tests/pi-harness/` + `tests/hooks/pi-harness/`
-(`bun test`). The asuku feature tests pin Allow/Deny round-trips, native TUI
-fallback, Codex rate-limit header formatting, and per-turn stale-state reset.
+(`bun test`). The asuku feature tests pin concurrent native TUI + asuku
+Allow/Deny round-trips, first-decision cancellation, native-dialog
+serialization, RPC fallback behavior, Codex rate-limit header formatting, and
+per-turn stale-state reset.
 Codex quota stays in the notification body because asuku's current
 `statusline.rate_limits` field is Claude-specific. `pi/settings.json` pins SSE;
 removing that override restores the WebSocket transport but also removes the
