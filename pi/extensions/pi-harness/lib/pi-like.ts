@@ -205,6 +205,7 @@ export type FooterFactoryLike = (
 export interface ModelLike {
   id: string;
   name?: string;
+  provider?: string;
 }
 
 export interface ContextUsageLike {
