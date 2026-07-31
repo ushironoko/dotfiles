@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
 import {
   evaluateCommand,
+  evaluateCommandWithAudit,
   gitReadCwdTarget,
   hasProjectSensitiveMutation,
   hasUnverifiedProjectMutationNavigation,
@@ -469,6 +470,481 @@ describe("built-in read-only classification", () => {
       verdict: "ask",
       reason: "confirm search",
     });
+  });
+});
+
+describe("sandbox-only Git classification", () => {
+  const rules = loadRules('{"deny":[],"allow":[],"ask":[]}');
+  const sandboxed = { effectSandboxed: true } as const;
+
+  test.each([
+    "git status --short --branch",
+    "git show --stat HEAD",
+    "git log -1 --oneline",
+    "git merge --no-edit feature/topic",
+    "git merge --continue",
+    "git merge -m --abort feature/topic",
+    "git merge -m message -- --abort",
+    "git switch feature/topic",
+    "git switch -c Cfeature/topic",
+    "git switch -cmfeature/topic",
+    "git merge-tree --write-tree main feature/topic",
+    "git fetch origin main",
+    "git fetch --all --tags",
+    "git fetch --filter=blob:none origin main",
+    "git fetch --filter blob:none origin main",
+    "git fetch -j4 origin main",
+    "git fetch https://github.com/example/repo.git main",
+    "git fetch git@github.com:example/repo.git main",
+    "git fetch git+ssh://github.com/example/repo.git main",
+    "git fetch ssh+git://github.com/example/repo.git main",
+    "git fetch --multiple origin upstream",
+    "git commit -m 'sandboxed commit'",
+    "git commit -m ':(fix parser)'",
+    "git commit -am ':(fix parser)'",
+    "git commit --message ':(fix parser)'",
+    "git commit -m --amend",
+    "git commit --allow-empty -m 'sandboxed commit'",
+    "git commit -m message -- --amend",
+    "git add src/parser.ts",
+    "git add -- -force",
+  ])("mechanically allows a concrete selected command: %s", (command) => {
+    expect(evaluateCommand(command, rules, sandboxed).verdict).toBe("allow");
+    expect(
+      evaluateCommandWithAudit(command, rules, sandboxed).audit.basis,
+    ).toBe("sandbox-git-allow");
+    expect(evaluateCommand(command, rules).verdict).toBe("default-continue");
+  });
+
+  test.each([
+    "git fetch --force origin main",
+    "git fetch -fp origin main:main",
+    "git fetch --for origin main",
+    "git fetch --stdin origin",
+    String.raw`printf '%s\n' '+refs/heads/main:refs/remotes/origin/main' | git fetch --stdin origin`,
+    "git fetch --upload-pack=/tmp/helper ssh://host/repo",
+    "git fetch --upload-pack /tmp/helper . HEAD",
+    "git fetch -u origin main:main",
+    "git fetch --server-option=execute-this origin main",
+    "git fetch custom://payload",
+    "git fetch --multiple custom://payload origin",
+    "git fetch --prune origin",
+    "git fetch --refmap=refs/heads/*:refs/remotes/origin/* origin",
+    "git fetch --update-head-ok origin main:main",
+    "git fetch origin main:refs/notes/review",
+    "git fetch --filter blob:none origin main:refs/notes/review",
+    "git fetch git@github.com:example/repo.git main:refs/notes/review",
+    "git switch --force main",
+    "git switch --discard-changes main",
+    "git switch -C main HEAD~5",
+    "git switch --force-create main HEAD~5",
+    "git switch --orphan scratch",
+    "git switch -m main",
+    "git switch --merge main",
+    "git switch --conflict=diff3 main",
+    "git switch --ignore-other-worktrees main",
+    "git commit --amend -m message",
+    "git commit -m -- --amend",
+    "git commit --message -- --amend",
+    "git commit --pathspec-from-file=paths.txt -m message",
+    "git commit -m message -- ':(glob)*.ts'",
+    "git merge --abort",
+    "git merge --quit",
+    "git merge -m -- --abort",
+    "git merge --message -- --quit",
+    "git add -f .env",
+    "git add --force secrets.pem",
+    "git add --pathspec-from-file=paths.txt",
+    "git add -- ':(glob)*.ts'",
+    "git add ../../outside.txt",
+    "git show HEAD:.ssh/id_ed25519",
+    "git show --all -- ':(top).ssh/id_ed25519'",
+    "git show -- ':(glob)*.ts'",
+    "git log -p -- .ssh/id_ed25519",
+    "git log -p -- ':(glob)*.ts'",
+    "git log -p ':(glob)*.ts'",
+    "git log --grep needle ':(glob)*.ts'",
+    "git --git-dir=/tmp/repo/.git status --short",
+    "git -c core.hooksPath=/tmp/hooks commit -m message",
+    "git --future-option status --short",
+  ])("preserves a higher-priority deterministic ASK: %s", (command) => {
+    expect(evaluateCommand(command, rules, sandboxed).verdict).toBe("ask");
+  });
+
+  test.each([
+    "/usr/bin/git status --short",
+    "sudo git status --short",
+    "git checkout -b Branch HEAD",
+    'git add "$path"',
+    String.raw`git $'status' --short`,
+    "git log --textconv -1",
+    "git show --ext-diff HEAD",
+    "git show --output=show.txt HEAD",
+    "git status --help",
+    "git commit --help",
+    "git show --ext-diff HEAD > show.txt",
+    "git status --short &",
+    "git status --short && echo done",
+  ])("keeps an indirect or non-concrete shape residual: %s", (command) => {
+    expect(evaluateCommand(command, rules, sandboxed).verdict).toBe(
+      "default-continue",
+    );
+  });
+
+  test.each([
+    "git log --textconv -1",
+    "git show --ext-diff HEAD",
+    "git show --output=show.txt HEAD",
+    "git status --help",
+    "git commit --help",
+  ])(
+    "keeps Git helper/output execution on the sandbox judge route: %s",
+    (command) => {
+      expect(evaluateCommandWithAudit(command, rules, sandboxed)).toEqual({
+        verdict: "default-continue",
+        audit: expect.objectContaining({ basis: "sandbox-residual" }),
+      });
+    },
+  );
+
+  test("allows a compound command only when every segment is selected", () => {
+    expect(
+      evaluateCommand(
+        "git status --short && git show --stat HEAD",
+        rules,
+        sandboxed,
+      ).verdict,
+    ).toBe("allow");
+  });
+
+  test("lets a configured ASK override the sandbox Git allow", () => {
+    const askRules = loadRules(
+      String.raw`{"deny":[],"allow":[],"ask":[{"pattern":"^git\\s+status\\b","reason":"confirm status"}]}`,
+    );
+    expect(evaluateCommand("git status --short", askRules, sandboxed)).toEqual({
+      verdict: "ask",
+      reason: "confirm status",
+    });
+  });
+});
+
+describe("expanded sandbox-only mechanical classification", () => {
+  const rules = loadRules('{"deny":[],"allow":[],"ask":[]}');
+  const sandboxed = { effectSandboxed: true } as const;
+
+  test.each([
+    "git diff --check",
+    "git diff --quiet --exit-code",
+    "git diff --stat -- src/parser.ts",
+    "git rev-parse --show-toplevel",
+    "git merge-base --is-ancestor main HEAD",
+    "git ls-files --cached -- src",
+    "git ls-tree --name-only HEAD",
+    "git show-ref --verify refs/heads/main",
+    "git for-each-ref --format='%(refname)' refs/heads",
+    "git describe --always HEAD",
+    "git name-rev --name-only HEAD",
+    "git rev-list --count main",
+    "git branch --show-current",
+    "git branch --list main",
+    "git branch --list -- --list",
+    "git worktree list --porcelain",
+    "git remote",
+    "git stash list --oneline",
+    "git stash show --stat stash@{0}",
+    "git tag --list v1.0.0",
+    "git tag --list -- --list",
+  ])("allows a concrete expanded Git read: %s", (command) => {
+    expect(evaluateCommandWithAudit(command, rules, sandboxed)).toEqual({
+      verdict: "allow",
+      audit: expect.objectContaining({ basis: "sandbox-git-allow" }),
+    });
+    expect(evaluateCommand(command, rules).verdict).not.toBe("allow");
+  });
+
+  test.each([
+    "git diff --no-index left right",
+    "git diff --future-option",
+    "git rev-parse --parseopt",
+    "git for-each-ref --stdin",
+    "git name-rev --stdin",
+    "git rev-list --stdin",
+    "git branch feature/new",
+    "git branch -- --list",
+    "git branch --list --contains --delete victim",
+    "git branch --color victim",
+    "git tag --color -f --column existing",
+    "git remote -v",
+    "git remote get-url origin",
+    "git stash pop",
+    "git tag v1.0.0",
+    "git tag -- --list",
+    "git tag --list --contains --delete v1.0.0",
+    "git tag --color victim",
+    "git worktree add /tmp/unverified",
+    "git worktree remove /tmp/worktree",
+    "git pull --ff-only",
+    "git pull --ff-only --no-rebase --no-autostash origin main",
+    "git pull --ff-only --no-rebase https://github.com/example/repo.git main",
+    "git pull --ff-only --no-rebase --no-autostash https://github.com/example/repo.git main",
+  ])(
+    "keeps an unsafe or unproven expanded Git form off ALLOW: %s",
+    (command) => {
+      expect(evaluateCommand(command, rules, sandboxed).verdict).not.toBe(
+        "allow",
+      );
+    },
+  );
+
+  test("separates verified git -C read and mutation capabilities", async () => {
+    const base = await mkdtemp(join(tmpdir(), "sandbox-git-c-expanded-"));
+    const active = join(base, "active");
+    const sibling = join(base, "sibling");
+    const createRoot = join(base, "managed");
+    const newWorktree = join(createRoot, "feature");
+    await mkdir(active);
+    await mkdir(sibling);
+    await mkdir(createRoot);
+    try {
+      const canonicalActive = realpathSync(active);
+      const canonicalSibling = realpathSync(sibling);
+      const canonicalCreateRoot = realpathSync(createRoot);
+      const context = {
+        cwd: canonicalActive,
+        navigableRoots: [canonicalActive, canonicalSibling],
+      };
+      const activeOptions = {
+        effectSandboxed: true,
+        trustedGitCwdTarget: canonicalActive,
+        trustedReadContext: context,
+        trustedWritableWorktrees: [canonicalActive],
+        trustedWorktreeCreateRoots: [canonicalCreateRoot],
+      } as const;
+      expect(
+        evaluateCommand(
+          `git -C ${canonicalActive} rev-parse HEAD`,
+          rules,
+          activeOptions,
+        ).verdict,
+      ).toBe("allow");
+      expect(
+        evaluateCommand(
+          `git -C ${canonicalActive} commit -m message`,
+          rules,
+          activeOptions,
+        ).verdict,
+      ).toBe("allow");
+      expect(
+        evaluateCommand(
+          `git -C ${canonicalActive} worktree add -b feature/new ${newWorktree}`,
+          rules,
+          activeOptions,
+        ).verdict,
+      ).toBe("allow");
+      expect(
+        evaluateCommand(
+          `git worktree lock ${canonicalActive}`,
+          rules,
+          activeOptions,
+        ).verdict,
+      ).toBe("allow");
+      expect(
+        evaluateCommand(
+          `git worktree unlock ${canonicalActive}`,
+          rules,
+          activeOptions,
+        ).verdict,
+      ).toBe("allow");
+
+      const siblingOptions = {
+        ...activeOptions,
+        trustedGitCwdTarget: canonicalSibling,
+      } as const;
+      expect(
+        evaluateCommand(
+          `git -C ${canonicalSibling} rev-parse HEAD`,
+          rules,
+          siblingOptions,
+        ).verdict,
+      ).toBe("allow");
+      expect(
+        evaluateCommand(
+          `git -C ${canonicalSibling} status --short`,
+          rules,
+          siblingOptions,
+        ).verdict,
+      ).toBe("allow");
+      expect(
+        evaluateCommand(
+          `git -C ${canonicalSibling} commit -m message`,
+          rules,
+          siblingOptions,
+        ).verdict,
+      ).not.toBe("allow");
+      const siblingLeadingCdOptions = {
+        ...activeOptions,
+        trustedLeadingCdTarget: canonicalSibling,
+        trustedReadContext: {
+          ...context,
+          cwd: canonicalSibling,
+        },
+      } as const;
+      expect(
+        evaluateCommand(
+          `cd ${canonicalSibling} && git commit -m message`,
+          rules,
+          siblingLeadingCdOptions,
+        ).verdict,
+      ).not.toBe("allow");
+      expect(
+        evaluateCommand(
+          `git worktree add --force ${newWorktree}`,
+          rules,
+          activeOptions,
+        ).verdict,
+      ).not.toBe("allow");
+      expect(
+        evaluateCommand(
+          `git worktree add -B main ${newWorktree}`,
+          rules,
+          activeOptions,
+        ).verdict,
+      ).not.toBe("allow");
+      expect(
+        evaluateCommand(
+          `git worktree add ${join(base, "outside")}`,
+          rules,
+          activeOptions,
+        ).verdict,
+      ).not.toBe("allow");
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  test("requires verified scope and preserves configured ASK for project readers", () => {
+    const cwd = realpathSync(resolve(import.meta.dir, "../.."));
+    expect(evaluateCommand("pwd -P", rules, sandboxed).verdict).not.toBe(
+      "allow",
+    );
+    expect(
+      evaluateCommand("cat package.json", rules, sandboxed).verdict,
+    ).not.toBe("allow");
+    const askRules = loadRules(
+      String.raw`{"deny":[],"allow":[],"ask":[{"pattern":"^cat\\s","reason":"confirm cat"}]}`,
+    );
+    expect(
+      evaluateCommand("cat package.json", askRules, {
+        effectSandboxed: true,
+        trustedReadContext: { cwd, navigableRoots: [cwd] },
+      }),
+    ).toEqual({ verdict: "ask", reason: "confirm cat" });
+  });
+
+  test("allows path-free project readers and keeps pathname reads residual", async () => {
+    const base = await mkdtemp(join(tmpdir(), "sandbox-project-readers-"));
+    const project = join(base, "project");
+    const outside = join(base, "outside.txt");
+    const source = join(project, "source.txt");
+    const data = join(project, "data.json");
+    const hidden = join(project, ".env");
+    const credentials = join(project, "credentials.json");
+    const privateKey = join(project, "server.key");
+    const insideLink = join(project, "inside-link");
+    const outsideLink = join(project, "outside-link");
+    const dashLink = join(project, "-");
+    await mkdir(project);
+    await writeFile(source, "needle\n");
+    await writeFile(data, '{"name":"demo","env":"field"}\n');
+    await writeFile(hidden, "SECRET=value\n");
+    await writeFile(credentials, '{"token":"secret"}\n');
+    await writeFile(privateKey, "private key\n");
+    await writeFile(outside, "outside\n");
+    await symlink(source, insideLink);
+    await symlink(outside, outsideLink);
+    await symlink(outside, dashLink);
+    const options = {
+      effectSandboxed: true,
+      trustedReadContext: {
+        cwd: project,
+        navigableRoots: [realpathSync(project)],
+      },
+    } as const;
+    try {
+      for (const command of ["pwd -P", "jq -n '1 + 1'"]) {
+        expect(evaluateCommandWithAudit(command, rules, options)).toEqual({
+          verdict: "allow",
+          audit: expect.objectContaining({ basis: "sandbox-read-allow" }),
+        });
+        expect(evaluateCommand(command, rules).verdict).not.toBe("allow");
+      }
+
+      expect(
+        evaluateCommand("pwd && cat source.txt", rules, options).verdict,
+      ).not.toBe("allow");
+      const writableOptions = {
+        ...options,
+        trustedWritableWorktrees: [realpathSync(project)],
+      };
+      expect(
+        evaluateCommand("git switch attacker", rules, writableOptions).verdict,
+      ).toBe("allow");
+      expect(
+        evaluateCommand(
+          "git switch attacker && cat source.txt",
+          rules,
+          writableOptions,
+        ).verdict,
+      ).not.toBe("allow");
+      expect(
+        evaluateCommand("git status && cat source.txt", rules, options).verdict,
+      ).not.toBe("allow");
+
+      for (const command of [
+        "ls -la .",
+        "stat source.txt",
+        "readlink inside-link",
+        "realpath source.txt",
+        "cat source.txt",
+        "head -n 1 source.txt",
+        "tail -n 1 source.txt",
+        "wc -l source.txt",
+        "grep -n needle source.txt",
+        "grep --color=never needle source.txt",
+        "jq '.name' data.json",
+        "jq '.env' data.json",
+        "ls -H -- -",
+        "ls -R .",
+        "ls -L .",
+        "cat .env",
+        "cat credentials.json",
+        "cat server.key",
+        "jq . credentials.json",
+        "cat outside-link",
+        `cat ${outside}`,
+        "cat ../outside.txt",
+        "cat .",
+        "grep needle .",
+        "grep -R needle .",
+        "grep -ne needle /etc/passwd",
+        "grep --color needle /etc/passwd",
+        "grep --recursive needle .",
+        "jq -n env",
+        "jq -n '$ENV'",
+        `jq -n '"\\(env)"'`,
+        `jq -n '"\\($ENV)"'`,
+        "jq 'include \"module\"' data.json",
+        "jq --rawfile secret .env '.name' data.json",
+        "cat source.txt > copy.txt",
+        `cat ${Array.from({ length: 65 }, () => "source.txt").join(" ")}`,
+      ]) {
+        expect(evaluateCommand(command, rules, options).verdict).not.toBe(
+          "allow",
+        );
+      }
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 });
 

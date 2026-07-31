@@ -559,6 +559,16 @@ const setupPermissionPolicy = (
     const effectSandboxed = executionBoundary?.mode === "sandboxed";
     const isEscalated = executionBoundary?.mode === "escalated";
     const evaluationRules = isEscalated ? { ...rules, allow: [] } : rules;
+    const sandboxEvaluationOptions = {
+      effectSandboxed,
+      ...(effectSandboxed && executionBoundary?.writableWorktrees !== undefined
+        ? { trustedWritableWorktrees: executionBoundary.writableWorktrees }
+        : {}),
+      ...(effectSandboxed &&
+      executionBoundary?.worktreeCreateRoots !== undefined
+        ? { trustedWorktreeCreateRoots: executionBoundary.worktreeCreateRoots }
+        : {}),
+    };
 
     try {
       const { input } = event;
@@ -594,7 +604,7 @@ const setupPermissionPolicy = (
         command,
         evaluationRules,
         isEscalated ? [] : activeSkillBashAllows,
-        { effectSandboxed },
+        sandboxEvaluationOptions,
       );
       recordDeterministic(event.toolCallId, "initial", result);
       if (result.verdict === "allow" && result.grantedBySkill === true) {
@@ -603,9 +613,11 @@ const setupPermissionPolicy = (
           gitCwd === undefined ||
           (gitCwd !== null && ctx.cwd === undefined)
         ) {
-          result = evaluateCommandWithAudit(command, evaluationRules, {
-            effectSandboxed,
-          });
+          result = evaluateCommandWithAudit(
+            command,
+            evaluationRules,
+            sandboxEvaluationOptions,
+          );
           recordDeterministic(event.toolCallId, "skill-fallback", result);
         } else if (gitCwd !== null && ctx.cwd !== undefined) {
           const candidate = resolve(ctx.cwd, gitCwd);
@@ -620,9 +632,11 @@ const setupPermissionPolicy = (
             projectDiscovery.leadingNavigation?.scope !== "listed-worktree" ||
             !projectDiscovery.leadingNavigation.sameRepository
           ) {
-            result = evaluateCommandWithAudit(command, evaluationRules, {
-              effectSandboxed,
-            });
+            result = evaluateCommandWithAudit(
+              command,
+              evaluationRules,
+              sandboxEvaluationOptions,
+            );
             recordDeterministic(event.toolCallId, "skill-fallback", result);
           }
         }
@@ -776,8 +790,16 @@ const setupPermissionPolicy = (
             });
             trustedGitReadCwdTarget = readCwdTarget;
             result = evaluateCommandWithAudit(command, evaluationRules, {
-              effectSandboxed,
+              ...sandboxEvaluationOptions,
               trustedGitCwdTarget: readCwdTarget,
+              ...(projectDiscovery.kind !== "git"
+                ? {}
+                : {
+                    trustedReadContext: {
+                      cwd: projectDiscovery.cwd,
+                      navigableRoots: projectDiscovery.navigableRoots,
+                    },
+                  }),
             });
             recordDeterministic(event.toolCallId, "verified-git-c", result);
           }
@@ -959,7 +981,7 @@ const setupPermissionPolicy = (
         trustedReadContext !== undefined
       ) {
         result = evaluateCommandWithAudit(command, evaluationRules, {
-          effectSandboxed,
+          ...sandboxEvaluationOptions,
           ...(trustedLeadingCdTarget === undefined
             ? {}
             : { trustedLeadingCdTarget }),

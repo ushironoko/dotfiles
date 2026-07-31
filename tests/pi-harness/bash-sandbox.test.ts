@@ -50,7 +50,9 @@ const config = (): HarnessConfig => ({
 
 const profile = (cwd = "/repo"): BashSandboxProfile => ({
   cwd,
+  activeWorktree: cwd,
   writableRoots: [cwd, "/private/scratch"],
+  configuredWriteRoots: [],
   scratchDirectory: "/private/scratch",
   networkMode: "denied",
   fingerprint: "a".repeat(64),
@@ -97,6 +99,7 @@ const setup = (
     attach?: boolean;
     commandPrefix?: string;
     spawnFn?: SpawnFunction;
+    sandboxProfile?: BashSandboxProfile;
     userOwnerOrder?: "before" | "after";
     validateWritableWorktree?: (
       path: string,
@@ -149,7 +152,7 @@ const setup = (
   };
   const controller = setupBashSandbox(pi, config(), {
     loadRuntime: async () => ({ SandboxManager: fakeManager }),
-    buildProfile: async () => profile(),
+    buildProfile: async () => options.sandboxProfile ?? profile(),
     makeTempDirectory: async () => "/private/scratch",
     chmodPath: async () => {},
     accessPath: async () => {},
@@ -195,7 +198,7 @@ describe("Bash sandbox profile", () => {
       undefined,
       {
         home: "/home/test",
-        canonicalize: async () => "/repo/active/subdir",
+        canonicalize: async (path) => path,
         discoverProject: async (_cwd, options) => {
           discoveryTimeoutMs = options?.timeoutMs;
           return {
@@ -225,6 +228,8 @@ describe("Bash sandbox profile", () => {
       "/private/scratch",
       "/home/test/trusted-output",
     ]);
+    expect(result.activeWorktree).toBe("/repo/active");
+    expect(result.configuredWriteRoots).toEqual(["/home/test/trusted-output"]);
     expect(result.writableRoots).not.toContain("/repo/other-worktree");
     expect(result.runtimeConfig.filesystem.allowWrite).toEqual([
       ...result.writableRoots,
@@ -234,6 +239,40 @@ describe("Bash sandbox profile", () => {
         "/repo/common.git/config",
         "/repo/common.git/hooks",
       ]),
+    );
+  });
+
+  test("canonicalizes configured write roots while preserving a missing tail", async () => {
+    const sandboxConfig = structuredClone(DEFAULT_BASH_SANDBOX_CONFIG);
+    sandboxConfig.filesystem.allowWrite.push("/tmp/missing-parent/worktrees");
+    const result = await buildBashSandboxProfile(
+      "/repo",
+      "/private/scratch",
+      sandboxConfig,
+      undefined,
+      {
+        canonicalize: async (path) => {
+          if (
+            path === "/tmp/missing-parent/worktrees" ||
+            path === "/tmp/missing-parent"
+          ) {
+            throw Object.assign(new Error("missing"), { code: "ENOENT" });
+          }
+          return path === "/tmp" ? "/private/tmp" : path;
+        },
+        discoverProject: async () => ({
+          kind: "non-git",
+          cwd: "/repo",
+          fingerprint: "project-fingerprint",
+        }),
+      },
+    );
+
+    expect(result.configuredWriteRoots).toEqual([
+      "/private/tmp/missing-parent/worktrees",
+    ]);
+    expect(result.runtimeConfig.filesystem.allowWrite).toContain(
+      "/private/tmp/missing-parent/worktrees",
     );
   });
 
@@ -301,6 +340,8 @@ describe("Bash effect sandbox lifecycle", () => {
       mode: "sandboxed",
       network: "denied",
       profileFingerprint: "a".repeat(64),
+      writableWorktrees: ["/repo"],
+      worktreeCreateRoots: [],
     });
     expect(runtime.pi.tools.map((tool) => tool.name)).toContain(
       "bash_escalated",
@@ -343,6 +384,10 @@ describe("Bash effect sandbox lifecycle", () => {
     expect(runtime.controller.boundaryFor("bash")?.profileFingerprint).not.toBe(
       initialFingerprint,
     );
+    expect(runtime.controller.boundaryFor("bash")?.writableWorktrees).toEqual([
+      "/repo",
+      "/repo/linked",
+    ]);
 
     await runtime.controller.registerWritableWorktree("/repo/linked");
     expect(runtime.fakeManager.updates).toHaveLength(1);
@@ -353,6 +398,55 @@ describe("Bash effect sandbox lifecycle", () => {
       "/repo",
       "/private/scratch",
     ]);
+    expect(runtime.controller.boundaryFor("bash")?.writableWorktrees).toEqual([
+      "/repo",
+    ]);
+  });
+
+  test("registers an already-configured writable worktree as a capability", async () => {
+    const configuredRoot = "/repo/configured";
+    const baseProfile = profile();
+    const sandboxProfile: BashSandboxProfile = {
+      ...baseProfile,
+      writableRoots: [...baseProfile.writableRoots, configuredRoot],
+      configuredWriteRoots: [configuredRoot],
+      runtimeConfig: {
+        ...baseProfile.runtimeConfig,
+        filesystem: {
+          ...baseProfile.runtimeConfig.filesystem,
+          allowWrite: [...baseProfile.writableRoots, configuredRoot],
+        },
+      },
+    };
+    const runtime = setup({
+      sandboxProfile,
+      validateWritableWorktree: async () => ({
+        ok: true,
+        canonicalCwd: configuredRoot,
+      }),
+    });
+    await runtime.pi.emitSessionStart({
+      type: "session_start",
+      reason: "startup",
+    });
+
+    await runtime.controller.registerWritableWorktree(configuredRoot);
+    expect(runtime.fakeManager.updates).toHaveLength(0);
+    expect(runtime.controller.boundaryFor("bash")).toEqual(
+      expect.objectContaining({
+        writableWorktrees: ["/repo", configuredRoot],
+        worktreeCreateRoots: [configuredRoot],
+      }),
+    );
+
+    await runtime.controller.revokeWritableWorktree(configuredRoot);
+    expect(runtime.fakeManager.updates).toHaveLength(0);
+    expect(runtime.controller.boundaryFor("bash")?.writableWorktrees).toEqual([
+      "/repo",
+    ]);
+    expect(sandboxProfile.runtimeConfig.filesystem.allowWrite).toContain(
+      configuredRoot,
+    );
   });
 
   test("merges concurrent registrations in the same session", async () => {
@@ -666,6 +760,7 @@ describe("controlled Bash launcher", () => {
         BASH_ENV: "/tmp/startup.sh",
         DYLD_INSERT_LIBRARIES: "/tmp/inject.dylib",
         GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
+        GIT_OPTIONAL_LOCKS: "1",
         PI_HARNESS_CODEX_STAGE_CAPABILITY: "prompt,review",
         GH_TOKEN: "secret",
         OPENAI_API_KEY: "secret",
@@ -679,6 +774,7 @@ describe("controlled Bash launcher", () => {
       HOME: "/home/test",
       LANG: "C.UTF-8",
       SHELL: CONTROLLED_BASH_PATH,
+      GIT_OPTIONAL_LOCKS: "0",
       TMPDIR: "/private/scratch",
     });
     expect(env.PATH).toBe("/usr/bin:/bin");

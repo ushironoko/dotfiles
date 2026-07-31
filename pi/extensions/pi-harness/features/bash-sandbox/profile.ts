@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import type { BashSandboxConfig } from "../../config";
 import {
@@ -13,7 +13,9 @@ export const BASH_SANDBOX_PROJECT_DISCOVERY_TIMEOUT_MS = 5_000;
 
 export interface BashSandboxProfile {
   readonly cwd: string;
+  readonly activeWorktree?: string;
   readonly writableRoots: readonly string[];
+  readonly configuredWriteRoots: readonly string[];
   readonly scratchDirectory: string;
   readonly networkMode: "denied" | "allowlisted";
   readonly fingerprint: string;
@@ -33,6 +35,27 @@ const expandHome = (path: string, home: string): string => {
 };
 
 const unique = (values: readonly string[]): string[] => [...new Set(values)];
+
+const canonicalizeWithMissingTail = async (
+  path: string,
+  canonicalize: (path: string) => Promise<string>,
+): Promise<string> => {
+  let current = resolve(path);
+  const missingTail: string[] = [];
+  while (true) {
+    try {
+      return resolve(await canonicalize(current), ...missingTail);
+    } catch (error) {
+      const { code } = error as NodeJS.ErrnoException;
+      const parent = dirname(current);
+      if ((code !== "ENOENT" && code !== "ENOTDIR") || parent === current) {
+        throw error;
+      }
+      missingTail.unshift(basename(current));
+      current = parent;
+    }
+  }
+};
 
 const profileFingerprint = (runtimeConfig: SandboxRuntimeConfig): string =>
   createHash("sha256")
@@ -98,8 +121,10 @@ export const buildBashSandboxProfile = async (
   }
 
   const home = options.home ?? homedir();
-  const configuredWriteRoots = config.filesystem.allowWrite.map((path) =>
-    expandHome(path, home),
+  const configuredWriteRoots = await Promise.all(
+    config.filesystem.allowWrite.map((path) =>
+      canonicalizeWithMissingTail(expandHome(path, home), canonicalize),
+    ),
   );
   const writableRoots = unique([
     ...projectRoots,
@@ -135,7 +160,11 @@ export const buildBashSandboxProfile = async (
 
   return {
     cwd: canonicalCwd,
+    ...(project.kind === "git"
+      ? { activeWorktree: project.activeWorktree }
+      : {}),
     writableRoots,
+    configuredWriteRoots,
     scratchDirectory,
     networkMode:
       config.network.allowedDomains.length === 0 ? "denied" : "allowlisted",
