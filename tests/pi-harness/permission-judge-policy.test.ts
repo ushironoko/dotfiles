@@ -21,6 +21,7 @@ import {
   pinCodexStageCommand,
 } from "../../pi/extensions/pi-harness/features/permission-policy/codex-stage-capability";
 import type { PermissionProjectContext } from "../../pi/extensions/pi-harness/features/permission-policy/context";
+import type { PermissionJudge } from "../../pi/extensions/pi-harness/features/permission-policy/judge";
 import { loadRules } from "../../pi/extensions/pi-harness/features/permission-policy/rules";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import type { ToolCallEvent } from "../../pi/extensions/pi-harness/lib/pi-like";
@@ -70,6 +71,16 @@ const ollamaResponse = (verdict: string): Response =>
     done: true,
     done_reason: "stop",
   });
+
+const askingJudge = (): PermissionJudge => ({
+  async judge() {
+    return {
+      kind: "ask",
+      reason: "local judge requested user confirmation",
+    };
+  },
+  clear() {},
+});
 
 const makeConfig = (
   permissionJudge?: PermissionJudgeConfig,
@@ -177,6 +188,12 @@ const createTestAbortController = (): {
   };
 };
 
+const signalAborted = (value: unknown): boolean =>
+  typeof value === "object" &&
+  value !== null &&
+  "aborted" in value &&
+  value.aborted === true;
+
 describe("permission policy local judge routing", () => {
   test("auto-approves an unruled command only on structured ALLOW", async () => {
     const upstream = await start(() => ollamaResponse("ALLOW"));
@@ -220,7 +237,9 @@ describe("permission policy local judge routing", () => {
 
     expect(await pi.emitToolCall(bashCall("git status --short"))).toEqual({
       block: true,
-      reason: "local judge requested user confirmation",
+      reason: expect.stringMatching(
+        /denied by the user[\s\S]*local judge requested user confirmation/,
+      ),
     });
     expect(chatRequests(upstream)).toHaveLength(1);
   });
@@ -270,8 +289,9 @@ describe("permission policy local judge routing", () => {
       ),
     ).toEqual({
       block: true,
-      reason:
-        "git -C の対象を登録済みの同一リポジトリworktree内と確認できませんでした",
+      reason: expect.stringMatching(
+        /interactive UI is unavailable[\s\S]*git -C の対象を登録済みの同一リポジトリworktree内と確認できませんでした/,
+      ),
     });
     expect(upstream.received).toHaveLength(0);
   });
@@ -295,8 +315,9 @@ describe("permission policy local judge routing", () => {
     ]) {
       expect(await pi.emitToolCall(bashCall(command))).toEqual({
         block: true,
-        reason:
-          "Git の作業場所・設定・不明なグローバルオプション変更には確認が必要です",
+        reason: expect.stringMatching(
+          /interactive UI is unavailable[\s\S]*Git の作業場所・設定・不明なグローバルオプション変更には確認が必要です/,
+        ),
       });
     }
     expect(discoveries).toBe(0);
@@ -580,8 +601,9 @@ describe("permission policy local judge routing", () => {
         ),
       ).toEqual({
         block: true,
-        reason:
-          "プロジェクト境界を検証できないため変更コマンドには確認が必要です",
+        reason: expect.stringMatching(
+          /interactive UI is unavailable[\s\S]*プロジェクト境界を検証できないため変更コマンドには確認が必要です/,
+        ),
       });
     }
     expect(upstream.received).toHaveLength(0);
@@ -651,7 +673,9 @@ describe("permission policy local judge routing", () => {
 
     expect(await pi.emitToolCall(bashCall(`bun "$'$(printf PWN)'"`))).toEqual({
       block: true,
-      reason: "local judge requested user confirmation",
+      reason: expect.stringMatching(
+        /interactive UI is unavailable[\s\S]*local judge requested user confirmation/,
+      ),
     });
     expect(chatRequests(upstream)).toHaveLength(1);
   });
@@ -1096,7 +1120,9 @@ describe("permission policy local judge routing", () => {
       ),
     ).toEqual({
       block: true,
-      reason: "local judge requested user confirmation",
+      reason: expect.stringMatching(
+        /interactive UI is unavailable[\s\S]*local judge requested user confirmation/,
+      ),
     });
     expect(chatRequests(upstream)).toHaveLength(1);
     expect(pi.confirmDialogs).toHaveLength(0);
@@ -1181,7 +1207,9 @@ describe("permission policy local judge routing", () => {
       ),
     ).toEqual({
       block: true,
-      reason: "登録済みの同一リポジトリworktreeへの移動と確認できませんでした",
+      reason: expect.stringMatching(
+        /interactive UI is unavailable[\s\S]*登録済みの同一リポジトリworktreeへの移動と確認できませんでした/,
+      ),
     });
     expect(upstream.received).toHaveLength(0);
   });
@@ -1234,7 +1262,9 @@ describe("permission policy local judge routing", () => {
       ),
     ).toEqual({
       block: true,
-      reason: "登録済みの同一リポジトリworktreeへの移動と確認できませんでした",
+      reason: expect.stringMatching(
+        /interactive UI is unavailable[\s\S]*登録済みの同一リポジトリworktreeへの移動と確認できませんでした/,
+      ),
     });
     expect(discoveredTarget).toBe(target);
     expect(upstream.received).toHaveLength(0);
@@ -1249,6 +1279,29 @@ describe("permission policy local judge routing", () => {
     expect(
       await accepted.emitToolCall(bashCall("git rev-parse HEAD", "accepted")),
     ).toBeUndefined();
+    const acceptedPatch = await accepted.emitToolResult({
+      type: "tool_result",
+      toolName: "bash",
+      toolCallId: "accepted",
+      content: [{ type: "text", text: "command output" }],
+      isError: false,
+    });
+    expect(acceptedPatch?.content).toEqual([
+      {
+        type: "text",
+        text: expect.stringMatching(/local verifier returned ASK/i),
+      },
+      { type: "text", text: "command output" },
+    ]);
+    expect(
+      await accepted.emitToolResult({
+        type: "tool_result",
+        toolName: "bash",
+        toolCallId: "accepted",
+        content: [{ type: "text", text: "duplicate" }],
+        isError: false,
+      }),
+    ).toBeUndefined();
 
     content = "not a verdict";
     const rejected = createFakePi();
@@ -1258,11 +1311,46 @@ describe("permission policy local judge routing", () => {
       await rejected.emitToolCall(bashCall("git rev-parse HEAD", "rejected")),
     ).toEqual({
       block: true,
-      reason: "local judge did not return a valid structured decision",
+      reason: expect.stringMatching(
+        /denied by the user[\s\S]*local judge did not return a valid structured decision/,
+      ),
     });
   });
 
-  test("bounds confirmation with the active signal and configured timeout", async () => {
+  test("surfaces accepted local ASK on only the matching tool result", async () => {
+    const pi = createFakePi();
+    pi.queueConfirm(true);
+    setupPermissionPolicy(pi, makeConfig(), { judge: askingJudge() });
+
+    expect(
+      await pi.emitToolCall(bashCall("git rev-parse HEAD", "stub-ask")),
+    ).toBeUndefined();
+    expect(
+      await pi.emitToolResult({
+        type: "tool_result",
+        toolName: "bash",
+        toolCallId: "other-call",
+        content: [{ type: "text", text: "other output" }],
+        isError: false,
+      }),
+    ).toBeUndefined();
+    const patch = await pi.emitToolResult({
+      type: "tool_result",
+      toolName: "bash",
+      toolCallId: "stub-ask",
+      content: [{ type: "text", text: "command output" }],
+      isError: false,
+    });
+    expect(patch?.content).toEqual([
+      {
+        type: "text",
+        text: expect.stringMatching(/local verifier returned ASK/i),
+      },
+      { type: "text", text: "command output" },
+    ]);
+  });
+
+  test("bounds confirmation with a composed signal and configured timeout", async () => {
     const upstream = await start(() => ollamaResponse("ASK"));
     const pi = createFakePi();
     const controller = createTestAbortController();
@@ -1278,13 +1366,40 @@ describe("permission policy local judge routing", () => {
 
     expect(await pi.emitToolCall(bashCall("git rev-parse HEAD"))).toEqual({
       block: true,
-      reason: "local judge requested user confirmation",
+      reason: expect.stringContaining("denied by the user"),
     });
     expect(pi.confirmDialogs).toHaveLength(1);
-    expect(pi.confirmDialogs[0]?.dialogOptions).toEqual({
-      signal: controller.signal,
-      timeout: 1_234,
+    expect(pi.confirmDialogs[0]?.dialogOptions?.timeout).toBe(1_234);
+    expect(pi.confirmDialogs[0]?.dialogOptions?.signal).not.toBe(
+      controller.signal,
+    );
+    expect(signalAborted(pi.confirmDialogs[0]?.dialogOptions?.signal)).toBe(
+      false,
+    );
+  });
+
+  test("reports confirmation timeout and unavailable-user guidance distinctly", async () => {
+    const pi = createFakePi();
+    pi.queueConfirmUntilAborted();
+    setupPermissionPolicy(
+      pi,
+      makeConfig({
+        ...DEFAULT_PERMISSION_JUDGE_CONFIG,
+        enabled: false,
+        confirmTimeoutMs: 10,
+      }),
+      { judge: askingJudge() },
+    );
+
+    expect(await pi.emitToolCall(bashCall("git rev-parse HEAD"))).toEqual({
+      block: true,
+      reason: expect.stringMatching(
+        /timed out[\s\S]*user is unavailable[\s\S]*system prompt instructions[\s\S]*local judge requested user confirmation/i,
+      ),
     });
+    expect(signalAborted(pi.confirmDialogs[0]?.dialogOptions?.signal)).toBe(
+      true,
+    );
   });
 
   test("blocks non-interactively when the judge does not allow", async () => {
@@ -1294,7 +1409,9 @@ describe("permission policy local judge routing", () => {
 
     expect(await pi.emitToolCall(bashCall("git rev-parse HEAD"))).toEqual({
       block: true,
-      reason: "local judge requested user confirmation",
+      reason: expect.stringMatching(
+        /interactive UI is unavailable[\s\S]*local judge requested user confirmation/,
+      ),
     });
   });
 
@@ -1310,7 +1427,9 @@ describe("permission policy local judge routing", () => {
 
     expect(await pi.emitToolCall(bashCall("git rev-parse HEAD"))).toEqual({
       block: true,
-      reason: "local judge requested user confirmation",
+      reason: expect.stringMatching(
+        /interactive UI is unavailable[\s\S]*local judge requested user confirmation/,
+      ),
     });
     expect(signals).toEqual([`${formatChildPermissionSignal(token)}\n`]);
   });

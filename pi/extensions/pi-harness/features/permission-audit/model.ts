@@ -131,6 +131,7 @@ export interface HookPermissionStage {
 export type PermissionConfirmationStatus =
   | "accepted"
   | "rejected"
+  | "timed-out"
   | "not-shown"
   | "aborted";
 

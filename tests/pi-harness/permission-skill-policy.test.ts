@@ -654,8 +654,9 @@ describe("active skill allowed-tools permission grants", () => {
         ),
       ).toEqual({
         block: true,
-        reason:
-          "プロジェクト境界を検証できないため変更コマンドには確認が必要です",
+        reason: expect.stringMatching(
+          /interactive UI is unavailable[\s\S]*プロジェクト境界を検証できないため変更コマンドには確認が必要です/,
+        ),
       });
     }
 

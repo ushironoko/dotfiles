@@ -72,6 +72,25 @@ interface ConfirmDialog {
   dialogOptions?: DialogOptionsLike;
 }
 
+interface ActiveAbortSignalLike {
+  readonly aborted: boolean;
+  addEventListener(
+    type: "abort",
+    listener: () => void,
+    options?: { once?: boolean },
+  ): void;
+}
+
+const isActiveAbortSignalLike = (
+  value: unknown,
+): value is ActiveAbortSignalLike =>
+  typeof value === "object" &&
+  value !== null &&
+  "aborted" in value &&
+  typeof value.aborted === "boolean" &&
+  "addEventListener" in value &&
+  typeof value.addEventListener === "function";
+
 interface HandlerStore {
   session_start: PiEventHandler<"session_start">[];
   input: PiEventHandler<"input">[];
@@ -140,6 +159,8 @@ export interface FakePi extends PiLike {
   readonly footerRenderRequests: number;
   /** Queue a response for the next ctx.ui.confirm call (defaults to false). */
   queueConfirm(answer: boolean): void;
+  /** Keep the next confirmation pending until its AbortSignal expires. */
+  queueConfirmUntilAborted(): void;
   /** Select the zero-based option on the next ctx.ui.select call. */
   queueSelectIndex(index: number | undefined): void;
   /** Queue text (or cancellation) for the next ctx.ui.input call. */
@@ -187,7 +208,10 @@ export const createFakePi = (
   const appendedEntries: { customType: string; data: unknown }[] = [];
   const notifications: Notification[] = [];
   const widgets = new Map<string, string[] | undefined>();
-  const confirmQueue: boolean[] = [];
+  const confirmQueue: (
+    | { readonly kind: "answer"; readonly answer: boolean }
+    | { readonly kind: "until-aborted" }
+  )[] = [];
   const selectQueue: { index: number | undefined }[] = [];
   const inputQueue: { answer: string | undefined }[] = [];
   const selectDialogs: SelectDialog[] = [];
@@ -236,7 +260,18 @@ export const createFakePi = (
       },
       confirm: async (title, message, dialogOptions) => {
         confirmDialogs.push({ title, message, dialogOptions });
-        return confirmQueue.shift() ?? false;
+        const reply = confirmQueue.shift();
+        if (reply === undefined) return false;
+        if (reply.kind === "answer") return reply.answer;
+        const signal = isActiveAbortSignalLike(dialogOptions?.signal)
+          ? dialogOptions.signal
+          : undefined;
+        if (signal?.aborted === true || signal === undefined) return false;
+        return new Promise<boolean>((resolve) => {
+          signal.addEventListener("abort", () => resolve(false), {
+            once: true,
+          });
+        });
       },
       input: async (title, placeholder, dialogOptions) => {
         inputDialogs.push({ title, placeholder, dialogOptions });
@@ -425,7 +460,10 @@ export const createFakePi = (
       return footerRenderRequests;
     },
     queueConfirm(answer) {
-      confirmQueue.push(answer);
+      confirmQueue.push({ kind: "answer", answer });
+    },
+    queueConfirmUntilAborted() {
+      confirmQueue.push({ kind: "until-aborted" });
     },
     queueSelectIndex(index) {
       selectQueue.push({ index });

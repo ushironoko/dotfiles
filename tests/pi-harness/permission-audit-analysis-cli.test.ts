@@ -71,7 +71,9 @@ const deterministicAllow: PermissionAuditStage = {
   reasonCode: "configured-allow",
 };
 
-const askStages = (status: "accepted" | "rejected"): PermissionAuditStage[] => [
+const askStages = (
+  status: "accepted" | "rejected" | "timed-out",
+): PermissionAuditStage[] => [
   {
     type: "deterministic",
     phase: "initial",
@@ -175,6 +177,33 @@ describe("permission audit analysis CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ records: 3 });
   });
+  test("summary reports timed-out confirmations distinctly", async () => {
+    const root = await tempRoot();
+    const logDir = join(root, "logs");
+    await fs.mkdir(logDir, { recursive: true, mode: 0o700 });
+    const record = buildPermissionDecisionRecord(
+      recordInput(
+        "723e4567-e89b-42d3-a456-426614174000",
+        1,
+        "git status --short",
+        askStages("timed-out"),
+        "block",
+      ),
+    );
+    await fs.writeFile(
+      join(logDir, `permission-2026-07-24-${WRITER_ID}.jsonl`),
+      `${JSON.stringify(record)}\n`,
+      { mode: 0o600 },
+    );
+
+    const result = await run("summary", "--log-dir", logDir);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      records: 1,
+      summary: { byConfirmation: { "timed-out": 1 } },
+    });
+  });
+
   test("summary and top-ask remain body-free while reporting diagnostics", async () => {
     const root = await tempRoot();
     const { logDir, commandHash } = await writeFixture(root);
