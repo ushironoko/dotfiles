@@ -12,7 +12,7 @@ const TRANSPARENT_BACKGROUND_KEYS = [
 describe("transparent pi theme", () => {
   test("keeps only the user-message background opaque", () => {
     expect(theme.vars.transparent).toBe("");
-    expect(theme.vars.userMsgBg).toBe("#515659");
+    expect(theme.vars.userMsgBg).toBe("#303354");
     expect(theme.colors.userMessageBg).toBe("userMsgBg");
 
     for (const key of TRANSPARENT_BACKGROUND_KEYS) {

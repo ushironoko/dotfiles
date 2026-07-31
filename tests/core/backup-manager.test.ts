@@ -1,7 +1,7 @@
-import { describe, expect, it, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { promises as fs } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import {
   createBackupManager,
   type BackupManager,
@@ -181,6 +181,23 @@ describe("BackupManager", () => {
 
       expect(await fileExists(file1)).toBe(true);
       expect(await fileExists(file2)).toBe(false);
+    });
+
+    it("should treat macOS private paths as absolute restore targets", async () => {
+      const backupName = "2024-01-01T10-00-00";
+      const relativeFile = "private/var/tmp/file.txt";
+      const backupFile = join(backupDir, backupName, relativeFile);
+
+      await fs.mkdir(dirname(backupFile), { recursive: true });
+      await fs.writeFile(backupFile, "backup");
+
+      const action = spyOn(logger, "action");
+      await manager.restoreBackup(backupName, undefined, true);
+
+      expect(action).toHaveBeenCalledWith(
+        "Restoring",
+        `${relativeFile} -> /${relativeFile}`,
+      );
     });
 
     it("should throw error for non-existent backup", async () => {
