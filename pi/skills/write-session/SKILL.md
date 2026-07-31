@@ -21,6 +21,18 @@ task issues plus your working memory of each task's status — pi has no
 built-in task list), git state, plan file, and the decisions distilled from
 the conversation, then writes the deltas back to the relevant bit issues.
 
+## Temporary session state vs durable project memory
+
+Bit issues retain the complete in-flight story: plan changes, Target Files,
+progress, decisions made for the current work, blockers, and completion state.
+Do not move that temporary state into project memory.
+
+Only a verified fact, lasting decision or constraint, reusable user feedback,
+or stable reference that will help a future session is a durable-memory
+candidate. Promotion is separate and uses the `project-memory` workflow:
+`memory_recall` before parent-only `memory_update`. Never call `git notes` or
+`bit notes` directly, and never consolidate session refs.
+
 ## When to invoke
 
 - User explicitly asks: "save", "snapshot", "checkpoint", "update bit issue", "persist progress".
@@ -95,7 +107,9 @@ Collect, in parallel where independent:
 3. **Plan file** — if its absolute path is still in conversation context, read it. Otherwise skip (do not guess paths or fabricate plan content).
 4. **Git state** — `git diff --stat` (vs base or HEAD as relevant), `git log --oneline <parent_creation>..HEAD` for commits since session start.
 5. **Cross-session view** — `bit issue list --open` (race + scope-change check, same as `start-work` §4).
-6. **Agent memory** — distill from the current conversation: completed milestones, key decisions and their reasons, current blockers. Do not transcribe — extract.
+6. **Checkpoint material** — distill completed milestones, key decisions and
+   their reasons, and current blockers for the bit issues. Separately identify
+   any item that meets the durable-save criteria; do not transcribe.
 
 ### Phase 3: Compute the delta
 
@@ -129,6 +143,18 @@ For each axis, decide whether to write and what:
   3. Else (decision is local to one task — e.g. a library/algorithm choice for that task's implementation) → comment on **that task's issue**. If multiple tasks are touched but only one is in progress, treat the decision as local to the in-progress task (rule 3, not rule 2).
 - Each active blocker → `Blocker: <what is stuck>` on its task. If a previously logged blocker is now resolved, add `Resolved: <prior blocker>` on the same task.
 
+**Durable project-memory promotion:**
+
+- Progress, task status, Target Files, current blockers, and session-only
+  decisions stay exclusively in bit issues.
+- For each genuinely durable candidate, verify the fact/source, choose a
+  `project/`, `feedback/`, or `reference/` logical path, and follow the
+  `project-memory` skill.
+- Call `memory_recall(list)` and, when relevant, `memory_recall(show)` before
+  any put. If the merged entry already represents the content, plan no write.
+- Promote only through parent-only `memory_update(put|remove)`. Memory
+  unavailability does not block or roll back the issue checkpoint.
+
 **Parent snapshot:**
 
 - Append one `Snapshot YYYY-MM-DDTHH:MM:SSZ` comment to the parent summarizing: tasks completed since last snapshot, files touched (`git diff --stat` top 3 by line count, or one summary stat line), key decisions (≤3 bullets), open blockers. Use UTC timestamp.
@@ -151,6 +177,9 @@ Apply order:
 3. `task_completed {task_id, task_subject}` for each done-but-open task — the tool closes and verifies synchronously.
 4. Parent body update (if plan section changed) + `Plan updated:` comment.
 5. Parent `Snapshot <ts>:` comment last, so it reflects everything written above.
+6. After issue persistence succeeds, apply any planned durable promotions
+   through structured memory tools. A promotion failure is reported separately
+   and never retried through direct notes commands.
 
 Always `bit issue view <id>` immediately before any `bit issue update` — body
 is read-modify-write and you must not clobber concurrent edits from another
@@ -170,6 +199,8 @@ implicitly. The user resumes regular work afterwards.
 - Private repo names, company / org / client names, internal tool names — same confidentiality rules as apply to commit messages and PR descriptions in the global agent instructions.
 - Updates to parent `## Session Info`. That section is invariant for the session; if worktree path changed, something is wrong — report it instead of silently rewriting.
 - New issues. `write-session` only updates and comments. Creating new task issues mid-session is `start-work` §3 territory (re-run that, don't reinvent here).
+- Temporary task/progress/blocker state in project memory. Keep it in the bit
+  issues; only promote items that pass the durable-save criteria.
 
 ## Idempotency
 

@@ -39,6 +39,14 @@
       "source": "Bash(bit clone relay+*)",
       "pattern": "^bit\\s+clone\\s+relay\\+",
       "reason": "bit clone relay+ は禁止です"
+    },
+    {
+      "pattern": "^git\\s+notes\\s+(?:add|append|copy|edit|merge|prune|remove)\\b",
+      "reason": "git notes による直接変更は禁止です"
+    },
+    {
+      "pattern": "^bit\\s+notes\\s+(?:add|append|copy|edit|merge|prune|remove)\\b",
+      "reason": "bit notes による直接変更は禁止です"
     }
   ],
   "allow": [

@@ -86,6 +86,19 @@ The pi-harness permission policy also denies them.
 
 `bit issue init` / `create` / `list` / `view` / `update` / `close` / `reopen` / `comment add` / `comment list` / `search`
 
+### Project memory is feature-owned
+
+The pi-harness project-memory feature performs bounded aggregate startup recall
+for trusted repositories. `start-work` must not repeat that recall or turn it
+into a per-branch setup step.
+
+Bit issues remain authoritative for the session plan, Target Files, task
+progress, decisions, and blockers. Durable project knowledge is a separate
+concern handled through the structured `memory_recall` / `memory_update` tools
+and the `project-memory` skill. Never access `bit notes` or `git notes`
+directly, and never add a memory consolidation step to this lifecycle: managed
+session/writer refs remain readable through aggregate recall.
+
 ## 1. Decide: New Session or Resume
 
 ```bash
@@ -315,6 +328,10 @@ worktree_remove {path: "<worktree-absolute-path>", confirmed: true}
 ```
 
 The tool refuses dirty trees and verifies the removal afterwards.
+
+There is no project-memory consolidation or branch-note cleanup step before
+closing the parent. Promote a genuinely durable item separately through the
+`project-memory` workflow; temporary session state stays in the issues.
 
 ## 8. Error Handling
 

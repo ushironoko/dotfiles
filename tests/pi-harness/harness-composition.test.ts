@@ -28,6 +28,7 @@ const config = (
     subagent: features.subagent,
     workflow: features.workflow,
     "bit-task": features["bit-task"],
+    "agent-memory": false,
     statusline: false,
     "provider-log": false,
     "asuku-notify": false,
@@ -181,7 +182,23 @@ describe("pi-harness coordination browser composition", () => {
     ).toEqual({ block: true, reason: expect.any(String) });
   });
 
-  test("PI_HARNESS_CHILD=1 disables both resident sources", () => {
+  test("registers project-memory write only for the parent profile", () => {
+    const parentConfig = config("pi-composition-memory-parent", {
+      subagent: false,
+      workflow: false,
+      "bit-task": false,
+    });
+    parentConfig.features["agent-memory"] = true;
+    const parent = registration(parentConfig);
+    expect(parent.tools).toContain("memory_recall");
+    expect(parent.tools).toContain("memory_update");
+
+    const child = registration({ ...parentConfig, isChild: true });
+    expect(child.tools).toContain("memory_recall");
+    expect(child.tools).not.toContain("memory_update");
+  });
+
+  test("PI_HARNESS_CHILD=1 keeps read-only memory but disables resident sources", () => {
     const childConfig = loadConfig(
       { PI_HARNESS_CHILD: "1" },
       resolvePaths("/tmp/pi-composition-child-profile"),
@@ -190,9 +207,12 @@ describe("pi-harness coordination browser composition", () => {
     expect(childConfig.features.subagent).toBe(false);
     expect(childConfig.features.workflow).toBe(false);
     expect(childConfig.features["bit-task"]).toBe(false);
+    expect(childConfig.features["agent-memory"]).toBe(true);
     expect(registered.commands.has("subagents")).toBe(false);
     expect(registered.commands.has("bit-issues")).toBe(false);
     expect(registered.tools).not.toContain("subagent_status");
+    expect(registered.tools).toContain("memory_recall");
+    expect(registered.tools).not.toContain("memory_update");
   });
 });
 

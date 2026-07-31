@@ -19,6 +19,7 @@ export const TOGGLEABLE_FEATURES = [
   "subagent",
   "workflow",
   "bit-task",
+  "agent-memory",
   "statusline",
   "provider-log",
   "asuku-notify",
@@ -27,8 +28,16 @@ export const TOGGLEABLE_FEATURES = [
 
 export type ToggleableFeature = (typeof TOGGLEABLE_FEATURES)[number];
 
+/** New toggles remain optional only for legacy/narrow test adapters. */
+export type HarnessFeatures = Record<
+  Exclude<ToggleableFeature, "agent-memory">,
+  boolean
+> &
+  Partial<Record<"agent-memory", boolean>>;
+
 const CHILD_ALLOWED_FEATURES: ReadonlySet<ToggleableFeature> = new Set([
   "hook-bridge",
+  "agent-memory",
 ]);
 
 const DEFAULT_TOGGLES: Record<ToggleableFeature, boolean> = {
@@ -36,6 +45,7 @@ const DEFAULT_TOGGLES: Record<ToggleableFeature, boolean> = {
   subagent: true,
   workflow: true,
   "bit-task": true,
+  "agent-memory": true,
   statusline: true,
   "provider-log": false,
   "asuku-notify": true,
@@ -110,7 +120,8 @@ export const DEFAULT_BASH_SANDBOX_CONFIG: Readonly<BashSandboxConfig> = {
 
 export interface HarnessConfig {
   isChild: boolean;
-  features: Record<ToggleableFeature, boolean>;
+  /** Fully materialized by loadConfig; the new key is optional for narrow adapters. */
+  features: HarnessFeatures;
   trust: TrustConfig;
   paths: HarnessPaths;
   /** Always materialized by loadConfig; optional for narrow test adapters. */

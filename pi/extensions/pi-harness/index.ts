@@ -37,6 +37,7 @@ import {
 import setupSubagent from "./features/subagent/index";
 import setupWorkflow from "./features/workflow/index";
 import setupBitTask from "./features/bit-task/index";
+import setupAgentMemory from "./features/agent-memory/index";
 import setupStatusline from "./features/statusline/index";
 import setupProviderLog from "./features/provider-log/index";
 import setupAsukuNotify from "./features/asuku-notify/index";
@@ -195,6 +196,7 @@ const setupHarness = (
       onWorktreeRemoved: (path) => bashSandbox.revokeWritableWorktree(path),
     });
   }
+  if (config.features["agent-memory"]) setupAgentMemory(pi, config);
   if (config.features.statusline) setupStatusline(pi, config);
   if (config.features["provider-log"]) setupProviderLog(pi, config);
   if (config.features["ask-user-question"]) setupAskUserQuestion(pi);
