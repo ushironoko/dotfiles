@@ -49,14 +49,18 @@ uses one `belowEditor` widget and one focus owner for both sources.
   hidden browser. A new child run or either explicit browser command shows it
   again.
 - In the resident list, Up/Down, `j`/`k`, and PageUp/PageDown select across both
-  row kinds. Enter or Right opens the selected child or issue. `r` refreshes
-  open issues without polling or relay-backed watch behavior.
+  row kinds. Enter or Right opens the selected child or issue. `x` aborts the
+  selected active child invocation; parallel, chain, and workflow siblings in
+  that invocation stop together. Completed children and issue rows remain
+  unchanged. `r` refreshes open issues without polling or relay-backed watch
+  behavior.
 - Child and issue details use the same focused, zero-margin full-terminal
   overlay, covering the resident panes in both dimensions. PageUp/PageDown move
   by a viewport, Home/End jump to the ends, and Escape, Left, `b`, or `q` closes
-  the overlay and returns to the list. Child details retain live-follow
-  behavior. Transcript text, issue bodies, and comments use the theme's primary
-  `text` color rather than the secondary tool-output color.
+  the overlay and returns to the list. Child details retain live-follow behavior
+  and accept the same `x` kill action while the invocation is active. Transcript
+  text, issue bodies, and comments use the theme's primary `text` color rather
+  than the secondary tool-output color.
 - Issue detail is loaded lazily with `bit issue get <id> --format json`, then
   bounded raw output from `bit issue comment list <id>`. It shows metadata,
   labels, body, and comments read-only. Human-readable comment output is not
@@ -65,7 +69,9 @@ uses one `belowEditor` widget and one focus owner for both sources.
   live-follow mode; scrolling upward pauses follow until End is pressed.
 - The normal subagent/workflow tool row remains a compact status summary.
 
-Closing, hiding, or unfocusing the browser never cancels child execution.
+Closing, hiding, or unfocusing the browser never cancels child execution. Only
+an explicit `x` on an active child requests termination, records
+`user-killed`, and preserves normal persistence and parent completion delivery.
 Issue refresh also runs after the agent settles, when the panel gains focus,
 on explicit refresh, and immediately before issue detail loading. Refresh is
 single-flight and session-generation guarded; failures retain a stale
@@ -179,5 +185,8 @@ raw source data.
    hidden; then run `/subagents` or `/bit-issues` and confirm it reappears.
 9. With the private focus capability disabled in a test runtime, confirm Down
    remains native and `/subagents` opens/closes the public overlay fallback.
-10. Resume the parent session and confirm completed transcripts open from the
+10. Start a disposable child invocation, select one of its rows, press `x`, and
+    confirm every active sibling in that invocation changes to `user-killed`
+    after SIGTERM/SIGKILL cleanup while a completion reaches the parent.
+11. Resume the parent session and confirm completed transcripts open from the
     beginning and remain scrollable within the documented retention bounds.

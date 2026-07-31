@@ -191,6 +191,83 @@ describe("background child-run manager", () => {
     );
   });
 
+  test("kills the selected run's active invocation and reports user-killed", async () => {
+    const { registry, manager, entries, messages } = runtime();
+    const started = registry.beginInvocation({
+      toolCallId: "tool-1",
+      source: "subagent",
+      mode: "parallel",
+      label: "subagent parallel",
+      runs: [
+        { agent: "worker-1", task: "inspect first", taskIndex: 0 },
+        { agent: "worker-2", task: "inspect second", taskIndex: 1 },
+      ],
+    });
+    const [, selectedRunId] = started.runIds;
+    if (selectedRunId === undefined) throw new Error("missing selected run");
+    manager.markAgentStarted();
+    manager.schedule({
+      invocationId: started.invocationId,
+      toolCallId: "tool-1",
+      source: "subagent",
+      run(signal) {
+        for (const runId of started.runIds) {
+          registry.observe(runId, { type: "process_started", at: 1 });
+        }
+        return new Promise((_resolve, reject) => {
+          if (
+            !("addEventListener" in signal) ||
+            typeof signal.addEventListener !== "function"
+          ) {
+            reject(new Error("AbortSignal listener API unavailable"));
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => reject(new Error("killed from TUI")),
+            { once: true },
+          );
+        });
+      },
+    });
+    manager.acknowledgeToolResult("tool-1");
+    await Promise.resolve();
+
+    expect(manager.killInvocationForRun(selectedRunId)).toEqual({
+      status: "requested",
+      invocationId: started.invocationId,
+      affectedRuns: 2,
+    });
+    expect(manager.killInvocationForRun(selectedRunId)).toEqual({
+      status: "already-requested",
+      invocationId: started.invocationId,
+    });
+
+    await manager.drain(started.invocationId);
+    expect(entries).toHaveLength(1);
+    expect(messages).toEqual([]);
+    expect(registry.getInvocation(started.invocationId)?.runs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "aborted",
+          terminalReason: "user-killed",
+        }),
+        expect.objectContaining({
+          status: "aborted",
+          terminalReason: "user-killed",
+        }),
+      ]),
+    );
+    expect(manager.killInvocationForRun(selectedRunId)).toEqual({
+      status: "not-active",
+      invocationId: started.invocationId,
+    });
+
+    manager.markAgentSettled();
+    expect(messages).toHaveLength(1);
+    expect(JSON.stringify(messages[0])).toContain("was aborted");
+  });
+
   test("shutdown awaits settlement invalidation even when notification is suppressed", async () => {
     const invalidationStarted = deferred<void>();
     const invalidated = deferred<void>();
