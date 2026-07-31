@@ -56,7 +56,11 @@ describe("background-agent system prompt", () => {
     expect(systemPrompt).toStartWith(
       "Base system prompt.\n\n## Background agent completion",
     );
+    expect(systemPrompt).toContain(
+      "subagent_status tool may be used for a one-off, non-blocking inspection",
+    );
     expect(systemPrompt).toContain("never use sleep");
+    expect(systemPrompt).toContain("repeated status checks");
     expect(systemPrompt).toContain(
       "Pi delivers completion automatically as a new message",
     );

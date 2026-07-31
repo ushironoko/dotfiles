@@ -29,6 +29,7 @@ import { join, resolve } from "node:path";
 import { schemaToJsonSchema } from "@tskm/compiler";
 import { format, resolveConfig } from "prettier";
 import { SubagentParameters } from "../pi/schemas/subagent";
+import { SubagentStatusParameters } from "../pi/schemas/subagent-status";
 import {
   TaskCompletedParameters,
   WorktreeCreateParameters,
@@ -52,6 +53,10 @@ interface Target {
 // tskm source and are inlined into their parent's JSON Schema.
 const TARGETS: Target[] = [
   { feature: "subagent", schemas: { SubagentParameters } },
+  {
+    feature: "child-runs",
+    schemas: { SubagentStatusParameters },
+  },
   {
     feature: "bit-task",
     schemas: {

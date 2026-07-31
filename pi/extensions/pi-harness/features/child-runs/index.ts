@@ -11,6 +11,7 @@ import {
   extractPersistedChildRuns,
 } from "./persistence";
 import { ChildRunRegistry } from "./registry";
+import { setupChildRunStatusTool } from "./status-tool";
 import { ChildRunsPanelController, type BrowserContextLike } from "./ui";
 
 interface RuntimeContextLike extends BrowserContextLike {
@@ -98,7 +99,7 @@ interface ExternalWriterLease {
 
 const BACKGROUND_AGENT_SYSTEM_PROMPT = `## Background agent completion
 
-The subagent and workflow tools run child agents asynchronously. After either tool accepts a background invocation, never use sleep, shell polling, repeated status checks, or any other blocking or waiting call to wait for it. Pi delivers completion automatically as a new message and starts the continuation turn. Continue only work that is independent of the child; otherwise end the current response and return control to Pi.`;
+The subagent and workflow tools run child agents asynchronously. The subagent_status tool may be used for a one-off, non-blocking inspection when current progress is needed. After a background invocation is accepted, never use sleep, shell polling, repeated status checks, or any other blocking or waiting call to wait for it. Pi delivers completion automatically as a new message and starts the continuation turn. Continue only work that is independent of the child; otherwise end the current response and return control to Pi.`;
 
 const appendBackgroundAgentSystemPrompt = (systemPrompt: string): string =>
   systemPrompt === ""
@@ -134,6 +135,12 @@ const setupChildRuns = (
 ): ChildRunsIntegration => {
   const runtime = pi as unknown as RuntimePiLike;
   const registry = new ChildRunRegistry();
+  if (
+    options.childExecution !== false &&
+    typeof pi.registerTool === "function"
+  ) {
+    setupChildRunStatusTool(pi, registry);
+  }
   const bitIssues = options.bitIssues
     ? new BitIssueRegistry({ cli: options.bitIssueCli })
     : undefined;

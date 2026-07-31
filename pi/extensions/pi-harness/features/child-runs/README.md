@@ -9,6 +9,10 @@ uses one `belowEditor` widget and one focus owner for both sources.
 - `subagent` and `workflow` validate and return an invocation ID immediately;
   their child pi processes continue asynchronously while the parent is free to
   do other work.
+- The parent model can call `subagent_status` with that invocation ID for a
+  one-off, non-blocking inspection. It returns each run's current state, live
+  draft when available, and recent sanitized assistant/tool activity. It covers
+  both `subagent` and `workflow` invocations, including retained completions.
 - The first child invocation mounts the browser in pi's `belowEditor` widget
   slot without stealing focus from the main editor.
 - When `bit-task` is enabled, `session_start` refreshes open issues in the
@@ -74,12 +78,13 @@ only one result is handed to pi at a time, while later results remain in the
 manager-local queue until the preceding notification turn settles.
 
 Whenever that background delivery runtime is available, pi-harness also
-appends parent system-prompt guidance before every agent run. It tells the
-parent never to wait with `sleep`, shell polling, repeated status checks, or
-other blocking calls: the parent may continue independent work, but otherwise
-must return control to pi until the automatic completion message starts the
-next turn. The guidance is omitted for the legacy synchronous fallback, where
-the tool call itself waits and returns the final result.
+appends parent system-prompt guidance before every agent run. It permits a
+one-off `subagent_status` inspection when current progress is useful, while
+still forbidding `sleep`, shell polling, repeated status checks, or other
+blocking waits: the parent may continue independent work, but otherwise must
+return control to pi until the automatic completion message starts the next
+turn. The guidance is omitted for the legacy synchronous fallback, where the
+tool call itself waits and returns the final result.
 
 A permission-policy block in a no-UI child emits a diagnostic signal bound to a
 random per-spawn token and makes that child run fail even if the model responds
@@ -130,10 +135,15 @@ persisted browser payload contains only:
 - local tool ordinals, tool names, and success/failure status;
 - synthetic truncation markers.
 
-It does **not** retain live drafts, thinking blocks, tool arguments,
+It does **not** persist live drafts, thinking blocks, tool arguments,
 tool-result bodies, stderr, images, signatures, provider/response IDs, raw
 tool-call IDs, arbitrary task working directories, or `{previous}`-expanded
-prompts.
+prompts. `subagent_status` may expose the current in-memory live draft, but it
+uses the same terminal-control sanitization, never exposes tool arguments or
+results, and wraps child text in an explicit untrusted JSON envelope. Like any
+tool result, that bounded snapshot enters the parent model context and parent
+session history; it is not additionally copied into child-run transcript
+persistence.
 
 Limits:
 
@@ -141,7 +151,8 @@ Limits:
 - eight retained background invocations, including manager-local completions and the single active notification turn;
 - 16 KiB per finalized assistant item;
 - 256 items and 64 KiB per run;
-- 512 KiB per invocation, divided fairly across runs;
+- 512 KiB per persisted invocation, divided fairly across runs;
+- 32 KiB per `subagent_status` response, with a fair per-run progress budget;
 - the newest 32 completed invocations / 2 MiB in both live and replayed
   browser history; active invocations are retained until completion.
 
