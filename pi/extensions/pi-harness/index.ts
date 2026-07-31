@@ -78,6 +78,10 @@ const setupHarness = (
       createCodexStagePin = createCodexStageExecutablePin,
     ...blockerOptions
   } = options;
+  // Install (or, when disabled after /reload, remove) the shared confirmation
+  // adapter before any permission handler can call ctx.ui.confirm. The bridge
+  // remains best-effort and preserves the original TUI dialog on failure.
+  setupAsukuNotify(pi, config);
   let codexStageModes = consumeCodexStageModes(config.isChild);
   let codexStageExecutable:
     | ReturnType<typeof createCodexStageExecutablePin>
@@ -193,7 +197,6 @@ const setupHarness = (
   }
   if (config.features.statusline) setupStatusline(pi, config);
   if (config.features["provider-log"]) setupProviderLog(pi, config);
-  if (config.features["asuku-notify"]) setupAsukuNotify(pi, config);
   if (config.features["ask-user-question"]) setupAskUserQuestion(pi);
   if (!config.isChild) setupBtw(pi);
 };
