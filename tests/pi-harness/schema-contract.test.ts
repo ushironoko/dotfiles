@@ -21,6 +21,8 @@ import { describe, expect, test } from "bun:test";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import setupBitTask from "../../pi/extensions/pi-harness/features/bit-task/index";
+import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
+import { setupChildRunStatusTool } from "../../pi/extensions/pi-harness/features/child-runs/status-tool";
 import setupSubagent from "../../pi/extensions/pi-harness/features/subagent/index";
 import setupWorkflow from "../../pi/extensions/pi-harness/features/workflow/index";
 import setupAskUserQuestion from "../../pi/extensions/pi-harness/features/ask-user-question/index";
@@ -49,6 +51,7 @@ const makeConfig = (): HarnessConfig => ({
 const registeredTools = (): Map<string, ToolDefLike> => {
   const pi = createFakePi();
   setupSubagent(pi, makeConfig());
+  setupChildRunStatusTool(pi, new ChildRunRegistry());
   setupBitTask(pi, makeConfig());
   setupWorkflow(pi, makeConfig());
   setupAskUserQuestion(pi);
@@ -221,6 +224,24 @@ describe("schema contract: registered shape (snapshot)", () => {
     `);
   });
 
+  test("subagent_status requires the invocation returned by an orchestrator", () => {
+    expect(parametersOf("subagent_status")).toMatchInlineSnapshot(`
+      {
+        "additionalProperties": true,
+        "properties": {
+          "invocationId": {
+            "description": "Invocation ID returned by subagent or workflow",
+            "type": "string",
+          },
+        },
+        "required": [
+          "invocationId",
+        ],
+        "type": "object",
+      }
+    `);
+  });
+
   test("workflow stage mode is an anyOf of const literals", () => {
     const params = parametersOf("workflow") as Record<string, unknown>;
     const stages = (params.properties as Record<string, unknown>)
@@ -267,6 +288,7 @@ describe("schema contract: pi validator accepts/rejects (real path)", () => {
     expect(() => validate("worktree_create", {})).toThrow();
     expect(() => validate("worktree_remove", { path: "/a" })).toThrow();
     expect(() => validate("workflow", {})).toThrow();
+    expect(() => validate("subagent_status", {})).toThrow();
   });
 
   test("accepts extra keys at root and nested levels (passthrough keeps objects open)", () => {
@@ -278,6 +300,12 @@ describe("schema contract: pi validator accepts/rejects (real path)", () => {
         stages: [{ mode: "fanout", tasks: [{ task: "t", extra: true }] }],
       }),
     ).not.toThrow();
+  });
+
+  test("accepts the invocation ID used by subagent_status", () => {
+    expect(
+      validate("subagent_status", { invocationId: "invocation-123" }),
+    ).toMatchObject({ invocationId: "invocation-123" });
   });
 
   test("preserves the boolean the worktree_remove security gate depends on", () => {

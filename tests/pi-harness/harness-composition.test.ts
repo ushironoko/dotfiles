@@ -79,6 +79,7 @@ describe("pi-harness coordination browser composition", () => {
     expect(registered.shortcuts.has("ctrl+alt+i")).toBe(true);
     expect(registered.tools).toContain("task_completed");
     expect(registered.tools).not.toContain("subagent");
+    expect(registered.tools).not.toContain("subagent_status");
     expect(registered.tools).not.toContain("workflow");
     const injection = await registered.pi.emitBeforeAgentStart({
       type: "before_agent_start",
@@ -102,6 +103,7 @@ describe("pi-harness coordination browser composition", () => {
     expect(registered.commands.has("bit-issues")).toBe(false);
     expect(registered.shortcuts.has("ctrl+alt+i")).toBe(false);
     expect(registered.tools).toContain("subagent");
+    expect(registered.tools).toContain("subagent_status");
   });
 
   test("registers one shared command pair when both sources are enabled", () => {
@@ -121,6 +123,7 @@ describe("pi-harness coordination browser composition", () => {
     expect(registered.tools).toEqual(
       expect.arrayContaining([
         "subagent",
+        "subagent_status",
         "workflow",
         "worktree_create",
         "worktree_remove",
@@ -141,6 +144,7 @@ describe("pi-harness coordination browser composition", () => {
     expect(registered.commands.has("bit-issues")).toBe(false);
     expect(registered.shortcuts.has("ctrl+alt+s")).toBe(false);
     expect(registered.shortcuts.has("ctrl+alt+i")).toBe(false);
+    expect(registered.tools).not.toContain("subagent_status");
   });
 
   test("keeps the mandatory permission policy when Codex launcher pinning fails", async () => {
@@ -188,6 +192,7 @@ describe("pi-harness coordination browser composition", () => {
     expect(childConfig.features["bit-task"]).toBe(false);
     expect(registered.commands.has("subagents")).toBe(false);
     expect(registered.commands.has("bit-issues")).toBe(false);
+    expect(registered.tools).not.toContain("subagent_status");
   });
 });
 

@@ -611,7 +611,7 @@ const setupSubagent = (
             {
               type: "text" as const,
               text: capText(
-                `Background subagent ${mode} accepted.\nInvocation ID: ${invocationId}\nUse /subagents to inspect progress; completion will be delivered to the parent automatically.`,
+                `Background subagent ${mode} accepted.\nInvocation ID: ${invocationId}\nUse subagent_status with this invocation ID for a one-off progress inspection; do not poll. /subagents opens the user-facing browser. Completion will be delivered to the parent automatically.`,
               ),
             },
           ],

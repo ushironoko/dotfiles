@@ -696,6 +696,9 @@ describe("child-run subagent integration", () => {
     const updateCountAtReturn = updates.length;
     expect(accepted.content[0]?.text).toContain("accepted");
     expect(accepted.content[0]?.text).toContain(invocationId);
+    expect(accepted.content[0]?.text).toContain(
+      "Use subagent_status with this invocation ID",
+    );
     expect(accepted.details.background.status).toBe("accepted");
     expect(controlled.isFinished()).toBe(false);
     await controlled.started;
@@ -1181,6 +1184,9 @@ describe("child-run subagent integration", () => {
     };
     const { invocationId } = accepted.details.background;
     expect(accepted.content[0]?.text).toContain("Background workflow accepted");
+    expect(accepted.content[0]?.text).toContain(
+      "Use subagent_status with this invocation ID",
+    );
 
     await background.drain(invocationId);
     expect(runtime.getAppendedEntries()).toEqual([]);
