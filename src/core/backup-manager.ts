@@ -12,6 +12,19 @@ import { expandPath, getRelativePath } from "../utils/paths.js";
 
 const SLICE_START = 0;
 const TIMESTAMP_LENGTH = 19;
+const ABSOLUTE_BACKUP_PREFIXES = [
+  "tmp/",
+  "var/",
+  "usr/",
+  "home/",
+  "opt/",
+  "private/",
+] as const;
+
+const getRestoreTargetPath = (file: string): string =>
+  ABSOLUTE_BACKUP_PREFIXES.some((prefix) => file.startsWith(prefix))
+    ? `/${file}`
+    : join(expandPath("~"), file);
 
 export const createBackupManager = (logger: Logger, config: BackupConfig) => {
   const backupFile = async (
@@ -153,14 +166,7 @@ export const createBackupManager = (logger: Logger, config: BackupConfig) => {
 
     for (const file of files) {
       if (targetPaths) {
-        const fullFilePath =
-          file.startsWith("tmp/") ||
-          file.startsWith("var/") ||
-          file.startsWith("usr/") ||
-          file.startsWith("home/") ||
-          file.startsWith("opt/")
-            ? `/${file}`
-            : join(expandPath("~"), file);
+        const fullFilePath = getRestoreTargetPath(file);
 
         const shouldInclude = targetPaths.some(
           (path) =>
@@ -175,16 +181,7 @@ export const createBackupManager = (logger: Logger, config: BackupConfig) => {
       }
 
       const sourcePath = join(expandedBackupDir, file);
-      // If file starts with known temp/absolute prefix, restore to original location
-      // Otherwise, restore relative to home
-      const targetPath =
-        file.startsWith("tmp/") ||
-        file.startsWith("var/") ||
-        file.startsWith("usr/") ||
-        file.startsWith("home/") ||
-        file.startsWith("opt/")
-          ? `/${file}`
-          : join(expandPath("~"), file);
+      const targetPath = getRestoreTargetPath(file);
 
       logger.action("Restoring", `${file} -> ${targetPath}`);
 
