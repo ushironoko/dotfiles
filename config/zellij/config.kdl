@@ -69,8 +69,8 @@ keybinds clear-defaults=true {
         // Scrollback (copy-mode equivalent; `e` inside opens $EDITOR)
         bind "[" { SwitchToMode "Scroll"; }
 
-        // Translate the last mouse selection with the local PLaMo Translate
-        // CLI (see copy-capture.sh / translate-popup.sh).
+        // Translate the last mouse selection with the Codex GPT-5.6 Luna
+        // agent (see copy-capture.sh / translate-popup.sh).
         // t / T / Ctrl+t all work so
         // a still-held Ctrl after the prefix doesn't miss.
         bind "t" "T" "Ctrl t" {
