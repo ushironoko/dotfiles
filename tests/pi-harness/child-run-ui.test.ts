@@ -110,11 +110,11 @@ const semanticTheme = {
   },
 };
 
-const setup = (rows = 20, theme?: unknown) => {
+const setup = (rows = 20, theme?: unknown, now: () => number = () => 100) => {
   let id = 0;
   const registry = new ChildRunRegistry({
     idFactory: () => `id-${++id}`,
-    now: () => 100,
+    now,
   });
   const renders: number[] = [];
   const tui = {
@@ -204,6 +204,37 @@ describe("child-session browser component", () => {
   test("renders nothing when empty", () => {
     const { component } = setup();
     expect(component.render(24)).toEqual([]);
+  });
+
+  test("orders child invocations newest first for rendering and navigation", () => {
+    let timestamp = 100;
+    const { registry, component } = setup(20, undefined, () => timestamp++);
+    const older = registry.beginInvocation({
+      toolCallId: "older-parent",
+      source: "subagent",
+      mode: "single",
+      label: "older",
+      runs: [{ agent: "older-agent", task: "older task", taskIndex: 0 }],
+    });
+    const newer = registry.beginInvocation({
+      toolCallId: "newer-parent",
+      source: "subagent",
+      mode: "single",
+      label: "newer",
+      runs: [{ agent: "newer-agent", task: "newer task", taskIndex: 0 }],
+    });
+
+    component.prefer("child");
+    const lines = component.render(80);
+
+    expect(lines[0]).toContain("newer-agent");
+    expect(lines[1]).toContain("older-agent");
+    expect(component.getSelectedRunId()).toBe(newer.runIds[0]);
+    component.handleInput("down");
+    expect(component.getSelectedRunId()).toBe(older.runIds[0]);
+    expect(
+      registry.getSnapshots().map(({ invocationId }) => invocationId),
+    ).toEqual([older.invocationId, newer.invocationId]);
   });
 
   test("caps populated height at three rows and uses every row for flat content", () => {
