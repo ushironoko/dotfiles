@@ -151,8 +151,8 @@ const countLine = (lines: string[], target: string): number =>
 
 describe("child-session browser normal-flow layout", () => {
   for (const [rows, columns, expectedPanelHeight] of [
-    [24, 80, 6],
-    [40, 120, 10],
+    [24, 80, 3],
+    [40, 120, 3],
   ] as const) {
     test(`keeps the editor visible in a ${rows}-row terminal`, async () => {
       const { editorLines, browserLines, viewport } = await createLayout(
@@ -167,7 +167,7 @@ describe("child-session browser normal-flow layout", () => {
         );
       }
       expect(viewport.filter((line) => line.startsWith("chat-"))).toHaveLength(
-        rows === 24 ? 7 : 19,
+        rows === 24 ? 10 : 26,
       );
       expect(viewport.at(-2)?.trimEnd()).toBe("footer-main");
       expect(viewport.at(-1)?.trimEnd()).toBe("footer-detail");
@@ -176,8 +176,8 @@ describe("child-session browser normal-flow layout", () => {
 
   test("keeps the same total budget when flat child and issue rows coexist", async () => {
     for (const [rows, columns, expectedPanelHeight] of [
-      [24, 80, 6],
-      [40, 120, 10],
+      [24, 80, 3],
+      [40, 120, 3],
     ] as const) {
       const { editorLines, browserLines, viewport } = await createLayout(
         rows,

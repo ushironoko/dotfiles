@@ -206,11 +206,12 @@ describe("child-session browser component", () => {
     expect(component.render(24)).toEqual([]);
   });
 
-  test("caps populated height and uses every row for flat content", () => {
+  test("caps populated height at three rows and uses every row for flat content", () => {
     for (const [rows, expectedHeight] of [
-      [24, 6],
-      [40, 10],
-      [12, 4],
+      [24, 3],
+      [40, 3],
+      [12, 3],
+      [8, 2],
     ] as const) {
       const { registry, component } = setup(rows);
       addRuns(registry, 30);
