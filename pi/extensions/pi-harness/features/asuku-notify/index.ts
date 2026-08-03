@@ -8,6 +8,10 @@ import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import type { HarnessConfig } from "../../config";
+import {
+  isAbortSignal as isActiveAbortSignal,
+  tryCreateAbortController as createAbortController,
+} from "../../lib/abort";
 import { launchDetached, type DetachedSpawnFunction } from "../../lib/detached";
 import { sanitizeChildEnv } from "../../lib/child-env";
 import type {
@@ -76,55 +80,6 @@ interface ConfirmBridgeRegistration {
   bridgedConfirm: ConfirmFunction;
   ctx: CtxLike;
 }
-
-interface ActiveAbortSignal {
-  readonly aborted: boolean;
-  addEventListener(
-    type: "abort",
-    listener: () => void,
-    options?: { once?: boolean },
-  ): void;
-  removeEventListener(type: "abort", listener: () => void): void;
-}
-
-interface AbortControllerLike {
-  readonly signal: ActiveAbortSignal;
-  abort(): void;
-}
-
-const isActiveAbortSignal = (value: unknown): value is ActiveAbortSignal =>
-  typeof value === "object" &&
-  value !== null &&
-  "aborted" in value &&
-  typeof value.aborted === "boolean" &&
-  "addEventListener" in value &&
-  typeof value.addEventListener === "function" &&
-  "removeEventListener" in value &&
-  typeof value.removeEventListener === "function";
-
-const createAbortController = (): AbortControllerLike | undefined => {
-  let value: unknown;
-  try {
-    value = new AbortController();
-  } catch {
-    return undefined;
-  }
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("abort" in value) ||
-    typeof value.abort !== "function" ||
-    !("signal" in value) ||
-    !isActiveAbortSignal(value.signal)
-  ) {
-    return undefined;
-  }
-  const { abort, signal } = value;
-  return {
-    signal,
-    abort: () => Reflect.apply(abort, value, []),
-  };
-};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);

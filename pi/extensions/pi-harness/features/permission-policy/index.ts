@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  type ActiveAbortSignal,
+  createAbortController,
+  isAbortSignal as isActiveAbortSignal,
+} from "../../lib/abort";
 import type { CtxLike, InputEvent, PiLike } from "../../lib/pi-like";
 import {
   DEFAULT_PERMISSION_JUDGE_CONFIG,
@@ -79,52 +84,8 @@ type PermissionConfirmationOutcome =
   | "not-shown"
   | "aborted";
 
-interface ActiveAbortSignal {
-  readonly aborted: boolean;
-  addEventListener(
-    type: "abort",
-    listener: () => void,
-    options?: { once?: boolean },
-  ): void;
-  removeEventListener(type: "abort", listener: () => void): void;
-}
-
-interface AbortControllerLike {
-  readonly signal: ActiveAbortSignal;
-  abort(): void;
-}
-
-const isActiveAbortSignal = (value: unknown): value is ActiveAbortSignal =>
-  typeof value === "object" &&
-  value !== null &&
-  "aborted" in value &&
-  typeof value.aborted === "boolean" &&
-  "addEventListener" in value &&
-  typeof value.addEventListener === "function" &&
-  "removeEventListener" in value &&
-  typeof value.removeEventListener === "function";
-
 const signalIsAborted = (signal: ActiveAbortSignal | undefined): boolean =>
   signal?.aborted === true;
-
-const createAbortController = (): AbortControllerLike => {
-  const value: unknown = new AbortController();
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("abort" in value) ||
-    typeof value.abort !== "function" ||
-    !("signal" in value) ||
-    !isActiveAbortSignal(value.signal)
-  ) {
-    throw new Error("AbortController is unavailable");
-  }
-  const { abort, signal } = value;
-  return {
-    signal,
-    abort: () => Reflect.apply(abort, value, []),
-  };
-};
 
 const requestPermissionConfirmation = async (
   ctx: CtxLike,

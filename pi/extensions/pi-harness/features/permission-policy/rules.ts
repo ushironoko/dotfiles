@@ -14,17 +14,20 @@ import { isPackageRunnerInvocation } from "./package-runner";
 import { literalTrustedCdTarget } from "./trusted-cd";
 import { isPathWithin } from "../../lib/trust";
 
-interface DenyRule {
+interface RequiredReasonRule<TPattern> {
   readonly source?: string;
-  readonly pattern: RegExp;
+  readonly pattern: TPattern;
   readonly reason: string;
 }
 
-interface AllowRule {
+interface OptionalReasonRule<TPattern> {
   readonly source?: string;
-  readonly pattern: RegExp;
+  readonly pattern: TPattern;
   readonly reason?: string;
 }
+
+type DenyRule = RequiredReasonRule<RegExp>;
+type AllowRule = OptionalReasonRule<RegExp>;
 
 interface AskRule {
   readonly pattern: RegExp;
@@ -109,17 +112,8 @@ interface EvaluationOptions {
   readonly trustedReadContext?: TrustedReadContext;
 }
 
-interface DenyDefinition {
-  readonly source?: string;
-  readonly pattern: string;
-  readonly reason: string;
-}
-
-interface AllowDefinition {
-  readonly source?: string;
-  readonly pattern: string;
-  readonly reason?: string;
-}
+type DenyDefinition = RequiredReasonRule<string>;
+type AllowDefinition = OptionalReasonRule<string>;
 
 interface AskDefinition {
   readonly pattern: string;

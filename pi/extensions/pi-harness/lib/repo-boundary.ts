@@ -20,6 +20,10 @@ import { execFile } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { sanitizeChildEnv } from "./child-env";
+import {
+  MAX_GIT_WORKTREE_PORCELAIN_BYTES,
+  parseGitWorktreePorcelain,
+} from "./git-worktree-porcelain";
 import { isPathWithin } from "./trust";
 
 export type CwdBoundaryResult =
@@ -63,86 +67,14 @@ export const gitCommonDir = (cwd: string): Promise<string | undefined> =>
 
 export type GitCommonDirFn = (cwd: string) => Promise<string | undefined>;
 
-const MAX_WORKTREE_LIST_BYTES = 64 * 1_024;
-const MAX_WORKTREE_COUNT = 128;
-const MAX_WORKTREE_PATH_BYTES = 1_024;
-const fatalUtf8 = new TextDecoder(undefined, { fatal: true, ignoreBOM: true });
-
-interface WorktreeRecord {
-  readonly path: string;
-  readonly bare: boolean;
-  readonly prunable: boolean;
-}
-
 const parseWorktreeRoots = async (
   stdout: Uint8Array,
 ): Promise<readonly string[] | undefined> => {
-  if (stdout.byteLength === 0 || stdout.byteLength > MAX_WORKTREE_LIST_BYTES) {
-    return undefined;
-  }
-  let text: string;
-  try {
-    text = fatalUtf8.decode(stdout);
-  } catch {
-    return undefined;
-  }
-  if (!text.endsWith("\0\0")) return undefined;
+  const records = parseGitWorktreePorcelain(stdout);
+  if (records === undefined) return undefined;
 
-  const records: WorktreeRecord[] = [];
-  let fields: string[] = [];
-  const consume = (): boolean => {
-    if (fields.length === 0) return true;
-    const [first] = fields;
-    if (first === undefined || !first.startsWith("worktree ")) return false;
-    if (fields.filter((field) => field.startsWith("worktree ")).length !== 1) {
-      return false;
-    }
-    const path = first.slice("worktree ".length);
-    if (
-      !isAbsolute(path) ||
-      Buffer.byteLength(path, "utf8") > MAX_WORKTREE_PATH_BYTES ||
-      hasControlCharacter(path)
-    ) {
-      return false;
-    }
-    const seenKinds = new Set<string>();
-    for (const field of fields.slice(1)) {
-      const [kind] = field.split(" ", 1);
-      if (
-        kind === undefined ||
-        !["HEAD", "branch", "detached", "bare", "locked", "prunable"].includes(
-          kind,
-        ) ||
-        seenKinds.has(kind)
-      ) {
-        return false;
-      }
-      seenKinds.add(kind);
-    }
-    if (seenKinds.has("branch") && seenKinds.has("detached")) return false;
-    records.push({
-      path,
-      bare: seenKinds.has("bare"),
-      prunable: seenKinds.has("prunable"),
-    });
-    return records.length <= MAX_WORKTREE_COUNT;
-  };
-
-  for (const field of text.split("\0")) {
-    if (field !== "") {
-      fields.push(field);
-      continue;
-    }
-    if (!consume()) return undefined;
-    fields = [];
-  }
-  if (fields.length !== 0 || records.length === 0) return undefined;
-
-  const lexical = new Set<string>();
   const canonical = new Set<string>();
   for (const record of records) {
-    if (lexical.has(record.path)) return undefined;
-    lexical.add(record.path);
     // A prunable administrative record is not a currently registered,
     // navigable worktree even when an attacker recreates its old path.
     if (record.bare || record.prunable) continue;
@@ -172,7 +104,7 @@ export const gitWorktreeRoots: GitWorktreeRootsFn = (cwd) =>
       {
         cwd,
         encoding: "buffer",
-        maxBuffer: MAX_WORKTREE_LIST_BYTES,
+        maxBuffer: MAX_GIT_WORKTREE_PORCELAIN_BYTES,
         timeout: 5_000,
         env: sanitizeChildEnv(
           process.env,

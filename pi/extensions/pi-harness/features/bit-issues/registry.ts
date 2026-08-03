@@ -1,3 +1,8 @@
+import {
+  type AbortControllerLike,
+  createAbortController,
+  isAbortSignal,
+} from "../../lib/abort";
 import { stripTerminalControls } from "../../lib/terminal-text";
 import { BitIssueCli } from "./cli";
 import {
@@ -26,56 +31,10 @@ interface BitIssueRegistryOptions {
   readonly now?: () => number;
 }
 
-interface AbortSignalLike {
-  readonly aborted: boolean;
-  addEventListener(
-    event: "abort",
-    listener: () => void,
-    options?: { once?: boolean },
-  ): void;
-  removeEventListener(event: "abort", listener: () => void): void;
-}
-
-interface AbortControllerLike {
-  readonly signal: AbortSignal & AbortSignalLike;
-  abort(): void;
-}
-
 interface LinkedController {
   readonly controller: AbortControllerLike;
   dispose(): void;
 }
-
-const isAbortSignal = (
-  value: unknown,
-): value is AbortSignal & AbortSignalLike =>
-  typeof value === "object" &&
-  value !== null &&
-  "aborted" in value &&
-  typeof value.aborted === "boolean" &&
-  "addEventListener" in value &&
-  typeof value.addEventListener === "function" &&
-  "removeEventListener" in value &&
-  typeof value.removeEventListener === "function";
-
-const createAbortController = (): AbortControllerLike => {
-  const controller: unknown = new AbortController();
-  if (
-    typeof controller !== "object" ||
-    controller === null ||
-    !("abort" in controller) ||
-    typeof controller.abort !== "function" ||
-    !("signal" in controller) ||
-    !isAbortSignal(controller.signal)
-  ) {
-    throw new Error("AbortController is unavailable");
-  }
-  const { abort, signal } = controller;
-  return {
-    signal,
-    abort: () => Reflect.apply(abort, controller, []),
-  };
-};
 
 const linkedController = (signal?: AbortSignal): LinkedController => {
   const controller = createAbortController();

@@ -1,3 +1,4 @@
+import { createAbortController } from "../../lib/abort";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import type { HarnessConfig } from "../../config";
 import { replacePrevious } from "../../lib/placeholder";
@@ -57,42 +58,8 @@ interface Semaphore {
   acquire(signal?: AbortSignal): Promise<() => void>;
 }
 
-interface AbortControllerLike {
-  signal: AbortSignal;
-  abort(): void;
-}
-
 const isAborted = (signal: AbortSignal | undefined): boolean =>
   signal !== undefined && "aborted" in signal && signal.aborted === true;
-
-const isAbortSignal = (value: unknown): value is AbortSignal =>
-  typeof value === "object" &&
-  value !== null &&
-  "aborted" in value &&
-  typeof value.aborted === "boolean" &&
-  "addEventListener" in value &&
-  typeof value.addEventListener === "function" &&
-  "removeEventListener" in value &&
-  typeof value.removeEventListener === "function";
-
-const createAbortController = (): AbortControllerLike => {
-  const controller: unknown = new AbortController();
-  if (
-    typeof controller !== "object" ||
-    controller === null ||
-    !("abort" in controller) ||
-    typeof controller.abort !== "function" ||
-    !("signal" in controller) ||
-    !isAbortSignal(controller.signal)
-  ) {
-    throw new Error("AbortController is unavailable");
-  }
-  const { abort, signal } = controller;
-  return {
-    signal,
-    abort: () => Reflect.apply(abort, controller, []),
-  };
-};
 
 const getResultOutput = (result: SpawnResult): string =>
   result.output || result.stderr || "(no output)";

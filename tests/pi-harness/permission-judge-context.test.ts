@@ -90,6 +90,16 @@ describe("current permission task context", () => {
     expect(first?.fingerprint).not.toBe(second?.fingerprint);
   });
 
+  test("truncates a multibyte task prefix only at a UTF-8 boundary", () => {
+    const task = boundTaskContext(`${"a".repeat(1_020)}🙂tail`, "interactive");
+
+    expect(task?.text).toBe(`${"a".repeat(1_020)}…`);
+    expect(task?.text).not.toContain("�");
+    expect(Buffer.byteLength(task?.text ?? "", "utf8")).toBeLessThanOrEqual(
+      1_024,
+    );
+  });
+
   test("promotes matching raw input only when its agent run starts", () => {
     const tracker = createPermissionTaskTracker();
     tracker.capture({
@@ -288,6 +298,35 @@ describe("current permission task context", () => {
 });
 
 describe("current permission run evidence", () => {
+  test("truncates a multibyte evidence tail only at a UTF-8 boundary", () => {
+    const evidence = derivePermissionRunEvidence(
+      [
+        { type: "message", message: { role: "user", content: "task" } },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: `head🙂${"z".repeat(2_042)}` }],
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "current", name: "bash" }],
+          },
+        },
+      ],
+      "current",
+    );
+
+    expect(evidence?.assistantText).toBe(`…${"z".repeat(2_042)}`);
+    expect(evidence?.assistantText).not.toContain("�");
+    expect(
+      Buffer.byteLength(evidence?.assistantText ?? "", "utf8"),
+    ).toBeLessThanOrEqual(2 * 1_024);
+  });
+
   test("binds assistant text, AskUserQuestion results, and prior metadata to the exact tool call", () => {
     const evidence = derivePermissionRunEvidence(
       [
