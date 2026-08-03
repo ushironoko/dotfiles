@@ -29,9 +29,11 @@ Do not move that temporary state into project memory.
 
 Only a verified fact, lasting decision or constraint, reusable user feedback,
 or stable reference that will help a future session is a durable-memory
-candidate. Promotion is separate and uses the `project-memory` workflow:
-`memory_recall` before parent-only `memory_update`. Never call `git notes` or
-`bit notes` directly, and never consolidate session refs.
+candidate. The parent proactively evaluates candidates on every checkpoint;
+it does not wait for an explicit user request. Promotion is separate and uses
+the `project-memory` workflow: `memory_recall` before parent-only
+`memory_update`. Never call `git notes` or `bit notes` directly, and never
+consolidate session refs.
 
 ## When to invoke
 
@@ -145,6 +147,9 @@ For each axis, decide whether to write and what:
 
 **Durable project-memory promotion:**
 
+- The parent **must evaluate** durable candidates on every checkpoint even when
+  the user did not ask to remember anything. Evaluation may correctly produce
+  no writes; never create filler memory to satisfy the checkpoint.
 - Progress, task status, Target Files, current blockers, and session-only
   decisions stay exclusively in bit issues.
 - For each genuinely durable candidate, verify the fact/source, choose a
@@ -152,8 +157,13 @@ For each axis, decide whether to write and what:
   `project-memory` skill.
 - Call `memory_recall(list)` and, when relevant, `memory_recall(show)` before
   any put. If the merged entry already represents the content, plan no write.
-- Promote only through parent-only `memory_update(put|remove)`. Memory
-  unavailability does not block or roll back the issue checkpoint.
+- When source, scope, and durable value are clear, promote through parent-only
+  `memory_update(put|remove)` without a separate confirmation question. Verify
+  uncertain candidates, keep session-only material in the issue, or ask only
+  when a decision genuinely requires the user.
+- A child-proposed candidate is evidence, not an automatic write: the parent
+  independently verifies it. Memory unavailability does not block or roll back
+  the issue checkpoint.
 
 **Parent snapshot:**
 
@@ -166,9 +176,12 @@ For each axis, decide whether to write and what:
 
 ### Phase 4: Show the plan, then apply
 
-Render a compact summary of intended writes (what will be commented on which
-issue, what bodies will be rewritten). In **auto mode**, show the summary and
-proceed without confirmation. In normal mode, ask before applying.
+Render a compact summary of intended issue writes (what will be commented on
+which issue, what bodies will be rewritten) and any durable-memory promotions.
+In **auto mode**, show the summary and proceed without confirmation. In normal
+mode, ask before applying the issue mutations. Do not add a separate
+confirmation question for a clear durable promotion; its safety comes from the
+mandatory criteria, verification, and recall-before-put workflow.
 
 Apply order:
 

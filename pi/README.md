@@ -145,6 +145,16 @@ through wrappers, Git location options, substitutions, and compound shells.
 Read-only `notes list` / `notes show` receive no broad allow and stay on the
 ordinary Bash policy path.
 
+Every agent start adds role-specific stewardship guidance. Parent agents
+proactively evaluate durable candidates when verified lasting knowledge emerges
+and before task completion, PR creation/update, checkpoints, compaction,
+pausing, or ending work; they do not wait for a user request. Evaluation may be
+a no-op. A clear candidate uses recall-before-put and needs no confirmation
+question merely to persist it. Child agents remain read-only and return a
+proposed path, description, distilled content, and evidence to the parent for
+independent verification. The extension does not scrape conversations or write
+memory mechanically: the parent remains responsible for the semantic decision.
+
 On the first eligible agent start, the feature injects a bounded merged index
 once per active session branch. The index contains only path, description,
 timestamp, and provenance; bodies require explicit `memory_recall(show)`.

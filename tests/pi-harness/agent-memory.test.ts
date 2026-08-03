@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import setupAgentMemory, {
+  AGENT_MEMORY_CHILD_GUIDANCE,
+  AGENT_MEMORY_PARENT_GUIDANCE,
   AGENT_MEMORY_RECALL_TYPE,
   AGENT_MEMORY_SYSTEM_GUIDANCE,
   type AgentMemoryDataSource,
@@ -102,6 +104,9 @@ const resultText = (result: {
   return block.text;
 };
 
+const occurrences = (value: string, needle: string): number =>
+  value.split(needle).length - 1;
+
 describe("agent-memory pi feature", () => {
   test("registers parent read/write tools but keeps child mutation unavailable", () => {
     const parent = createFakePi({ cwd: "/repo" });
@@ -117,6 +122,74 @@ describe("agent-memory pi feature", () => {
       cwd: "/repo",
     });
     expect(child.tools.map(({ name }) => name)).toEqual(["memory_recall"]);
+  });
+
+  test("injects role-specific proactive stewardship guidance idempotently", async () => {
+    const parent = createFakePi({ cwd: "/repo", sessionId: "parent-guidance" });
+    setupAgentMemory(parent, config(), {
+      cli: dataSource(aggregate([])),
+      cwd: "/repo",
+    });
+    const parentStart = await parent.emitBeforeAgentStart({
+      type: "before_agent_start",
+      prompt: "start",
+      systemPrompt: "base",
+    });
+    const parentPrompt = parentStart?.systemPrompt ?? "";
+    expect(parentPrompt).toStartWith("base\n\n");
+    expect(parentPrompt).toContain(AGENT_MEMORY_SYSTEM_GUIDANCE);
+    expect(parentPrompt).toContain(AGENT_MEMORY_PARENT_GUIDANCE);
+    expect(parentPrompt).not.toContain(AGENT_MEMORY_CHILD_GUIDANCE);
+    for (const clause of [
+      "proactively evaluate durable-memory candidates",
+      "before completing a task",
+      "taking a checkpoint",
+      "A checkpoint does not require a write",
+      "recall the merged index and any likely existing entry",
+      "update it without asking merely for confirmation",
+      "verify it or leave it unsaved",
+    ]) {
+      expect(parentPrompt).toContain(clause);
+    }
+
+    const repeatedParent = await parent.emitBeforeAgentStart({
+      type: "before_agent_start",
+      prompt: "continue",
+      systemPrompt: parentPrompt,
+    });
+    const repeatedPrompt = repeatedParent?.systemPrompt ?? "";
+    expect(occurrences(repeatedPrompt, "## Project memory safety")).toBe(1);
+    expect(occurrences(repeatedPrompt, "## Project memory stewardship")).toBe(
+      1,
+    );
+
+    const child = createFakePi({
+      cwd: "/repo",
+      sessionId: "child-guidance",
+      hasUI: false,
+    });
+    setupAgentMemory(child, config(true), {
+      cli: dataSource(aggregate([])),
+      cwd: "/repo",
+    });
+    const childStart = await child.emitBeforeAgentStart({
+      type: "before_agent_start",
+      prompt: "review",
+      systemPrompt: "base",
+    });
+    const childPrompt = childStart?.systemPrompt ?? "";
+    expect(childPrompt).toStartWith("base\n\n");
+    expect(childPrompt).toContain(AGENT_MEMORY_SYSTEM_GUIDANCE);
+    expect(childPrompt).toContain(AGENT_MEMORY_CHILD_GUIDANCE);
+    expect(childPrompt).not.toContain(AGENT_MEMORY_PARENT_GUIDANCE);
+    for (const clause of [
+      "can recall but cannot update project memory",
+      "proposed path, description, content, and supporting evidence",
+      "Do not attempt a shell workaround",
+      "transient task state",
+    ]) {
+      expect(childPrompt).toContain(clause);
+    }
   });
 
   test("injects a bounded data-only index once per active session branch", async () => {
@@ -379,6 +452,8 @@ describe("agent-memory pi feature", () => {
       prompt: "start",
     });
     expect(empty?.message).toBeUndefined();
+    expect(empty?.systemPrompt).toStartWith("## Project memory safety");
+    expect(empty?.systemPrompt).toContain("## Project memory stewardship");
     expect(emptyPi.notifications).toEqual([]);
 
     const missingPi = createFakePi({ cwd: "/repo", sessionId: "missing" });
@@ -393,10 +468,12 @@ describe("agent-memory pi feature", () => {
         },
       },
     });
-    await missingPi.emitBeforeAgentStart({
+    const missing = await missingPi.emitBeforeAgentStart({
       type: "before_agent_start",
       prompt: "start",
     });
+    expect(missing?.systemPrompt).toContain("## Project memory safety");
+    expect(missing?.systemPrompt).toContain("## Project memory stewardship");
     expect(missingPi.notifications).toEqual([]);
 
     const corruptPi = createFakePi({ cwd: "/repo", sessionId: "corrupt" });
@@ -411,14 +488,18 @@ describe("agent-memory pi feature", () => {
         },
       },
     });
-    await corruptPi.emitBeforeAgentStart({
+    const corrupt = await corruptPi.emitBeforeAgentStart({
       type: "before_agent_start",
       prompt: "start",
     });
-    await corruptPi.emitBeforeAgentStart({
+    expect(corrupt?.systemPrompt).toContain("## Project memory stewardship");
+    const corruptAgain = await corruptPi.emitBeforeAgentStart({
       type: "before_agent_start",
       prompt: "continue",
     });
+    expect(corruptAgain?.systemPrompt).toContain(
+      "## Project memory stewardship",
+    );
     expect(corruptPi.notifications).toEqual([
       { message: "Project memory disabled: corrupt notes", level: "warning" },
     ]);

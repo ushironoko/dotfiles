@@ -1,6 +1,6 @@
 ---
 name: project-memory
-description: "Recall or update durable project knowledge through pi-harness structured memory tools. Use when the user asks to remember a lasting project fact, decision, constraint, feedback item, or reference, or when a later session needs explicit durable context."
+description: "Proactively recall or update durable project knowledge through pi-harness structured memory tools. Parent agents use this without waiting for a user request when verified lasting facts, decisions, constraints, feedback, or references emerge, and at task, PR, checkpoint, compaction, pause, and session-end boundaries."
 ---
 
 # Overview
@@ -12,6 +12,28 @@ in bit issues by `start-work`, `write-session`, and `restoring-session`.
 Use only the structured `memory_recall` and `memory_update` tools. Never invoke
 `git notes` or `bit notes` directly. The harness derives its own session/writer
 ref and aggregates managed refs automatically; there is no consolidate step.
+
+## Proactive parent checkpoint
+
+A parent agent must evaluate durable-memory candidates without waiting for the
+user to say "remember this". Evaluate when a verified lasting item emerges and
+again at these boundaries:
+
+- before completing each task;
+- before creating or materially updating a pull request;
+- during every `write-session` checkpoint and before context compaction;
+- before pausing work or sending the final session-ending response.
+
+Evaluation is mandatory; writing is not. A no-candidate or already-represented
+result is a correct no-op and should not generate filler memory. When the source,
+scope, and durable value are clear, perform recall-before-put and update without
+asking merely for confirmation. If they are uncertain, verify from trusted
+project/user evidence, leave the item in the bit issue when it is session-only,
+or ask only when a decision genuinely requires the user.
+
+A child agent never writes. It should return a concise candidate containing a
+proposed logical path, description, distilled content, and supporting evidence
+to the parent, which independently verifies and decides whether to promote it.
 
 ## Durable-save criteria
 
@@ -56,8 +78,8 @@ paths, `..`, arbitrary ref names, object ids, or caller-selected session ids.
    obsolete and should be hidden from aggregate recall.
 
 Children can call `memory_recall` but cannot update memory. If `memory_update`
-is unavailable, return the proposed durable item to the parent instead of
-trying a shell workaround.
+is unavailable, return the proposed path, description, distilled content, and
+supporting evidence to the parent instead of trying a shell workaround.
 
 ## Never store
 

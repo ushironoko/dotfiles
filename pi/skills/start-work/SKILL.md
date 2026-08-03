@@ -298,6 +298,21 @@ Use `bit issue list --all` to find both open and closed sessions.
 Close task issues **before** removing the worktree. Reversing this order
 creates orphan issues (issue stays open but its worktree is gone).
 
+### Proactive durable-memory checkpoint
+
+Before closing each task, creating or materially updating a pull request,
+closing the parent plan, pausing work, or ending the session, the main parent
+agent **MUST** evaluate whether the completed work produced a verified durable
+fact, decision, constraint, reusable feedback item, or stable reference. Do not
+wait for an explicit user request.
+
+Follow the `project-memory` recall-before-put workflow. A no-candidate or
+already-represented result is a valid no-op. When a candidate clearly meets the
+criteria, promote it through `memory_update` without asking merely for
+confirmation; uncertainty requires verification or no write. Memory
+unavailability does not block task/issue completion. Children only return a
+proposed path, description, distilled content, and evidence to the parent.
+
 ### Task issue close
 
 **MUST**: When each task completes, immediately call the `task_completed`
@@ -330,8 +345,9 @@ worktree_remove {path: "<worktree-absolute-path>", confirmed: true}
 The tool refuses dirty trees and verifies the removal afterwards.
 
 There is no project-memory consolidation or branch-note cleanup step before
-closing the parent. Promote a genuinely durable item separately through the
-`project-memory` workflow; temporary session state stays in the issues.
+closing the parent. The proactive checkpoint above promotes only genuinely
+durable items through the `project-memory` workflow; temporary session state
+stays in the issues.
 
 ## 8. Error Handling
 
