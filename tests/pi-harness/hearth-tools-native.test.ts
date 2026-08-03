@@ -94,6 +94,73 @@ describe("Hearth-backed pi tool contracts", () => {
     });
   });
 
+  test("read and grep report observed files without changing successful results", async () => {
+    const cwd = await root();
+    const path = join(cwd, "observed.ts");
+    await writeFile(path, "export const observed = true;\n");
+    const hearth = engine(cwd);
+    const observed: string[][] = [];
+    const observer = {
+      observe(paths: readonly string[]) {
+        observed.push([...paths]);
+      },
+    };
+
+    const read = createHearthReadDefinition(
+      cwd,
+      hearth,
+      settings,
+      undefined,
+      observer,
+    );
+    const readResult = await read.execute(
+      "read-observed",
+      { path: "observed.ts" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(readResult.content[0]).toEqual({
+      type: "text",
+      text: "export const observed = true;\n",
+    });
+
+    const grep = createHearthGrepDefinition(cwd, hearth, undefined, observer);
+    const grepResult = await grep.execute(
+      "grep-observed",
+      { pattern: "observed", path: "." },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(grepResult.content[0]).toEqual({
+      type: "text",
+      text: "observed.ts:1: export const observed = true;",
+    });
+    expect(observed).toEqual([[path], [path]]);
+
+    const advisoryRead = createHearthReadDefinition(
+      cwd,
+      hearth,
+      settings,
+      undefined,
+      {
+        observe() {
+          throw new Error("graph observer failure");
+        },
+      },
+    );
+    await expect(
+      advisoryRead.execute(
+        "read-advisory",
+        { path: "observed.ts" },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).resolves.toBeDefined();
+  });
+
   test("edit applies multiple original-relative replacements and returns pi details", async () => {
     const cwd = await root();
     const path = join(cwd, "edit.txt");

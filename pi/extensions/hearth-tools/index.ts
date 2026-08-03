@@ -27,16 +27,26 @@ import {
   type PiToolSettings,
 } from "./engine";
 import {
+  createHearthGraphDefinition,
+  HearthGraphObserver,
+  HEARTH_GRAPH_TOOL_NAME,
+  type HearthGraphRuntime,
+} from "./graph";
+import {
   registerHearthInvalidationService,
   registerHearthReadService,
 } from "./service";
 
-export const HEARTH_TOOL_NAMES = [
+export const HEARTH_OVERRIDE_TOOL_NAMES = [
   "read",
   "write",
   "edit",
   "bash",
   "grep",
+] as const;
+export const HEARTH_TOOL_NAMES = [
+  ...HEARTH_OVERRIDE_TOOL_NAMES,
+  HEARTH_GRAPH_TOOL_NAME,
 ] as const;
 
 const STARTUP_ERROR = "pi-hearth-tools: Hearth native backend is unavailable";
@@ -77,6 +87,7 @@ export interface RuntimeState {
   runtime: HearthEngineRuntime;
   settings: PiToolSettings;
   config: HearthToolsConfig;
+  graph: HearthGraphRuntime;
 }
 
 const defaultFatal: Fatal = (message) => {
@@ -113,10 +124,17 @@ const definitions = (
   runtime: HearthEngineRuntime,
   settings: PiToolSettings,
   config: HearthToolsConfig,
+  graph: HearthGraphRuntime,
   bashOperations?: BashOperations,
 ) =>
   [
-    createHearthReadDefinition(cwd, runtime.engine, settings, runtime.gate),
+    createHearthReadDefinition(
+      cwd,
+      runtime.engine,
+      settings,
+      runtime.gate,
+      graph,
+    ),
     createHearthWriteDefinition(cwd, runtime.engine, runtime.gate),
     createHearthEditDefinition(cwd, runtime.engine, runtime.gate),
     createHearthBashDefinition(cwd, runtime.engine, settings, {
@@ -129,7 +147,8 @@ const definitions = (
             commandPrefixHandled: true,
           }),
     }),
-    createHearthGrepDefinition(cwd, runtime.engine, runtime.gate),
+    createHearthGrepDefinition(cwd, runtime.engine, runtime.gate, graph),
+    createHearthGraphDefinition(cwd, runtime.engine, runtime.gate, graph),
   ] as const;
 
 const createExternalWriterProtector =
@@ -268,7 +287,12 @@ export const setupHearthTools = async (
         config,
         settings.shell,
       );
-      state = { runtime, settings, config };
+      const graph = new HearthGraphObserver(
+        ctx.cwd,
+        runtime.engine,
+        runtime.gate,
+      );
+      state = { runtime, settings, config, graph };
       invalidation.activate({
         clearCaches,
         protectExternalWriter: createExternalWriterProtector(runtime),
@@ -276,11 +300,12 @@ export const setupHearthTools = async (
 
       assertNoExistingOverride(pi);
       const activeBefore = pi.getActiveTools();
-      const [read, write, edit, bash, grep] = definitions(
+      const [read, write, edit, bash, grep, hearthGraph] = definitions(
         ctx.cwd,
         runtime,
         settings,
         config,
+        graph,
         bashSandboxProvider?.sandboxedOperations,
       );
       pi.registerTool(read);
@@ -288,7 +313,10 @@ export const setupHearthTools = async (
       pi.registerTool(edit);
       pi.registerTool(bash);
       pi.registerTool(grep);
-      pi.setActiveTools(activeBefore);
+      pi.registerTool(hearthGraph);
+      pi.setActiveTools([
+        ...new Set([...activeBefore, HEARTH_GRAPH_TOOL_NAME]),
+      ]);
       assertHearthOwnership(pi);
       bashSandboxProvider?.attach({
         commandPrefix: settings.shellCommandPrefix,
@@ -337,7 +365,10 @@ export const setupHearthTools = async (
     await clearCaches();
   });
 
-  pi.on("session_shutdown", () => service.dispose());
+  pi.on("session_shutdown", () => {
+    state?.graph.dispose();
+    service.dispose();
+  });
 
   pi.on("user_bash", () => {
     if (state === undefined) return;

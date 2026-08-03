@@ -319,7 +319,7 @@ describe("hearth-tools startup", () => {
     );
   });
 
-  test("registers five overrides on session start without activating grep", async () => {
+  test("registers five overrides plus an active graph tool without activating grep", async () => {
     const fake = fakePi();
     await setupHearthTools(fake.pi, {
       loadModule: async () => ({ HearthEngine: FakeEngine as never }),
@@ -338,7 +338,13 @@ describe("hearth-tools startup", () => {
     );
 
     expect(fake.tools.map((tool) => tool.name)).toEqual([...HEARTH_TOOL_NAMES]);
-    expect(fake.active()).toEqual(["read", "bash", "write", "edit"]);
+    expect(fake.active()).toEqual([
+      "read",
+      "bash",
+      "write",
+      "edit",
+      "hearth_graph",
+    ]);
     expect(FakeEngine.constructed).toHaveLength(1);
     expect(FakeEngine.constructed[0]).toMatchObject({
       cwd: "/workspace",
@@ -509,9 +515,14 @@ describe("hearth-tools startup", () => {
     ).rejects.toThrow(COLLISION_ERROR);
   });
 
-  test("releases the legacy process slot before creating the gated runtime", async () => {
-    const legacySlot = Symbol.for("ushironoko.pi-hearth-tools.engine.v1");
-    Reflect.set(globalThis, legacySlot, { engine: {}, options: {} });
+  test("releases pre-graph process slots before creating the current runtime", async () => {
+    const legacySlots = [
+      Symbol.for("ushironoko.pi-hearth-tools.engine.v1"),
+      Symbol.for("ushironoko.pi-hearth-tools.engine.v2"),
+    ];
+    for (const legacySlot of legacySlots) {
+      Reflect.set(globalThis, legacySlot, { engine: {}, options: {} });
+    }
     const fake = fakePi();
     await setupHearthTools(fake.pi, {
       loadModule: async () => ({ HearthEngine: FakeEngine as never }),
@@ -524,7 +535,9 @@ describe("hearth-tools startup", () => {
     });
     await fake.emit("session_start", { reason: "reload" });
 
-    expect(Reflect.has(globalThis, legacySlot)).toBe(false);
+    for (const legacySlot of legacySlots) {
+      expect(Reflect.has(globalThis, legacySlot)).toBe(false);
+    }
     expect(FakeEngine.constructed).toHaveLength(1);
   });
 

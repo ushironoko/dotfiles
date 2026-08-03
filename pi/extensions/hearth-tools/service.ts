@@ -133,6 +133,7 @@ export const registerHearthReadService = (
         current.runtime.engine,
         current.settings,
         current.runtime.gate,
+        current.graph,
       );
     },
   };

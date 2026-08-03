@@ -182,12 +182,18 @@ export interface HearthEngineRuntime {
 
 // Bump the symbol whenever the slot shape changes so /reload cannot interpret
 // a runtime created by an older extension revision as the current contract.
-const ENGINE_SLOT = Symbol.for("ushironoko.pi-hearth-tools.engine.v2");
-const LEGACY_ENGINE_SLOT = Symbol.for("ushironoko.pi-hearth-tools.engine.v1");
+const ENGINE_SLOT = Symbol.for("ushironoko.pi-hearth-tools.engine.v3");
+const LEGACY_ENGINE_SLOT_V2 = Symbol.for(
+  "ushironoko.pi-hearth-tools.engine.v2",
+);
+const LEGACY_ENGINE_SLOT_V1 = Symbol.for(
+  "ushironoko.pi-hearth-tools.engine.v1",
+);
 
 interface GlobalWithEngine {
   [ENGINE_SLOT]?: HearthEngineRuntime;
-  [LEGACY_ENGINE_SLOT]?: unknown;
+  [LEGACY_ENGINE_SLOT_V2]?: unknown;
+  [LEGACY_ENGINE_SLOT_V1]?: unknown;
 }
 
 export class HearthEngineRestartRequiredError extends Error {
@@ -237,11 +243,11 @@ export const getOrCreateEngineRuntime = (
   shell: ShellSpec,
 ): HearthEngineRuntime => {
   const host = globalThis as GlobalWithEngine;
-  // A live /reload from the pre-gate slot must release its global root before
-  // constructing v2. The stale extension runtime may keep a short-lived local
-  // reference until reload teardown completes, but the old optimizer/warm shell
-  // can then drop instead of remaining process-rooted forever.
-  delete host[LEGACY_ENGINE_SLOT];
+  // A live /reload must release pre-graph and pre-gate global roots before
+  // constructing v3. A 0.1.0 Engine in the v2 slot has no graph methods and
+  // cannot satisfy the current runtime even when its ordinary options match.
+  delete host[LEGACY_ENGINE_SLOT_V2];
+  delete host[LEGACY_ENGINE_SLOT_V1];
   const options = createOptions(cwd, config, shell);
   const existing = host[ENGINE_SLOT];
   if (existing !== undefined) {
@@ -263,5 +269,6 @@ export const getOrCreateEngineRuntime = (
 export const clearProcessEngineForTests = (): void => {
   const host = globalThis as GlobalWithEngine;
   delete host[ENGINE_SLOT];
-  delete host[LEGACY_ENGINE_SLOT];
+  delete host[LEGACY_ENGINE_SLOT_V2];
+  delete host[LEGACY_ENGINE_SLOT_V1];
 };
