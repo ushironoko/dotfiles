@@ -1011,7 +1011,11 @@ const normalizeBitWords = (
         i += 2; // drop the option and its value operand
         continue;
       }
-      if (BIT_GLOBAL_FLAG.has(w)) {
+      if (w.startsWith("-C") && w.length > 2) {
+        i += 1; // drop an attached -C<path> spelling
+        continue;
+      }
+      if (BIT_GLOBAL_FLAG.has(w) || w === "--") {
         i += 1;
         continue;
       }
@@ -1307,4 +1311,131 @@ export const interpreterConcreteArg = (
     }
   }
   return undefined;
+};
+
+const XARGS_LONG_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set([
+  "--arg-file",
+  "--delimiter",
+  "--eof",
+  "--max-args",
+  "--max-chars",
+  "--max-lines",
+  "--max-procs",
+  "--process-slot-var",
+  "--replace",
+]);
+const XARGS_LONG_INERT_OPTIONS: ReadonlySet<string> = new Set([
+  "--exit",
+  "--help",
+  "--interactive",
+  "--no-run-if-empty",
+  "--null",
+  "--open-tty",
+  "--show-limits",
+  "--verbose",
+  "--version",
+]);
+const XARGS_SHORT_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set([
+  "a",
+  "d",
+  "E",
+  "I",
+  "J",
+  "L",
+  "n",
+  "P",
+  "R",
+  "S",
+  "e",
+  "i",
+  "l",
+  "s",
+]);
+const XARGS_SHORT_INERT_OPTIONS: ReadonlySet<string> = new Set([
+  "0",
+  "o",
+  "p",
+  "r",
+  "t",
+  "x",
+]);
+
+const xargsShortOptionOperand = (word: string): 0 | 1 | undefined => {
+  if (!word.startsWith("-") || word.startsWith("--") || word === "-") {
+    return undefined;
+  }
+  for (let index = 1; index < word.length; index += 1) {
+    const option = word[index];
+    if (XARGS_SHORT_INERT_OPTIONS.has(option)) continue;
+    if (!XARGS_SHORT_OPTIONS_WITH_VALUE.has(option)) return undefined;
+    // The remainder of this cluster is the option's attached value. Without
+    // one, the next argv word is the value operand.
+    return index + 1 < word.length ? 0 : 1;
+  }
+  return 0;
+};
+
+const quoteShellWord = (word: string): string =>
+  `'${word.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * Return literal script text executed by eval/xargs. Dynamic or ambiguous
+ * executor forms stay on the ordinary opaque-executor policy path.
+ */
+export const opaqueExecutorConcreteArg = (
+  seg: NormalizedSegment,
+): string | undefined => {
+  const [head] = seg.words;
+  if (head === "eval") {
+    let index = 1;
+    if (seg.words[index] === "--" && !seg.opaque.has(index)) index += 1;
+    if (index >= seg.words.length) return undefined;
+    for (let i = index; i < seg.words.length; i += 1) {
+      if (seg.opaque.has(i)) return undefined;
+    }
+    return seg.words.slice(index).join(" ");
+  }
+  if (head !== "xargs") return undefined;
+
+  let index = 1;
+  while (index < seg.words.length) {
+    if (seg.opaque.has(index)) return undefined;
+    const word = seg.words[index];
+    if (word === "--") {
+      index += 1;
+      break;
+    }
+    if (XARGS_LONG_OPTIONS_WITH_VALUE.has(word)) {
+      if (seg.words[index + 1] === undefined || seg.opaque.has(index + 1)) {
+        return undefined;
+      }
+      index += 2;
+      continue;
+    }
+    if (
+      XARGS_LONG_INERT_OPTIONS.has(word) ||
+      (word.startsWith("--") && word.includes("="))
+    ) {
+      index += 1;
+      continue;
+    }
+    const shortOptionOperand = xargsShortOptionOperand(word);
+    if (shortOptionOperand !== undefined) {
+      if (
+        shortOptionOperand === 1 &&
+        (seg.words[index + 1] === undefined || seg.opaque.has(index + 1))
+      ) {
+        return undefined;
+      }
+      index += 1 + shortOptionOperand;
+      continue;
+    }
+    if (word.startsWith("-")) return undefined;
+    break;
+  }
+  if (index >= seg.words.length) return undefined;
+  for (let i = index; i < seg.words.length; i += 1) {
+    if (seg.opaque.has(i)) return undefined;
+  }
+  return seg.words.slice(index).map(quoteShellWord).join(" ");
 };

@@ -47,6 +47,8 @@ const denyCases = [
   ["bit pr import 7", "bit pr import は禁止です"],
   ["bit relay serve", "bit relay は禁止です"],
   ["bit clone relay+ssh://x", "bit clone relay+ は禁止です"],
+  ["git notes add -m durable HEAD", "git notes による直接変更は禁止です"],
+  ["bit notes remove HEAD", "bit notes による直接変更は禁止です"],
 ] as const;
 
 const benignCommands: string[] = [
@@ -1587,6 +1589,163 @@ describe("loadRules fail-closed behavior", () => {
   });
 });
 
+describe("project-memory notes mutation boundary", () => {
+  const floor = loadRules(undefined);
+  const mutationActions = [
+    "add",
+    "append",
+    "copy",
+    "edit",
+    "merge",
+    "prune",
+    "remove",
+  ] as const;
+  const directMutationCases: readonly (readonly [string, string])[] =
+    mutationActions.flatMap(
+      (action): readonly (readonly [string, string])[] => [
+        [`git notes ${action}`, "git notes による直接変更は禁止です"],
+        [`bit notes ${action}`, "bit notes による直接変更は禁止です"],
+      ],
+    );
+  const wrappedMutationCases: readonly (readonly [string, string])[] = [
+    ["git -C /repo notes add", "git notes による直接変更は禁止です"],
+    ["git -C/repo notes append", "git notes による直接変更は禁止です"],
+    [
+      "git --git-dir /repo/.git notes copy",
+      "git notes による直接変更は禁止です",
+    ],
+    [
+      "git --git-dir=/repo/.git notes edit",
+      "git notes による直接変更は禁止です",
+    ],
+    ["/usr/bin/git notes merge", "git notes による直接変更は禁止です"],
+    ["/opt/local/bin/bit notes prune", "bit notes による直接変更は禁止です"],
+    ["env git notes remove", "git notes による直接変更は禁止です"],
+    ["env MEMORY=1 git notes remove", "git notes による直接変更は禁止です"],
+    ["MEMORY=1 env bit notes add", "bit notes による直接変更は禁止です"],
+    ["bit -C /repo notes append", "bit notes による直接変更は禁止です"],
+    ["bit -C. notes add", "bit notes による直接変更は禁止です"],
+    ["bit -C/repo notes remove", "bit notes による直接変更は禁止です"],
+    ["bit -- notes add", "bit notes による直接変更は禁止です"],
+    ["bit repo -- notes copy", "bit notes による直接変更は禁止です"],
+    ["command /usr/bin/git notes append", "git notes による直接変更は禁止です"],
+    [
+      "git notes --ref refs/notes/project add",
+      "git notes による直接変更は禁止です",
+    ],
+    [
+      "bit notes --ref=refs/notes/project remove",
+      "bit notes による直接変更は禁止です",
+    ],
+    [
+      "bash -c 'git notes copy source target'",
+      "git notes による直接変更は禁止です",
+    ],
+    [
+      "env /bin/zsh -c 'bit notes edit HEAD'",
+      "bit notes による直接変更は禁止です",
+    ],
+    [
+      'echo "$(git notes merge refs/notes/x)"',
+      "git notes による直接変更は禁止です",
+    ],
+    ["printf ok; bit notes prune", "bit notes による直接変更は禁止です"],
+    ["(git notes remove HEAD)", "git notes による直接変更は禁止です"],
+    [
+      "eval git notes add -m durable HEAD",
+      "git notes による直接変更は禁止です",
+    ],
+    [
+      "eval -- git notes add -m durable HEAD",
+      "git notes による直接変更は禁止です",
+    ],
+    ["xargs git notes append", "git notes による直接変更は禁止です"],
+    ["xargs -n 1 bit -- notes remove", "bit notes による直接変更は禁止です"],
+    ["xargs -0n1 git notes remove", "git notes による直接変更は禁止です"],
+    ["xargs -J % git notes remove", "git notes による直接変更は禁止です"],
+    [
+      "xargs sh -c 'git notes add -m durable HEAD'",
+      "git notes による直接変更は禁止です",
+    ],
+    ["git notes future-write", "git notes による直接変更は禁止です"],
+    ["bit notes sync", "bit notes による直接変更は禁止です"],
+    ['git notes "$action"', "git notes による直接変更は禁止です"],
+    [`bit notes "\${action}"`, "bit notes による直接変更は禁止です"],
+    [
+      'git notes --ref=refs/notes/x "$action"',
+      "git notes による直接変更は禁止です",
+    ],
+    [
+      'bit notes --ref refs/notes/x "$action"',
+      "bit notes による直接変更は禁止です",
+    ],
+  ];
+
+  test.each([...directMutationCases, ...wrappedMutationCases])(
+    "denies direct notes mutation: %s",
+    (command, reason) => {
+      const expected = { verdict: "deny" as const, reason };
+      expect(evaluateCommand(command, floor)).toEqual(expected);
+      expect(
+        evaluateCommand(command, floor, { effectSandboxed: true }),
+      ).toEqual(expected);
+    },
+  );
+
+  test("keeps the structural notes floor above configured allows", () => {
+    const catchAll = loadRules(
+      JSON.stringify({
+        deny: [],
+        allow: [{ pattern: "^" }],
+        ask: [],
+      }),
+    );
+
+    expect(
+      evaluateCommandWithAudit("git -C /repo notes add", catchAll),
+    ).toEqual({
+      verdict: "deny",
+      reason: "git notes による直接変更は禁止です",
+      audit: {
+        basis: "structural-deny",
+        reasonCode: "structural-deny",
+      },
+    });
+  });
+
+  test.each([
+    ["git notes", "default-continue"],
+    ["git notes list", "default-continue"],
+    ["git notes get-ref", "default-continue"],
+    ["git notes list add", "default-continue"],
+    ["git notes show remove", "default-continue"],
+    ["git notes --ref refs/notes/x list", "default-continue"],
+    ["git notes --ref=refs/notes/x show HEAD", "default-continue"],
+    ["bit notes", "default-continue"],
+    ["bit notes list", "default-continue"],
+    ["bit notes list remove", "default-continue"],
+    ["bit notes show add", "default-continue"],
+    ["bit -- notes list", "default-continue"],
+    ["env /usr/bin/git notes show HEAD", "default-continue"],
+    ["bit -C /repo notes list", "default-continue"],
+    ["git -C /repo notes list", "ask"],
+    ["git --git-dir=/repo/.git notes show HEAD", "ask"],
+  ] as const)(
+    "does not auto-allow or mutation-deny read-only notes: %s",
+    (command, expected) => {
+      expect(evaluateCommand(command, floor).verdict).toBe(expected);
+      expect(evaluateCommand(command, floor).verdict).not.toBe("allow");
+    },
+  );
+
+  test.each(["eval echo git notes add", "xargs git notes list"])(
+    "does not mutation-deny a non-mutating opaque executor: %s",
+    (command) => {
+      expect(evaluateCommand(command, floor).verdict).not.toBe("deny");
+    },
+  );
+});
+
 describe("evaluateCommand compound-command scanning", () => {
   const floor = loadRules(undefined);
   const verdictOf = (command: string) =>
@@ -1661,9 +1820,15 @@ describe("evaluateCommand compound-command scanning", () => {
     expect(verdictOf(command)).toBe("deny");
   });
 
+  test.each(['eval "bit issue claim"', "xargs bit issue claim"])(
+    "denies a concrete floor command behind an executor: %s",
+    (command) => {
+      expect(verdictOf(command)).toBe("deny");
+    },
+  );
+
   // Opaque executors that cannot be statically inspected → ask.
   test.each([
-    'eval "bit issue claim"', // eval body is re-parsed dynamically; not recursed
     'bash -c "rm -rf /"', // interpreter -c body recurses to a destructive ask
     'sh -c "$CMD"', // interpreter -c body is opaque → nothing to inspect
     'sh -c "echo hi"', // interpreter -c body is benign → stays opaque-executor ask

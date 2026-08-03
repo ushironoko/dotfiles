@@ -26,6 +26,7 @@ import { setupChildRunStatusTool } from "../../pi/extensions/pi-harness/features
 import setupSubagent from "../../pi/extensions/pi-harness/features/subagent/index";
 import setupWorkflow from "../../pi/extensions/pi-harness/features/workflow/index";
 import setupAskUserQuestion from "../../pi/extensions/pi-harness/features/ask-user-question/index";
+import setupAgentMemory from "../../pi/extensions/pi-harness/features/agent-memory/index";
 import type { ToolDefLike } from "../../pi/extensions/pi-harness/lib/pi-like";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import { createFakePi } from "./fake-pi";
@@ -55,6 +56,7 @@ const registeredTools = (): Map<string, ToolDefLike> => {
   setupBitTask(pi, makeConfig());
   setupWorkflow(pi, makeConfig());
   setupAskUserQuestion(pi);
+  setupAgentMemory(pi, makeConfig());
   return new Map(pi.tools.map((tool) => [tool.name, tool]));
 };
 
@@ -224,6 +226,47 @@ describe("schema contract: registered shape (snapshot)", () => {
     `);
   });
 
+  test("agent memory schemas preserve action boundaries and bounded fields", () => {
+    expect(parametersOf("memory_recall")).toMatchInlineSnapshot(`
+      {
+        "additionalProperties": true,
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "const": "list",
+              },
+              {
+                "const": "show",
+              },
+              {
+                "const": "sessions",
+              },
+            ],
+            "description": "Aggregated read operation",
+          },
+          "path": {
+            "description": "Logical project-memory path required by show",
+            "maxLength": 256,
+            "type": "string",
+          },
+        },
+        "required": [
+          "action",
+        ],
+        "type": "object",
+      }
+    `);
+    const update = parametersOf("memory_update") as Record<string, unknown>;
+    const properties = update.properties as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(properties.path?.maxLength).toBe(256);
+    expect(properties.description?.maxLength).toBe(512);
+    expect(properties.content?.maxLength).toBe(32 * 1024);
+  });
+
   test("subagent_status requires the invocation returned by an orchestrator", () => {
     expect(parametersOf("subagent_status")).toMatchInlineSnapshot(`
       {
@@ -289,6 +332,8 @@ describe("schema contract: pi validator accepts/rejects (real path)", () => {
     expect(() => validate("worktree_remove", { path: "/a" })).toThrow();
     expect(() => validate("workflow", {})).toThrow();
     expect(() => validate("subagent_status", {})).toThrow();
+    expect(() => validate("memory_recall", {})).toThrow();
+    expect(() => validate("memory_update", { action: "put" })).toThrow();
   });
 
   test("accepts extra keys at root and nested levels (passthrough keeps objects open)", () => {
@@ -300,6 +345,22 @@ describe("schema contract: pi validator accepts/rejects (real path)", () => {
         stages: [{ mode: "fanout", tasks: [{ task: "t", extra: true }] }],
       }),
     ).not.toThrow();
+  });
+
+  test("validates project-memory action literals and path bounds", () => {
+    expect(
+      validate("memory_recall", {
+        action: "show",
+        path: "project/architecture.md",
+      }),
+    ).toMatchObject({ action: "show" });
+    expect(() => validate("memory_recall", { action: "search" })).toThrow();
+    expect(() =>
+      validate("memory_update", {
+        action: "put",
+        path: "x".repeat(257),
+      }),
+    ).toThrow();
   });
 
   test("accepts the invocation ID used by subagent_status", () => {

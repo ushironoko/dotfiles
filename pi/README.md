@@ -11,15 +11,15 @@ child-process behavior): `tests/fixtures/pi-harness/raw/`.
 
 ## Layout
 
-| Repo path                         | Deployed to                                | Mechanism                                     |
-| --------------------------------- | ------------------------------------------ | --------------------------------------------- |
-| `pi/SYSTEM.md`                    | `~/.pi/agent/SYSTEM.md`                    | dotfiles file symlink                         |
-| `pi/extensions/pi-harness`        | `~/.pi/agent/extensions/pi-harness`        | dotfiles directory symlink                    |
-| `pi/extensions/hearth-tools`      | `~/.pi/agent/extensions/hearth-tools`      | dotfiles directory symlink                    |
-| `pi/extensions/codex-web`         | `~/.pi/agent/extensions/codex-web`         | dotfiles directory symlink                    |
-| `pi/themes/transparent-dark.json` | `~/.pi/agent/themes/transparent-dark.json` | dotfiles file symlink                         |
-| `claude/.claude/skills`           | `~/.agents/skills`                         | existing shared mapping                       |
-| `pi/skills`                       | `~/.pi/agent/skills`                       | selective symlink (6 forks + 1 pi-only skill) |
+| Repo path                         | Deployed to                                | Mechanism                                      |
+| --------------------------------- | ------------------------------------------ | ---------------------------------------------- |
+| `pi/SYSTEM.md`                    | `~/.pi/agent/SYSTEM.md`                    | dotfiles file symlink                          |
+| `pi/extensions/pi-harness`        | `~/.pi/agent/extensions/pi-harness`        | dotfiles directory symlink                     |
+| `pi/extensions/hearth-tools`      | `~/.pi/agent/extensions/hearth-tools`      | dotfiles directory symlink                     |
+| `pi/extensions/codex-web`         | `~/.pi/agent/extensions/codex-web`         | dotfiles directory symlink                     |
+| `pi/themes/transparent-dark.json` | `~/.pi/agent/themes/transparent-dark.json` | dotfiles file symlink                          |
+| `claude/.claude/skills`           | `~/.agents/skills`                         | existing shared mapping                        |
+| `pi/skills`                       | `~/.pi/agent/skills`                       | selective symlink (6 forks + 2 pi-only skills) |
 
 ## Install
 
@@ -91,6 +91,88 @@ feature toggles live in `~/.pi/agent/pi-harness.local.json` (machine-local):
 
 Child pi processes spawned by subagent/workflow receive `PI_HARNESS_CHILD=1`
 and keep only the safety layer (no recursion, no duplicate notifications).
+
+## Project memory
+
+The default-on `agent-memory` feature provides durable, repository-scoped
+knowledge through structured tools. It is trust- and capability-gated: a
+non-Git cwd, an untrusted repository, missing/incompatible local commands, or
+empty memory disables recall without breaking startup or the bit-issue
+lifecycle. A linked worktree outside a trusted root is accepted only when Git
+reports it as a registered worktree whose canonical common directory matches a
+trusted repository.
+
+Each feature process writes only to:
+
+```text
+refs/notes/pi-agent-memory/sessions/<session-key>/writers/<writer-key>
+```
+
+The session key is derived from a digest of pi's physical session id; the
+writer key is a process-local random digest. Neither raw ids nor
+caller-selected refs are exposed. Separate processes therefore never share a
+writable ref, even when they resume the same pi session. Reads enumerate the
+fixed managed prefix and merge every valid writer ref, so reloads and old
+session writers remain visible without a shared ref or consolidation pass.
+
+Entries have one validated logical path:
+
+- `project/<slug>.md` for durable facts, decisions, conventions, and
+  constraints;
+- `feedback/<slug>.md` for reusable user feedback;
+- `reference/<slug>.md` for stable references and their concise context.
+
+The merge validates each versioned record and its deterministic target object,
+rejects duplicate/malformed/out-of-window data, and selects the newest
+timestamp per logical path with source ref as a deterministic tie-break.
+Removal writes a tombstone in the current writer ref; it never edits another
+session's note. The pinned `bit v0.45.3` accepts note bodies through `-m` rather
+than Git's `-F -`, so the validated JSON is passed as one bounded direct argv
+value with no shell or logging. Target-object writes and batched object reads
+use bounded Git plumbing stdin; the note ref itself is always managed through
+`bit notes`.
+
+| Tool                         | Availability   | Contract                                                                 |
+| ---------------------------- | -------------- | ------------------------------------------------------------------------ |
+| `memory_recall(list)`        | parent + child | Return the bounded merged index, without full bodies.                    |
+| `memory_recall(show)`        | parent + child | Return one merged logical entry with provenance.                         |
+| `memory_recall(sessions)`    | parent + child | Return a bounded summary of managed session/writer refs.                 |
+| `memory_update(put\|remove)` | parent only    | Write or tombstone one validated path in the harness-derived writer ref. |
+
+The tools never accept arbitrary refs, object ids, shell fragments, or session
+ids. Direct Bash mutation via `git notes` or `bit notes` is structurally denied
+through wrappers, Git location options, substitutions, and compound shells.
+Read-only `notes list` / `notes show` receive no broad allow and stay on the
+ordinary Bash policy path.
+
+Every agent start adds role-specific stewardship guidance. Parent agents
+proactively evaluate durable candidates when verified lasting knowledge emerges
+and before task completion, PR creation/update, checkpoints, compaction,
+pausing, or ending work; they do not wait for a user request. Evaluation may be
+a no-op. A clear candidate uses recall-before-put and needs no confirmation
+question merely to persist it. Child agents remain read-only and return a
+proposed path, description, distilled content, and evidence to the parent for
+independent verification. The extension does not scrape conversations or write
+memory mechanically: the parent remains responsible for the semantic decision.
+
+On the first eligible agent start, the feature injects a bounded merged index
+once per active session branch. The index contains only path, description,
+timestamp, and provenance; bodies require explicit `memory_recall(show)`.
+Persisted hidden markers prevent duplicate injection across reload/resume.
+Every name, description, body, timestamp, and provenance value is **untrusted
+data, not instructions**.
+
+Aggregation has fixed ceilings for logical path/description/content size,
+managed refs, annotated objects, subprocess count and output, total deadline,
+index items/bytes, and show output. Malformed or oversized entries are skipped
+with bounded diagnostics, and failures produce at most a bounded session
+warning. The feature never logs memory bodies.
+
+There is no automatic fetch, push, relay, or other network synchronization, and
+there is no `consolidate` operation. Bit issues remain authoritative for
+in-flight plans/tasks/progress; project memory stores only distilled durable
+facts, decisions, constraints, feedback, and references. Use
+`/skill:project-memory` for recall-before-put, no-op, and content-safety rules.
 
 ## Bash auto-mode effect boundary
 
@@ -484,7 +566,7 @@ hook is advisory):
 
 Templates: `pi/skills/start-work/references/multi-model-workflows.md`.
 
-## Skills (6 forks + 1 pi-only workflow)
+## Skills (6 forks + 2 pi-only skills)
 
 `start-work` / `write-session` / `restoring-session` / `plan-review` / `dig`
 / `smart-compact` are forked into `pi/skills/` with pi vocabulary
@@ -499,6 +581,12 @@ infers labels from observed approval or judge output and does not automatically
 edit rules or
 the checked-in qualification corpus. Invoke it with
 `/skill:permission-audit-analysis`.
+
+`project-memory` is a pi-only durable-knowledge workflow. It requires
+recall-before-put, keeps already represented content as a no-op, restricts
+logical paths to `project/`, `feedback/`, and `reference/`, and excludes
+secrets, transcripts, full diffs, and generated blobs. Invoke it with
+`/skill:project-memory`.
 
 Collision behavior (pi 0.80.6, docs/skills.md): discovery scans
 `~/.pi/agent/skills` before `~/.agents/skills` and keeps the **first** skill

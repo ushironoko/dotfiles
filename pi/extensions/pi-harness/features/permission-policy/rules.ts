@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, resolve } from "node:path";
 import {
   interpreterConcreteArg,
   isOpaqueExecutor,
+  opaqueExecutorConcreteArg,
   normalizeSegment,
   type NormalizedSegment,
   scanCommand,
@@ -393,6 +394,89 @@ const structuralBitDeny = (seg: NormalizedSegment): string | undefined => {
     }
   }
   return undefined;
+};
+
+const NOTES_MUTATION_ACTIONS: ReadonlySet<string> = new Set([
+  "add",
+  "append",
+  "copy",
+  "edit",
+  "merge",
+  "prune",
+  "remove",
+]);
+const NOTES_READ_ACTIONS: ReadonlySet<string> = new Set([
+  "get-ref",
+  "list",
+  "show",
+]);
+
+const notesMutationReason = (command: "bit" | "git"): string =>
+  `${command} notes による直接変更は禁止です`;
+
+// `git notes` and `bit notes` writes belong to the structured agent-memory
+// feature. Keep this as a structural floor: configured regexes cannot safely
+// account for Git global options, wrapper normalization, or an opaque action.
+// A concrete list/show action remains on the ordinary policy path.
+const notesActionDeny = (
+  seg: NormalizedSegment,
+  command: "bit" | "git",
+  start: number,
+): string | undefined => {
+  let index = start;
+  while (index < seg.words.length) {
+    const word = seg.words[index];
+    if (word === undefined) return undefined;
+    if (seg.opaque.has(index)) return notesMutationReason(command);
+    if (word === "--") {
+      index += 1;
+      break;
+    }
+    if (word === "--ref") {
+      if (seg.words[index + 1] === undefined) return undefined;
+      index += 2;
+      continue;
+    }
+    if (word.startsWith("--ref=")) {
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("-")) {
+      // An unknown option makes the action position ambiguous. Continue
+      // looking so a following literal or opaque mutation cannot bypass the
+      // boundary; harmless option-only forms remain on the ordinary path.
+      index += 1;
+      continue;
+    }
+    break;
+  }
+
+  const action = seg.words[index];
+  if (action === undefined) return undefined;
+  if (
+    seg.opaque.has(index) ||
+    NOTES_MUTATION_ACTIONS.has(action) ||
+    !NOTES_READ_ACTIONS.has(action)
+  ) {
+    return notesMutationReason(command);
+  }
+  return undefined;
+};
+
+const structuralNotesDeny = (seg: NormalizedSegment): string | undefined => {
+  if (seg.words[0] === "bit" && seg.words[1] === "notes") {
+    return notesActionDeny(seg, "bit", 2);
+  }
+
+  const position = gitSubcommandPosition(seg.words);
+  if (
+    position === undefined ||
+    seg.opaque.has(position.index) ||
+    seg.words[position.index] !== "notes"
+  ) {
+    return undefined;
+  }
+  return notesActionDeny(seg, "git", position.index + 1);
 };
 
 const GIT_GLOBAL_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set([
@@ -2714,6 +2798,14 @@ const evaluateNormalized = (
     return audited({ verdict: "deny", reason: structural }, "structural-deny");
   }
 
+  const notesMutation = structuralNotesDeny(normalized);
+  if (notesMutation !== undefined) {
+    return audited(
+      { verdict: "deny", reason: notesMutation },
+      "structural-deny",
+    );
+  }
+
   if (potential === "deny" && !effectSandboxed) {
     return audited(
       { verdict: "ask", reason: POTENTIALLY_SENSITIVE_REASON },
@@ -2929,7 +3021,9 @@ const evaluateCommandInner = (
     }
     // `sh -c '<script>'` runs exactly <script>; evaluate it so a denied body
     // (e.g. `bit relay sync`) is denied instead of downgraded to an opaque ask.
-    const inner = interpreterConcreteArg(normalized);
+    const inner =
+      interpreterConcreteArg(normalized) ??
+      opaqueExecutorConcreteArg(normalized);
     if (inner !== undefined) {
       verdicts.push(
         evaluateCommandInner(inner, rules, depth + 1, {
