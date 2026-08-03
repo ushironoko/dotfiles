@@ -21,6 +21,10 @@ import {
   type PermissionTaskAuditContext,
 } from "./model";
 import {
+  projectPermissionNavigation,
+  projectPermissionRunEvidence,
+} from "./projection";
+import {
   createPermissionAuditWriter,
   type PermissionAuditWriter,
 } from "./writer";
@@ -297,6 +301,13 @@ export const setupPermissionAudit = (
     const finalization = (async (): Promise<PermissionAuditFinalizeResult> => {
       try {
         const project = projectContext(transaction.project);
+        const runEvidence = projectPermissionRunEvidence(
+          transaction.runEvidence,
+        );
+        const leadingNavigation = projectPermissionNavigation(
+          transaction.leadingNavigation,
+        );
+        const gitCwd = projectPermissionNavigation(transaction.gitCwd);
         const record = await writer.append((identity) =>
           fitPermissionDecisionRecord({
             ...identity,
@@ -308,16 +319,10 @@ export const setupPermissionAudit = (
             command: transaction.command,
             ...(transaction.cwd === undefined ? {} : { cwd: transaction.cwd }),
             task: transaction.task,
-            ...(transaction.runEvidence === undefined
-              ? {}
-              : { runEvidence: transaction.runEvidence }),
+            ...(runEvidence === undefined ? {} : { runEvidence }),
             ...(project === undefined ? {} : { project }),
-            ...(transaction.leadingNavigation === undefined
-              ? {}
-              : { leadingNavigation: transaction.leadingNavigation }),
-            ...(transaction.gitCwd === undefined
-              ? {}
-              : { gitCwd: transaction.gitCwd }),
+            ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
+            ...(gitCwd === undefined ? {} : { gitCwd }),
             executionBoundary: transaction.executionBoundary,
             stages: transaction.stages,
             boundaryDisposition,

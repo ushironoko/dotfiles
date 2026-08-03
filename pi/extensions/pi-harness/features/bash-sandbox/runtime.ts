@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
+import { type ActiveAbortSignal, isAbortSignal } from "../../lib/abort";
 import { sanitizeChildEnv } from "../../lib/child-env";
 
 export const CONTROLLED_BASH_PATH = "/bin/bash";
@@ -83,31 +84,8 @@ type SpawnFunction = (
   options: SpawnOptions,
 ) => SpawnedProcess;
 
-interface ActiveAbortSignal {
-  readonly aborted: boolean;
-  addEventListener(
-    type: "abort",
-    listener: () => void,
-    options?: { once?: boolean },
-  ): void;
-  removeEventListener(type: "abort", listener: () => void): void;
-}
-
-const activeAbortSignal = (value: unknown): ActiveAbortSignal | undefined => {
-  if (
-    value === null ||
-    typeof value !== "object" ||
-    !("aborted" in value) ||
-    typeof value.aborted !== "boolean" ||
-    !("addEventListener" in value) ||
-    typeof value.addEventListener !== "function" ||
-    !("removeEventListener" in value) ||
-    typeof value.removeEventListener !== "function"
-  ) {
-    return undefined;
-  }
-  return value as ActiveAbortSignal;
-};
+const activeAbortSignal = (value: unknown): ActiveAbortSignal | undefined =>
+  isAbortSignal(value) ? value : undefined;
 
 interface ControlledBashOptions {
   readonly getScratchDirectory: () => string | undefined;

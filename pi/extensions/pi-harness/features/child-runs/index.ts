@@ -123,6 +123,41 @@ export interface SetupChildRunsOptions {
   readonly backgroundDrainTimeoutMs?: number;
 }
 
+type CoordinationRefreshOutcome =
+  | { readonly ok: true; readonly count: number }
+  | {
+      readonly ok: false;
+      readonly kind: string;
+      readonly message: string;
+    };
+
+interface CoordinationRefreshSource {
+  refresh(cwd: string): Promise<CoordinationRefreshOutcome>;
+}
+
+const createCoordinationRefresher = (
+  source: CoordinationRefreshSource | undefined,
+  ensureVisible: (ctx: RuntimeContextLike) => void,
+  unavailableLabel: string,
+): ((ctx: RuntimeContextLike, explicit?: boolean) => Promise<void>) => {
+  let lastExplicitWarning: string | undefined;
+  return async (ctx, explicit = false) => {
+    if (source === undefined) return;
+    const cwd = ctx.cwd ?? process.cwd();
+    const outcome = await source.refresh(cwd);
+    if (outcome.ok) {
+      lastExplicitWarning = undefined;
+      if (outcome.count > 0) ensureVisible(ctx);
+      return;
+    }
+    if (!explicit) return;
+    const warning = `${outcome.kind}:${outcome.message}`;
+    if (warning === lastExplicitWarning) return;
+    lastExplicitWarning = warning;
+    ctx.ui.notify(`${unavailableLabel}: ${outcome.message}`, "warning");
+  };
+};
+
 const replayBranch = (
   registry: ChildRunRegistry,
   ctx: RuntimeContextLike,
@@ -149,55 +184,17 @@ const setupChildRuns = (
     : undefined;
   const { agentMemory } = options;
   let activeContext: RuntimeContextLike | undefined;
-  let lastExplicitIssueWarning: string | undefined;
-  let lastExplicitMemoryWarning: string | undefined;
   let panel: ChildRunsPanelController;
-  const refreshBitIssues = async (
-    ctx: RuntimeContextLike,
-    explicit = false,
-  ): Promise<void> => {
-    if (bitIssues === undefined) return;
-    const cwd = ctx.cwd ?? process.cwd();
-    const outcome = await bitIssues.refresh(cwd);
-    if (outcome.ok) {
-      lastExplicitIssueWarning = undefined;
-      if (outcome.count > 0) panel.ensureVisibleForIssues(ctx);
-      return;
-    }
-    if (explicit) {
-      const warning = `${outcome.kind}:${outcome.message}`;
-      if (warning !== lastExplicitIssueWarning) {
-        lastExplicitIssueWarning = warning;
-        ctx.ui.notify(
-          `Open bit issues unavailable: ${outcome.message}`,
-          "warning",
-        );
-      }
-    }
-  };
-  const refreshAgentMemory = async (
-    ctx: RuntimeContextLike,
-    explicit = false,
-  ): Promise<void> => {
-    if (agentMemory === undefined) return;
-    const cwd = ctx.cwd ?? process.cwd();
-    const outcome = await agentMemory.refresh(cwd);
-    if (outcome.ok) {
-      lastExplicitMemoryWarning = undefined;
-      if (outcome.count > 0) panel.ensureVisibleForMemory(ctx);
-      return;
-    }
-    if (explicit) {
-      const warning = `${outcome.kind}:${outcome.message}`;
-      if (warning !== lastExplicitMemoryWarning) {
-        lastExplicitMemoryWarning = warning;
-        ctx.ui.notify(
-          `Project memory unavailable: ${outcome.message}`,
-          "warning",
-        );
-      }
-    }
-  };
+  const refreshBitIssues = createCoordinationRefresher(
+    bitIssues,
+    (ctx) => panel.ensureVisibleForIssues(ctx),
+    "Open bit issues unavailable",
+  );
+  const refreshAgentMemory = createCoordinationRefresher(
+    agentMemory,
+    (ctx) => panel.ensureVisibleForMemory(ctx),
+    "Project memory unavailable",
+  );
   const refreshCoordination = async (
     ctx: RuntimeContextLike,
     explicit = false,

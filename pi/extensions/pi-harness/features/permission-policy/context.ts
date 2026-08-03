@@ -2,14 +2,21 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, resolve as resolvePath } from "node:path";
+import {
+  type ActiveAbortSignal,
+  createAbortController,
+  isAbortSignal,
+} from "../../lib/abort";
 import { sanitizeChildEnvAsync } from "../../lib/child-env";
+import {
+  MAX_GIT_WORKTREE_PORCELAIN_BYTES,
+  parseGitWorktreePorcelain,
+} from "../../lib/git-worktree-porcelain";
 import { isPathWithin } from "../../lib/trust";
 
 const MAX_TASK_TEXT_BYTES = 1_024;
 const MAX_PENDING_TASKS = 8;
-const MAX_GIT_OUTPUT_BYTES = 64 * 1_024;
-const MAX_DISCOVERED_WORKTREES = 128;
-const MAX_DISCOVERED_PATH_BYTES = 1_024;
+const MAX_GIT_OUTPUT_BYTES = MAX_GIT_WORKTREE_PORCELAIN_BYTES;
 const MAX_VISIBLE_WORKTREES = 16;
 const MAX_VISIBLE_PATH_BYTES = 512;
 const MAX_VISIBLE_PROJECT_BYTES = 2_048;
@@ -21,14 +28,15 @@ const fingerprint = (...parts: readonly string[]): string => {
   return hash.digest("hex");
 };
 
+const isUtf8ContinuationByte = (byte: number | undefined): boolean =>
+  byte !== undefined && byte >= 128 && byte < 192;
+
 const truncateUtf8 = (value: string, maxBytes: number): string => {
   const encoded = Buffer.from(value, "utf8");
   if (encoded.byteLength <= maxBytes) return value;
   const marker = Buffer.from("…", "utf8");
   let end = Math.max(0, maxBytes - marker.byteLength);
-  while (end > 0 && (encoded[end] ?? 0) >= 128 && (encoded[end] ?? 0) < 192) {
-    end -= 1;
-  }
+  while (end > 0 && isUtf8ContinuationByte(encoded[end])) end -= 1;
   return `${encoded.subarray(0, end).toString("utf8")}${marker.toString("utf8")}`;
 };
 
@@ -480,11 +488,7 @@ const truncateUtf8Tail = (value: string, maxBytes: number): string => {
   let start = Math.min(encoded.byteLength, marker.byteLength);
   const targetStart = encoded.byteLength - (maxBytes - marker.byteLength);
   start = Math.max(start, targetStart);
-  while (
-    start < encoded.byteLength &&
-    (encoded[start] ?? 0) >= 0x80 &&
-    (encoded[start] ?? 0) < 192
-  ) {
+  while (start < encoded.byteLength && isUtf8ContinuationByte(encoded[start])) {
     start += 1;
   }
   return `${marker.toString("utf8")}${encoded.subarray(start).toString("utf8")}`;
@@ -673,52 +677,6 @@ const decoder = new TextDecoder(undefined, {
   fatal: true,
   ignoreBOM: true,
 });
-
-interface ActiveAbortSignal {
-  readonly aborted: boolean;
-  addEventListener(
-    type: "abort",
-    listener: () => void,
-    options?: { once?: boolean },
-  ): void;
-  removeEventListener(type: "abort", listener: () => void): void;
-}
-
-const isAbortSignal = (
-  value: AbortSignal | undefined,
-): value is AbortSignal & ActiveAbortSignal =>
-  value !== undefined &&
-  typeof value === "object" &&
-  "aborted" in value &&
-  typeof value.aborted === "boolean" &&
-  "addEventListener" in value &&
-  typeof value.addEventListener === "function" &&
-  "removeEventListener" in value &&
-  typeof value.removeEventListener === "function";
-
-interface AbortControllerLike {
-  readonly signal: AbortSignal & ActiveAbortSignal;
-  abort(): void;
-}
-
-const createAbortController = (): AbortControllerLike => {
-  const value: unknown = new AbortController();
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("abort" in value) ||
-    typeof value.abort !== "function" ||
-    !("signal" in value) ||
-    !isAbortSignal(value.signal as AbortSignal | undefined)
-  ) {
-    throw new Error("AbortController is unavailable");
-  }
-  const { abort, signal } = value;
-  return {
-    signal: signal as AbortSignal & ActiveAbortSignal,
-    abort: () => Reflect.apply(abort, value, []),
-  };
-};
 
 export const runGitWorktreeList = (
   cwd: string,
@@ -971,89 +929,6 @@ interface ProjectContextOptions {
   readonly timeoutMs?: number;
 }
 
-interface ParsedWorktreeRecord {
-  readonly path: string;
-  readonly prunable: boolean;
-  readonly bare: boolean;
-}
-
-const parseWorktreeRecords = (
-  stdout: Uint8Array,
-): readonly ParsedWorktreeRecord[] | undefined => {
-  if (stdout.byteLength === 0 || stdout.byteLength > MAX_GIT_OUTPUT_BYTES) {
-    return undefined;
-  }
-  let text: string;
-  try {
-    text = decoder.decode(stdout);
-  } catch {
-    return undefined;
-  }
-  if (!text.endsWith("\0\0")) return undefined;
-
-  const records: ParsedWorktreeRecord[] = [];
-  const seenPaths = new Set<string>();
-  let fields: string[] = [];
-  const consume = (): boolean => {
-    if (fields.length === 0) return true;
-    const worktreeFields = fields.filter((field) =>
-      field.startsWith("worktree "),
-    );
-    const [worktreeField] = worktreeFields;
-    const [firstField] = fields;
-    if (
-      worktreeFields.length !== 1 ||
-      worktreeField === undefined ||
-      worktreeField !== firstField
-    ) {
-      return false;
-    }
-    const path = worktreeField.slice("worktree ".length);
-    if (
-      path === "" ||
-      !isAbsolute(path) ||
-      Buffer.byteLength(path, "utf8") > MAX_DISCOVERED_PATH_BYTES ||
-      hasControlCharacter(path)
-    ) {
-      return false;
-    }
-    if (seenPaths.has(path)) return false;
-    seenPaths.add(path);
-    const seenKinds = new Set<string>();
-    for (const field of fields.slice(1)) {
-      const [kind] = field.split(" ", 1);
-      if (
-        kind === undefined ||
-        !["HEAD", "branch", "detached", "bare", "locked", "prunable"].includes(
-          kind,
-        ) ||
-        seenKinds.has(kind)
-      ) {
-        return false;
-      }
-      seenKinds.add(kind);
-    }
-    if (seenKinds.has("branch") && seenKinds.has("detached")) return false;
-    records.push({
-      path,
-      prunable: seenKinds.has("prunable"),
-      bare: seenKinds.has("bare"),
-    });
-    return records.length <= MAX_DISCOVERED_WORKTREES;
-  };
-
-  for (const field of text.split("\0")) {
-    if (field !== "") {
-      fields.push(field);
-      continue;
-    }
-    if (!consume()) return undefined;
-    fields = [];
-  }
-  if (fields.length !== 0 || records.length === 0) return undefined;
-  return records;
-};
-
 const unavailableProject = (
   cwd: string | undefined,
   reason: string,
@@ -1155,7 +1030,7 @@ const discoverProjectContextUnbounded = async (
     return unavailable(canonicalCwd, result.reason);
   }
 
-  const records = parseWorktreeRecords(result.stdout);
+  const records = parseGitWorktreePorcelain(result.stdout);
   if (records === undefined) {
     return unavailable(canonicalCwd, "git returned malformed worktree data");
   }

@@ -494,6 +494,38 @@ describe("open bit issue browser lifecycle", () => {
 });
 
 describe("project memory browser lifecycle", () => {
+  test("keeps automatic failures silent and deduplicates explicit warnings", async () => {
+    const runtime = createIssueRuntime();
+    const source: AgentMemoryDataSource = {
+      aggregate: async () => {
+        throw new Error("memory is unavailable");
+      },
+      update: async () => {
+        throw new Error("unused");
+      },
+    };
+    const memory = new AgentMemoryRegistry({
+      cli: source,
+      trust: { trustedRoots: ["/repo"] },
+    });
+    setupChildRuns(runtime.pi, {
+      agentMemory: memory,
+      childExecution: false,
+    });
+
+    await runtime.emit("session_start");
+    await Bun.sleep(0);
+    expect(runtime.notifications).toEqual([]);
+    const command = runtime.commands.get("project-memory");
+    if (command === undefined)
+      throw new Error("project-memory command missing");
+    await command.handler("", runtime.context);
+    await command.handler("", runtime.context);
+    expect(runtime.notifications).toEqual([
+      "Project memory unavailable: memory is unavailable",
+    ]);
+  });
+
   test("background-mounts, focuses, refreshes, and disposes memory-only state", async () => {
     const runtime = createIssueRuntime();
     let aggregateCalls = 0;

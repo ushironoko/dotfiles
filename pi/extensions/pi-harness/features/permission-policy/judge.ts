@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import { connect, type Socket } from "node:net";
 import { resolve } from "node:path";
 import type { PermissionJudgeConfig } from "../../config";
+import {
+  type ActiveAbortSignal,
+  createAbortController,
+  isAbortSignal as isActiveAbortSignal,
+} from "../../lib/abort";
 import type {
   BoundedTaskContext,
   PermissionLeadingNavigation,
@@ -119,50 +124,6 @@ interface JudgeOptions {
 interface CacheEntry {
   expiresAt: number;
 }
-
-interface ActiveAbortSignal {
-  readonly aborted: boolean;
-  addEventListener(
-    type: "abort",
-    listener: () => void,
-    options?: { once?: boolean },
-  ): void;
-  removeEventListener(type: "abort", listener: () => void): void;
-}
-
-interface AbortControllerLike {
-  readonly signal: ActiveAbortSignal;
-  abort(): void;
-}
-
-const isActiveAbortSignal = (value: unknown): value is ActiveAbortSignal =>
-  typeof value === "object" &&
-  value !== null &&
-  "aborted" in value &&
-  typeof value.aborted === "boolean" &&
-  "addEventListener" in value &&
-  typeof value.addEventListener === "function" &&
-  "removeEventListener" in value &&
-  typeof value.removeEventListener === "function";
-
-const createAbortController = (): AbortControllerLike => {
-  const value: unknown = new AbortController();
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("abort" in value) ||
-    typeof value.abort !== "function" ||
-    !("signal" in value) ||
-    !isActiveAbortSignal(value.signal)
-  ) {
-    throw new Error("AbortController is unavailable");
-  }
-  const { abort, signal } = value;
-  return {
-    signal,
-    abort: () => Reflect.apply(abort, value, []),
-  };
-};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);

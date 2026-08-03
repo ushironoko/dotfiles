@@ -15,6 +15,10 @@ import {
   type PermissionDecisionRecordInput,
 } from "../../pi/extensions/pi-harness/features/permission-audit/model";
 import {
+  projectPermissionNavigation,
+  projectPermissionRunEvidence,
+} from "../../pi/extensions/pi-harness/features/permission-audit/projection";
+import {
   createPermissionAuditWriter,
   permissionAuditLogFileName,
   type PermissionAuditFileHandle,
@@ -32,7 +36,12 @@ import {
   setupPermissionAudit,
 } from "../../pi/extensions/pi-harness/features/permission-audit/index";
 import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy/index";
-import { createPermissionTaskTracker } from "../../pi/extensions/pi-harness/features/permission-policy/context";
+import {
+  createPermissionTaskTracker,
+  type PermissionLeadingNavigation,
+  type PermissionRunEvidence,
+  type PermissionToolResultEvidence,
+} from "../../pi/extensions/pi-harness/features/permission-policy/context";
 import { CHILD_PERMISSION_SIGNAL_ENV } from "../../pi/extensions/pi-harness/features/permission-policy/block";
 import { sanitizeChildEnv } from "../../pi/extensions/pi-harness/lib/child-env";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
@@ -98,6 +107,49 @@ const allowedStage: PermissionAuditStage = {
 };
 
 describe("permission audit record model", () => {
+  test("projects only persisted fields from runtime permission contexts", () => {
+    const priorToolResults: readonly (PermissionToolResultEvidence & {
+      readonly runtimeOnly: string;
+    })[] = [
+      { toolName: "AskUserQuestion", status: "ok", runtimeOnly: "nested" },
+    ];
+    const runEvidence: PermissionRunEvidence & {
+      readonly runtimeOnly: string;
+    } = {
+      assistantText: "Inspecting the repository.",
+      askUserQuestionResultText: "Approved.",
+      priorToolResults,
+      fingerprint: "runtime-fingerprint",
+      runtimeOnly: "top-level",
+    };
+    const navigation: PermissionLeadingNavigation & {
+      readonly canonicalPath: string;
+    } = {
+      scope: "listed-worktree",
+      sameRepository: true,
+      canonicalPath: "/private/runtime-only",
+    };
+
+    const projectedEvidence = projectPermissionRunEvidence(runEvidence);
+    expect(projectedEvidence).toEqual({
+      assistantText: "Inspecting the repository.",
+      askUserQuestionResultText: "Approved.",
+      priorToolResults: [{ toolName: "AskUserQuestion", status: "ok" }],
+      fingerprint: "runtime-fingerprint",
+    });
+    expect(projectedEvidence?.priorToolResults).not.toBe(
+      runEvidence.priorToolResults,
+    );
+    expect(JSON.stringify(projectedEvidence)).not.toContain("runtimeOnly");
+    expect(projectPermissionNavigation(navigation)).toEqual({
+      scope: "listed-worktree",
+      sameRepository: true,
+    });
+    expect(
+      JSON.stringify(projectPermissionNavigation(navigation)),
+    ).not.toContain("canonicalPath");
+  });
+
   test("derives terminal decisions from challenges rather than intermediate ASK", () => {
     const intermediateAsk: PermissionAuditStage = {
       type: "deterministic",
