@@ -3,6 +3,11 @@ import {
   loadConfig,
   type HarnessConfig,
 } from "../../pi/extensions/pi-harness/config";
+import type { MemoryAggregate } from "../../pi/extensions/pi-harness/features/agent-memory/cli";
+import {
+  AgentMemoryRegistry,
+  type AgentMemoryDataSource,
+} from "../../pi/extensions/pi-harness/features/agent-memory/registry";
 import {
   BitIssueCli,
   BoundedCommandError,
@@ -192,10 +197,15 @@ describe("pi-harness coordination browser composition", () => {
     const parent = registration(parentConfig);
     expect(parent.tools).toContain("memory_recall");
     expect(parent.tools).toContain("memory_update");
+    expect(parent.commands.has("subagents")).toBe(true);
+    expect(parent.commands.has("project-memory")).toBe(true);
+    expect(parent.shortcuts.has("ctrl+alt+m")).toBe(true);
 
     const child = registration({ ...parentConfig, isChild: true });
     expect(child.tools).toContain("memory_recall");
     expect(child.tools).not.toContain("memory_update");
+    expect(child.commands.has("subagents")).toBe(false);
+    expect(child.commands.has("project-memory")).toBe(false);
   });
 
   test("PI_HARNESS_CHILD=1 keeps read-only memory but disables resident sources", () => {
@@ -439,7 +449,8 @@ describe("open bit issue browser lifecycle", () => {
     await Bun.sleep(0);
     const mounted = runtime.getComponent();
     expect(mounted).toBeDefined();
-    expect(mounted?.render(80)[0]).toContain("Open bit issues: 1");
+    expect(mounted?.render(80)[0]).toContain("#issue-a");
+    expect(mounted?.render(80).join("\n")).not.toContain("Open bit issues");
     expect(runtime.tui.focusedComponent).not.toBe(mounted ?? null);
 
     const bitIssuesCommand = runtime.commands.get("bit-issues");
@@ -476,6 +487,104 @@ describe("open bit issue browser lifecycle", () => {
       throw new Error("bit-issues shortcut missing");
     await bitIssuesShortcut.handler(runtime.context);
     expect(runtime.getComponent()).toBeDefined();
+    await runtime.emit("session_shutdown");
+    expect(runtime.getComponent()).toBeUndefined();
+    expect(runtime.hasTerminalInput()).toBe(false);
+  });
+});
+
+describe("project memory browser lifecycle", () => {
+  test("background-mounts, focuses, refreshes, and disposes memory-only state", async () => {
+    const runtime = createIssueRuntime();
+    let aggregateCalls = 0;
+    const aggregate: MemoryAggregate = {
+      repository: {
+        cwd: "/repo",
+        topLevel: "/repo",
+        commonDir: "/repo/.git",
+        objectFormat: "sha1",
+        trustSource: "direct",
+      },
+      merged: {
+        entries: new Map([
+          [
+            "project/architecture.md",
+            {
+              record: {
+                version: 1,
+                path: "project/architecture.md",
+                description: "Architecture decision",
+                updatedAt: "2026-08-03T08:00:00.000Z",
+                deleted: false,
+                content: "Use the shared registry.",
+              },
+              sourceRef: `refs/notes/pi-agent-memory/sessions/${"a".repeat(64)}/writers/${"b".repeat(64)}`,
+              targetOid: "c".repeat(40),
+            },
+          ],
+        ]),
+        deleted: new Map(),
+      },
+      refs: [],
+      diagnostics: [],
+      truncated: false,
+    };
+    const source: AgentMemoryDataSource = {
+      aggregate: async () => {
+        aggregateCalls += 1;
+        return aggregate;
+      },
+      update: async () => {
+        throw new Error("unused");
+      },
+    };
+    const memory = new AgentMemoryRegistry({
+      cli: source,
+      trust: { trustedRoots: ["/repo"] },
+    });
+    setupChildRuns(runtime.pi, {
+      agentMemory: memory,
+      childExecution: false,
+    });
+
+    await runtime.emit("session_start");
+    await Bun.sleep(0);
+    expect(runtime.getComponent()?.render(100)[0]).toContain(
+      "project/architecture.md",
+    );
+    expect(runtime.getComponent()?.render(100).join("\n")).not.toContain(
+      "Project memory",
+    );
+
+    const callsAfterSessionStart = aggregateCalls;
+    await runtime.emit("agent_settled");
+    await Bun.sleep(0);
+    expect(aggregateCalls).toBe(callsAfterSessionStart);
+    const subagents = runtime.commands.get("subagents");
+    if (subagents === undefined) throw new Error("subagents command missing");
+    await subagents.handler("", runtime.context);
+    expect(aggregateCalls).toBe(callsAfterSessionStart);
+
+    const command = runtime.commands.get("project-memory");
+    if (command === undefined)
+      throw new Error("project-memory command missing");
+    const callsBeforeCommand = aggregateCalls;
+    await command.handler("", runtime.context);
+    expect(aggregateCalls).toBe(callsBeforeCommand + 1);
+    expect(
+      (
+        runtime.getComponent() as RuntimeComponent & {
+          getSelectedMemoryPath(): string | undefined;
+        }
+      ).getSelectedMemoryPath(),
+    ).toBe("project/architecture.md");
+    expect(runtime.tui.focusedComponent).toBe(runtime.getComponent() ?? null);
+
+    const callsBeforeR = aggregateCalls;
+    runtime.getComponent()?.handleInput?.("r");
+    await Bun.sleep(0);
+    expect(aggregateCalls).toBeGreaterThan(callsBeforeR);
+
     await runtime.emit("session_shutdown");
     expect(runtime.getComponent()).toBeUndefined();
     expect(runtime.hasTerminalInput()).toBe(false);
