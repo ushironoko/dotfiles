@@ -282,23 +282,27 @@ describe("Claude-compatible statusline rendering", () => {
     ).toEqual(["dotfiles | TS L? T? X?"]);
   });
 
-  test("uses Claude-equivalent colors for diffs, checks, model, and context", () => {
+  test("uses theme colors for metadata, diffs, checks, model, and context", () => {
     const [line = ""] = renderStatusline(
       snapshot({
         git: gitStatus({ additions: 2, deletions: 1 }),
         projectLabel: "TS",
         cache: sampleCache(),
       }),
-      { modelName: "Sonnet", remainingContext: 9 },
+      { branch: "main", modelName: "Sonnet", remainingContext: 9 },
       200,
       ansiTheme,
     );
 
+    expect(line).toContain("\u001B[90m | dotfiles | main | \u001B[0m");
     expect(line).toContain("\u001B[32m+2\u001B[0m");
     expect(line).toContain("\u001B[31m-1\u001B[0m");
-    expect(line).toContain("L\u001B[32m✓\u001B[0m");
-    expect(line).toContain("T\u001B[33m…\u001B[0m");
-    expect(line).toContain("X\u001B[31m✗\u001B[0m");
+    expect(line).toContain("\u001B[90m L\u001B[0m");
+    expect(line).toContain("L\u001B[0m\u001B[32m✓\u001B[0m");
+    expect(line).toContain("\u001B[90m T\u001B[0m");
+    expect(line).toContain("T\u001B[0m\u001B[33m…\u001B[0m");
+    expect(line).toContain("\u001B[90m X\u001B[0m");
+    expect(line).toContain("X\u001B[0m\u001B[31m✗\u001B[0m");
     expect(line).toContain("\u001B[36mSonnet\u001B[0m");
     expect(line).toContain("\u001B[31m9%\u001B[0m");
   });
@@ -395,7 +399,9 @@ describe("Claude-compatible statusline rendering", () => {
     );
 
     expect(line).toContain(
-      "L\u001B[90m?\u001B[0m T\u001B[90m?\u001B[0m X\u001B[90m?\u001B[0m",
+      "\u001B[90m L\u001B[0m\u001B[90m?\u001B[0m" +
+        "\u001B[90m T\u001B[0m\u001B[90m?\u001B[0m" +
+        "\u001B[90m X\u001B[0m\u001B[90m?\u001B[0m",
     );
   });
 
