@@ -210,7 +210,7 @@ describe("child-session browser component", () => {
     expect(lines.every((item) => visibleWidth(item) <= 24)).toBe(true);
   });
 
-  test("caps populated height and uses every row after the title for content", () => {
+  test("caps populated height and uses every row for flat content", () => {
     for (const [rows, expectedHeight] of [
       [24, 6],
       [40, 10],
@@ -221,7 +221,7 @@ describe("child-session browser component", () => {
       const lines = component.render(80);
       expect(lines).toHaveLength(expectedHeight);
       expect(lines.join("\n")).not.toContain("↑↓ select");
-      expect(lines.at(-1)).toContain(`agent-${expectedHeight - 3}`);
+      expect(lines.at(-1)).toContain(`agent-${expectedHeight - 1}`);
     }
   });
 
@@ -825,22 +825,19 @@ const setupCombined = async (
 };
 
 describe("combined coordination browser", () => {
-  test("renders issue-only and combined sections in the old height budget", async () => {
+  test("renders child and issue rows in one flat height budget", async () => {
     const issueOnly = await setupCombined(["issue-a", "issue-b"]);
     const onlyLines = issueOnly.component.render(80);
-    expect(onlyLines[0]).toContain("Child sessions: 0 | Open bit issues: 2");
-    expect(onlyLines.join("\n")).toContain("Open bit issues");
-    expect(onlyLines.join("\n")).toContain("#issue-a");
+    expect(onlyLines[0]).toContain("#issue-a");
+    expect(onlyLines.join("\n")).not.toContain("Open bit issues");
     expect(issueOnly.component.getSelectedIssueId()).toBe("issue-a");
 
     const combined = await setupCombined(["issue-a"], 1);
     const combinedLines = combined.component.render(80);
     expect(combinedLines.length).toBeLessThanOrEqual(10);
-    expect(combinedLines.join("\n")).toContain("Child sessions");
-    expect(combinedLines.join("\n")).toContain("Open bit issues");
-    expect(combinedLines.indexOf("Child sessions")).toBeLessThan(
-      combinedLines.indexOf("Open bit issues"),
-    );
+    expect(combinedLines[0]).toContain("agent-0");
+    expect(combinedLines[1]).toContain("#issue-a");
+    expect(combinedLines.join("\n")).not.toContain("Child sessions");
     expect(combinedLines.every((item) => visibleWidth(item) <= 80)).toBe(true);
   });
 
@@ -850,11 +847,10 @@ describe("combined coordination browser", () => {
       "project/alpha.md",
     ]);
     const lines = combined.component.render(100);
-    expect(lines[0]).toContain("Project memory: 2");
-    expect(lines.indexOf("Open bit issues")).toBeLessThan(
-      lines.indexOf("Project memory"),
-    );
-    expect(lines.join("\n")).toContain("project/alpha.md");
+    expect(lines[0]).toContain("agent-0");
+    expect(lines[1]).toContain("#issue-a");
+    expect(lines[2]).toContain("project/alpha.md");
+    expect(lines.join("\n")).not.toContain("Project memory");
 
     combined.component.handleInput("down");
     combined.component.handleInput("down");

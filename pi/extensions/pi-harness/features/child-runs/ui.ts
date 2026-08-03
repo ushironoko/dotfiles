@@ -267,41 +267,14 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
     const memories = memorySnapshot?.entries ?? [];
     this.syncSelection(runs, issues, memories);
 
-    const body = this.renderList(
+    return this.renderList(
       snapshots,
       runs,
       issues,
       memories,
       safeWidth,
-      height - 1,
+      height,
     );
-    let issueState = "";
-    if (issueSnapshot?.loading === true) issueState = " · refreshing";
-    else if (issueSnapshot?.stale === true) issueState = " · stale";
-    else if (issueSnapshot?.error !== undefined) issueState = " · unavailable";
-    let memoryState = "";
-    if (memorySnapshot?.loading === true) memoryState = " · refreshing";
-    else if (memorySnapshot?.stale === true) memoryState = " · stale";
-    else if (memorySnapshot?.error !== undefined)
-      memoryState = " · unavailable";
-    const counts = [
-      `Child sessions: ${runs.length}`,
-      this.bitIssues === undefined
-        ? undefined
-        : `Open bit issues: ${issues.length}${issueState}`,
-      this.agentMemory === undefined
-        ? undefined
-        : `Project memory: ${memories.length}${memoryState}`,
-    ].filter((item): item is string => item !== undefined);
-    const title =
-      this.bitIssues === undefined && this.agentMemory === undefined
-        ? " Child sessions "
-        : ` ${counts.join(" | ")} `;
-    const borderWidth = Math.max(1, safeWidth - visibleWidth(title));
-    return [
-      line(`${title}${"─".repeat(borderWidth)}`, safeWidth),
-      ...body,
-    ].slice(0, height);
   }
 
   handleInput(data: string): void {
@@ -494,12 +467,7 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
 
     const rendered: BrowserRow[] = [];
     if (runs.length > 0) {
-      if (this.bitIssues !== undefined || this.agentMemory !== undefined)
-        rendered.push({ text: "Child sessions" });
       for (const invocation of snapshots) {
-        rendered.push({
-          text: `${invocation.label} · ${invocation.source} · ${invocation.runs.length} run(s)`,
-        });
         for (const run of invocation.runs) {
           const stage =
             run.stageIndex === undefined
@@ -521,7 +489,6 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
       }
     }
     if (issues.length > 0) {
-      rendered.push({ text: "Open bit issues" });
       for (const issue of issues) {
         const selection: BrowserSelection = { kind: "issue", id: issue.id };
         rendered.push({
@@ -539,7 +506,6 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
       });
     }
     if (memories.length > 0) {
-      rendered.push({ text: "Project memory" });
       for (const entry of memories) {
         const selection: BrowserSelection = {
           kind: "memory",

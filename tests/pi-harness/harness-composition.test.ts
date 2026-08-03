@@ -449,7 +449,8 @@ describe("open bit issue browser lifecycle", () => {
     await Bun.sleep(0);
     const mounted = runtime.getComponent();
     expect(mounted).toBeDefined();
-    expect(mounted?.render(80)[0]).toContain("Open bit issues: 1");
+    expect(mounted?.render(80)[0]).toContain("#issue-a");
+    expect(mounted?.render(80).join("\n")).not.toContain("Open bit issues");
     expect(runtime.tui.focusedComponent).not.toBe(mounted ?? null);
 
     const bitIssuesCommand = runtime.commands.get("bit-issues");
@@ -549,10 +550,10 @@ describe("project memory browser lifecycle", () => {
     await runtime.emit("session_start");
     await Bun.sleep(0);
     expect(runtime.getComponent()?.render(100)[0]).toContain(
-      "Project memory: 1",
-    );
-    expect(runtime.getComponent()?.render(100).join("\n")).toContain(
       "project/architecture.md",
+    );
+    expect(runtime.getComponent()?.render(100).join("\n")).not.toContain(
+      "Project memory",
     );
 
     const callsAfterSessionStart = aggregateCalls;

@@ -61,7 +61,7 @@ const createLayout = async (
     toolCallId: "layout-parent",
     source: "workflow",
     label: "workflow",
-    runs: Array.from({ length: 30 }, (_, taskIndex) => ({
+    runs: Array.from({ length: includeIssues ? 2 : 30 }, (_, taskIndex) => ({
       agent: `agent-${taskIndex}`,
       task: `inspect task ${taskIndex}`,
       taskIndex,
@@ -174,7 +174,7 @@ describe("child-session browser normal-flow layout", () => {
     });
   }
 
-  test("keeps the same total budget when child and issue sections coexist", async () => {
+  test("keeps the same total budget when flat child and issue rows coexist", async () => {
     for (const [rows, columns, expectedPanelHeight] of [
       [24, 80, 6],
       [40, 120, 10],
@@ -185,7 +185,10 @@ describe("child-session browser normal-flow layout", () => {
         true,
       );
       expect(browserLines).toHaveLength(expectedPanelHeight);
-      expect(browserLines[0]).toContain("Open bit issues: 30");
+      expect(browserLines[0]).toContain("agent-0");
+      expect(browserLines[1]).toContain("agent-1");
+      expect(browserLines[2]).toContain("#issue-0");
+      expect(browserLines.join("\n")).not.toContain("Open bit issues");
       for (const editorLine of new Set(editorLines)) {
         expect(countLine(viewport, editorLine)).toBeGreaterThanOrEqual(
           countLine(editorLines, editorLine),

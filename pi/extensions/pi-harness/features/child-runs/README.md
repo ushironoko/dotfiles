@@ -19,14 +19,14 @@ for all sources.
 - When `bit-task` is enabled, `session_start` refreshes open issues in the
   current Git repository. One or more open issues also mount the browser without
   stealing editor focus. Closed issues are never listed.
-- The header reports `Child sessions: N | Open bit issues: M | Project memory:
-P` for enabled sources. One scrollable list places child rows first, open
-  issue rows second, and project-memory rows last. Issues are sorted by
+- The browser has no aggregate header, source counts, or source section titles.
+  One flat scrollable list places child rows first, open issue rows second, and
+  project-memory rows last at the same visual level. Issues are sorted by
   `updated_at` descending and stable issue id; memory is sorted by path and
   capped to the same 50-entry bounded index used for startup recall. Child
-  status icons use the
-  active theme's semantic status colors (`success`, `error`, and the existing
-  warning/dim mappings), and overlong rows end with a width-safe ellipsis.
+  status icons use the active theme's semantic status colors (`success`,
+  `error`, and the existing warning/dim mappings), and overlong rows end with a
+  width-safe ellipsis.
 - The browser receives the full terminal content width and remains in normal
   layout flow, so it does not cover chat or editor content.
 - Its height is approximately one quarter of the terminal, clamped to 4–10
