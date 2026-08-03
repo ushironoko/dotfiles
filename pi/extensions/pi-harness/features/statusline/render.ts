@@ -358,14 +358,14 @@ export const renderStatusline = (
   }
   // Claude always starts with the current directory, even when its basename
   // is empty (for example, the filesystem root).
-  fields.push([{ text: directory }]);
+  fields.push([{ text: directory, tone: "muted" }]);
 
   const branch =
     runtime.branch === undefined || runtime.branch === null
       ? ""
       : singleLine(runtime.branch);
   if (branch !== "" && branch !== "detached") {
-    fields.push([{ text: branch }]);
+    fields.push([{ text: branch, tone: "muted" }]);
   }
 
   if (
@@ -389,7 +389,10 @@ export const renderStatusline = (
     for (const [slot, display] of SLOTS) {
       const status = checkStatus(snapshot.cache, slot);
       const [glyph, tone] = STATUS_STYLES.get(status) ?? ["?", "dim"];
-      checks.push({ text: ` ${display}` }, { text: glyph, tone });
+      checks.push(
+        { text: ` ${display}`, tone: "muted" },
+        { text: glyph, tone },
+      );
     }
     fields.push(checks);
   }
