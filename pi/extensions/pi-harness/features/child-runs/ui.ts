@@ -445,13 +445,7 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
     const issueSnapshot = this.bitIssues?.registry.getSnapshot();
     const memorySnapshot = this.agentMemory?.registry.getSnapshot();
     if (runs.length === 0 && issues.length === 0 && memories.length === 0) {
-      if (this.bitIssues === undefined && this.agentMemory === undefined) {
-        return [
-          line("No child runs on this session branch.", width),
-          line("Start subagent or workflow to populate this view.", width),
-        ];
-      }
-      let status = "No coordination records are available.";
+      let status: string | undefined;
       if (issueSnapshot?.loading === true || memorySnapshot?.loading === true)
         status = "Loading coordination records…";
       else if (issueSnapshot?.error !== undefined) {
@@ -459,10 +453,7 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
       } else if (memorySnapshot?.error !== undefined) {
         status = `Project memory unavailable: ${memorySnapshot.error}`;
       }
-      return [
-        line("No child runs, open bit issues, or project memory.", width),
-        line(status, width),
-      ];
+      return status === undefined ? [] : [line(status, width)];
     }
 
     const rendered: BrowserRow[] = [];
