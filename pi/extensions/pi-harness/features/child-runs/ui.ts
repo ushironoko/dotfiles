@@ -92,6 +92,11 @@ interface FlatRun {
   run: LiveChildRun;
 }
 
+const newestInvocationsFirst = (
+  snapshots: ChildInvocationSnapshot[],
+): ChildInvocationSnapshot[] =>
+  [...snapshots].sort((left, right) => right.createdAt - left.createdAt);
+
 const flattenRuns = (snapshots: ChildInvocationSnapshot[]): FlatRun[] =>
   snapshots.flatMap((invocation) =>
     invocation.runs.map((run) => ({ invocation, run })),
@@ -259,7 +264,7 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
       1,
       Math.min(Math.floor(this.tui.terminal.rows / 4), 3),
     );
-    const snapshots = this.registry.getSnapshots();
+    const snapshots = newestInvocationsFirst(this.registry.getSnapshots());
     const runs = flattenRuns(snapshots);
     const issueSnapshot = this.bitIssues?.registry.getSnapshot();
     const issues = issueSnapshot?.issues ?? [];
@@ -369,9 +374,9 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
   }
 
   private selectableRows(): BrowserSelection[] {
-    const children = flattenRuns(this.registry.getSnapshots()).map(
-      ({ run }): BrowserSelection => ({ kind: "child", id: run.runId }),
-    );
+    const children = flattenRuns(
+      newestInvocationsFirst(this.registry.getSnapshots()),
+    ).map(({ run }): BrowserSelection => ({ kind: "child", id: run.runId }));
     const issues =
       this.bitIssues?.registry
         .getSnapshot()
@@ -557,7 +562,7 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
 
   private requestRender(): void {
     this.syncSelection(
-      flattenRuns(this.registry.getSnapshots()),
+      flattenRuns(newestInvocationsFirst(this.registry.getSnapshots())),
       this.bitIssues?.registry.getSnapshot().issues ?? [],
       this.agentMemory?.registry.getSnapshot().entries ?? [],
     );
