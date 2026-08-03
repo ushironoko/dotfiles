@@ -254,10 +254,10 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
     // The browser participates in normal layout flow with chat, editor, status
-    // rows, and footer. Combining sources must not increase this old budget.
+    // rows, and footer. Keep all combined sources within the three-row cap.
     const height = Math.max(
-      4,
-      Math.min(Math.floor(this.tui.terminal.rows / 4), 10),
+      1,
+      Math.min(Math.floor(this.tui.terminal.rows / 4), 3),
     );
     const snapshots = this.registry.getSnapshots();
     const runs = flattenRuns(snapshots);
