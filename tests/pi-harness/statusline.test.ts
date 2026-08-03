@@ -294,10 +294,12 @@ describe("Claude-compatible statusline rendering", () => {
       ansiTheme,
     );
 
-    expect(line).toContain("\u001B[90m | dotfiles | main | \u001B[0m");
+    expect(line).toContain(
+      "\u001B[90mushironoko/dotfiles | dotfiles | main | \u001B[0m",
+    );
     expect(line).toContain("\u001B[32m+2\u001B[0m");
     expect(line).toContain("\u001B[31m-1\u001B[0m");
-    expect(line).toContain("\u001B[90m L\u001B[0m");
+    expect(line).toContain("\u001B[90m | TS L\u001B[0m");
     expect(line).toContain("L\u001B[0m\u001B[32m✓\u001B[0m");
     expect(line).toContain("\u001B[90m T\u001B[0m");
     expect(line).toContain("T\u001B[0m\u001B[33m…\u001B[0m");
@@ -399,7 +401,8 @@ describe("Claude-compatible statusline rendering", () => {
     );
 
     expect(line).toContain(
-      "\u001B[90m L\u001B[0m\u001B[90m?\u001B[0m" +
+      "\u001B[90mushironoko/dotfiles | dotfiles | TS L\u001B[0m" +
+        "\u001B[90m?\u001B[0m" +
         "\u001B[90m T\u001B[0m\u001B[90m?\u001B[0m" +
         "\u001B[90m X\u001B[0m\u001B[90m?\u001B[0m",
     );
