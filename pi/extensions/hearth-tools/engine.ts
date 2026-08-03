@@ -17,6 +17,11 @@ export interface HearthAccessGate {
   exclusive<T>(operation: () => Promise<T>): Promise<T>;
 }
 
+export interface HearthExternalWriterLease {
+  ready: Promise<void>;
+  complete: Promise<void>;
+}
+
 type AccessMode = "shared" | "exclusive";
 
 interface AccessWaiter {
@@ -37,13 +42,72 @@ export class HearthEngineGate implements HearthAccessGate {
   private readonly waiters: AccessWaiter[] = [];
   private activeReaders = 0;
   private activeWriter = false;
+  private activeExternalWriters = 0;
+  private externalWriterInvalidation?: () => unknown;
 
   shared<T>(operation: () => Promise<T>): Promise<T> {
-    return this.enqueue("shared", operation);
+    return this.enqueueExternalWriterSafe("shared", operation);
   }
 
   exclusive<T>(operation: () => Promise<T>): Promise<T> {
-    return this.enqueue("exclusive", operation);
+    return this.enqueueExternalWriterSafe("exclusive", operation);
+  }
+
+  /**
+   * Keeps Engine caches coherent while an out-of-process writer is active
+   * without holding the gate for that writer's full lifetime. Parent tools
+   * remain runnable; each one gets a fresh cache view and runs exclusively
+   * with respect to other Engine operations while external writes may race.
+   */
+  protectExternalWriter(
+    finished: Promise<void>,
+    invalidate: () => unknown,
+  ): HearthExternalWriterLease {
+    this.activeExternalWriters += 1;
+    this.externalWriterInvalidation = invalidate;
+
+    // The child does not start before this short barrier. Operations already
+    // admitted by the gate finish first, then their cached view is discarded.
+    const ready = this.enqueue("exclusive", async () => {
+      invalidate();
+    });
+    const readySettled = ready.then(
+      () => undefined,
+      () => undefined,
+    );
+    const writerSettled = finished.then(
+      () => undefined,
+      () => undefined,
+    );
+    const complete = Promise.all([readySettled, writerSettled]).then(() =>
+      this.enqueue("exclusive", async () => {
+        try {
+          invalidate();
+        } finally {
+          this.activeExternalWriters = Math.max(
+            0,
+            this.activeExternalWriters - 1,
+          );
+          if (this.activeExternalWriters === 0) {
+            this.externalWriterInvalidation = undefined;
+          }
+        }
+      }),
+    );
+    return { ready, complete };
+  }
+
+  private enqueueExternalWriterSafe<T>(
+    mode: AccessMode,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (this.activeExternalWriters === 0) {
+      return this.enqueue(mode, operation);
+    }
+    return this.enqueue("exclusive", async () => {
+      this.externalWriterInvalidation?.();
+      return operation();
+    });
   }
 
   private enqueue<T>(

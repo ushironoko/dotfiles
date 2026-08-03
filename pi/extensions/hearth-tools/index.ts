@@ -132,61 +132,11 @@ const definitions = (
     createHearthGrepDefinition(cwd, runtime.engine, runtime.gate),
   ] as const;
 
-interface ExternalWriterGroup {
-  accepting: boolean;
-  active: number;
-  ready: Promise<void>;
-  markReady(): void;
-  drained: Promise<void>;
-  markDrained(): void;
-  complete: Promise<void>;
-}
-
-const createExternalWriterProtector = (runtime: HearthEngineRuntime) => {
-  let group: ExternalWriterGroup | undefined;
-
-  return (finished: Promise<void>) => {
-    if (group === undefined || !group.accepting) {
-      let markReady = (): void => {};
-      let markDrained = (): void => {};
-      const next: ExternalWriterGroup = {
-        accepting: true,
-        active: 0,
-        ready: new Promise<void>((resolve) => {
-          markReady = resolve;
-        }),
-        markReady: () => markReady(),
-        drained: new Promise<void>((resolve) => {
-          markDrained = resolve;
-        }),
-        markDrained: () => markDrained(),
-        complete: Promise.resolve(),
-      };
-      next.complete = runtime.gate.exclusive(async () => {
-        next.markReady();
-        await next.drained;
-        runtime.engine.clearCaches();
-      });
-      const retire = (): void => {
-        if (group === next) group = undefined;
-      };
-      void next.complete.then(retire, retire);
-      group = next;
-    }
-
-    const current = group;
-    current.active += 1;
-    const release = (): void => {
-      current.active -= 1;
-      if (current.active === 0) {
-        current.accepting = false;
-        current.markDrained();
-      }
-    };
-    void finished.then(release, release);
-    return { ready: current.ready, complete: current.complete };
-  };
-};
+const createExternalWriterProtector =
+  (runtime: HearthEngineRuntime) => (finished: Promise<void>) =>
+    runtime.gate.protectExternalWriter(finished, () =>
+      runtime.engine.clearCaches(),
+    );
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object";

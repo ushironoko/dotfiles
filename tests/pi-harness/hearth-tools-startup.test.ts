@@ -264,6 +264,43 @@ describe("Hearth Engine access gate", () => {
       "reader:later",
     ]);
   });
+
+  test("keeps parent operations runnable during an external writer lease", async () => {
+    const gate = new HearthEngineGate();
+    let finishWriter: (() => void) | undefined;
+    const writerFinished = new Promise<void>((resolve) => {
+      finishWriter = resolve;
+    });
+    let invalidations = 0;
+    const lease = gate.protectExternalWriter(writerFinished, () => {
+      invalidations += 1;
+    });
+
+    await lease.ready;
+    expect(invalidations).toBe(1);
+
+    let parentRan = false;
+    await gate.shared(async () => {
+      parentRan = true;
+    });
+    expect(parentRan).toBe(true);
+    expect(invalidations).toBe(2);
+
+    let leaseCompleted = false;
+    void lease.complete.then(() => {
+      leaseCompleted = true;
+    });
+    await Promise.resolve();
+    expect(leaseCompleted).toBe(false);
+
+    finishWriter?.();
+    await lease.complete;
+    expect(leaseCompleted).toBe(true);
+    expect(invalidations).toBe(3);
+
+    await gate.shared(async () => {});
+    expect(invalidations).toBe(3);
+  });
 });
 
 describe("hearth-tools startup", () => {
@@ -522,6 +559,8 @@ describe("hearth-tools startup", () => {
     });
     expect(FakeEngine.clearCount).toBe(3);
 
+    const clearCommand = fake.commands.get("hearth-clear-cache");
+    expect(clearCommand).toBeDefined();
     await fake.emit("session_shutdown");
     // Register the next extension revision without starting its session. The
     // old initialized broker must remain active throughout this reload gap.
@@ -557,6 +596,16 @@ describe("hearth-tools startup", () => {
     expect(lease).toBeDefined();
     await lease?.ready;
 
+    const parentOperation = Promise.resolve(clearCommand?.handler("", context));
+    const parentOperationSettled = await Promise.race([
+      parentOperation.then(() => true),
+      new Promise<false>((resolveTimeout) => {
+        setTimeout(() => resolveTimeout(false), 25);
+      }),
+    ]);
+    expect(parentOperationSettled).toBe(true);
+    expect(FakeEngine.clearCount).toBe(7);
+
     const acceptance = fake.emit("message_end", {
       message: {
         role: "toolResult",
@@ -571,7 +620,7 @@ describe("hearth-tools startup", () => {
       }),
     ]);
     expect(acceptanceSettled).toBe(true);
-    expect(FakeEngine.clearCount).toBe(4);
+    expect(FakeEngine.clearCount).toBe(7);
 
     let finishSecondWriter = (): void => {};
     const secondWriterFinished = new Promise<void>((resolveWriter) => {
@@ -588,19 +637,20 @@ describe("hearth-tools startup", () => {
     });
     expect(secondLease).toBeDefined();
     await secondLease?.ready;
+    expect(FakeEngine.clearCount).toBe(8);
 
     let leaseCompleted = false;
     void lease?.complete.then(() => {
       leaseCompleted = true;
     });
     finishWriter();
-    await Promise.resolve();
-    expect(leaseCompleted).toBe(false);
+    await lease?.complete;
+    expect(leaseCompleted).toBe(true);
+    expect(FakeEngine.clearCount).toBe(9);
 
     finishSecondWriter();
-    await Promise.all([lease?.complete, secondLease?.complete]);
-    expect(leaseCompleted).toBe(true);
-    expect(FakeEngine.clearCount).toBe(5);
+    await secondLease?.complete;
+    expect(FakeEngine.clearCount).toBe(10);
 
     await fake.emit("message_end", {
       message: { role: "toolResult", toolName: "subagent" },
@@ -608,6 +658,6 @@ describe("hearth-tools startup", () => {
     await fake.emit("message_end", {
       message: { role: "toolResult", toolName: "worktree_remove" },
     });
-    expect(FakeEngine.clearCount).toBe(7);
+    expect(FakeEngine.clearCount).toBe(12);
   });
 });
