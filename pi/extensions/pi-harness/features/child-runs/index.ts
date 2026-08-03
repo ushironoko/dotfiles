@@ -1,4 +1,5 @@
 import type { CtxLike, PiLike } from "../../lib/pi-like";
+import type { AgentMemoryRegistry } from "../agent-memory/registry";
 import { BitIssueCli } from "../bit-issues/cli";
 import { BitIssueRegistry } from "../bit-issues/registry";
 import {
@@ -109,6 +110,7 @@ const appendBackgroundAgentSystemPrompt = (systemPrompt: string): string =>
 export interface ChildRunsIntegration {
   registry: ChildRunRegistry;
   bitIssues?: BitIssueRegistry;
+  agentMemory?: AgentMemoryRegistry;
   background?: BackgroundInvocationManager;
   ensureVisible(ctx: CtxLike): void;
 }
@@ -116,6 +118,7 @@ export interface ChildRunsIntegration {
 export interface SetupChildRunsOptions {
   readonly bitIssues?: boolean;
   readonly bitIssueCli?: BitIssueCli;
+  readonly agentMemory?: AgentMemoryRegistry;
   readonly childExecution?: boolean;
   readonly backgroundDrainTimeoutMs?: number;
 }
@@ -144,8 +147,10 @@ const setupChildRuns = (
   const bitIssues = options.bitIssues
     ? new BitIssueRegistry({ cli: options.bitIssueCli })
     : undefined;
+  const { agentMemory } = options;
   let activeContext: RuntimeContextLike | undefined;
-  let lastExplicitWarning: string | undefined;
+  let lastExplicitIssueWarning: string | undefined;
+  let lastExplicitMemoryWarning: string | undefined;
   let panel: ChildRunsPanelController;
   const refreshBitIssues = async (
     ctx: RuntimeContextLike,
@@ -155,20 +160,52 @@ const setupChildRuns = (
     const cwd = ctx.cwd ?? process.cwd();
     const outcome = await bitIssues.refresh(cwd);
     if (outcome.ok) {
-      lastExplicitWarning = undefined;
+      lastExplicitIssueWarning = undefined;
       if (outcome.count > 0) panel.ensureVisibleForIssues(ctx);
       return;
     }
     if (explicit) {
       const warning = `${outcome.kind}:${outcome.message}`;
-      if (warning !== lastExplicitWarning) {
-        lastExplicitWarning = warning;
+      if (warning !== lastExplicitIssueWarning) {
+        lastExplicitIssueWarning = warning;
         ctx.ui.notify(
           `Open bit issues unavailable: ${outcome.message}`,
           "warning",
         );
       }
     }
+  };
+  const refreshAgentMemory = async (
+    ctx: RuntimeContextLike,
+    explicit = false,
+  ): Promise<void> => {
+    if (agentMemory === undefined) return;
+    const cwd = ctx.cwd ?? process.cwd();
+    const outcome = await agentMemory.refresh(cwd);
+    if (outcome.ok) {
+      lastExplicitMemoryWarning = undefined;
+      if (outcome.count > 0) panel.ensureVisibleForMemory(ctx);
+      return;
+    }
+    if (explicit) {
+      const warning = `${outcome.kind}:${outcome.message}`;
+      if (warning !== lastExplicitMemoryWarning) {
+        lastExplicitMemoryWarning = warning;
+        ctx.ui.notify(
+          `Project memory unavailable: ${outcome.message}`,
+          "warning",
+        );
+      }
+    }
+  };
+  const refreshCoordination = async (
+    ctx: RuntimeContextLike,
+    explicit = false,
+  ): Promise<void> => {
+    await Promise.all([
+      refreshBitIssues(ctx, explicit),
+      refreshAgentMemory(ctx, explicit),
+    ]);
   };
   const invalidateHearthCaches = async (): Promise<void> => {
     const pending: Promise<void>[] = [];
@@ -222,8 +259,13 @@ const setupChildRuns = (
       : undefined;
   panel = new ChildRunsPanelController(registry, {
     bitIssues,
+    agentMemory,
     refreshBitIssues: async () => {
       if (activeContext !== undefined) await refreshBitIssues(activeContext);
+    },
+    refreshCoordination: async () => {
+      if (activeContext !== undefined)
+        await refreshCoordination(activeContext, true);
     },
     killRun:
       background === undefined
@@ -309,6 +351,35 @@ const setupChildRuns = (
     });
   }
 
+  if (agentMemory !== undefined) {
+    runtime.registerCommand("project-memory", {
+      description: "Refresh, show, and focus project memory",
+      handler: async (_args, ctx) => {
+        activeContext = ctx;
+        if (ctx.mode !== "tui") {
+          if (ctx.hasUI) {
+            ctx.ui.notify(
+              "The project memory browser requires TUI mode.",
+              "warning",
+            );
+          }
+          return;
+        }
+        await refreshAgentMemory(ctx, true);
+        await panel.showAndFocus(ctx, "memory", false);
+      },
+    });
+
+    runtime.registerShortcut("ctrl+alt+m", {
+      description: "Refresh, show, and focus project memory",
+      handler: async (ctx) => {
+        activeContext = ctx;
+        await refreshAgentMemory(ctx, true);
+        await panel.showAndFocus(ctx, "memory", false);
+      },
+    });
+  }
+
   runtime.on("tool_result", (rawEvent) => {
     const event = rawEvent as RuntimeToolResultEvent;
     if (
@@ -376,10 +447,10 @@ const setupChildRuns = (
     activeContext = ctx;
     clearTreeTransitions();
     replayBranch(registry, ctx);
-    if (bitIssues !== undefined) {
-      bitIssues.beginSession(ctx.cwd ?? process.cwd());
-      void refreshBitIssues(ctx);
-    }
+    const cwd = ctx.cwd ?? process.cwd();
+    if (bitIssues !== undefined) bitIssues.beginSession(cwd);
+    if (agentMemory !== undefined) agentMemory.beginSession(cwd);
+    void refreshCoordination(ctx);
   });
   runtime.on("session_before_tree", async (rawEvent) => {
     // Serialize navigation boundaries. Pi does not correlate session_tree with
@@ -453,12 +524,14 @@ const setupChildRuns = (
     await background?.shutdown();
     panel.dispose();
     bitIssues?.dispose();
+    agentMemory?.dispose();
     registry.dispose();
   });
 
   return {
     registry,
     bitIssues,
+    agentMemory,
     background,
     ensureVisible(ctx) {
       panel.ensureVisible(ctx as RuntimeContextLike);

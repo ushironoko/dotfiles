@@ -19,6 +19,11 @@ import type {
   BitIssueSummary,
 } from "../bit-issues/model";
 import { BitIssueRegistry } from "../bit-issues/registry";
+import type { SourcedMemoryRecord } from "../agent-memory/model";
+import {
+  AgentMemoryRegistry,
+  type AgentMemorySummary,
+} from "../agent-memory/registry";
 import type {
   ChildInvocationSnapshot,
   ChildRunStatus,
@@ -184,7 +189,8 @@ const transcriptComponent = (
 
 type BrowserSelection =
   | { readonly kind: "child"; readonly id: string }
-  | { readonly kind: "issue"; readonly id: string };
+  | { readonly kind: "issue"; readonly id: string }
+  | { readonly kind: "memory"; readonly id: string };
 
 interface BrowserRow {
   readonly text: string;
@@ -194,6 +200,12 @@ interface BrowserRow {
 export interface BitIssueBrowserBindings {
   readonly registry: BitIssueRegistry;
   readonly onInspect: (issueId: string) => void;
+  readonly onRefresh: () => void | Promise<void>;
+}
+
+export interface AgentMemoryBrowserBindings {
+  readonly registry: AgentMemoryRegistry;
+  readonly onInspect: (path: string) => void;
   readonly onRefresh: () => void | Promise<void>;
 }
 
@@ -215,6 +227,7 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
   private listOffset = 0;
   private readonly unsubscribeChild: () => void;
   private readonly unsubscribeIssues: (() => void) | undefined;
+  private readonly unsubscribeMemory: (() => void) | undefined;
 
   constructor(
     private readonly registry: ChildRunRegistry,
@@ -226,10 +239,14 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
     private readonly bitIssues?: BitIssueBrowserBindings,
     theme?: unknown,
     private readonly onKill?: (runId: string) => void,
+    private readonly agentMemory?: AgentMemoryBrowserBindings,
   ) {
     this.theme = resolveTheme(theme);
     this.unsubscribeChild = registry.subscribe(() => this.requestRender());
     this.unsubscribeIssues = bitIssues?.registry.subscribe(() =>
+      this.requestRender(),
+    );
+    this.unsubscribeMemory = agentMemory?.registry.subscribe(() =>
       this.requestRender(),
     );
   }
@@ -246,12 +263,15 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
     const runs = flattenRuns(snapshots);
     const issueSnapshot = this.bitIssues?.registry.getSnapshot();
     const issues = issueSnapshot?.issues ?? [];
-    this.syncSelection(runs, issues);
+    const memorySnapshot = this.agentMemory?.registry.getSnapshot();
+    const memories = memorySnapshot?.entries ?? [];
+    this.syncSelection(runs, issues, memories);
 
     const body = this.renderList(
       snapshots,
       runs,
       issues,
+      memories,
       safeWidth,
       height - 1,
     );
@@ -259,10 +279,24 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
     if (issueSnapshot?.loading === true) issueState = " · refreshing";
     else if (issueSnapshot?.stale === true) issueState = " · stale";
     else if (issueSnapshot?.error !== undefined) issueState = " · unavailable";
-    const title =
+    let memoryState = "";
+    if (memorySnapshot?.loading === true) memoryState = " · refreshing";
+    else if (memorySnapshot?.stale === true) memoryState = " · stale";
+    else if (memorySnapshot?.error !== undefined)
+      memoryState = " · unavailable";
+    const counts = [
+      `Child sessions: ${runs.length}`,
       this.bitIssues === undefined
+        ? undefined
+        : `Open bit issues: ${issues.length}${issueState}`,
+      this.agentMemory === undefined
+        ? undefined
+        : `Project memory: ${memories.length}${memoryState}`,
+    ].filter((item): item is string => item !== undefined);
+    const title =
+      this.bitIssues === undefined && this.agentMemory === undefined
         ? " Child sessions "
-        : ` Child sessions: ${runs.length} | Open bit issues: ${issues.length}${issueState} `;
+        : ` ${counts.join(" | ")} `;
     const borderWidth = Math.max(1, safeWidth - visibleWidth(title));
     return [
       line(`${title}${"─".repeat(borderWidth)}`, safeWidth),
@@ -275,8 +309,9 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
       this.onHide();
       return;
     }
-    if (data === "r" && this.bitIssues !== undefined) {
-      void this.bitIssues.onRefresh();
+    if (data === "r") {
+      const refresh = this.bitIssues?.onRefresh ?? this.agentMemory?.onRefresh;
+      if (refresh !== undefined) void refresh();
       return;
     }
     if (data === "x") {
@@ -313,6 +348,8 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
       if (this.selection?.kind === "child") this.onInspect(this.selection.id);
       else if (this.selection?.kind === "issue") {
         this.bitIssues?.onInspect(this.selection.id);
+      } else if (this.selection?.kind === "memory") {
+        this.agentMemory?.onInspect(this.selection.id);
       }
     } else return;
 
@@ -329,6 +366,7 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
   dispose(): void {
     this.unsubscribeChild();
     this.unsubscribeIssues?.();
+    this.unsubscribeMemory?.();
   }
 
   getSelectedRunId(): string | undefined {
@@ -337,6 +375,10 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
 
   getSelectedIssueId(): string | undefined {
     return this.selection?.kind === "issue" ? this.selection.id : undefined;
+  }
+
+  getSelectedMemoryPath(): string | undefined {
+    return this.selection?.kind === "memory" ? this.selection.id : undefined;
   }
 
   prefer(kind: BrowserSelection["kind"]): void {
@@ -363,12 +405,19 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
         .issues.map(
           (issue): BrowserSelection => ({ kind: "issue", id: issue.id }),
         ) ?? [];
-    return [...children, ...issues];
+    const memories =
+      this.agentMemory?.registry
+        .getSnapshot()
+        .entries.map(
+          (entry): BrowserSelection => ({ kind: "memory", id: entry.path }),
+        ) ?? [];
+    return [...children, ...issues, ...memories];
   }
 
   private syncSelection(
     runs: FlatRun[],
     issues: readonly BitIssueSummary[],
+    memories: readonly AgentMemorySummary[],
   ): void {
     const selectable: BrowserSelection[] = [
       ...runs.map(
@@ -379,6 +428,9 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
       ),
       ...issues.map(
         (issue): BrowserSelection => ({ kind: "issue", id: issue.id }),
+      ),
+      ...memories.map(
+        (entry): BrowserSelection => ({ kind: "memory", id: entry.path }),
       ),
     ];
     if (this.pendingPreference !== undefined) {
@@ -413,32 +465,36 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
     snapshots: ChildInvocationSnapshot[],
     runs: FlatRun[],
     issues: readonly BitIssueSummary[],
+    memories: readonly AgentMemorySummary[],
     width: number,
     viewport: number,
   ): string[] {
     const issueSnapshot = this.bitIssues?.registry.getSnapshot();
-    if (runs.length === 0 && issues.length === 0) {
-      if (this.bitIssues === undefined) {
+    const memorySnapshot = this.agentMemory?.registry.getSnapshot();
+    if (runs.length === 0 && issues.length === 0 && memories.length === 0) {
+      if (this.bitIssues === undefined && this.agentMemory === undefined) {
         return [
           line("No child runs on this session branch.", width),
           line("Start subagent or workflow to populate this view.", width),
         ];
       }
-      let issueStatus = "Start subagent/workflow or create a local bit issue.";
-      if (issueSnapshot?.loading === true)
-        issueStatus = "Loading open bit issues…";
+      let status = "No coordination records are available.";
+      if (issueSnapshot?.loading === true || memorySnapshot?.loading === true)
+        status = "Loading coordination records…";
       else if (issueSnapshot?.error !== undefined) {
-        issueStatus = `Open bit issues unavailable: ${issueSnapshot.error}`;
+        status = `Open bit issues unavailable: ${issueSnapshot.error}`;
+      } else if (memorySnapshot?.error !== undefined) {
+        status = `Project memory unavailable: ${memorySnapshot.error}`;
       }
       return [
-        line("No child runs or open bit issues.", width),
-        line(issueStatus, width),
+        line("No child runs, open bit issues, or project memory.", width),
+        line(status, width),
       ];
     }
 
     const rendered: BrowserRow[] = [];
     if (runs.length > 0) {
-      if (this.bitIssues !== undefined)
+      if (this.bitIssues !== undefined || this.agentMemory !== undefined)
         rendered.push({ text: "Child sessions" });
       for (const invocation of snapshots) {
         rendered.push({
@@ -482,6 +538,32 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
         text: `${issueSnapshot.stale ? "stale" : "issue refresh failed"}: ${issueSnapshot.error}`,
       });
     }
+    if (memories.length > 0) {
+      rendered.push({ text: "Project memory" });
+      for (const entry of memories) {
+        const selection: BrowserSelection = {
+          kind: "memory",
+          id: entry.path,
+        };
+        rendered.push({
+          selection,
+          text: `${this.isCursorVisible(selection) ? ">" : " "} ▣ ${taskOneLine(entry.path)} — ${taskOneLine(entry.description)}`,
+        });
+      }
+      if (memorySnapshot?.truncated === true) {
+        rendered.push({ text: "… more project memory entries" });
+      }
+    }
+    if (memorySnapshot?.diagnosticCount) {
+      rendered.push({
+        text: `project memory ignored ${memorySnapshot.diagnosticCount} invalid note entries`,
+      });
+    }
+    if (memorySnapshot?.error !== undefined) {
+      rendered.push({
+        text: `${memorySnapshot.stale ? "stale" : "memory refresh failed"}: ${memorySnapshot.error}`,
+      });
+    }
 
     const selectedToken = this.selection && selectionToken(this.selection);
     const selectedLine = Math.max(
@@ -520,6 +602,7 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
     this.syncSelection(
       flattenRuns(this.registry.getSnapshots()),
       this.bitIssues?.registry.getSnapshot().issues ?? [],
+      this.agentMemory?.registry.getSnapshot().entries ?? [],
     );
     this.tui.requestRender();
   }
@@ -1042,6 +1125,217 @@ export class BitIssueDetailComponent implements ComponentLike {
   }
 }
 
+const memoryDetailContentLines = (
+  entry: SourcedMemoryRecord,
+  width: number,
+  theme: ChildRunTheme,
+): string[] => {
+  const root = new Container();
+  const metadata = new Box(1, 0, (text) => theme.bg("selectedBg", text));
+  metadata.addChild(
+    new Text(
+      theme.fg("toolTitle", theme.bold(taskOneLine(entry.record.path))),
+      0,
+      0,
+    ),
+  );
+  metadata.addChild(
+    new Text(
+      theme.fg("muted", `updated ${taskOneLine(entry.record.updatedAt)}`),
+      0,
+      0,
+    ),
+  );
+  metadata.addChild(
+    new Text(
+      theme.fg("muted", `source  ${taskOneLine(entry.sourceRef)}`),
+      0,
+      0,
+    ),
+  );
+  root.addChild(metadata);
+  root.addChild(new Text(theme.fg("accent", theme.bold("Description")), 0, 0));
+  const description = new Box(1, 0);
+  description.addChild(
+    new Text(
+      theme.fg(
+        "text",
+        wrapPlainText(
+          safeBlock(entry.record.description),
+          Math.max(1, width - 2),
+        ).join("\n"),
+      ),
+      0,
+      0,
+    ),
+  );
+  root.addChild(description);
+  root.addChild(new Text(theme.fg("accent", theme.bold("Content")), 0, 0));
+  const content = new Box(1, 0);
+  content.addChild(
+    new Text(
+      theme.fg(
+        "text",
+        wrapPlainText(
+          entry.record.content === ""
+            ? "(empty content)"
+            : safeBlock(entry.record.content),
+          Math.max(1, width - 2),
+        ).join("\n"),
+      ),
+      0,
+      0,
+    ),
+  );
+  root.addChild(content);
+  return root.render(Math.max(1, width));
+};
+
+/** Focused, near-full-screen read-only viewer for one project-memory entry. */
+export class AgentMemoryDetailComponent implements ComponentLike {
+  private offset = 0;
+  private lastMaxOffset = 0;
+  private lastViewport = 1;
+  private readonly unsubscribe: () => void;
+  private readonly theme: ChildRunTheme;
+
+  constructor(
+    private readonly registry: AgentMemoryRegistry,
+    private readonly path: string,
+    private readonly tui: TuiLike,
+    private readonly keybindings: KeybindingsLike,
+    private readonly onClose: () => void,
+    theme?: unknown,
+  ) {
+    this.theme = resolveTheme(theme);
+    this.unsubscribe = registry.subscribe(() => this.tui.requestRender());
+  }
+
+  render(width: number): string[] {
+    const safeWidth = Math.max(1, width);
+    const height = Math.max(1, this.tui.terminal.rows);
+    const showTitle = height >= 2;
+    const showHint = height >= 3;
+    const chrome = Number(showTitle) + Number(showHint);
+    const viewport = Math.max(1, height - chrome);
+    this.lastViewport = viewport;
+    const entry = this.registry.getEntry(this.path);
+    const allLines =
+      entry === undefined
+        ? new Text(
+            this.theme.fg(
+              "warning",
+              "Selected project memory is no longer available.",
+            ),
+            0,
+            0,
+          ).render(safeWidth)
+        : memoryDetailContentLines(entry, safeWidth, this.theme);
+    this.lastMaxOffset = Math.max(0, allLines.length - viewport);
+    this.offset = Math.min(this.offset, this.lastMaxOffset);
+
+    const visible = allLines.slice(this.offset, this.offset + viewport);
+    while (visible.length < viewport) visible.push("");
+
+    const title = this.theme.fg(
+      "toolTitle",
+      this.theme.bold(` Project memory · ${taskOneLine(this.path)} `),
+    );
+    const borderWidth = Math.max(1, safeWidth - visibleWidth(title));
+    const first = allLines.length === 0 ? 0 : this.offset + 1;
+    const last = Math.min(allLines.length, this.offset + viewport);
+    const position = `${first}-${last}/${allLines.length}`;
+    const output: string[] = [];
+    if (showTitle) {
+      output.push(
+        styledLine(
+          `${title}${this.theme.fg("borderMuted", "─".repeat(borderWidth))}`,
+          safeWidth,
+        ),
+      );
+    }
+    output.push(...visible.map((item) => styledLine(item, safeWidth)));
+    if (showHint) {
+      const hint = this.theme.fg(
+        "dim",
+        "↑↓ scroll  PgUp/PgDn page  Home/End  Esc/←/b/q close  ",
+      );
+      output.push(
+        styledLine(`${hint}${this.theme.fg("muted", position)}`, safeWidth),
+      );
+    }
+    return output.slice(0, height);
+  }
+
+  handleInput(data: string): void {
+    if (
+      data === "q" ||
+      data === "b" ||
+      this.matches(data, "tui.select.cancel") ||
+      this.matches(data, "tui.editor.cursorLeft") ||
+      defaultKeyMatches(data, "tui.select.cancel") ||
+      defaultKeyMatches(data, "tui.editor.cursorLeft")
+    ) {
+      this.onClose();
+      return;
+    }
+
+    const page = Math.max(1, this.lastViewport - 1);
+    if (
+      data === "k" ||
+      this.matches(data, "tui.select.up") ||
+      defaultKeyMatches(data, "tui.select.up")
+    ) {
+      this.offset = Math.max(0, this.offset - 1);
+    } else if (
+      this.matches(data, "tui.select.pageUp") ||
+      defaultKeyMatches(data, "tui.select.pageUp")
+    ) {
+      this.offset = Math.max(0, this.offset - page);
+    } else if (
+      data === "j" ||
+      this.matches(data, "tui.select.down") ||
+      defaultKeyMatches(data, "tui.select.down")
+    ) {
+      this.offset = Math.min(this.lastMaxOffset, this.offset + 1);
+    } else if (
+      this.matches(data, "tui.select.pageDown") ||
+      defaultKeyMatches(data, "tui.select.pageDown")
+    ) {
+      this.offset = Math.min(this.lastMaxOffset, this.offset + page);
+    } else if (
+      this.matches(data, "tui.editor.cursorLineStart") ||
+      defaultKeyMatches(data, "tui.editor.cursorLineStart")
+    ) {
+      this.offset = 0;
+    } else if (
+      this.matches(data, "tui.editor.cursorLineEnd") ||
+      defaultKeyMatches(data, "tui.editor.cursorLineEnd")
+    ) {
+      this.offset = this.lastMaxOffset;
+    } else return;
+    this.tui.requestRender();
+  }
+
+  invalidate(): void {}
+
+  dispose(): void {
+    this.unsubscribe();
+  }
+
+  getOffset(): number {
+    return this.offset;
+  }
+
+  private matches(data: string, keybinding: string): boolean {
+    try {
+      return this.keybindings.matches(data, keybinding);
+    } catch {
+      return false;
+    }
+  }
+}
+
 type MountState = "unmounted" | "mounted" | "disposed";
 
 export const CHILD_RUNS_WIDGET_KEY = "pi-harness-child-runs";
@@ -1117,7 +1411,9 @@ const sameCursor = (
  */
 export interface ChildRunsPanelOptions {
   readonly bitIssues?: BitIssueRegistry;
+  readonly agentMemory?: AgentMemoryRegistry;
   readonly refreshBitIssues?: () => void | Promise<unknown>;
+  readonly refreshCoordination?: () => void | Promise<unknown>;
   readonly killRun?: (runId: string) => ChildRunKillResult;
 }
 
@@ -1154,6 +1450,11 @@ export class ChildRunsPanelController {
   }
 
   ensureVisibleForIssues(ctx: BrowserContextLike): void {
+    if (this.hiddenByUser) return;
+    this.show(ctx, false);
+  }
+
+  ensureVisibleForMemory(ctx: BrowserContextLike): void {
     if (this.hiddenByUser) return;
     this.show(ctx, false);
   }
@@ -1230,6 +1531,7 @@ export class ChildRunsPanelController {
             this.bitIssueBindings(),
             theme,
             (runId) => this.killRun(runId),
+            this.agentMemoryBindings(),
           );
           if (preferred !== undefined) component.prefer(preferred);
           this.component = component;
@@ -1295,6 +1597,7 @@ export class ChildRunsPanelController {
             this.bitIssueBindings(),
             theme,
             (runId) => this.killRun(runId),
+            this.agentMemoryBindings(),
           );
           if (preferred !== undefined) component.prefer(preferred);
           if (refreshOnFocus) void this.options.refreshBitIssues?.();
@@ -1479,6 +1782,72 @@ export class ChildRunsPanelController {
       });
   }
 
+  private openMemoryDetail(path: string): void {
+    const { ui } = this;
+    const registry = this.options.agentMemory;
+    if (registry === undefined) return;
+    if (ui?.custom === undefined) {
+      ui?.notify(
+        "Project memory detail view requires custom TUI support.",
+        "warning",
+      );
+      return;
+    }
+    if (this.detailPromise !== undefined) return;
+
+    let detailPromise: Promise<void>;
+    try {
+      detailPromise = ui.custom<void>(
+        (tui, theme, keybindings, done) => {
+          let closed = false;
+          const close = () => {
+            if (closed) return;
+            closed = true;
+            done(undefined);
+          };
+          this.detailClose = close;
+          return new AgentMemoryDetailComponent(
+            registry,
+            path,
+            tui,
+            keybindings,
+            close,
+            theme,
+          );
+        },
+        {
+          overlay: true,
+          overlayOptions: {
+            width: "100%",
+            maxHeight: "100%",
+            anchor: "center",
+            margin: 0,
+          },
+        },
+      );
+    } catch (error) {
+      ui.notify(
+        `Project memory detail view could not open: ${String(error)}`,
+        "warning",
+      );
+      return;
+    }
+
+    this.detailPromise = detailPromise;
+    void detailPromise
+      .catch((error) => {
+        ui.notify(
+          `Project memory detail view could not open: ${String(error)}`,
+          "warning",
+        );
+      })
+      .finally(() => {
+        if (this.detailPromise !== detailPromise) return;
+        this.detailPromise = undefined;
+        this.detailClose = undefined;
+      });
+  }
+
   private killRun(runId: string): void {
     const result = this.options.killRun?.(runId);
     if (result === undefined) {
@@ -1514,7 +1883,19 @@ export class ChildRunsPanelController {
       registry,
       onInspect: (issueId) => this.openIssueDetail(issueId),
       onRefresh: async () => {
-        await this.options.refreshBitIssues?.();
+        await this.options.refreshCoordination?.();
+      },
+    };
+  }
+
+  private agentMemoryBindings(): AgentMemoryBrowserBindings | undefined {
+    const registry = this.options.agentMemory;
+    if (registry === undefined) return undefined;
+    return {
+      registry,
+      onInspect: (path) => this.openMemoryDetail(path),
+      onRefresh: async () => {
+        await this.options.refreshCoordination?.();
       },
     };
   }
@@ -1638,10 +2019,16 @@ export class ChildRunsPanelController {
     }
     if (this.focusWarningShown) return;
     this.focusWarningShown = true;
-    const fallbackKeys =
-      this.options.bitIssues === undefined
-        ? "/subagents or Ctrl+Alt+S"
-        : "/subagents, /bit-issues, Ctrl+Alt+S, or Ctrl+Alt+I";
+    const fallbackKeys = [
+      "/subagents",
+      this.options.bitIssues === undefined ? undefined : "/bit-issues",
+      this.options.agentMemory === undefined ? undefined : "/project-memory",
+      "Ctrl+Alt+S",
+      this.options.bitIssues === undefined ? undefined : "Ctrl+Alt+I",
+      this.options.agentMemory === undefined ? undefined : "Ctrl+Alt+M",
+    ]
+      .filter((item): item is string => item !== undefined)
+      .join(", ");
     this.ui?.notify(
       `Coordination browser focus degraded: ${reason}. Use ${fallbackKeys} for the public overlay fallback.`,
       "warning",

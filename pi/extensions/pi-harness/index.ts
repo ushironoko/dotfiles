@@ -38,6 +38,7 @@ import setupSubagent from "./features/subagent/index";
 import setupWorkflow from "./features/workflow/index";
 import setupBitTask from "./features/bit-task/index";
 import setupAgentMemory from "./features/agent-memory/index";
+import { AgentMemoryRegistry } from "./features/agent-memory/registry";
 import setupStatusline from "./features/statusline/index";
 import setupProviderLog from "./features/provider-log/index";
 import setupAsukuNotify from "./features/asuku-notify/index";
@@ -127,12 +128,18 @@ const setupHarness = (
   // Reserve the parent turn before either hook-bridge partition registers its
   // async before_agent_start handler. This manager has no tool_call handler, so
   // the npm preflight still remains first in the command-permission chain.
+  const agentMemory =
+    config.features["agent-memory"] && !config.isChild
+      ? new AgentMemoryRegistry({ trust: config.trust })
+      : undefined;
   const childRuns =
     config.features.subagent ||
     config.features.workflow ||
-    config.features["bit-task"]
+    config.features["bit-task"] ||
+    agentMemory !== undefined
       ? setupChildRuns(pi, {
           bitIssues: config.features["bit-task"],
+          agentMemory,
           childExecution: config.features.subagent || config.features.workflow,
         })
       : undefined;
@@ -196,7 +203,12 @@ const setupHarness = (
       onWorktreeRemoved: (path) => bashSandbox.revokeWritableWorktree(path),
     });
   }
-  if (config.features["agent-memory"]) setupAgentMemory(pi, config);
+  if (config.features["agent-memory"])
+    setupAgentMemory(
+      pi,
+      config,
+      agentMemory === undefined ? {} : { registry: agentMemory },
+    );
   if (config.features.statusline) setupStatusline(pi, config);
   if (config.features["provider-log"]) setupProviderLog(pi, config);
   if (config.features["ask-user-question"]) setupAskUserQuestion(pi);

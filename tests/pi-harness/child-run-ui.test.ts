@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
+import type { MemoryAggregate } from "../../pi/extensions/pi-harness/features/agent-memory/cli";
+import type { SourcedMemoryRecord } from "../../pi/extensions/pi-harness/features/agent-memory/model";
+import {
+  AgentMemoryRegistry,
+  type AgentMemoryDataSource,
+} from "../../pi/extensions/pi-harness/features/agent-memory/registry";
 import {
   readFocusedComponent,
   setFocusSafely,
@@ -14,6 +20,7 @@ import {
 } from "../../pi/extensions/pi-harness/features/bit-issues/registry";
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
 import {
+  AgentMemoryDetailComponent,
   BitIssueDetailComponent,
   ChildRunDetailComponent,
   ChildRunsBrowserComponent,
@@ -699,7 +706,44 @@ const bitDetail = (
   comments: options.comments ?? { status: "none" },
 });
 
-const setupCombined = async (issueIds: string[], childCount = 0) => {
+const memoryEntry = (path: string, index: number): SourcedMemoryRecord => ({
+  record: {
+    version: 1,
+    path,
+    description: `Memory description ${index}`,
+    updatedAt: `2026-08-${String(index + 1).padStart(2, "0")}T08:00:00.000Z`,
+    deleted: false,
+    content: `Durable content ${index}`,
+  },
+  sourceRef: `refs/notes/pi-agent-memory/sessions/${"a".repeat(64)}/writers/${"b".repeat(64)}`,
+  targetOid: String(index).padStart(40, "c"),
+});
+
+const memoryAggregate = (paths: string[]): MemoryAggregate => {
+  const entries = paths.map(memoryEntry);
+  return {
+    repository: {
+      cwd: "/repo",
+      topLevel: "/repo",
+      commonDir: "/repo/.git",
+      objectFormat: "sha1",
+      trustSource: "direct",
+    },
+    merged: {
+      entries: new Map(entries.map((entry) => [entry.record.path, entry])),
+      deleted: new Map(),
+    },
+    refs: [],
+    diagnostics: [],
+    truncated: false,
+  };
+};
+
+const setupCombined = async (
+  issueIds: string[],
+  childCount = 0,
+  memoryPaths?: string[],
+) => {
   const base = setup(40);
   base.component.dispose();
   if (childCount > 0) addRuns(base.registry, childCount);
@@ -714,6 +758,27 @@ const setupCombined = async (issueIds: string[], childCount = 0) => {
   await issues.refresh("/repo");
   const inspectedIssues: string[] = [];
   let refreshes = 0;
+  let currentMemoryPaths = memoryPaths;
+  const memorySource: AgentMemoryDataSource = {
+    aggregate: async () => memoryAggregate(currentMemoryPaths ?? []),
+    update: async () => {
+      throw new Error("unused");
+    },
+  };
+  const memory =
+    memoryPaths === undefined
+      ? undefined
+      : new AgentMemoryRegistry({
+          cli: memorySource,
+          trust: { trustedRoots: ["/repo"] },
+          now: () => 200,
+        });
+  if (memory !== undefined) {
+    memory.beginSession("/repo");
+    await memory.refresh("/repo");
+  }
+  const inspectedMemory: string[] = [];
+  let memoryRefreshes = 0;
   const component = new ChildRunsBrowserComponent(
     base.registry,
     base.tui,
@@ -730,6 +795,15 @@ const setupCombined = async (issueIds: string[], childCount = 0) => {
     },
     undefined,
     (runId) => base.killed.push(runId),
+    memory === undefined
+      ? undefined
+      : {
+          registry: memory,
+          onInspect: (path) => inspectedMemory.push(path),
+          onRefresh: () => {
+            memoryRefreshes += 1;
+          },
+        },
   );
   return {
     ...base,
@@ -737,9 +811,15 @@ const setupCombined = async (issueIds: string[], childCount = 0) => {
     issues,
     details,
     inspectedIssues,
+    memory,
+    inspectedMemory,
     getRefreshes: () => refreshes,
+    getMemoryRefreshes: () => memoryRefreshes,
     setIssueIds(ids: string[]) {
       currentList = bitList(...ids);
+    },
+    setMemoryPaths(paths: string[]) {
+      currentMemoryPaths = paths;
     },
   };
 };
@@ -762,6 +842,34 @@ describe("combined coordination browser", () => {
       combinedLines.indexOf("Open bit issues"),
     );
     expect(combinedLines.every((item) => visibleWidth(item) <= 80)).toBe(true);
+  });
+
+  test("renders project memory below open issues and navigates into its detail", async () => {
+    const combined = await setupCombined(["issue-a"], 1, [
+      "reference/zeta.md",
+      "project/alpha.md",
+    ]);
+    const lines = combined.component.render(100);
+    expect(lines[0]).toContain("Project memory: 2");
+    expect(lines.indexOf("Open bit issues")).toBeLessThan(
+      lines.indexOf("Project memory"),
+    );
+    expect(lines.join("\n")).toContain("project/alpha.md");
+
+    combined.component.handleInput("down");
+    combined.component.handleInput("down");
+    expect(combined.component.getSelectedMemoryPath()).toBe("project/alpha.md");
+    combined.component.handleInput("enter");
+    expect(combined.inspectedMemory).toEqual(["project/alpha.md"]);
+
+    combined.setMemoryPaths([
+      "project/000-new.md",
+      "project/alpha.md",
+      "reference/zeta.md",
+    ]);
+    await combined.memory?.refresh("/repo");
+    combined.component.render(100);
+    expect(combined.component.getSelectedMemoryPath()).toBe("project/alpha.md");
   });
 
   test("moves selection across child and issue rows and dispatches typed detail", async () => {
@@ -810,6 +918,58 @@ describe("combined coordination browser", () => {
     pending.component.prefer("child");
     const [runId] = addRuns(pending.registry, 1);
     expect(pending.component.getSelectedRunId()).toBe(runId);
+  });
+});
+
+describe("project memory detail component", () => {
+  test("renders bounded untrusted content and scrolls to the final line", async () => {
+    const { tui, keybindings } = setup(12);
+    const base = memoryEntry("project/alpha.md", 0);
+    const entry: SourcedMemoryRecord = {
+      ...base,
+      record: {
+        ...base.record,
+        description: "Architecture decision 界😀",
+        content: `${"durable line 界😀 ".repeat(80)}\nCONTENT-END\u001b]2;spoof\u0007`,
+      },
+    };
+    const aggregate: MemoryAggregate = {
+      ...memoryAggregate([]),
+      merged: {
+        entries: new Map([[entry.record.path, entry]]),
+        deleted: new Map(),
+      },
+    };
+    const source: AgentMemoryDataSource = {
+      aggregate: async () => aggregate,
+      update: async () => {
+        throw new Error("unused");
+      },
+    };
+    const registry = new AgentMemoryRegistry({
+      cli: source,
+      trust: { trustedRoots: ["/repo"] },
+    });
+    registry.beginSession("/repo");
+    await registry.refresh("/repo");
+    let closes = 0;
+    const detail = new AgentMemoryDetailComponent(
+      registry,
+      "project/alpha.md",
+      tui,
+      keybindings,
+      () => closes++,
+    );
+
+    const initial = detail.render(24);
+    expect(initial.join("\n")).toContain("project/alpha.md");
+    expect(initial.every((line) => visibleWidth(line) <= 24)).toBe(true);
+    expect(stripTerminalControls(initial.join("\n"))).not.toContain("spoof");
+
+    detail.handleInput("end");
+    expect(detail.render(24).join("\n")).toContain("CONTENT-END");
+    detail.handleInput("b");
+    expect(closes).toBe(1);
   });
 });
 

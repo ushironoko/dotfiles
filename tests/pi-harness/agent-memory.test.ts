@@ -12,6 +12,7 @@ import {
   type MemoryAggregate,
 } from "../../pi/extensions/pi-harness/features/agent-memory/cli";
 import type { SourcedMemoryRecord } from "../../pi/extensions/pi-harness/features/agent-memory/model";
+import { AgentMemoryRegistry } from "../../pi/extensions/pi-harness/features/agent-memory/registry";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import { createFakePi } from "./fake-pi";
 
@@ -107,6 +108,22 @@ const resultText = (result: {
 const occurrences = (value: string, needle: string): number =>
   value.split(needle).length - 1;
 
+const onAbort = (
+  signal: AbortSignal | undefined,
+  callback: () => void,
+): void => {
+  const candidate = signal as unknown as
+    | {
+        addEventListener?(
+          event: "abort",
+          callback: () => void,
+          options: { once: true },
+        ): void;
+      }
+    | undefined;
+  candidate?.addEventListener?.("abort", callback, { once: true });
+};
+
 describe("agent-memory pi feature", () => {
   test("registers parent read/write tools but keeps child mutation unavailable", () => {
     const parent = createFakePi({ cwd: "/repo" });
@@ -122,6 +139,203 @@ describe("agent-memory pi feature", () => {
       cwd: "/repo",
     });
     expect(child.tools.map(({ name }) => name)).toEqual(["memory_recall"]);
+  });
+
+  test("shares one in-flight aggregate between the browser registry and startup recall", async () => {
+    let aggregateCalls = 0;
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const source: AgentMemoryDataSource = {
+      aggregate: async () => {
+        aggregateCalls += 1;
+        await gate;
+        return aggregate();
+      },
+      update: async () => {
+        throw new Error("unused");
+      },
+    };
+    const registry = new AgentMemoryRegistry({
+      cli: source,
+      trust: { trustedRoots: ["/repo"] },
+    });
+    const pi = createFakePi({ cwd: "/repo", sessionId: "shared-refresh" });
+    setupAgentMemory(pi, config(), { registry, cwd: "/repo" });
+
+    const browserRefresh = registry.refresh("/repo");
+    const startupRecall = pi.emitBeforeAgentStart({
+      type: "before_agent_start",
+      prompt: "start",
+      systemPrompt: "base",
+    });
+    release();
+    const [outcome, startup] = await Promise.all([
+      browserRefresh,
+      startupRecall,
+    ]);
+
+    expect(outcome.ok).toBe(true);
+    expect(aggregateCalls).toBe(1);
+    expect(registry.getSnapshot().entries.map((entry) => entry.path)).toEqual([
+      "project/architecture.md",
+    ]);
+    expect(startup?.message?.customType).toBe(AGENT_MEMORY_RECALL_TYPE);
+  });
+
+  test("isolates shared refresh waiters and aborts the work only when none remain", async () => {
+    let finish = (): void => {};
+    let underlyingAborted = false;
+    const source: AgentMemoryDataSource = {
+      aggregate: async (_cwd, _trust, signal) =>
+        new Promise<MemoryAggregate>((resolve, reject) => {
+          finish = () => resolve(aggregate());
+          onAbort(signal, () => {
+            underlyingAborted = true;
+            reject(new AgentMemoryCliError("aborted", "aborted"));
+          });
+        }),
+      update: async () => {
+        throw new Error("unused");
+      },
+    };
+    const registry = new AgentMemoryRegistry({
+      cli: source,
+      trust: { trustedRoots: ["/repo"] },
+    });
+    const browserRefresh = registry.refresh("/repo");
+    const controller = new AbortController() as unknown as {
+      readonly signal: AbortSignal;
+      abort(): void;
+    };
+    const cancelledRecall = registry.refresh("/repo", controller.signal);
+    controller.abort();
+
+    const cancelledOutcome = await cancelledRecall;
+    expect(cancelledOutcome.ok).toBe(false);
+    expect(underlyingAborted).toBe(false);
+    finish();
+    const browserOutcome = await browserRefresh;
+    expect(browserOutcome.ok).toBe(true);
+
+    let singleAborted = false;
+    const singleSource: AgentMemoryDataSource = {
+      aggregate: async (_cwd, _trust, signal) =>
+        new Promise<MemoryAggregate>((_resolve, reject) => {
+          onAbort(signal, () => {
+            singleAborted = true;
+            reject(new AgentMemoryCliError("aborted", "aborted"));
+          });
+        }),
+      update: async () => {
+        throw new Error("unused");
+      },
+    };
+    const singleRegistry = new AgentMemoryRegistry({
+      cli: singleSource,
+      trust: { trustedRoots: ["/repo"] },
+    });
+    const singleController = new AbortController() as unknown as {
+      readonly signal: AbortSignal;
+      abort(): void;
+    };
+    const onlyWaiter = singleRegistry.refresh("/repo", singleController.signal);
+    singleController.abort();
+    const onlyOutcome = await onlyWaiter;
+    expect(onlyOutcome.ok).toBe(false);
+    expect(singleAborted).toBe(true);
+  });
+
+  test("contains subscriber failures without poisoning refresh", async () => {
+    const registry = new AgentMemoryRegistry({
+      cli: dataSource(),
+      trust: { trustedRoots: ["/repo"] },
+    });
+    let notifications = 0;
+    registry.subscribe(() => {
+      throw new Error("renderer failed");
+    });
+    registry.subscribe(() => {
+      notifications += 1;
+    });
+
+    const outcome = await registry.refresh("/repo");
+    expect(outcome.ok).toBe(true);
+    expect(notifications).toBe(3);
+  });
+
+  test("retains stale UI data without returning it as a successful recall", async () => {
+    let fail = false;
+    const source: AgentMemoryDataSource = {
+      aggregate: async () => {
+        if (fail) {
+          throw new AgentMemoryCliError("invalid-data", "corrupt notes");
+        }
+        return aggregate();
+      },
+      update: async () => {
+        throw new Error("unused");
+      },
+    };
+    const registry = new AgentMemoryRegistry({
+      cli: source,
+      trust: { trustedRoots: ["/repo"] },
+    });
+    const initial = await registry.refresh("/repo");
+    expect(initial.ok).toBe(true);
+    fail = true;
+
+    const failed = await registry.refresh("/repo");
+    expect(failed.ok).toBe(false);
+    expect(registry.getSnapshot()).toMatchObject({
+      stale: true,
+      error: "corrupt notes",
+      entries: [{ path: "project/architecture.md" }],
+    });
+    await expect(registry.aggregate("/repo")).rejects.toThrow("corrupt notes");
+  });
+
+  test("refreshes the browser snapshot after a successful memory update", async () => {
+    let current = aggregate();
+    const replacement = sourced("project/replacement.md");
+    const source: AgentMemoryDataSource = {
+      aggregate: async () => current,
+      update: async (_cwd, _trust, _sessionId, input) => {
+        current = aggregate([replacement]);
+        return {
+          status: "written",
+          path: input.path,
+          sourceRef: replacement.sourceRef,
+          deleted: false,
+          updatedAt: replacement.record.updatedAt,
+        };
+      },
+    };
+    const registry = new AgentMemoryRegistry({
+      cli: source,
+      trust: { trustedRoots: ["/repo"] },
+    });
+    const pi = createFakePi({ cwd: "/repo", sessionId: "update-refresh" });
+    setupAgentMemory(pi, config(), { registry, cwd: "/repo" });
+    await registry.refresh("/repo");
+
+    await tool(pi, "memory_update").execute(
+      "replace",
+      {
+        action: "put",
+        path: "project/replacement.md",
+        description: "Replacement",
+        content: "Updated",
+      } as never,
+      undefined,
+      undefined,
+      pi.ctx,
+    );
+
+    expect(registry.getSnapshot().entries.map((entry) => entry.path)).toEqual([
+      "project/replacement.md",
+    ]);
   });
 
   test("injects role-specific proactive stewardship guidance idempotently", async () => {

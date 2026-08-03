@@ -1,11 +1,8 @@
 import type { HarnessConfig } from "../../config";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import { capUtf8, stripTerminalControls } from "../../lib/terminal-text";
-import {
-  AgentMemoryCli,
-  AgentMemoryCliError,
-  type MemoryAggregate,
-} from "./cli";
+import { AgentMemoryCliError, type MemoryAggregate } from "./cli";
+import { AgentMemoryRegistry, type AgentMemoryDataSource } from "./registry";
 import {
   MEMORY_INDEX_ITEM_LIMIT,
   MEMORY_INDEX_MAX_BYTES,
@@ -17,6 +14,8 @@ import {
   MemoryRecallParameters,
   MemoryUpdateParameters,
 } from "./parameters.generated";
+
+export type { AgentMemoryDataSource } from "./registry";
 
 export const AGENT_MEMORY_RECALL_TYPE = "pi-harness-agent-memory-index";
 
@@ -37,31 +36,14 @@ const DATA_PREAMBLE =
 const BEGIN_DATA = "BEGIN_UNTRUSTED_PROJECT_MEMORY_JSON";
 const END_DATA = "END_UNTRUSTED_PROJECT_MEMORY_JSON";
 
-export interface AgentMemoryDataSource {
-  aggregate(
-    cwd: string,
-    trust: HarnessConfig["trust"],
-    signal?: AbortSignal,
-  ): Promise<MemoryAggregate>;
-  update(
-    cwd: string,
-    trust: HarnessConfig["trust"],
-    sessionId: string,
-    input:
-      | {
-          readonly action: "put";
-          readonly path: string;
-          readonly description: string;
-          readonly content: string;
-        }
-      | { readonly action: "remove"; readonly path: string },
-    signal?: AbortSignal,
-  ): ReturnType<AgentMemoryCli["update"]>;
-}
-
 interface AgentMemoryDeps {
   readonly cli?: AgentMemoryDataSource;
+  readonly registry?: AgentMemoryRegistry;
   readonly cwd?: string;
+}
+
+export interface AgentMemoryIntegration {
+  readonly registry: AgentMemoryRegistry;
 }
 
 interface SessionContextLike {
@@ -224,8 +206,11 @@ export default function setupAgentMemory(
   pi: PiLike,
   config: HarnessConfig,
   deps: AgentMemoryDeps = {},
-): void {
-  const cli = deps.cli ?? new AgentMemoryCli();
+): AgentMemoryIntegration {
+  const ownsRegistry = deps.registry === undefined;
+  const registry =
+    deps.registry ??
+    new AgentMemoryRegistry({ cli: deps.cli, trust: config.trust });
   const attemptedSessions = new Set<string>();
   const warnedSessions = new Set<string>();
 
@@ -252,7 +237,7 @@ export default function setupAgentMemory(
         throw new Error(`memory_recall ${action} does not accept path`);
       }
       const cwd = deps.cwd ?? ctx.cwd ?? process.cwd();
-      const aggregate = await cli.aggregate(cwd, config.trust, signal);
+      const aggregate = await registry.aggregate(cwd, signal);
       if (action === "list") {
         return textResult(
           renderBoundedIndex(aggregate) ??
@@ -350,9 +335,8 @@ export default function setupAgentMemory(
         const cwd = deps.cwd ?? ctx.cwd ?? process.cwd();
         const result =
           action === "put"
-            ? await cli.update(
+            ? await registry.update(
                 cwd,
-                config.trust,
                 sessionId,
                 {
                   action,
@@ -366,13 +350,7 @@ export default function setupAgentMemory(
                 },
                 signal,
               )
-            : await cli.update(
-                cwd,
-                config.trust,
-                sessionId,
-                { action, path },
-                signal,
-              );
+            : await registry.update(cwd, sessionId, { action, path }, signal);
         return textResult(
           result.status === "unchanged"
             ? `Project memory unchanged: ${result.path}`
@@ -393,6 +371,7 @@ export default function setupAgentMemory(
   pi.on("session_start", resetBranchState);
   pi.on("session_before_tree", resetBranchState);
   pi.on("session_compact", resetBranchState);
+  if (ownsRegistry) pi.on("session_shutdown", () => registry.dispose());
 
   pi.on("before_agent_start", async (event, ctx) => {
     const systemPrompt = appendMemoryGuidance(
@@ -408,7 +387,7 @@ export default function setupAgentMemory(
 
     const cwd = deps.cwd ?? ctx.cwd ?? process.cwd();
     try {
-      const aggregate = await cli.aggregate(cwd, config.trust, ctx.signal);
+      const aggregate = await registry.aggregate(cwd, ctx.signal);
       if (aggregate.diagnostics.length > 0 && !warnedSessions.has(sessionKey)) {
         warnedSessions.add(sessionKey);
         ctx.ui.notify(
@@ -439,4 +418,6 @@ export default function setupAgentMemory(
       return { systemPrompt };
     }
   });
+
+  return { registry };
 }
