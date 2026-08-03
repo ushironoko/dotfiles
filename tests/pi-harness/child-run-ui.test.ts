@@ -201,13 +201,9 @@ const addTranscript = (
 };
 
 describe("child-session browser component", () => {
-  test("renders an explanatory empty state within width", () => {
+  test("renders nothing when empty", () => {
     const { component } = setup();
-    const lines = component.render(24);
-    expect(lines.join("\n")).toContain("No child runs");
-    expect(lines.join("\n")).not.toContain("Open bit issues");
-    expect(lines.join("\n")).not.toContain("↑↓ select");
-    expect(lines.every((item) => visibleWidth(item) <= 24)).toBe(true);
+    expect(component.render(24)).toEqual([]);
   });
 
   test("caps populated height and uses every row for flat content", () => {
@@ -825,6 +821,11 @@ const setupCombined = async (
 };
 
 describe("combined coordination browser", () => {
+  test("renders nothing when every coordination source is empty", async () => {
+    const combined = await setupCombined([], 0, []);
+    expect(combined.component.render(80)).toEqual([]);
+  });
+
   test("renders child and issue rows in one flat height budget", async () => {
     const issueOnly = await setupCombined(["issue-a", "issue-b"]);
     const onlyLines = issueOnly.component.render(80);
