@@ -189,12 +189,31 @@ const LEGACY_ENGINE_SLOT_V2 = Symbol.for(
 const LEGACY_ENGINE_SLOT_V1 = Symbol.for(
   "ushironoko.pi-hearth-tools.engine.v1",
 );
+const RETIRED_ENGINE_SLOT = Symbol.for(
+  "ushironoko.pi-hearth-tools.retired-engines.v1",
+);
 
 interface GlobalWithEngine {
   [ENGINE_SLOT]?: HearthEngineRuntime;
   [LEGACY_ENGINE_SLOT_V2]?: unknown;
   [LEGACY_ENGINE_SLOT_V1]?: unknown;
+  [RETIRED_ENGINE_SLOT]?: unknown[];
 }
+
+const retireLegacyEngines = (host: GlobalWithEngine): void => {
+  let retired = host[RETIRED_ENGINE_SLOT];
+  for (const legacy of [
+    host[LEGACY_ENGINE_SLOT_V2],
+    host[LEGACY_ENGINE_SLOT_V1],
+  ]) {
+    if (legacy === undefined) continue;
+    retired ??= [];
+    if (!retired.includes(legacy)) retired.push(legacy);
+  }
+  if (retired !== undefined) host[RETIRED_ENGINE_SLOT] = retired;
+  delete host[LEGACY_ENGINE_SLOT_V2];
+  delete host[LEGACY_ENGINE_SLOT_V1];
+};
 
 export class HearthEngineRestartRequiredError extends Error {
   constructor() {
@@ -243,11 +262,14 @@ export const getOrCreateEngineRuntime = (
   shell: ShellSpec,
 ): HearthEngineRuntime => {
   const host = globalThis as GlobalWithEngine;
-  // A live /reload must release pre-graph and pre-gate global roots before
-  // constructing v3. A 0.1.0 Engine in the v2 slot has no graph methods and
-  // cannot satisfy the current runtime even when its ordinary options match.
-  delete host[LEGACY_ENGINE_SLOT_V2];
-  delete host[LEGACY_ENGINE_SLOT_V1];
+  // A live /reload must detach pre-graph and pre-gate slots before constructing
+  // v3. Keep their native runtimes strongly reachable, though: dropping a warm
+  // HearthEngine during extension reload can block native finalization and
+  // prevent Pi from ever loading the new extension. Hearth has no async close
+  // boundary, so an ordinary forward migration deliberately keeps at most the
+  // two named legacy runtimes (including their caches, optimizer, and shells)
+  // until the process restarts.
+  retireLegacyEngines(host);
   const options = createOptions(cwd, config, shell);
   const existing = host[ENGINE_SLOT];
   if (existing !== undefined) {
@@ -271,4 +293,5 @@ export const clearProcessEngineForTests = (): void => {
   delete host[ENGINE_SLOT];
   delete host[LEGACY_ENGINE_SLOT_V2];
   delete host[LEGACY_ENGINE_SLOT_V1];
+  delete host[RETIRED_ENGINE_SLOT];
 };
