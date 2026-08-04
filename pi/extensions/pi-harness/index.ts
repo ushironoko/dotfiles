@@ -141,6 +141,7 @@ const setupHarness = (
           bitIssues: config.features["bit-task"],
           agentMemory,
           childExecution: config.features.subagent || config.features.workflow,
+          maxConcurrentChildren: config.childRuns?.maxConcurrent,
         })
       : undefined;
 

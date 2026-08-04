@@ -11,6 +11,7 @@
  *   wrapper does not lock the tree, so overlapping parallel writes corrupt it.
  */
 import { isAbsolute } from "node:path";
+import { MAX_CHILD_RUNS_PER_INVOCATION } from "../child-runs/limits";
 
 export const CODEX_AGENT_TYPES = [
   "codex-reviewer",
@@ -20,7 +21,8 @@ export const CODEX_AGENT_TYPES = [
 
 export const DEFAULT_FANOUT_AGENT_TYPE = "codex-reviewer";
 export const MAX_WORKFLOW_STAGES = 8;
-export const MAX_STAGE_TASKS = 8;
+export const MAX_STAGE_TASKS = MAX_CHILD_RUNS_PER_INVOCATION;
+export const MAX_WORKFLOW_TASKS = MAX_CHILD_RUNS_PER_INVOCATION;
 
 export interface WorkflowTaskPlan {
   agentType: string;
@@ -275,6 +277,18 @@ export const validateWorkflowPlan = (
         `stages: must contain at most ${MAX_WORKFLOW_STAGES} stages (got ${input.stages.length})`,
       ],
     };
+  }
+
+  const totalTaskCount = input.stages.reduce(
+    (total, stage) =>
+      total +
+      (isRecord(stage) && Array.isArray(stage.tasks) ? stage.tasks.length : 0),
+    0,
+  );
+  if (totalTaskCount > MAX_WORKFLOW_TASKS) {
+    errors.push(
+      `stages: must contain at most ${MAX_WORKFLOW_TASKS} tasks in total (got ${totalTaskCount})`,
+    );
   }
 
   const stages: WorkflowStagePlan[] = [];

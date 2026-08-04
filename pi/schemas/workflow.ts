@@ -24,6 +24,7 @@ import {
   DEFAULT_FANOUT_AGENT_TYPE,
   MAX_STAGE_TASKS,
   MAX_WORKFLOW_STAGES,
+  MAX_WORKFLOW_TASKS,
 } from "../extensions/pi-harness/features/workflow/plan";
 
 const passthrough = { rest: "passthrough" } as const;
@@ -99,7 +100,9 @@ export const WorkflowParameters = object(
     stages: pipe(
       array(WorkflowStageParameters),
       maxLength(MAX_WORKFLOW_STAGES),
-      description("Stages executed sequentially"),
+      description(
+        `Stages executed sequentially; at most ${MAX_WORKFLOW_TASKS} tasks in total`,
+      ),
     ),
   },
   passthrough,

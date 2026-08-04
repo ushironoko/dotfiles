@@ -24,7 +24,7 @@ export const SubagentParameters = {
         required: ["agent", "task"],
         additionalProperties: true,
       },
-      maxItems: 8,
+      maxItems: 64,
       description: "Tasks to run in parallel",
     },
     chain: {

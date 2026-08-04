@@ -19,9 +19,11 @@ import {
   COLLISION_ERROR,
   CONFIG_ERROR,
   guardHearthBashOperations,
+  HEARTH_OVERRIDE_TOOL_NAMES,
   HEARTH_TOOL_NAMES,
   RESTART_ERROR,
   setupHearthTools,
+  usesRestrictedChildTools,
 } from "../../pi/extensions/hearth-tools/index";
 import {
   BASH_SANDBOX_PROVIDER_EVENT,
@@ -83,19 +85,18 @@ const fakePi = (
     },
     getAllTools: () => {
       const winners = new Map<string, Record<string, unknown>>();
-      if (competingName !== undefined) {
-        winners.set(competingName, {
-          name: competingName,
+      for (const name of HEARTH_OVERRIDE_TOOL_NAMES) {
+        winners.set(name, {
+          name,
           sourceInfo: {
-            path: competingSourcePath,
-            source: "project-extension",
-            scope: "project",
+            path: `<builtin:${name}>`,
+            source: "builtin",
+            scope: "builtin",
             origin: "top-level",
           },
         });
       }
       for (const tool of tools) {
-        if (winners.has(tool.name)) continue;
         winners.set(tool.name, {
           name: tool.name,
           description: tool.description,
@@ -105,6 +106,17 @@ const fakePi = (
             path: HEARTH_TEST_SOURCE,
             source: "extension",
             scope: "user",
+            origin: "top-level",
+          },
+        });
+      }
+      if (competingName !== undefined) {
+        winners.set(competingName, {
+          name: competingName,
+          sourceInfo: {
+            path: competingSourcePath,
+            source: "project-extension",
+            scope: "project",
             origin: "top-level",
           },
         });
@@ -304,6 +316,109 @@ describe("Hearth Engine access gate", () => {
 });
 
 describe("hearth-tools startup", () => {
+  test("requires both harness-child and restricted-profile markers", () => {
+    expect(usesRestrictedChildTools({ PI_HARNESS_RESTRICTED_TOOLS: "1" })).toBe(
+      false,
+    );
+    expect(
+      usesRestrictedChildTools({
+        PI_HARNESS_CHILD: "1",
+        PI_HARNESS_RESTRICTED_TOOLS: "1",
+      }),
+    ).toBe(true);
+  });
+
+  test("keeps and verifies Pi builtins for a tool-restricted harness child", async () => {
+    const fake = fakePi();
+    let moduleLoads = 0;
+    await setupHearthTools(fake.pi, {
+      loadModule: async () => {
+        moduleLoads += 1;
+        return { HearthEngine: FakeEngine as never };
+      },
+      usesRestrictedChildTools: () => true,
+      restrictedBuiltinToolNames: () => ["read"],
+      fatal: (message) => {
+        throw new Error(message);
+      },
+    });
+
+    expect(moduleLoads).toBe(0);
+    expect(fake.sessionStart).toHaveLength(1);
+    await fake.emit("session_start", { reason: "startup" });
+    expect(fake.tools).toHaveLength(0);
+  });
+
+  test("rejects an initial or late override of a selected builtin", async () => {
+    const initial = fakePi("read");
+    await setupHearthTools(initial.pi, {
+      usesRestrictedChildTools: () => true,
+      restrictedBuiltinToolNames: () => ["read"],
+      fatal: (message) => {
+        throw new Error(message);
+      },
+    });
+    await expect(
+      initial.emit("session_start", { reason: "startup" }),
+    ).rejects.toThrow(COLLISION_ERROR);
+
+    const late = fakePi();
+    await setupHearthTools(late.pi, {
+      usesRestrictedChildTools: () => true,
+      restrictedBuiltinToolNames: () => ["read"],
+      fatal: (message) => {
+        throw new Error(message);
+      },
+    });
+    await late.emit("session_start", { reason: "startup" });
+    late.setCompetingTool("read");
+    await expect(late.emit("before_agent_start")).rejects.toThrow(
+      COLLISION_ERROR,
+    );
+  });
+
+  test("registers trusted Bash and attaches its sandbox for a restricted child", async () => {
+    const fake = fakePi();
+    await setupHearthTools(fake.pi, {
+      loadModule: async () => ({ HearthEngine: FakeEngine as never }),
+      getAgentDir: () => "/agent",
+      loadConfig: () => ({ ...DEFAULT_HEARTH_TOOLS_CONFIG }),
+      createSettings: (() => settings) as never,
+      usesRestrictedChildTools: () => true,
+      restrictedBuiltinToolNames: () => ["bash"],
+      fatal: (message) => {
+        throw new Error(message);
+      },
+    });
+    const sandbox = sandboxProvider();
+    fake.pi.events.emit(BASH_SANDBOX_PROVIDER_EVENT, sandbox.provider);
+
+    await fake.emit("session_start", { reason: "startup" });
+    expect(fake.tools.map((tool) => tool.name)).toEqual(["bash"]);
+    expect(fake.active()).not.toContain("hearth_graph");
+    expect(sandbox.attachments()).toBe(1);
+  });
+
+  test("registers only hearth_graph when a restricted child requests it", async () => {
+    const fake = fakePi();
+    await setupHearthTools(fake.pi, {
+      loadModule: async () => ({ HearthEngine: FakeEngine as never }),
+      getAgentDir: () => "/agent",
+      loadConfig: () => ({ ...DEFAULT_HEARTH_TOOLS_CONFIG }),
+      createSettings: (() => settings) as never,
+      usesRestrictedChildTools: () => true,
+      allowsHearthGraphInRestrictedChild: () => true,
+      restrictedBuiltinToolNames: () => ["read"],
+      fatal: (message) => {
+        throw new Error(message);
+      },
+    });
+
+    await fake.emit("session_start", { reason: "startup" });
+    expect(fake.tools.map((tool) => tool.name)).toEqual(["hearth_graph"]);
+    expect(fake.active()).toContain("hearth_graph");
+  });
+
   test("fails through the injected fatal boundary when the addon cannot load", async () => {
     await expect(
       setupHearthTools(fakePi().pi, {

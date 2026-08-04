@@ -54,6 +54,10 @@ const CONFIG_ERROR = "pi-hearth-tools: invalid local configuration";
 const COLLISION_ERROR = "pi-hearth-tools: competing tool override detected";
 const RESTART_ERROR =
   "pi-hearth-tools: Engine settings changed; restart pi to apply them";
+const HARNESS_CHILD_ENV = "PI_HARNESS_CHILD";
+const RESTRICTED_CHILD_TOOLS_ENV = "PI_HARNESS_RESTRICTED_TOOLS";
+const RESTRICTED_CHILD_HEARTH_GRAPH_ENV = "PI_HARNESS_RESTRICTED_HEARTH_GRAPH";
+const RESTRICTED_CHILD_BUILTINS_ENV = "PI_HARNESS_RESTRICTED_BUILTINS";
 const CHILD_RUN_COMPLETION_ENTRY = "pi-harness/child-run-completion";
 const BASH_SANDBOX_PROVIDER_EVENT = "pi-harness:bash-sandbox-provider";
 
@@ -75,12 +79,39 @@ const POST_TOOL_INVALIDATION = new Set([
 
 type Fatal = (message: string) => never;
 
+const usesRestrictedChildTools = (
+  env: NodeJS.ProcessEnv = process.env,
+): boolean =>
+  env[HARNESS_CHILD_ENV] === "1" && env[RESTRICTED_CHILD_TOOLS_ENV] === "1";
+
+const allowsHearthGraphInRestrictedChild = (): boolean =>
+  process.env[RESTRICTED_CHILD_HEARTH_GRAPH_ENV] === "1";
+
+const restrictedBuiltinToolNames = (): readonly string[] | undefined => {
+  const raw = process.env[RESTRICTED_CHILD_BUILTINS_ENV] ?? "";
+  if (raw === "") return [];
+  if (Buffer.byteLength(raw, "utf8") > 256) return undefined;
+  const names = raw.split(",");
+  if (
+    names.some(
+      (name) =>
+        !(HEARTH_OVERRIDE_TOOL_NAMES as readonly string[]).includes(name),
+    )
+  ) {
+    return undefined;
+  }
+  return [...new Set(names)];
+};
+
 export interface HearthSetupDependencies {
   loadModule?: () => Promise<HearthModule>;
   fatal?: Fatal;
   getAgentDir?: () => string;
   loadConfig?: typeof loadHearthToolsConfig;
   createSettings?: typeof SettingsManager.create;
+  usesRestrictedChildTools?: () => boolean;
+  allowsHearthGraphInRestrictedChild?: () => boolean;
+  restrictedBuiltinToolNames?: () => readonly string[] | undefined;
 }
 
 export interface RuntimeState {
@@ -174,9 +205,12 @@ const isHearthSource = (path: string): boolean =>
 const effectiveTools = (pi: ExtensionAPI) =>
   new Map(pi.getAllTools().map((tool) => [tool.name, tool]));
 
-const assertNoExistingOverride = (pi: ExtensionAPI): void => {
+const assertNoExistingOverride = (
+  pi: ExtensionAPI,
+  toolNames: readonly string[] = HEARTH_TOOL_NAMES,
+): void => {
   const byName = effectiveTools(pi);
-  for (const name of HEARTH_TOOL_NAMES) {
+  for (const name of toolNames) {
     const tool = byName.get(name);
     if (
       tool !== undefined &&
@@ -188,11 +222,26 @@ const assertNoExistingOverride = (pi: ExtensionAPI): void => {
   }
 };
 
-const assertHearthOwnership = (pi: ExtensionAPI): void => {
+const assertHearthOwnership = (
+  pi: ExtensionAPI,
+  toolNames: readonly string[] = HEARTH_TOOL_NAMES,
+): void => {
   const byName = effectiveTools(pi);
-  for (const name of HEARTH_TOOL_NAMES) {
+  for (const name of toolNames) {
     const sourcePath = byName.get(name)?.sourceInfo.path;
     if (sourcePath === undefined || !isHearthSource(sourcePath)) {
+      throw new Error(COLLISION_ERROR);
+    }
+  }
+};
+
+const assertBuiltinOwnership = (
+  pi: ExtensionAPI,
+  toolNames: readonly string[],
+): void => {
+  const byName = effectiveTools(pi);
+  for (const name of toolNames) {
+    if (byName.get(name)?.sourceInfo.source !== "builtin") {
       throw new Error(COLLISION_ERROR);
     }
   }
@@ -228,7 +277,56 @@ export const setupHearthTools = async (
   pi: ExtensionAPI,
   dependencies: HearthSetupDependencies = {},
 ): Promise<void> => {
+  // Pi's --tools profile installs CLI-owned wrappers around selected builtins.
+  // A restricted harness child therefore keeps those builtins. If its profile
+  // explicitly requests Hearth's unique graph tool, register only that tool;
+  // otherwise avoid loading the native backend at all.
+  const restrictedChild = (
+    dependencies.usesRestrictedChildTools ?? usesRestrictedChildTools
+  )();
+  const restrictedChildAllowsGraph = (
+    dependencies.allowsHearthGraphInRestrictedChild ??
+    allowsHearthGraphInRestrictedChild
+  )();
   const fatal = dependencies.fatal ?? defaultFatal;
+  const selectedRestrictedBuiltins = (
+    dependencies.restrictedBuiltinToolNames ?? restrictedBuiltinToolNames
+  )();
+  if (restrictedChild && selectedRestrictedBuiltins === undefined) {
+    fatal(COLLISION_ERROR);
+  }
+  const restrictedBuiltins = selectedRestrictedBuiltins ?? [];
+  const restrictedChildAllowsBash =
+    restrictedChild && restrictedBuiltins.includes("bash");
+  const verifyRestrictedBuiltins = (
+    toolNames: readonly string[] = restrictedBuiltins,
+  ): void => {
+    try {
+      assertBuiltinOwnership(pi, toolNames);
+    } catch {
+      fatal(COLLISION_ERROR);
+    }
+  };
+  if (
+    restrictedChild &&
+    !restrictedChildAllowsGraph &&
+    !restrictedChildAllowsBash
+  ) {
+    pi.on("session_start", () => verifyRestrictedBuiltins());
+    pi.on("before_agent_start", () => verifyRestrictedBuiltins());
+    pi.on("tool_call", () => verifyRestrictedBuiltins());
+    return;
+  }
+  const ownedToolNames: readonly string[] = restrictedChild
+    ? [
+        ...(restrictedChildAllowsBash ? ["bash"] : []),
+        ...(restrictedChildAllowsGraph ? [HEARTH_GRAPH_TOOL_NAME] : []),
+      ]
+    : HEARTH_TOOL_NAMES;
+  const retainedBuiltinNames = restrictedChildAllowsBash
+    ? restrictedBuiltins.filter((name) => name !== "bash")
+    : restrictedBuiltins;
+
   let module: HearthModule;
   try {
     module = await (dependencies.loadModule?.() ?? import("@hearthdev/napi"));
@@ -266,6 +364,9 @@ export const setupHearthTools = async (
 
     let config: HearthToolsConfig;
     try {
+      if (restrictedChild) {
+        assertBuiltinOwnership(pi, restrictedBuiltins);
+      }
       const agentDir = (dependencies.getAgentDir ?? getAgentDir)();
       try {
         config = (dependencies.loadConfig ?? loadHearthToolsConfig)(agentDir);
@@ -298,7 +399,7 @@ export const setupHearthTools = async (
         protectExternalWriter: createExternalWriterProtector(runtime),
       });
 
-      assertNoExistingOverride(pi);
+      assertNoExistingOverride(pi, ownedToolNames);
       const activeBefore = pi.getActiveTools();
       const [read, write, edit, bash, grep, hearthGraph] = definitions(
         ctx.cwd,
@@ -308,19 +409,31 @@ export const setupHearthTools = async (
         graph,
         bashSandboxProvider?.sandboxedOperations,
       );
-      pi.registerTool(read);
-      pi.registerTool(write);
-      pi.registerTool(edit);
-      pi.registerTool(bash);
-      pi.registerTool(grep);
-      pi.registerTool(hearthGraph);
+      if (restrictedChild) {
+        if (restrictedChildAllowsBash) pi.registerTool(bash);
+        if (restrictedChildAllowsGraph) pi.registerTool(hearthGraph);
+      } else {
+        pi.registerTool(read);
+        pi.registerTool(write);
+        pi.registerTool(edit);
+        pi.registerTool(bash);
+        pi.registerTool(grep);
+        pi.registerTool(hearthGraph);
+      }
       pi.setActiveTools([
-        ...new Set([...activeBefore, HEARTH_GRAPH_TOOL_NAME]),
+        ...new Set([
+          ...activeBefore,
+          ...(!restrictedChild || restrictedChildAllowsGraph
+            ? [HEARTH_GRAPH_TOOL_NAME]
+            : []),
+        ]),
       ]);
-      assertHearthOwnership(pi);
-      bashSandboxProvider?.attach({
-        commandPrefix: settings.shellCommandPrefix,
-      });
+      assertHearthOwnership(pi, ownedToolNames);
+      if (!restrictedChild || restrictedChildAllowsBash) {
+        bashSandboxProvider?.attach({
+          commandPrefix: settings.shellCommandPrefix,
+        });
+      }
 
       registered = true;
       service.announce();
@@ -341,7 +454,10 @@ export const setupHearthTools = async (
   const verifyOwnership = (): void => {
     if (!registered) return;
     try {
-      assertHearthOwnership(pi);
+      if (restrictedChild) {
+        assertBuiltinOwnership(pi, retainedBuiltinNames);
+      }
+      assertHearthOwnership(pi, ownedToolNames);
     } catch {
       fatal(COLLISION_ERROR);
     }
@@ -371,7 +487,8 @@ export const setupHearthTools = async (
   });
 
   pi.on("user_bash", () => {
-    if (state === undefined) return;
+    if (state === undefined || (restrictedChild && !restrictedChildAllowsBash))
+      return;
     return {
       operations:
         bashSandboxProvider === undefined
@@ -409,5 +526,11 @@ export const setupHearthTools = async (
 
 const hearthTools: ExtensionFactory = async (pi) => setupHearthTools(pi);
 
-export { CONFIG_ERROR, COLLISION_ERROR, RESTART_ERROR, STARTUP_ERROR };
+export {
+  CONFIG_ERROR,
+  COLLISION_ERROR,
+  RESTART_ERROR,
+  STARTUP_ERROR,
+  usesRestrictedChildTools,
+};
 export default hearthTools;

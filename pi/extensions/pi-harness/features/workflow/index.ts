@@ -16,6 +16,10 @@ import { realpath, stat } from "node:fs/promises";
 import type { HarnessConfig } from "../../config";
 import { MAX_NOTIFICATION_RESULT_BYTES } from "../child-runs/background";
 import type { ChildRunsIntegration } from "../child-runs/index";
+import {
+  assertChildRunsConfiguration,
+  DEFAULT_MAX_CONCURRENT_CHILDREN,
+} from "../child-runs/limits";
 import type { PermissionAuditIntegration } from "../permission-audit/index";
 import type { ChildObservation } from "../child-runs/model";
 import { renderChildRunsResult } from "../child-runs/presentation";
@@ -44,8 +48,6 @@ import {
   type WorkflowTaskPlan,
 } from "./plan";
 
-const MAX_CONCURRENCY = 4;
-
 interface SetupWorkflowOptions {
   spawnFn?: SpawnFunction;
   termGraceMs?: number;
@@ -62,6 +64,7 @@ interface SetupWorkflowOptions {
   ) => Promise<CwdBoundaryResult>;
   childRuns?: ChildRunsIntegration;
   permissionAudit?: PermissionAuditIntegration;
+  maxConcurrency?: number;
 }
 
 interface SpawnFailure {
@@ -154,13 +157,13 @@ const failureLabel = (result: SpawnResult): string => {
 };
 
 // The report text shares the background notification's retained-result budget
-// across every task. A single prefix-preserving cap would let one oversized
-// early output erase later tasks (including reviewer identities and PoC
-// worktree paths the parent needs for judging). Headers and worktree identities
-// are never subject to the output budget.
+// across every task. Resource and agent identities remain exact. When repeated
+// absolute worktree roots would dominate the report, the root is emitted once
+// and each task retains its complete relative suffix.
 const REPORT_OVERHEAD_BYTES = 2_048;
-const REPORT_TASK_HEADER_ALLOWANCE = 256;
-const MIN_TASK_OUTPUT_BUDGET = 64;
+const REPORT_AGENT_LABEL_BYTES = 64;
+const REPORT_FAILURE_LABEL_BYTES = 64;
+const REPORT_STAGE_TITLE_BYTES = 128;
 // Background completion wraps the report in a JSON string. Quotes, backslashes,
 // and newlines can double in size during JSON escaping, so leave one quarter of
 // the raw-result cap unused; the enclosing 50 KiB notification then retains the
@@ -169,34 +172,185 @@ const MAX_WORKFLOW_NOTIFICATION_RESULT_BYTES = Math.floor(
   MAX_NOTIFICATION_RESULT_BYTES * 0.75,
 );
 
-const taskOutputBudget = (taskCount: number): number => {
-  const available =
-    MAX_WORKFLOW_NOTIFICATION_RESULT_BYTES -
-    REPORT_OVERHEAD_BYTES -
-    taskCount * REPORT_TASK_HEADER_ALLOWANCE;
-  return Math.max(
-    MIN_TASK_OUTPUT_BUDGET,
-    Math.floor(available / Math.max(1, taskCount)),
+interface ReportLayout {
+  worktreePrefix?: string;
+  worktreePathBytes?: number;
+}
+
+const worktreePaths = (stages: WorkflowStageReport[]): string[] =>
+  stages.flatMap((stage) =>
+    stage.tasks.flatMap((report) =>
+      report.worktree === undefined ? [] : [report.worktree],
+    ),
   );
+
+const sharedWorktreePrefix = (
+  stages: WorkflowStageReport[],
+): string | undefined => {
+  const paths = worktreePaths(stages);
+  const [first] = paths;
+  if (paths.length < 2 || first === undefined) return undefined;
+  let sharedCharacters = first.length;
+  for (const path of paths.slice(1)) {
+    sharedCharacters = Math.min(sharedCharacters, path.length);
+    let index = 0;
+    while (index < sharedCharacters && first[index] === path[index]) {
+      index += 1;
+    }
+    sharedCharacters = index;
+  }
+  const separator = first.lastIndexOf("/", sharedCharacters - 1);
+  if (separator === -1) return undefined;
+  const directoryPrefix = first.slice(0, separator + 1);
+  return Buffer.byteLength(directoryPrefix, "utf8") > 16
+    ? directoryPrefix
+    : undefined;
+};
+
+const displayWorktreePath = (path: string, layout: ReportLayout): string => {
+  const display =
+    layout.worktreePrefix !== undefined &&
+    path.startsWith(layout.worktreePrefix)
+      ? `<prefix>${path.slice(layout.worktreePrefix.length)}`
+      : path;
+  return layout.worktreePathBytes === undefined
+    ? display
+    : capText(display, layout.worktreePathBytes);
+};
+
+const worktreePrefixHeader = (layout: ReportLayout): string => {
+  const prefix =
+    layout.worktreePrefix === undefined
+      ? ""
+      : `Worktree path prefix: ${layout.worktreePrefix}\n`;
+  const details =
+    layout.worktreePathBytes === undefined
+      ? ""
+      : "Long worktree suffixes are abbreviated here; complete canonical paths remain in child-run details.\n";
+  return prefix === "" && details === "" ? "" : `${prefix}${details}\n`;
+};
+
+const taskReportHeader = (
+  report: WorkflowTaskReport,
+  layout: ReportLayout,
+): string => {
+  const agentLabel = capText(report.agentType, REPORT_AGENT_LABEL_BYTES);
+  const worktreeSuffix =
+    report.worktree === undefined
+      ? ""
+      : ` (worktree: ${displayWorktreePath(report.worktree, layout)} — left in place)`;
+  if (isSpawnFailure(report.result)) {
+    return `### [${agentLabel}] FAILED${worktreeSuffix}`;
+  }
+  if (report.result.failed) {
+    const reason = capText(
+      failureLabel(report.result),
+      REPORT_FAILURE_LABEL_BYTES,
+    );
+    return `### [${agentLabel}] FAILED (${reason})${worktreeSuffix}`;
+  }
+  return `### [${agentLabel}] succeeded${worktreeSuffix}`;
+};
+
+const reportStructuralBytes = (
+  stages: WorkflowStageReport[],
+  layout: ReportLayout,
+): number =>
+  Buffer.byteLength(worktreePrefixHeader(layout), "utf8") +
+  stages.reduce((total, stage, stageIndex) => {
+    const title = capText(
+      stage.name ?? `Stage ${stageIndex + 1}`,
+      REPORT_STAGE_TITLE_BYTES,
+    );
+    const stageHeader = `## ${title} (${stage.mode})\n\n`;
+    const taskHeaders = stage.tasks
+      .map((report) => taskReportHeader(report, layout))
+      .join("\n\n");
+    return (
+      total +
+      Buffer.byteLength(stageHeader, "utf8") +
+      Buffer.byteLength(taskHeaders, "utf8") +
+      // One output separator per task plus the separator before this stage.
+      stage.tasks.length * 2 +
+      (stageIndex === 0 ? 0 : 2)
+    );
+  }, 0);
+
+const selectReportLayout = (
+  stages: WorkflowStageReport[],
+  maxBytes: number,
+): ReportLayout => {
+  const exact: ReportLayout = {};
+  if (
+    REPORT_OVERHEAD_BYTES + reportStructuralBytes(stages, exact) <=
+    maxBytes
+  ) {
+    return exact;
+  }
+
+  const compact: ReportLayout = {
+    worktreePrefix: sharedWorktreePrefix(stages),
+  };
+  if (
+    REPORT_OVERHEAD_BYTES + reportStructuralBytes(stages, compact) <=
+    maxBytes
+  ) {
+    return compact;
+  }
+
+  // Unusually long, unrelated suffixes cannot all fit in the notification.
+  // Keep every task header and a stable task-to-path mapping here while the
+  // child-run registry retains the full canonical paths out of band.
+  let low = 32;
+  let high = Math.max(
+    low,
+    ...worktreePaths(stages).map((path) => Buffer.byteLength(path, "utf8")),
+  );
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const candidate = { ...compact, worktreePathBytes: middle };
+    if (
+      REPORT_OVERHEAD_BYTES + reportStructuralBytes(stages, candidate) <=
+      maxBytes
+    ) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return { ...compact, worktreePathBytes: low };
+};
+
+const taskOutputBudget = (
+  stages: WorkflowStageReport[],
+  maxBytes: number,
+  layout: ReportLayout,
+): number => {
+  const taskCount = stages.reduce(
+    (count, stage) => count + stage.tasks.length,
+    0,
+  );
+  const available =
+    maxBytes - REPORT_OVERHEAD_BYTES - reportStructuralBytes(stages, layout);
+  return Math.max(0, Math.floor(available / Math.max(1, taskCount)));
 };
 
 const describeTaskReport = (
   report: WorkflowTaskReport,
   outputBudget: number,
+  layout: ReportLayout,
 ): string => {
-  const worktreeSuffix =
-    report.worktree === undefined
-      ? ""
-      : ` (worktree: ${report.worktree} — left in place)`;
+  const header = taskReportHeader(report, layout);
+  if (outputBudget <= 0) return header;
+  let output: string;
   if (isSpawnFailure(report.result)) {
-    return `### [${report.agentType}] FAILED${worktreeSuffix}\n\n${capText(report.result.errorMessage, outputBudget)}`;
+    output = report.result.errorMessage;
+  } else if (report.result.failed) {
+    output = report.result.stderr || report.result.output || "(no output)";
+  } else {
+    output = report.result.output || "(no output)";
   }
-  if (report.result.failed) {
-    const output =
-      report.result.stderr || report.result.output || "(no output)";
-    return `### [${report.agentType}] FAILED (${failureLabel(report.result)})${worktreeSuffix}\n\n${capText(output, outputBudget)}`;
-  }
-  return `### [${report.agentType}] succeeded${worktreeSuffix}\n\n${capText(report.result.output || "(no output)", outputBudget)}`;
+  return `${header}\n\n${capText(output, outputBudget)}`;
 };
 
 // Shared renderer for the parent-facing summary AND the {previous} injection.
@@ -205,23 +359,41 @@ const describeTaskReport = (
 const renderStageDigest = (
   stages: WorkflowStageReport[],
   outputBudget: number,
+  layout: ReportLayout,
 ): string =>
+  worktreePrefixHeader(layout) +
   stages
     .map((stage, index) => {
-      const title = stage.name ?? `Stage ${index + 1}`;
+      const title = capText(
+        stage.name ?? `Stage ${index + 1}`,
+        REPORT_STAGE_TITLE_BYTES,
+      );
       const body = stage.tasks
-        .map((report) => describeTaskReport(report, outputBudget))
+        .map((report) => describeTaskReport(report, outputBudget, layout))
         .join("\n\n");
       return `## ${title} (${stage.mode})\n\n${body}`;
     })
     .join("\n\n");
 
 // Ceiling on the prior-stage digest spliced into a child task prompt. The
-// per-task output budget bounds each report body, but headers, worktree
-// paths, agent names and the fan-out task count are not individually capped;
-// this bounds the assembled digest so a later child's prompt cannot grow
-// unboundedly with the run.
+// per-task output budget and structural field caps bound individual records;
+// this final ceiling also bounds separators and aggregate stage metadata.
 const MAX_PREVIOUS_DIGEST_BYTES = PER_TASK_OUTPUT_CAP;
+
+const renderBudgetedStageDigest = (
+  stages: WorkflowStageReport[],
+  maxBytes: number,
+): string => {
+  const layout = selectReportLayout(stages, maxBytes);
+  return capText(
+    renderStageDigest(
+      stages,
+      taskOutputBudget(stages, maxBytes, layout),
+      layout,
+    ),
+    maxBytes,
+  );
+};
 
 // Prior-stage output is untrusted (repository-influenced) data. Fence it so a
 // downstream agent treats it as reference material, not as instructions.
@@ -233,6 +405,10 @@ const setupWorkflow = (
   config: HarnessConfig,
   options: SetupWorkflowOptions = {},
 ): void => {
+  const maxConcurrency =
+    options.maxConcurrency ??
+    config.childRuns?.maxConcurrent ??
+    DEFAULT_MAX_CONCURRENT_CHILDREN;
   const tool = {
     name: "workflow",
     label: "Workflow",
@@ -246,6 +422,7 @@ const setupWorkflow = (
       onUpdate: unknown,
       ctx: CtxLike,
     ) {
+      assertChildRunsConfiguration(config.childRuns?.configurationError);
       if (isAborted(signal)) throw new Error("Workflow was aborted");
 
       const { childRuns } = options;
@@ -402,19 +579,12 @@ const setupWorkflow = (
             // Digest of every already-completed stage, spliced into this stage's
             // tasks wherever they contain {previous}. A task never sees sibling
             // output, only prior stages in declaration order.
-            const priorTaskCount = stageReports.reduce(
-              (count, report) => count + report.tasks.length,
-              0,
-            );
             const previous =
               stageReports.length === 0
                 ? "(no prior stages)"
                 : wrapUntrusted(
-                    capText(
-                      renderStageDigest(
-                        stageReports,
-                        taskOutputBudget(priorTaskCount),
-                      ),
+                    renderBudgetedStageDigest(
+                      stageReports,
                       MAX_PREVIOUS_DIGEST_BYTES,
                     ),
                   );
@@ -592,7 +762,7 @@ const setupWorkflow = (
             };
             await runWithConcurrency(
               stage.tasks,
-              MAX_CONCURRENCY,
+              maxConcurrency,
               runTask,
               executionSignal,
             );
@@ -620,9 +790,9 @@ const setupWorkflow = (
             (report) => report.worktree !== undefined,
           );
 
-          const stageDigest = renderStageDigest(
+          const stageDigest = renderBudgetedStageDigest(
             stageReports,
-            taskOutputBudget(total),
+            MAX_WORKFLOW_NOTIFICATION_RESULT_BYTES,
           );
           const worktreeNote = hasWorktrees
             ? "\n\nWorktrees are left in place for review; never merged automatically. Removal requires the user-approved worktree_remove tool."

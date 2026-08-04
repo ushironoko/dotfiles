@@ -55,8 +55,11 @@ Agent definitions come from `~/.claude/agents/*.md` — `codex-reviewer`,
 
 The plan validator rejects violations — these are contracts, not advice:
 
-- Stages run sequentially. Fan-out tasks within a stage run 4-concurrent.
-  Max 8 tasks per stage, max 8 stages.
+- Stages run sequentially, with up to 8 stages and up to 64 tasks in total.
+  A single fan-out stage may use all 64 tasks. By default, 32 child processes
+  run concurrently across all `subagent` and `workflow` invocations; overflow
+  queues in their shared FIFO pool. Machine-local `childRuns.maxConcurrent`
+  configuration may tune that process limit from 1 through 64.
 - A fan-out task without `agentType` defaults to `codex-reviewer`.
 - A fan-out stage whose roster contains no codex-family task
   (`codex-reviewer` / `codex-runner` / `codex-poc`) is REJECTED unless the

@@ -6,6 +6,12 @@ import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { AgentDefinition } from "../../lib/agent-md";
 import { sanitizeChildEnv } from "../../lib/child-env";
+import {
+  RESTRICTED_CHILD_BUILTINS_ENV,
+  RESTRICTED_CHILD_HEARTH_GRAPH_ENV,
+  RESTRICTED_CHILD_TOOLS_ENV,
+  restrictedBuiltinTools,
+} from "../../lib/child-tool-profile";
 import type { ChildObservation } from "../child-runs/model";
 import { createChildProtocolParser } from "../child-runs/protocol";
 import {
@@ -277,6 +283,15 @@ const spawnAgent = async (
               {
                 ...options.auditEnv,
                 PI_HARNESS_CHILD: "1",
+                [RESTRICTED_CHILD_TOOLS_ENV]:
+                  agent.tools !== undefined && agent.tools.length > 0
+                    ? "1"
+                    : "0",
+                [RESTRICTED_CHILD_HEARTH_GRAPH_ENV]:
+                  agent.tools?.includes("hearth_graph") === true ? "1" : "0",
+                [RESTRICTED_CHILD_BUILTINS_ENV]: restrictedBuiltinTools(
+                  agent.tools,
+                ),
                 [CHILD_PERMISSION_SIGNAL_ENV]: permissionSignalToken,
                 ...(agent.codexStageModes === undefined
                   ? {}

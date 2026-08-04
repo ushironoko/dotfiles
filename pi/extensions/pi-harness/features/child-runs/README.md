@@ -165,7 +165,12 @@ persistence.
 
 Limits:
 
-- four child pi processes across all concurrent `subagent` and `workflow` invocations;
+- 32 child pi processes by default across all concurrent `subagent` and
+  `workflow` invocations; `childRuns.maxConcurrent` in the machine-local
+  `pi-harness.local.json` may set the shared FIFO pool from 1 through 64;
+- 64 runs per invocation; a workflow may place all 64 in one fan-out stage or
+  split them across sequential stages, and excess runnable tasks wait for a
+  shared child slot;
 - eight retained background invocations, including manager-local completions and the single active notification turn;
 - 16 KiB per finalized assistant item;
 - 256 items and 64 KiB per run;

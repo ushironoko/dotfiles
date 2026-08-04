@@ -82,6 +82,9 @@ feature toggles live in `~/.pi/agent/pi-harness.local.json` (machine-local):
     "provider-log": false,
     "ask-user-question": true
   },
+  "childRuns": {
+    "maxConcurrent": 32
+  },
   "trustedRoots": ["/path/to/repo/you/trust"]
 }
 ```
@@ -584,6 +587,11 @@ hook is advisory):
 - `codex-poc` requires `isolation: "worktree"`; the engine provisions a
   validated linked worktree per task (bit-task creator, S1 postconditions)
   and leaves it in place — no auto merge, no auto remove.
+- One workflow may contain up to 64 tasks across its sequential stages, and a
+  single fan-out stage may use all 64. Up to 32 child processes run at once by
+  default; remaining tasks queue in the shared cross-invocation pool.
+  `childRuns.maxConcurrent` in `pi-harness.local.json` can tune that global
+  process limit from 1 through 64 for the machine.
 - Parallel `codex-runner` tasks must declare disjoint `writeScope`s.
 - Managed Codex agents invoke `codex-stage.sh` directly through
   `bash_escalated`. Pi validates only the trusted agent's declared mode and the

@@ -2,7 +2,12 @@ import { createAbortController } from "../../lib/abort";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
 import type { HarnessConfig } from "../../config";
 import { replacePrevious } from "../../lib/placeholder";
+import { MAX_NOTIFICATION_RESULT_BYTES } from "../child-runs/background";
 import type { ChildRunsIntegration } from "../child-runs/index";
+import {
+  assertChildRunsConfiguration,
+  DEFAULT_MAX_CONCURRENT_CHILDREN,
+} from "../child-runs/limits";
 import type { PermissionAuditIntegration } from "../permission-audit/index";
 import type { ChildObservation } from "../child-runs/model";
 import { renderChildRunsResult } from "../child-runs/presentation";
@@ -15,8 +20,6 @@ import {
   type SpawnFunction,
   type SpawnResult,
 } from "./spawn";
-
-const MAX_CONCURRENCY = 4;
 
 interface TaskItem {
   agent: string;
@@ -37,6 +40,7 @@ interface SetupSubagentOptions {
   termGraceMs?: number;
   childRuns?: ChildRunsIntegration;
   permissionAudit?: PermissionAuditIntegration;
+  maxConcurrency?: number;
 }
 
 interface SubagentDetails {
@@ -63,6 +67,39 @@ const isAborted = (signal: AbortSignal | undefined): boolean =>
 
 const getResultOutput = (result: SpawnResult): string =>
   result.output || result.stderr || "(no output)";
+
+// Keep every parallel result identifiable within the retained background
+// notification. A prefix-only cap would let large early outputs erase later
+// agents while still claiming the whole invocation succeeded.
+const PARALLEL_SUMMARY_OVERHEAD_BYTES = 1_024;
+const PARALLEL_RESULT_HEADER_ALLOWANCE = 256;
+const MIN_PARALLEL_RESULT_OUTPUT_BUDGET = 64;
+const MAX_PARALLEL_NOTIFICATION_RESULT_BYTES = Math.floor(
+  MAX_NOTIFICATION_RESULT_BYTES * 0.75,
+);
+
+const parallelResultOutputBudget = (resultCount: number): number => {
+  const available =
+    MAX_PARALLEL_NOTIFICATION_RESULT_BYTES -
+    PARALLEL_SUMMARY_OVERHEAD_BYTES -
+    resultCount * PARALLEL_RESULT_HEADER_ALLOWANCE;
+  return Math.max(
+    MIN_PARALLEL_RESULT_OUTPUT_BUDGET,
+    Math.floor(available / Math.max(1, resultCount)),
+  );
+};
+
+const renderParallelSummary = (results: SpawnResult[]): string => {
+  const outputBudget = parallelResultOutputBudget(results.length);
+  const summaries = results.map(
+    (result) =>
+      `### [${capText(result.agent, 128)}] completed\n\n${capText(getResultOutput(result), outputBudget)}`,
+  );
+  return capText(
+    `Parallel: ${results.length}/${results.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`,
+    MAX_PARALLEL_NOTIFICATION_RESULT_BYTES,
+  );
+};
 
 const assertSuccessful = (result: SpawnResult): void => {
   if (!result.failed) return;
@@ -119,7 +156,7 @@ const createSemaphore = (limit: number): Semaphore => {
         return Promise.resolve(createRelease());
       }
       // Queued waiters must be removable on abort: a cancelled invocation
-      // parked behind four unrelated children rejects immediately instead of
+      // parked behind unrelated children rejects immediately instead of
       // waiting for a slot (re-review finding). Listener wiring uses the same
       // structural guards as the rest of this file.
       return new Promise((resolve, reject) => {
@@ -198,7 +235,11 @@ const setupSubagent = (
   config: HarnessConfig,
   options: SetupSubagentOptions = {},
 ): void => {
-  const semaphore = createSemaphore(MAX_CONCURRENCY);
+  const maxConcurrency =
+    options.maxConcurrency ??
+    config.childRuns?.maxConcurrent ??
+    DEFAULT_MAX_CONCURRENT_CHILDREN;
+  const semaphore = createSemaphore(maxConcurrency);
 
   const tool = {
     name: "subagent",
@@ -213,6 +254,7 @@ const setupSubagent = (
       onUpdate: unknown,
       ctx: CtxLike,
     ) {
+      assertChildRunsConfiguration(config.childRuns?.configurationError);
       const agents = loadAgents(config.paths.claudeAgentsDir);
       const hasChain = (params.chain?.length ?? 0) > 0;
       const hasTasks = (params.tasks?.length ?? 0) > 0;
@@ -454,7 +496,7 @@ const setupSubagent = (
             try {
               results = await mapWithConcurrencyLimit(
                 params.tasks,
-                MAX_CONCURRENCY,
+                maxConcurrency,
                 async (task, index) => {
                   const result = await runTask(
                     task,
@@ -480,17 +522,11 @@ const setupSubagent = (
               }
             }
 
-            const summaries = results.map(
-              (result) =>
-                `### [${result.agent}] completed\n\n${getResultOutput(result)}`,
-            );
             return {
               content: [
                 {
                   type: "text" as const,
-                  text: capText(
-                    `Parallel: ${results.length}/${results.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`,
-                  ),
+                  text: renderParallelSummary(results),
                 },
               ],
               details: {

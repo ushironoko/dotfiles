@@ -1,5 +1,6 @@
 import { capUtf8, stripTerminalControls } from "../../lib/terminal-text";
 import { CHILD_RUN_COMPLETION_ENTRY } from "./background";
+import { MAX_CHILD_RUNS_PER_INVOCATION } from "./limits";
 import {
   CHILD_RUNS_SCHEMA,
   CHILD_RUNS_VERSION,
@@ -201,7 +202,7 @@ export const decodePersistedChildRuns = (
     value.kind !== "transcript" ||
     (value.source !== "subagent" && value.source !== "workflow") ||
     !Array.isArray(value.runs) ||
-    value.runs.length > 64
+    value.runs.length > MAX_CHILD_RUNS_PER_INVOCATION
   ) {
     return undefined;
   }

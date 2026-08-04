@@ -1347,12 +1347,14 @@ describe("child-run subagent integration", () => {
     expect(report).toContain("Workflow completed: 4/4");
   });
 
-  test("shares the four-child process limit across background subagent and workflow", async () => {
+  test("shares a configured process limit across background subagent and workflow", async () => {
     const home = await setupTestDirectory("pi-child-background-mixed-limit");
     tempDirectories.push(home);
     await writeAgent(home);
     const runtime = createRuntime(home, { background: true });
-    const childRuns = setupChildRuns(runtime.pi);
+    const childRuns = setupChildRuns(runtime.pi, {
+      maxConcurrentChildren: 4,
+    });
     const { background } = childRuns;
     if (background === undefined) throw new Error("background unavailable");
     const pool = pooledSpawn();
