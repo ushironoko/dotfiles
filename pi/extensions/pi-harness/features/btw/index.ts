@@ -78,6 +78,11 @@ interface BtwHistoryData {
   createdAt: number;
 }
 
+interface BtwInvocation {
+  mode: "parallel" | "settled";
+  question: string;
+}
+
 interface BtwSnapshot {
   cwd: string;
   parentSession?: string;
@@ -190,6 +195,15 @@ const assertQuestion = (question: string): void => {
   if (byteLength(question) > QUESTION_MAX_BYTES) {
     throw new Error(`BTW question exceeds ${QUESTION_MAX_BYTES} bytes`);
   }
+};
+
+const parseBtwInvocation = (args: string): BtwInvocation => {
+  const trimmed = args.trim();
+  const settled = /^--wait(?:\s+([\s\S]*))?$/u.exec(trimmed);
+  if (settled !== null) {
+    return { mode: "settled", question: settled[1]?.trim() ?? "" };
+  }
+  return { mode: "parallel", question: trimmed };
 };
 
 const seedSessionManager = (
@@ -401,13 +415,47 @@ const waitForIdleOrAbort = async (
   }
 };
 
+const captureSnapshot = (
+  pi: PiLike,
+  ctx: ExtensionCommandContext,
+  signal: BtwCancellationSignal,
+): BtwSnapshot => {
+  const { model } = ctx;
+  if (!model) throw new Error("No model selected for BTW");
+
+  // Keep all parent reads in one synchronous section. In particular, clone the
+  // resolved messages before the parent can append its in-flight response.
+  const parentSession = ctx.sessionManager.getSessionFile();
+  const parentEntries = ctx.sessionManager.getEntries();
+  const leafId = ctx.sessionManager.getLeafId();
+  const resolved = buildSessionContext(parentEntries, leafId);
+  const systemPrompt = ctx.getSystemPrompt();
+  const thinkingLevel = pi.getThinkingLevel();
+  const hasAssistant = parentEntries.some(
+    (entry) => entry.type === "message" && entry.message.role === "assistant",
+  );
+  if (parentSession !== undefined && !hasAssistant) {
+    throw new Error(
+      "BTW history is not durable until the parent completes its first assistant response",
+    );
+  }
+
+  return {
+    cwd: ctx.cwd,
+    parentSession,
+    systemPrompt,
+    messages: structuredClone(resolved.messages),
+    model,
+    modelRegistry: ctx.modelRegistry,
+    thinkingLevel,
+    signal,
+  };
+};
+
 const readQuestion = async (
-  args: string,
   ctx: ExtensionCommandContext,
   cancellation: BtwCancellationSignal,
 ): Promise<string | undefined> => {
-  const inline = args.trim();
-  if (inline !== "") return inline;
   if (!ctx.hasUI) {
     throw new Error("Usage: /btw <question> (interactive input unavailable)");
   }
@@ -471,6 +519,7 @@ const setupBtw = (
 
   pi.on("session_start", () => {
     sessionGeneration += 1;
+    activeAbort?.abort();
     requestHearthService();
   });
   pi.on("session_before_tree", () => {
@@ -564,9 +613,9 @@ const setupBtw = (
 
   pi.registerCommand("btw", {
     description:
-      "Ask a read-only side question without changing parent context",
+      "Ask a parallel read-only side question (--wait for settled context)",
     handler: async (args, ctx) => {
-      const { hasUI, ui, mode } = ctx;
+      const { hasUI, ui, mode: uiMode } = ctx;
       if (running) {
         if (hasUI) ui.notify("A BTW question is already running", "warning");
         return;
@@ -587,17 +636,29 @@ const setupBtw = (
         running = false;
       };
 
+      const invocation = parseBtwInvocation(args);
       let question: string;
+      let parallelSnapshot: BtwSnapshot | undefined;
       try {
         if (!hasUI) throw new Error("BTW requires TUI or RPC UI mode");
-        const input = await readQuestion(args, ctx, invocationAbort.signal);
+        const input =
+          invocation.question === ""
+            ? await readQuestion(ctx, invocationAbort.signal)
+            : invocation.question;
         if (input === undefined) {
+          releaseInvocation();
+          return;
+        }
+        if (invocationAbort.signal.aborted || invocationIsStale()) {
           releaseInvocation();
           return;
         }
         question = stripTerminalControls(input).trim();
         assertQuestion(question);
         if (!ctx.model) throw new Error("No model selected for BTW");
+        if (invocation.mode === "parallel") {
+          parallelSnapshot = captureSnapshot(pi, ctx, invocationAbort.signal);
+        }
       } catch (error) {
         releaseInvocation();
         if (!hasUI) throw error;
@@ -613,47 +674,29 @@ const setupBtw = (
       const operation = Promise.resolve().then(async () => {
         let statusSet = false;
         try {
-          if (!ctx.isIdle()) {
-            ui.notify("Waiting for the parent session to settle...", "info");
+          let snapshot = parallelSnapshot;
+          if (invocation.mode === "settled") {
+            if (!ctx.isIdle()) {
+              ui.notify("Waiting for the parent session to settle...", "info");
+            }
+            while (!ctx.isIdle()) {
+              const aborted = await waitForIdleOrAbort(
+                ctx,
+                invocationAbort.signal,
+              );
+              if (aborted || invocationIsStale()) return;
+            }
+            if (invocationAbort.signal.aborted || invocationIsStale()) return;
+            snapshot = captureSnapshot(pi, ctx, invocationAbort.signal);
+          } else if (invocationAbort.signal.aborted || invocationIsStale()) {
+            return;
           }
-          while (!ctx.isIdle()) {
-            const aborted = await waitForIdleOrAbort(
-              ctx,
-              invocationAbort.signal,
-            );
-            if (aborted || invocationIsStale()) return;
-          }
-          if (invocationAbort.signal.aborted || invocationIsStale()) return;
-          if (!ctx.model) throw new Error("No model selected for BTW");
-
-          const parentSession = ctx.sessionManager.getSessionFile();
-          const parentEntries = ctx.sessionManager.getEntries();
-          const hasAssistant = parentEntries.some(
-            (entry) =>
-              entry.type === "message" && entry.message.role === "assistant",
-          );
-          if (parentSession !== undefined && !hasAssistant) {
-            throw new Error(
-              "BTW history is not durable until the parent completes its first assistant response",
-            );
+          if (snapshot === undefined) {
+            throw new Error("BTW snapshot is unavailable");
           }
 
           ui.setStatus(STATUS_KEY, "btw: answering");
           statusSet = true;
-          const resolved = buildSessionContext(
-            parentEntries,
-            ctx.sessionManager.getLeafId(),
-          );
-          const snapshot: BtwSnapshot = {
-            cwd: ctx.cwd,
-            parentSession,
-            systemPrompt: ctx.getSystemPrompt(),
-            messages: structuredClone(resolved.messages),
-            model: ctx.model,
-            modelRegistry: ctx.modelRegistry,
-            thinkingLevel: pi.getThinkingLevel(),
-            signal: invocationAbort.signal,
-          };
           const rawAnswer = await answerQuestion(snapshot, question);
           if (invocationAbort.signal.aborted || invocationIsStale()) return;
           const answer = stripTerminalControls(rawAnswer.trim()).trim();
@@ -673,7 +716,7 @@ const setupBtw = (
             createdAt: now(),
           };
           pi.appendEntry<BtwHistoryData>(HISTORY_TYPE, record);
-          if (mode === "rpc") {
+          if (uiMode === "rpc") {
             ui.notify(`BTW\nQ: ${record.question}\n\n${record.answer}`, "info");
           }
         } catch (error) {
@@ -704,12 +747,15 @@ export {
   BTW_DENIED_TOOLS,
   BtwCancellationController,
   type BtwFeatureDependencies,
+  type BtwInvocation,
   type BtwForkDependencies,
   type BtwHistoryData,
   type BtwSnapshot,
   BTW_READ_ONLY_TOOLS,
+  captureSnapshot,
   ERROR_MAX_BYTES,
   HISTORY_TYPE,
+  parseBtwInvocation,
   QUESTION_MAX_BYTES,
   setupBtw as default,
   truncateUtf8,
