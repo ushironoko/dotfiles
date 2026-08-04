@@ -630,14 +630,19 @@ describe("hearth-tools startup", () => {
     ).rejects.toThrow(COLLISION_ERROR);
   });
 
-  test("releases pre-graph process slots before creating the current runtime", async () => {
+  test("retires pre-graph runtimes without dropping them during reload", async () => {
     const legacySlots = [
       Symbol.for("ushironoko.pi-hearth-tools.engine.v1"),
       Symbol.for("ushironoko.pi-hearth-tools.engine.v2"),
     ];
-    for (const legacySlot of legacySlots) {
-      Reflect.set(globalThis, legacySlot, { engine: {}, options: {} });
-    }
+    const legacyRuntimes = legacySlots.map((legacySlot) => {
+      const runtime = { engine: {}, options: {} };
+      Reflect.set(globalThis, legacySlot, runtime);
+      return runtime;
+    });
+    const retiredSlot = Symbol.for(
+      "ushironoko.pi-hearth-tools.retired-engines.v1",
+    );
     const fake = fakePi();
     await setupHearthTools(fake.pi, {
       loadModule: async () => ({ HearthEngine: FakeEngine as never }),
@@ -653,7 +658,24 @@ describe("hearth-tools startup", () => {
     for (const legacySlot of legacySlots) {
       expect(Reflect.has(globalThis, legacySlot)).toBe(false);
     }
+    expect(Reflect.get(globalThis, retiredSlot)).toEqual([
+      legacyRuntimes[1],
+      legacyRuntimes[0],
+    ]);
     expect(FakeEngine.constructed).toHaveLength(1);
+
+    await fake.emit("session_shutdown");
+    await setupHearthTools(fake.pi, {
+      loadModule: async () => ({ HearthEngine: FakeEngine as never }),
+      getAgentDir: () => "/agent",
+      loadConfig: () => ({ ...DEFAULT_HEARTH_TOOLS_CONFIG }),
+      createSettings: (() => settings) as never,
+      fatal: (message) => {
+        throw new Error(message);
+      },
+    });
+    await fake.emit("session_start", { reason: "reload" });
+    expect(Reflect.get(globalThis, retiredSlot)).toHaveLength(2);
   });
 
   test("clears caches after mutation hooks and child completion", async () => {
