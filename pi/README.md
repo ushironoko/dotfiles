@@ -528,14 +528,25 @@ plugins, and provider-log is a request/status logger (not full logproxy).
 
 ## BTW side questions
 
-`/btw <question>` answers a side question from a stable snapshot of the active
-parent-session leaf without adding the question or answer to the parent model's
-context. With no inline argument, TUI/RPC UI modes open a short input dialog.
-The command requires one of those UI-capable modes; RPC answers are also sent
-through the UI notification channel. Print/JSON mode reports an unsupported-mode
-error instead of producing an invisible answer.
+`/btw <question>` immediately snapshots the active parent-session leaf and
+answers in a read-only child while the parent agent may continue streaming.
+`/btw --wait <question>` instead waits for the parent to settle before taking
+the snapshot. `--wait` is recognized only as the first complete command-line
+token; text entered in the question dialog is always treated literally. With no
+question (`/btw` or `/btw --wait`), TUI/RPC UI modes open that dialog. The
+command requires one of those UI-capable modes; RPC answers are also sent through
+the UI notification channel. Print/JSON mode reports an unsupported-mode error
+instead of producing an invisible answer.
 
-Each invocation creates an in-memory child, copies the parent's resolved
+The default snapshot contains only messages already recorded on the parent's
+active SessionManager leaf when the inline command is accepted, or when the
+question dialog returns. It excludes partial streaming assistant content and
+assistant responses, tool results, steering, or follow-ups recorded after that
+point. Settled mode includes entries recorded through the idle boundary. In
+both modes, the copied question and answer remain outside the parent model's
+context.
+
+Each invocation creates an in-memory child, copies the snapshot's resolved
 (compaction-aware) messages, current model/thinking level, and system prompt,
 and disposes the child immediately after the answer. The child loads no
 extensions, skills, prompt templates, themes, or newly discovered context
@@ -546,15 +557,22 @@ same filesystem read scope as the parent session (this is a read-only boundary,
 not a filesystem sandbox). The `grep`/`find` wrappers are deliberately omitted
 because they can auto-install missing `rg`/`fd` binaries. `bash`, `edit`, and
 `write` are explicitly denied and the active set is checked before the model
-runs.
+runs. The conversation snapshot is not a filesystem snapshot: `read` and `ls`
+inspect the same live workspace as the parent and may observe state before,
+after, or during its concurrent file updates. Parent and child also make
+concurrent requests to the selected
+provider/model, so provider concurrency limits, rate limits, and quota apply to
+both; either request can fail or be cancelled without aborting the other.
 
 Successful Q/A records are appended as custom entries in the parent session.
 They remain visible after resuming that parent (hidden records are replayed
 after parent compaction) but are never sent to its LLM, and no independently
 resumable child session or child file is created. Stored and rendered fields are
-terminal-control sanitized. Deleting the parent session therefore deletes BTW
-history with it. BTW is not registered inside `PI_HARNESS_CHILD=1` child
-profiles, and one parent session runs at most one BTW invocation at a time.
+terminal-control sanitized. A persistent parent must already contain one
+completed assistant response so this history can be durably retained. Deleting
+the parent session therefore deletes BTW history with it. BTW is not registered
+inside `PI_HARNESS_CHILD=1` child profiles, and one parent session runs at most
+one BTW invocation at a time.
 Cancel a slow BTW request with `/btw-cancel` or `Ctrl+Alt+B`; parent session
 shutdown also aborts and disposes the child.
 

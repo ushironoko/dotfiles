@@ -28,6 +28,7 @@ import setupBtw, {
   BTW_READ_ONLY_TOOLS,
   ERROR_MAX_BYTES,
   HISTORY_TYPE,
+  parseBtwInvocation,
   QUESTION_MAX_BYTES,
   truncateUtf8,
 } from "../../pi/extensions/pi-harness/features/btw/index";
@@ -82,6 +83,17 @@ const assistantMessage = (
   },
   stopReason,
   timestamp: 2,
+});
+
+const toolResultMessage = (
+  text: string,
+): Extract<AgentMessage, { role: "toolResult" }> => ({
+  role: "toolResult",
+  toolCallId: "tool-1",
+  toolName: "read",
+  content: [{ type: "text", text }],
+  isError: false,
+  timestamp: 3,
 });
 
 interface ChildHarness {
@@ -200,6 +212,43 @@ const snapshot = (): BtwSnapshot => ({
   model: parentModel,
   modelRegistry: {} as ModelRegistry,
   thinkingLevel: "low",
+});
+
+describe("BTW invocation parser", () => {
+  test("treats only a leading complete --wait token as settled mode", () => {
+    expect(parseBtwInvocation("")).toEqual({
+      mode: "parallel",
+      question: "",
+    });
+    expect(parseBtwInvocation("  side question  ")).toEqual({
+      mode: "parallel",
+      question: "side question",
+    });
+    expect(parseBtwInvocation("--wait")).toEqual({
+      mode: "settled",
+      question: "",
+    });
+    expect(parseBtwInvocation("  --wait   settled question  ")).toEqual({
+      mode: "settled",
+      question: "settled question",
+    });
+    expect(parseBtwInvocation("--wait\nmultiline question")).toEqual({
+      mode: "settled",
+      question: "multiline question",
+    });
+    expect(parseBtwInvocation("--waiting is literal")).toEqual({
+      mode: "parallel",
+      question: "--waiting is literal",
+    });
+    expect(parseBtwInvocation("--wait=literal")).toEqual({
+      mode: "parallel",
+      question: "--wait=literal",
+    });
+    expect(parseBtwInvocation("question --wait")).toEqual({
+      mode: "parallel",
+      question: "question --wait",
+    });
+  });
 });
 
 describe("BTW read-only fork runner", () => {
@@ -521,7 +570,7 @@ const commandContext = (
 };
 
 describe("BTW parent command", () => {
-  test("waits for a stable snapshot and retains Q/A only as a parent custom entry", async () => {
+  test("starts from an immediate snapshot and retains Q/A only as a parent custom entry", async () => {
     const harness = commandHarness();
     const context = commandContext();
     let received: BtwSnapshot | undefined;
@@ -538,7 +587,7 @@ describe("BTW parent command", () => {
     await harness.command().handler("  side question  ", context.ctx);
     await waitFor(() => harness.entries.length === 1);
 
-    expect(context.order).toEqual(["wait", "answer"]);
+    expect(context.order).toEqual(["answer"]);
     expect(received?.messages).toEqual([userMessage("main question")]);
     expect(received?.systemPrompt).toBe("current system");
     expect(received?.thinkingLevel).toBe("high");
@@ -565,6 +614,34 @@ describe("BTW parent command", () => {
     expect(
       buildSessionContext(context.sessionManager.getEntries()).messages,
     ).toEqual([userMessage("main question")]);
+  });
+
+  test("freezes an inline default snapshot before yielding to parent updates", async () => {
+    const harness = commandHarness();
+    const context = commandContext({ idle: false });
+    let received: BtwSnapshot | undefined;
+    setupBtw(harness.pi, {
+      answerQuestion: async (value) => {
+        received = value;
+        return "frozen answer";
+      },
+    });
+
+    const invocation = harness.command().handler("question", context.ctx);
+    context.sessionManager.appendMessage(
+      assistantMessage("assistant completed after acceptance"),
+    );
+    context.sessionManager.appendMessage(
+      toolResultMessage("tool result completed after acceptance"),
+    );
+    context.sessionManager.appendMessage(
+      userMessage("follow-up added after acceptance"),
+    );
+    await invocation;
+    await waitFor(() => harness.entries.length === 1);
+
+    expect(received?.messages).toEqual([userMessage("main question")]);
+    expect(context.order).toEqual([]);
   });
 
   test("replays hidden history after parent compaction", async () => {
@@ -596,7 +673,7 @@ describe("BTW parent command", () => {
   test("uses UI input when args are empty and reports missing model without running", async () => {
     const harness = commandHarness();
     const context = commandContext();
-    context.ctx.ui.input = async () => "from dialog";
+    context.ctx.ui.input = async () => "--wait remains a literal question";
     let questions: string[] = [];
     setupBtw(harness.pi, {
       answerQuestion: async (_snapshot, question) => {
@@ -606,7 +683,24 @@ describe("BTW parent command", () => {
     });
     await harness.command().handler("", context.ctx);
     await waitFor(() => questions.length === 1);
-    expect(questions).toEqual(["from dialog"]);
+    expect(questions).toEqual(["--wait remains a literal question"]);
+    expect(context.order).toEqual([]);
+
+    const settledHarness = commandHarness();
+    const settled = commandContext({ idle: false });
+    settled.ctx.ui.input = async () => "settled from dialog";
+    const settledQuestions: string[] = [];
+    setupBtw(settledHarness.pi, {
+      answerQuestion: async (_snapshot, question) => {
+        settled.order.push("answer");
+        settledQuestions.push(question);
+        return "ok";
+      },
+    });
+    await settledHarness.command().handler("--wait", settled.ctx);
+    await waitFor(() => settledQuestions.length === 1);
+    expect(settledQuestions).toEqual(["settled from dialog"]);
+    expect(settled.order).toEqual(["wait", "answer"]);
 
     const noModelHarness = commandHarness();
     const noModel = commandContext();
@@ -633,25 +727,36 @@ describe("BTW parent command", () => {
     expect(noUiHarness.entries).toHaveLength(0);
   });
 
-  test("rechecks idleness before taking the synchronous snapshot", async () => {
+  test("settled mode rechecks idleness before taking its snapshot", async () => {
     const harness = commandHarness();
     const context = commandContext({ idle: false });
     let waits = 0;
     context.ctx.waitForIdle = async () => {
       waits += 1;
       context.order.push("wait");
+      if (waits === 2) {
+        context.sessionManager.appendMessage(
+          userMessage("added while settling"),
+        );
+      }
     };
     context.ctx.isIdle = () => waits >= 2;
+    let received: BtwSnapshot | undefined;
     setupBtw(harness.pi, {
-      answerQuestion: async () => {
+      answerQuestion: async (snapshot) => {
+        received = snapshot;
         context.order.push("answer");
         return "ok";
       },
     });
 
-    await harness.command().handler("question", context.ctx);
+    await harness.command().handler("--wait question", context.ctx);
     await waitFor(() => context.order.includes("answer"));
     expect(context.order).toEqual(["wait", "wait", "answer"]);
+    expect(received?.messages).toEqual([
+      userMessage("main question"),
+      userMessage("added while settling"),
+    ]);
   });
 
   test("cancellation releases a permanently pending idle wait", async () => {
@@ -674,7 +779,7 @@ describe("BTW parent command", () => {
         },
       });
 
-      await harness.command().handler("question", context.ctx);
+      await harness.command().handler("--wait question", context.ctx);
       await waitStarted;
       const completion =
         trigger === "command"
@@ -811,6 +916,43 @@ describe("BTW parent command", () => {
     expect(harness.entries).toHaveLength(0);
   });
 
+  test("aborts an in-flight child when a replacement session starts", async () => {
+    const harness = commandHarness();
+    const context = commandContext({ idle: false });
+    let started!: () => void;
+    const hasStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let aborted = false;
+    let calls = 0;
+    setupBtw(harness.pi, {
+      answerQuestion: async (snapshot) => {
+        calls += 1;
+        if (calls > 1) return "fresh answer";
+        started();
+        return new Promise<string>((_resolve, reject) => {
+          snapshot.signal?.onAbort(() => {
+            aborted = true;
+            reject(new Error("replaced"));
+          });
+        });
+      },
+    });
+
+    const invocation = harness.command().handler("question", context.ctx);
+    await hasStarted;
+    await invocation;
+    await harness.emitSessionStart();
+    await waitFor(() => aborted);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.entries).toHaveLength(0);
+
+    const freshContext = commandContext({ idle: true });
+    await harness.command().handler("fresh question", freshContext.ctx);
+    await waitFor(() => harness.entries.length === 1);
+    expect(calls).toBe(2);
+  });
+
   test("drops an answer when parent tree navigation changes the active branch", async () => {
     const harness = commandHarness();
     const context = commandContext({ idle: true });
@@ -872,6 +1014,184 @@ describe("BTW parent command", () => {
       if (sessionFile === undefined) throw new Error("missing session file");
       const persisted = await readFile(sessionFile, "utf8");
       expect(persisted).toContain(`"customType":"${HISTORY_TYPE}"`);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a real parent session linear when BTW finishes during streaming", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-btw-concurrent-"));
+    try {
+      const sessionManager = SessionManager.create("/repo", directory);
+      sessionManager.appendMessage(userMessage("completed parent prompt"));
+      sessionManager.appendMessage(assistantMessage("completed parent answer"));
+      const streamingPromptId = sessionManager.appendMessage(
+        userMessage("streaming parent prompt"),
+      );
+      const beforeBtw = structuredClone(
+        sessionManager.buildSessionContext().messages,
+      );
+
+      const context = commandContext({ idle: false });
+      Object.assign(context.ctx, { sessionManager });
+      const harness = commandHarness((customType, data) => {
+        sessionManager.appendCustomEntry(customType, data);
+      });
+      let received: BtwSnapshot | undefined;
+      setupBtw(harness.pi, {
+        answerQuestion: async (snapshot) => {
+          received = snapshot;
+          return "concurrent side answer";
+        },
+      });
+
+      await harness.command().handler("parallel side question", context.ctx);
+      await waitFor(() => harness.entries.length === 1);
+
+      expect(context.order).toEqual([]);
+      expect(received?.messages).toEqual(beforeBtw);
+      expect(sessionManager.buildSessionContext().messages).toEqual(beforeBtw);
+      const customEntry = sessionManager.getBranch().at(-1);
+      if (customEntry?.type !== "custom") {
+        throw new Error("missing concurrent BTW history entry");
+      }
+      expect(customEntry.parentId).toBe(streamingPromptId);
+      const history = customEntry.data as BtwHistoryData;
+
+      const completedStreamingAnswer = assistantMessage(
+        "completed streaming answer",
+      );
+      const parentAnswerId = sessionManager.appendMessage(
+        completedStreamingAnswer,
+      );
+      const completedToolResult = toolResultMessage(
+        "completed streaming tool result",
+      );
+      const toolResultId = sessionManager.appendMessage(completedToolResult);
+      const branch = sessionManager.getBranch();
+      const parentAnswerEntry = sessionManager.getEntry(parentAnswerId);
+      expect(parentAnswerEntry?.parentId).toBe(customEntry.id);
+      expect(sessionManager.getEntry(toolResultId)?.parentId).toBe(
+        parentAnswerId,
+      );
+      expect(sessionManager.getLeafId()).toBe(toolResultId);
+      expect(branch.map((entry) => entry.type)).toEqual([
+        "message",
+        "message",
+        "message",
+        "custom",
+        "message",
+        "message",
+      ]);
+      expect(
+        branch.flatMap((entry) =>
+          entry.type === "message" ? [entry.message] : [],
+        ),
+      ).toEqual([...beforeBtw, completedStreamingAnswer, completedToolResult]);
+      const parentContext = sessionManager.buildSessionContext().messages;
+      expect(parentContext).toEqual([
+        ...beforeBtw,
+        completedStreamingAnswer,
+        completedToolResult,
+      ]);
+      expect(JSON.stringify(parentContext)).not.toContain(
+        "parallel side question",
+      );
+      expect(JSON.stringify(parentContext)).not.toContain(
+        "concurrent side answer",
+      );
+
+      const tree = sessionManager.getTree();
+      expect(tree).toHaveLength(1);
+      let [node] = tree;
+      let nodeCount = 0;
+      while (node !== undefined) {
+        nodeCount += 1;
+        expect(node.children.length).toBeLessThanOrEqual(1);
+        [node] = node.children;
+      }
+      expect(nodeCount).toBe(branch.length);
+
+      const sessionFile = sessionManager.getSessionFile();
+      if (sessionFile === undefined) throw new Error("missing session file");
+      const resumed = SessionManager.open(sessionFile, directory);
+      expect(
+        resumed
+          .getBranch()
+          .map(({ id, parentId, type }) => ({ id, parentId, type })),
+      ).toEqual(
+        branch.map(({ id, parentId, type }) => ({ id, parentId, type })),
+      );
+      expect(resumed.getLeafId()).toBe(toolResultId);
+      expect(resumed.buildSessionContext().messages).toEqual(parentContext);
+      expect(
+        resumed
+          .getBranch()
+          .filter(
+            (entry) =>
+              entry.type === "custom" && entry.customType === HISTORY_TYPE,
+          ),
+      ).toHaveLength(1);
+
+      sessionManager.appendCompaction(
+        "compacted parent context",
+        parentAnswerId,
+        10_000,
+      );
+      harness.entries.length = 0;
+      await harness.emitSessionCompact(context.ctx);
+      expect(harness.entries).toHaveLength(1);
+
+      const visibleHistories = sessionManager
+        .buildContextEntries()
+        .filter(
+          (entry) =>
+            entry.type === "custom" &&
+            entry.customType === HISTORY_TYPE &&
+            (entry.data as BtwHistoryData | undefined)?.id === history.id,
+        );
+      const rawHistories = sessionManager
+        .getBranch()
+        .filter(
+          (entry) =>
+            entry.type === "custom" &&
+            entry.customType === HISTORY_TYPE &&
+            (entry.data as BtwHistoryData | undefined)?.id === history.id,
+        );
+      expect(visibleHistories).toHaveLength(1);
+      expect(rawHistories).toHaveLength(2);
+      const compactedContext = sessionManager.buildSessionContext().messages;
+      expect(JSON.stringify(compactedContext)).not.toContain(
+        "parallel side question",
+      );
+      expect(JSON.stringify(compactedContext)).not.toContain(
+        "concurrent side answer",
+      );
+
+      const resumedCompacted = SessionManager.open(sessionFile, directory);
+      expect(
+        resumedCompacted
+          .buildContextEntries()
+          .filter(
+            (entry) =>
+              entry.type === "custom" &&
+              entry.customType === HISTORY_TYPE &&
+              (entry.data as BtwHistoryData | undefined)?.id === history.id,
+          ),
+      ).toHaveLength(1);
+      expect(
+        resumedCompacted
+          .getBranch()
+          .filter(
+            (entry) =>
+              entry.type === "custom" &&
+              entry.customType === HISTORY_TYPE &&
+              (entry.data as BtwHistoryData | undefined)?.id === history.id,
+          ),
+      ).toHaveLength(2);
+      expect(resumedCompacted.buildSessionContext().messages).toEqual(
+        compactedContext,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
