@@ -230,6 +230,7 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
   private pendingPreference: BrowserSelection["kind"] | undefined;
   private selectedIndexHint = 0;
   private listOffset = 0;
+  private knownChildRunIds: Set<string>;
   private readonly unsubscribeChild: () => void;
   private readonly unsubscribeIssues: (() => void) | undefined;
   private readonly unsubscribeMemory: (() => void) | undefined;
@@ -247,7 +248,12 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
     private readonly agentMemory?: AgentMemoryBrowserBindings,
   ) {
     this.theme = resolveTheme(theme);
-    this.unsubscribeChild = registry.subscribe(() => this.requestRender());
+    this.knownChildRunIds = new Set(
+      flattenRuns(registry.getSnapshots()).map(({ run }) => run.runId),
+    );
+    this.unsubscribeChild = registry.subscribe(() =>
+      this.handleChildRegistryUpdate(),
+    );
     this.unsubscribeIssues = bitIssues?.registry.subscribe(() =>
       this.requestRender(),
     );
@@ -558,6 +564,25 @@ export class ChildRunsBrowserComponent implements ComponentLike, Focusable {
       this.selection !== undefined &&
       selectionToken(this.selection) === selectionToken(selection)
     );
+  }
+
+  private handleChildRegistryUpdate(): void {
+    const runs = flattenRuns(
+      newestInvocationsFirst(this.registry.getSnapshots()),
+    );
+    const hasNewRun = runs.some(
+      ({ run }) => !this.knownChildRunIds.has(run.runId),
+    );
+    this.knownChildRunIds = new Set(runs.map(({ run }) => run.runId));
+
+    const firstRun = runs[0]?.run;
+    if (hasNewRun && firstRun !== undefined) {
+      this.pendingPreference = undefined;
+      this.selection = { kind: "child", id: firstRun.runId };
+      this.selectedIndexHint = 0;
+      this.listOffset = 0;
+    }
+    this.requestRender();
   }
 
   private requestRender(): void {

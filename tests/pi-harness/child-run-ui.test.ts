@@ -237,6 +237,31 @@ describe("child-session browser component", () => {
     ).toEqual([older.invocationId, newer.invocationId]);
   });
 
+  test("returns to the first row when a new child session is added", () => {
+    let timestamp = 100;
+    const { registry, component } = setup(12, undefined, () => timestamp++);
+    const olderRunIds = addRuns(registry, 6);
+    component.render(80);
+    for (let index = 0; index < 4; index++) component.handleInput("down");
+
+    const scrolled = component.render(80);
+    expect(scrolled[0]).toContain("agent-2");
+    expect(component.getSelectedRunId()).toBe(olderRunIds[4]);
+
+    const newer = registry.beginInvocation({
+      toolCallId: "newer-parent",
+      source: "subagent",
+      mode: "single",
+      label: "newer",
+      runs: [{ agent: "newer-agent", task: "newer task", taskIndex: 0 }],
+    });
+    const reset = component.render(80);
+
+    expect(reset[0]).toContain("newer-agent");
+    expect(reset[1]).toContain("agent-0");
+    expect(component.getSelectedRunId()).toBe(newer.runIds[0]);
+  });
+
   test("caps populated height at three rows and uses every row for flat content", () => {
     for (const [rows, expectedHeight] of [
       [24, 3],
