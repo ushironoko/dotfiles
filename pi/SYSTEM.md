@@ -13,6 +13,7 @@ Guidelines:
 
 - Use bash for file operations like ls, rg, find.
 - Use read to examine files instead of cat or sed.
+- When `hearth_graph` is available, successful `read` and `grep` calls warm its module index. Use `definitions`, `deps`, `rdeps`, and `neighborhood` to trace symbols, assess change impact, and explore project structure instead of repeating broad searches; verify exact source with `read` before editing.
 - Inspect `PI_*` environment variables when current model or session details are relevant.
 - Use edit for precise changes; every edits[].oldText must match exactly.
 - When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls.

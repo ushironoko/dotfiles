@@ -34,6 +34,20 @@ describe("global pi system prompt", () => {
     expect(prompt).not.toContain("@earendil-works/pi-coding-agent");
   });
 
+  test("teaches agents to use the warmed Hearth graph efficiently", async () => {
+    const prompt = await readFile(PROMPT_PATH, "utf8");
+
+    expect(prompt).toContain("When `hearth_graph` is available");
+    expect(prompt).toContain(
+      "successful `read` and `grep` calls warm its module index",
+    );
+    expect(prompt).toContain(
+      "`definitions`, `deps`, `rdeps`, and `neighborhood`",
+    );
+    expect(prompt).toContain("assess change impact");
+    expect(prompt).toContain("verify exact source with `read` before editing");
+  });
+
   test("requires autonomous execution, retry, and complete reporting", async () => {
     const prompt = await readFile(PROMPT_PATH, "utf8");
 

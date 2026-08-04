@@ -30,6 +30,7 @@ import {
   type HearthAccessGate,
   type PiToolSettings,
 } from "./engine";
+import type { HearthGraphObserverLike } from "./graph";
 import { withStatusTitle } from "./status-title";
 
 const FILE_REFERENCE_PREFIX = "@";
@@ -134,6 +135,17 @@ const absolutePath = (cwd: string, input: string): string => {
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+const observeGraphFiles = (
+  observer: HearthGraphObserverLike | undefined,
+  paths: readonly string[],
+): void => {
+  try {
+    observer?.observe(paths);
+  } catch {
+    // Graph warming is advisory and must not change a successful file result.
+  }
+};
 
 const mapCancelled = (error: unknown, message: string): never => {
   if (errorMessage(error).startsWith("cancelled:")) throw new Error(message);
@@ -257,6 +269,7 @@ export const createHearthReadDefinition = (
   engine: HearthEngine,
   settings: PiToolSettings,
   gate: HearthAccessGate = IMMEDIATE_HEARTH_ACCESS_GATE,
+  observer?: HearthGraphObserverLike,
 ) => {
   const base = withStatusTitle(
     createReadToolDefinition(cwd, {
@@ -271,9 +284,17 @@ export const createHearthReadDefinition = (
         autoResizeImages: settings.imageAutoResize,
         operations: hearthReadOperations(engine, signal),
       });
-      return gate.shared(() =>
-        delegated.execute(id, params, signal, onUpdate, ctx),
-      );
+      return gate.shared(async () => {
+        const result = await delegated.execute(
+          id,
+          params,
+          signal,
+          onUpdate,
+          ctx,
+        );
+        observeGraphFiles(observer, [absolutePath(cwd, params.path)]);
+        return result;
+      });
     },
   };
   return definition;
@@ -284,6 +305,7 @@ export const createHearthReadTool = (
   engine: HearthEngine,
   settings: PiToolSettings,
   gate: HearthAccessGate = IMMEDIATE_HEARTH_ACCESS_GATE,
+  observer?: HearthGraphObserverLike,
 ) => {
   const base = createReadTool(cwd, {
     autoResizeImages: settings.imageAutoResize,
@@ -291,12 +313,14 @@ export const createHearthReadTool = (
   const tool: typeof base = {
     ...base,
     execute(id, params, signal, onUpdate) {
-      return gate.shared(() =>
-        createReadTool(cwd, {
+      return gate.shared(async () => {
+        const result = await createReadTool(cwd, {
           autoResizeImages: settings.imageAutoResize,
           operations: hearthReadOperations(engine, signal),
-        }).execute(id, params, signal, onUpdate),
-      );
+        }).execute(id, params, signal, onUpdate);
+        observeGraphFiles(observer, [absolutePath(cwd, params.path)]);
+        return result;
+      });
     },
   };
   return tool;
@@ -508,6 +532,7 @@ export const createHearthGrepDefinition = (
   cwd: string,
   engine: HearthEngine,
   gate: HearthAccessGate = IMMEDIATE_HEARTH_ACCESS_GATE,
+  observer?: HearthGraphObserverLike,
 ) => {
   const base = withStatusTitle(createGrepToolDefinition(cwd), "all-content");
   const definition: typeof base = {
@@ -553,6 +578,10 @@ export const createHearthGrepDefinition = (
           cwd,
           glob,
           result.rootIsDir,
+        );
+        observeGraphFiles(
+          observer,
+          filtered.map((file) => file.path),
         );
         const totalMatches = filtered.reduce(
           (total, file) => total + file.matchCount,
