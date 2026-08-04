@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   HearthEngine,
   type GraphMeta,
@@ -15,6 +16,7 @@ import {
   formatGraphResult,
   HearthGraphObserver,
 } from "../../pi/extensions/hearth-tools/graph";
+import { stripTerminalControls } from "../../pi/extensions/hearth-tools/terminal-text";
 
 const roots: string[] = [];
 const root = async (): Promise<string> => {
@@ -60,6 +62,39 @@ const resultText = (
   return content?.type === "text" ? content.text : "";
 };
 
+const ansi = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
+const visibleText = (text: string): string => text.replace(ansi, "").trimEnd();
+const renderTheme = {
+  getFgAnsi(color: string) {
+    return color === "success" ? "\x1b[32m" : "\x1b[31m";
+  },
+  fg(_color: string, text: string) {
+    return `\x1b[36m${text}\x1b[39m`;
+  },
+  bold(text: string) {
+    return `\x1b[1m${text}\x1b[22m`;
+  },
+} as Theme;
+const renderContext = (
+  args: Record<string, unknown>,
+  overrides: Record<string, unknown> = {},
+) =>
+  ({
+    args,
+    toolCallId: "graph-call",
+    invalidate() {},
+    lastComponent: undefined,
+    state: undefined,
+    cwd: "/workspace",
+    executionStarted: true,
+    argsComplete: true,
+    isPartial: true,
+    expanded: false,
+    showImages: true,
+    isError: false,
+    ...overrides,
+  }) as never;
+
 afterEach(async () => {
   await Promise.all(
     roots.splice(0).map((path) => rm(path, { recursive: true, force: true })),
@@ -67,6 +102,147 @@ afterEach(async () => {
 });
 
 describe("Hearth graph integration", () => {
+  test("makes the operation and primary target visible in the call title", () => {
+    const tool = createHearthGraphDefinition(
+      "/workspace",
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const { renderCall } = tool;
+    if (renderCall === undefined)
+      throw new Error("missing graph call renderer");
+    const args = { operation: "definitions" as const, name: "run" };
+
+    const pending = renderCall(args, renderTheme, renderContext(args));
+    expect(visibleText(pending.render(120).join("\n"))).toBe(
+      "graph_definitions run",
+    );
+
+    const settled = renderCall(
+      args,
+      renderTheme,
+      renderContext(args, { lastComponent: pending, isPartial: false }),
+    );
+    expect(settled).toBe(pending);
+    expect(visibleText(settled.render(120).join("\n"))).toBe(
+      "✓ graph_definitions run",
+    );
+    expect(
+      settled.render(20).every((line) => visibleText(line).length <= 20),
+    ).toBe(true);
+    expect(
+      settled.render(1).every((line) => visibleText(line).length <= 1),
+    ).toBe(true);
+
+    const depsArgs = { operation: "deps" as const, path: "src/run.ts" };
+    const deps = renderCall(depsArgs, renderTheme, renderContext(depsArgs));
+    expect(visibleText(deps.render(120).join("\n"))).toBe(
+      "graph_deps src/run.ts",
+    );
+
+    const rdepsArgs = { operation: "rdeps" as const, path: "src/value.ts" };
+    const rdeps = renderCall(rdepsArgs, renderTheme, renderContext(rdepsArgs));
+    expect(visibleText(rdeps.render(120).join("\n"))).toBe(
+      "graph_rdeps src/value.ts",
+    );
+
+    const searchArgs = { operation: "search" as const, query: "graph use" };
+    const failed = renderCall(
+      searchArgs,
+      renderTheme,
+      renderContext(searchArgs, { isPartial: false, isError: true }),
+    );
+    expect(visibleText(failed.render(120).join("\n"))).toBe(
+      '✗ graph_search "graph use"',
+    );
+    expect(tool.renderResult).toBeUndefined();
+  });
+
+  test("sanitizes unvalidated call arguments without losing failure feedback", () => {
+    const tool = createHearthGraphDefinition(
+      "/workspace",
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const { renderCall } = tool;
+    if (renderCall === undefined)
+      throw new Error("missing graph call renderer");
+
+    expect(
+      stripTerminalControls(
+        "safe\x1b[31m red\x1b[0m\x1b]2;spoof\x07\u0000\u009dhidden\u009c text",
+      ),
+    ).toBe("safe red text");
+
+    const unsafeArgs = {
+      operation: "search",
+      query: "\x1b]2;spoof\x07graph\x1b[31m use\x1b[0m\u0000\u009dhidden\u009c",
+    };
+    const unsafe = renderCall(
+      unsafeArgs as never,
+      renderTheme,
+      renderContext(unsafeArgs),
+    );
+    const unsafeRendered = unsafe.render(120).join("\n");
+    expect(unsafeRendered).not.toContain("\x1b]2;spoof");
+    expect(unsafeRendered).not.toContain("\x07");
+    expect(unsafeRendered).not.toContain("\u0000");
+    expect(unsafeRendered).not.toContain("hidden");
+    expect(visibleText(unsafeRendered)).toBe('graph_search "graph use"');
+
+    const oversizedArgs = {
+      operation: "search",
+      query: `${"\x1b[31m".repeat(2_000)}tail`,
+    };
+    const oversized = renderCall(
+      oversizedArgs as never,
+      renderTheme,
+      renderContext(oversizedArgs),
+    );
+    expect(visibleText(oversized.render(120).join("\n"))).toBe(
+      'graph_search "…"',
+    );
+
+    const malformedArgs = { operation: "search", query: null };
+    const malformed = renderCall(
+      malformedArgs as never,
+      renderTheme,
+      renderContext(malformedArgs, { isPartial: false, isError: true }),
+    );
+    expect(visibleText(malformed.render(120).join("\n"))).toBe(
+      "✗ graph_search",
+    );
+
+    const nullArgs = renderCall(
+      null as never,
+      renderTheme,
+      renderContext(
+        {},
+        {
+          args: null,
+          isPartial: false,
+          isError: true,
+        },
+      ),
+    );
+    expect(visibleText(nullArgs.render(120).join("\n"))).toBe("✗ graph_…");
+
+    const invalidOperationArgs = {
+      operation: "\x1b]2;spoof\x07search",
+      query: "hidden target",
+    };
+    const invalidOperation = renderCall(
+      invalidOperationArgs as never,
+      renderTheme,
+      renderContext(invalidOperationArgs),
+    );
+    const invalidOperationRendered = invalidOperation.render(120).join("\n");
+    expect(invalidOperationRendered).not.toContain("\x1b]2;spoof");
+    expect(visibleText(invalidOperationRendered)).toBe("graph_…");
+  });
+
   test("incrementally indexes observed files and exposes project graph queries", async () => {
     const cwd = await root();
     await mkdir(join(cwd, "src"), { recursive: true });

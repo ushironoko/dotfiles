@@ -1,7 +1,9 @@
 import {
   defineTool,
+  truncateToVisualLines,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import type {
   GraphDepEdge,
   GraphMeta,
@@ -11,6 +13,8 @@ import type {
 } from "@hearthdev/napi";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { HearthAccessGate } from "./engine";
+import { withStatusTitle } from "./status-title";
+import { stripTerminalControls } from "./terminal-text";
 
 export const HEARTH_GRAPH_TOOL_NAME = "hearth_graph";
 
@@ -27,6 +31,7 @@ const MAX_CONTENT_LINES = MAX_OUTPUT_LINES - 1;
 const MAX_CONTENT_BYTES = MAX_OUTPUT_BYTES - OUTPUT_NOTICE_RESERVE_BYTES;
 const MAX_FIELD_LENGTH = 500;
 const MAX_PATH_LENGTH = 4_096;
+const MAX_RAW_FIELD_LENGTH = MAX_PATH_LENGTH;
 const MAX_SYMBOL_TEXT_LENGTH = 512;
 
 const GRAPH_OPERATIONS = [
@@ -162,16 +167,87 @@ const waitAbortable = async <T>(
   }
 };
 
+const rawFieldPrefix = (
+  value: string,
+): { text: string; truncated: boolean } => {
+  let end = Math.min(value.length, MAX_RAW_FIELD_LENGTH);
+  const last = value.charCodeAt(end - 1);
+  if (last >= 55_296 && last <= 56_319) end -= 1;
+  return { text: value.slice(0, end), truncated: end < value.length };
+};
+
 const boundedField = (value: string): string => {
-  const escaped = value
+  const raw = rawFieldPrefix(value);
+  const escaped = stripTerminalControls(raw.text)
     .replaceAll("\\", "\\\\")
     .replaceAll("\r", String.raw`\r`)
     .replaceAll("\n", String.raw`\n`)
     .replaceAll("\t", String.raw`\t`);
-  return escaped.length <= MAX_FIELD_LENGTH
+  return !raw.truncated && escaped.length <= MAX_FIELD_LENGTH
     ? escaped
     : `${escaped.slice(0, MAX_FIELD_LENGTH)}…`;
 };
+
+const graphCallOperation = (value: unknown): GraphOperation | undefined =>
+  typeof value === "string" &&
+  (GRAPH_OPERATIONS as readonly string[]).includes(value)
+    ? (value as GraphOperation)
+    : undefined;
+
+const graphCallField = (value: unknown): string | undefined =>
+  typeof value === "string" ? boundedField(value) : undefined;
+
+interface UnvalidatedGraphCallArgs {
+  operation?: unknown;
+  path?: unknown;
+  query?: unknown;
+  name?: unknown;
+}
+
+const unvalidatedGraphCallArgs = (value: unknown): UnvalidatedGraphCallArgs =>
+  typeof value === "object" && value !== null
+    ? (value as UnvalidatedGraphCallArgs)
+    : {};
+
+const graphCallTarget = (
+  params: UnvalidatedGraphCallArgs,
+): string | undefined => {
+  switch (graphCallOperation(params.operation)) {
+    case "symbols":
+    case "outline":
+    case "deps":
+    case "rdeps":
+    case "neighborhood": {
+      return graphCallField(params.path);
+    }
+    case "search": {
+      const query = graphCallField(params.query);
+      return query === undefined ? undefined : `"${query}"`;
+    }
+    case "definitions": {
+      return graphCallField(params.name);
+    }
+    case "status":
+    case undefined: {
+      return undefined;
+    }
+  }
+};
+
+class GraphCallTitle implements Component {
+  constructor(private text = "") {}
+
+  setText(text: string): void {
+    this.text = text;
+  }
+
+  render(width: number): string[] {
+    return truncateToVisualLines(this.text, Number.MAX_SAFE_INTEGER, width)
+      .visualLines;
+  }
+
+  invalidate(): void {}
+}
 
 const withinRoot = (root: string, input: string): string | undefined => {
   const absolute = resolve(root, input);
@@ -676,57 +752,76 @@ export const createHearthGraphDefinition = (
   gate: HearthAccessGate,
   observer: HearthGraphRuntime,
 ): ToolDefinition<typeof GraphParameters, Record<string, unknown>> =>
-  defineTool({
-    name: HEARTH_GRAPH_TOOL_NAME,
-    label: "Hearth Graph",
-    description:
-      "Query the current project module graph and symbol index. Supports symbols, outlines, symbol search, definitions, dependencies, reverse dependencies, neighborhoods, and build status.",
-    promptSnippet:
-      "Query the Hearth project symbol index and module dependency graph",
-    promptGuidelines: [
-      "Use hearth_graph after locating relevant files when symbol definitions or module dependency direction would reduce further text searching.",
-      "Treat approximate graph guarantees and unresolved imports as incomplete evidence; confirm consequential conclusions with read or grep.",
-      "Graph paths are restricted to the current project and traversal depth is bounded.",
-    ],
-    executionMode: "sequential",
-    parameters: GraphParameters,
-    async execute(_id, params, signal) {
-      await observer.flush(signal);
-      const result = await observer.runQuery(
-        () =>
-          gate.shared(() =>
-            runGraphQuery(engine, root, params.operation, params, signal),
-          ),
-        signal,
-      );
-      if (params.operation !== "status") {
-        observer.markProjectComplete(result.meta.guarantee === "exact");
-      }
-      const observerStatus = observer.status();
-      const effectiveGuarantee = observerStatus.projectComplete
-        ? result.meta.guarantee
-        : "approximate";
-      const formatted = formatGraphResult(
-        root,
-        params.operation,
-        result,
-        observerStatus,
-      );
-      return {
-        content: [{ type: "text", text: formatted.text }],
-        details: {
-          operation: params.operation,
-          nativeMeta: result.meta,
-          effectiveGuarantee,
-          scope: observerStatus.projectComplete
-            ? "project"
-            : "observed-partial",
-          observer: observerStatus,
-          truncated: formatted.truncated,
-          outputLines: formatted.outputLines,
-          outputBytes: formatted.outputBytes,
-          omittedRows: formatted.omittedRows,
-        },
-      };
-    },
-  });
+  withStatusTitle(
+    defineTool({
+      name: HEARTH_GRAPH_TOOL_NAME,
+      label: "Hearth Graph",
+      description:
+        "Query the current project module graph and symbol index. Supports symbols, outlines, symbol search, definitions, dependencies, reverse dependencies, neighborhoods, and build status.",
+      promptSnippet:
+        "Query the Hearth project symbol index and module dependency graph",
+      promptGuidelines: [
+        "Use hearth_graph after locating relevant files when symbol definitions or module dependency direction would reduce further text searching.",
+        "Treat approximate graph guarantees and unresolved imports as incomplete evidence; confirm consequential conclusions with read or grep.",
+        "Graph paths are restricted to the current project and traversal depth is bounded.",
+      ],
+      executionMode: "sequential",
+      parameters: GraphParameters,
+      renderCall(args, theme, context) {
+        const title =
+          context.lastComponent instanceof GraphCallTitle
+            ? context.lastComponent
+            : new GraphCallTitle();
+        const callArgs = unvalidatedGraphCallArgs(args);
+        const operation = graphCallOperation(callArgs.operation);
+        const target = graphCallTarget(callArgs);
+        const callTitle =
+          operation === undefined ? "graph_…" : `graph_${operation}`;
+        let content = theme.fg("toolTitle", theme.bold(callTitle));
+        if (target !== undefined) {
+          content += ` ${theme.fg("muted", target)}`;
+        }
+        title.setText(content);
+        return title;
+      },
+      async execute(_id, params, signal) {
+        await observer.flush(signal);
+        const result = await observer.runQuery(
+          () =>
+            gate.shared(() =>
+              runGraphQuery(engine, root, params.operation, params, signal),
+            ),
+          signal,
+        );
+        if (params.operation !== "status") {
+          observer.markProjectComplete(result.meta.guarantee === "exact");
+        }
+        const observerStatus = observer.status();
+        const effectiveGuarantee = observerStatus.projectComplete
+          ? result.meta.guarantee
+          : "approximate";
+        const formatted = formatGraphResult(
+          root,
+          params.operation,
+          result,
+          observerStatus,
+        );
+        return {
+          content: [{ type: "text", text: formatted.text }],
+          details: {
+            operation: params.operation,
+            nativeMeta: result.meta,
+            effectiveGuarantee,
+            scope: observerStatus.projectComplete
+              ? "project"
+              : "observed-partial",
+            observer: observerStatus,
+            truncated: formatted.truncated,
+            outputLines: formatted.outputLines,
+            outputBytes: formatted.outputBytes,
+            omittedRows: formatted.omittedRows,
+          },
+        };
+      },
+    }),
+  );
