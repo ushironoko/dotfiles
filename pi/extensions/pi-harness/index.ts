@@ -46,6 +46,7 @@ import setupAskUserQuestion from "./features/ask-user-question/index";
 import setupBtw from "./features/btw/index";
 import setupChildRuns from "./features/child-runs/index";
 import setupUltracodeSettings from "./features/ultracode-settings/index";
+import setupTrustPromptFeature from "./features/trust-prompt/index";
 
 // This hook runs before the permission boundary, so it must not resolve any
 // executable through an inherited repository-influenced PATH. If a required
@@ -64,6 +65,7 @@ const PERMISSION_PREFLIGHT_PATH = [
 // to lib/pi-like.ts. Shapes verified against tests/fixtures/pi-harness/raw/.
 interface SetupHarnessOptions extends PermissionBlockerOptions {
   readonly setupBashSandbox?: typeof setupBashSandboxFeature;
+  readonly setupTrustPrompt?: typeof setupTrustPromptFeature;
   readonly consumeCodexStageCapability?: typeof consumeCodexStageCapability;
   readonly createCodexStageExecutablePin?: typeof createCodexStageExecutablePin;
 }
@@ -75,6 +77,7 @@ const setupHarness = (
 ): void => {
   const {
     setupBashSandbox: createBashSandbox = setupBashSandboxFeature,
+    setupTrustPrompt = setupTrustPromptFeature,
     consumeCodexStageCapability:
       consumeCodexStageModes = consumeCodexStageCapability,
     createCodexStageExecutablePin:
@@ -85,6 +88,9 @@ const setupHarness = (
   // adapter before any permission handler can call ctx.ui.confirm. The bridge
   // remains best-effort and preserves the original TUI dialog on failure.
   setupAsukuNotify(pi, config);
+  // Trust onboarding is parent-only and registers before any feature that
+  // consumes the trust snapshot during session_start.
+  if (!config.isChild) setupTrustPrompt(pi, config);
   // Consume the namespaced settings input before permission task correlation;
   // a handled command must not remain as pending task text for the next turn.
   if (!config.isChild && config.features["hook-bridge"]) {
