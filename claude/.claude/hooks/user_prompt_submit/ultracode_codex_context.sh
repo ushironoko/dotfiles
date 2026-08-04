@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# UserPromptSubmit hook: when the prompt opts into ultracode, deterministically
-# inject the cross-model (codex) mandate so workflow authoring cannot miss it.
-# Silent (exit 0, no output) on every other prompt and on machines where codex
-# is absent or unauthenticated.
+# UserPromptSubmit hook: when the prompt opts into ultracode, or the Pi bridge's
+# persistent auto-injection is enabled, deterministically inject the cross-model
+# mandate so workflow authoring cannot miss it. Silent (exit 0, no output) when
+# inactive or on machines where codex is absent or unauthenticated.
 set -euo pipefail
 
 INPUT=$(cat)
@@ -12,7 +12,13 @@ PROMPT=$(printf '%s' "$INPUT" | jq -r '.prompt // .user_prompt // empty' 2>/dev/
 
 case $PROMPT in
   *ultracode*|*"ultra code"*) ;;
-  *) exit 0 ;;
+  *)
+    # Only pi-harness supplies this trusted path. Direct Claude hook execution
+    # therefore keeps the original keyword-only activation behavior.
+    ULTRACODE_CONFIG="${PI_HARNESS_LOCAL_CONFIG_FILE:-}"
+    [ -n "$ULTRACODE_CONFIG" ] && [ -r "$ULTRACODE_CONFIG" ] || exit 0
+    jq -se 'length == 1 and (.[0] | type == "object") and (.[0].ultracode.autoInjectContext == true)' "$ULTRACODE_CONFIG" >/dev/null 2>&1 || exit 0
+    ;;
 esac
 
 # codex is installed via bun; the hook shell may lack that PATH entry.

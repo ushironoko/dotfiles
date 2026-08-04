@@ -29,6 +29,7 @@ import type {
   FooterDataLike,
   GenericEvent,
   InputEvent,
+  InputEventResult,
   ModelLike,
   NotifyLevel,
   PiEventHandler,
@@ -112,6 +113,8 @@ export interface FakePi extends PiLike {
   readonly events: EventBus;
   emitSessionStart(payload: SessionStartEvent): Promise<void>;
   emitInput(payload: InputEvent): Promise<void>;
+  /** Emit input and expose Pi's terminal action for command-consumption tests. */
+  emitInputResult(payload: InputEvent): Promise<InputEventResult | undefined>;
   emitBeforeAgentStart(
     payload: BeforeAgentStartEvent,
   ): Promise<AgentStartInjection | undefined>;
@@ -314,6 +317,26 @@ export const createFakePi = (
       store.after_provider_response.push(handler),
   };
 
+  const emitInputResult = async (
+    payload: InputEvent,
+  ): Promise<InputEventResult | undefined> => {
+    let current = payload;
+    for (const handler of store.input) {
+      const result = await handler(current, ctx);
+      if (result?.action === "handled") return result;
+      if (result?.action === "transform") {
+        current = {
+          ...current,
+          text: result.text,
+          images: result.images ?? current.images,
+        };
+      }
+    }
+    return current.text !== payload.text || current.images !== payload.images
+      ? { action: "transform", text: current.text, images: current.images }
+      : { action: "continue" };
+  };
+
   return {
     events,
     on<K extends PiEventName>(event: K, handler: PiEventHandler<K>) {
@@ -346,8 +369,9 @@ export const createFakePi = (
       for (const handler of store.session_start) await handler(payload, ctx);
     },
     async emitInput(payload) {
-      for (const handler of store.input) await handler(payload, ctx);
+      await emitInputResult(payload);
     },
+    emitInputResult,
     async emitBeforeAgentStart(payload) {
       let current = payload;
       let injection: AgentStartInjection | undefined;

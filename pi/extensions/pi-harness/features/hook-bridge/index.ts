@@ -246,7 +246,10 @@ export default function setupHookBridge(
         JSON.stringify(makeUserPromptSubmitStdin(event.prompt, cwd)),
         {
           cwd,
-          env: options?.env,
+          env: {
+            ...options?.env,
+            PI_HARNESS_LOCAL_CONFIG_FILE: config.paths.localConfigFile,
+          },
           timeoutMs: spec.timeoutMs,
           maxOutputBytes: spec.maxOutputBytes,
         },
