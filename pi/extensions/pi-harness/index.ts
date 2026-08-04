@@ -45,6 +45,7 @@ import setupAsukuNotify from "./features/asuku-notify/index";
 import setupAskUserQuestion from "./features/ask-user-question/index";
 import setupBtw from "./features/btw/index";
 import setupChildRuns from "./features/child-runs/index";
+import setupUltracodeSettings from "./features/ultracode-settings/index";
 
 // This hook runs before the permission boundary, so it must not resolve any
 // executable through an inherited repository-influenced PATH. If a required
@@ -84,6 +85,11 @@ const setupHarness = (
   // adapter before any permission handler can call ctx.ui.confirm. The bridge
   // remains best-effort and preserves the original TUI dialog on failure.
   setupAsukuNotify(pi, config);
+  // Consume the namespaced settings input before permission task correlation;
+  // a handled command must not remain as pending task text for the next turn.
+  if (!config.isChild && config.features["hook-bridge"]) {
+    setupUltracodeSettings(pi, config.paths.localConfigFile);
+  }
   let codexStageModes = consumeCodexStageModes(config.isChild);
   let codexStageExecutable:
     | ReturnType<typeof createCodexStageExecutablePin>

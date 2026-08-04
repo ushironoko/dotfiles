@@ -37,6 +37,12 @@ export interface InputEvent {
   streamingBehavior?: "steer" | "followUp";
 }
 
+/** Returned by input handlers to transform or consume raw user input. */
+export type InputEventResult =
+  | { action: "continue" }
+  | { action: "transform"; text: string; images?: unknown[] }
+  | { action: "handled" };
+
 export interface ContextEvent {
   type: "context";
   messages: unknown[];
@@ -152,7 +158,7 @@ export interface AgentStartInjection {
 
 export interface PiEventResultMap {
   session_start: void;
-  input: void;
+  input: InputEventResult | undefined | void;
   before_agent_start: AgentStartInjection | undefined | void;
   context: ContextUpdate | undefined | void;
   turn_end: void;
