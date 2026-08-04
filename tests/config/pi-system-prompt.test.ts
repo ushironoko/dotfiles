@@ -39,12 +39,16 @@ describe("global pi system prompt", () => {
 
     expect(prompt).toContain("When `hearth_graph` is available");
     expect(prompt).toContain(
-      "successful `read` and `grep` calls warm its module index",
+      "Successful `read` and `grep` calls warm its module index",
     );
+    expect(prompt).toContain("read-only structural index");
+    expect(prompt).toContain("comprehensive codebase exploration");
+    expect(prompt).toContain("change-impact analysis");
     expect(prompt).toContain(
-      "`definitions`, `deps`, `rdeps`, and `neighborhood`",
+      "`symbols`, `outline`, `search`, and `definitions`",
     );
-    expect(prompt).toContain("assess change impact");
+    expect(prompt).toContain("`deps`, `rdeps`, and `neighborhood`");
+    expect(prompt).toContain("identify affected areas");
     expect(prompt).toContain("verify exact source with `read` before editing");
   });
 
