@@ -109,6 +109,26 @@ test("refuses to overwrite malformed local config", async () => {
   }
 });
 
+test("shares the local-config writer lock with trust onboarding", async () => {
+  const home = await setupTestDirectory("pi-ultracode-setting-lock");
+  const directory = join(home, ".pi", "agent");
+  const configFile = join(directory, "pi-harness.local.json");
+  const lockFile = join(directory, ".pi-harness.local.json.lock");
+  try {
+    await createTestFile(configFile, '{"custom":"keep"}\n');
+    await createTestFile(lockFile, "trust-writer");
+
+    expect(() => writeUltracodeSetting(configFile, true)).toThrow(
+      "pi-harness.local.json update already in progress",
+    );
+    expect(JSON.parse(await readFile(configFile, "utf8"))).toEqual({
+      custom: "keep",
+    });
+  } finally {
+    await cleanupTestDirectory(home);
+  }
+});
+
 test("settings input toggles ultracode without registering a conflicting command", async () => {
   const home = await setupTestDirectory("pi-ultracode-command");
   const configFile = join(home, ".pi", "agent", "pi-harness.local.json");

@@ -90,7 +90,16 @@ feature toggles live in `~/.pi/agent/pi-harness.local.json` (machine-local):
 ```
 
 `trustedRoots` gates every feature that executes repository-defined commands
-(formatter, lint/typecheck/test) — fail-closed, symlink-resolved.
+(formatter, lint/typecheck/test) — fail-closed, symlink-resolved. When an
+interactive parent pi starts in an untrusted Git repository, the harness asks
+once per process whether to trust its canonical top-level directory. It uses
+the same Git common-directory identity rules as project memory, so a distinct
+nested repository does not inherit trust merely by containment, while a
+registered linked worktree can inherit its trusted repository identity.
+Approval serializes and atomically appends the directory to the machine-local
+file without discarding unrelated settings, then activates it for the current
+session. Denial, non-interactive modes, child processes, non-Git directories,
+and validation failures leave the configuration unchanged.
 
 Child pi processes spawned by subagent/workflow receive `PI_HARNESS_CHILD=1`
 and keep only the safety layer (no recursion, no duplicate notifications).

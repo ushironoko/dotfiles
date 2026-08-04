@@ -208,6 +208,32 @@ describe("pi-harness coordination browser composition", () => {
     expect(registered.tools).not.toContain("subagent_status");
   });
 
+  test("registers startup trust onboarding only for the parent profile", () => {
+    const parentConfig = config("pi-composition-trust-parent", {
+      subagent: false,
+      workflow: false,
+      "bit-task": false,
+    });
+    let registrations = 0;
+    setupHarness(createFakePi({ cwd: parentConfig.paths.home }), parentConfig, {
+      setupTrustPrompt: () => {
+        registrations += 1;
+      },
+    });
+
+    setupHarness(
+      createFakePi({ cwd: parentConfig.paths.home }),
+      { ...parentConfig, isChild: true },
+      {
+        setupTrustPrompt: () => {
+          registrations += 1;
+        },
+      },
+    );
+
+    expect(registrations).toBe(1);
+  });
+
   test("keeps the mandatory permission policy when Codex launcher pinning fails", async () => {
     const value = {
       ...config("pi-composition-codex-pin-failure", {
