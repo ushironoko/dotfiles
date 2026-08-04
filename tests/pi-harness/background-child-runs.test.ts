@@ -5,6 +5,7 @@ import {
   formatBackgroundCompletion,
   type BackgroundHost,
 } from "../../pi/extensions/pi-harness/features/child-runs/background";
+import { DEFAULT_MAX_CONCURRENT_CHILDREN } from "../../pi/extensions/pi-harness/features/child-runs/limits";
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
 import {
   BACKGROUND_DRAIN_TIMEOUT_MS,
@@ -733,6 +734,29 @@ describe("background child-run manager", () => {
       WORKTREE_CREATE_TERM_GRACE_MS + PROCESS_FORCE_SETTLE_MS,
     );
     expect(BACKGROUND_DRAIN_TIMEOUT_MS).toBe(12_000);
+  });
+
+  test("defaults the shared pool to more than 30 concurrent children", async () => {
+    const { manager } = runtime();
+    const releases = await Promise.all(
+      Array.from({ length: DEFAULT_MAX_CONCURRENT_CHILDREN }, () =>
+        manager.acquireChildSlot(),
+      ),
+    );
+    let overflowStarted = false;
+    const overflowPromise = manager.acquireChildSlot().then((release) => {
+      overflowStarted = true;
+      return release;
+    });
+    await Promise.resolve();
+    expect(DEFAULT_MAX_CONCURRENT_CHILDREN).toBeGreaterThan(30);
+    expect(overflowStarted).toBe(false);
+
+    releases[0]?.();
+    const overflowRelease = await overflowPromise;
+    expect(overflowStarted).toBe(true);
+    for (const release of releases.slice(1)) release();
+    overflowRelease();
   });
 
   test("shares a bounded abort-aware child slot pool", async () => {

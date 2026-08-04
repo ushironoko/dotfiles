@@ -18,7 +18,10 @@ import {
   CHILD_PERMISSION_SIGNAL_ENV,
   formatChildPermissionSignal,
 } from "../../pi/extensions/pi-harness/features/permission-policy/block";
-import { MAX_CHAIN_DEPTH } from "../../pi/extensions/pi-harness/features/subagent/limits";
+import {
+  MAX_CHAIN_DEPTH,
+  MAX_PARALLEL_TASKS,
+} from "../../pi/extensions/pi-harness/features/subagent/limits";
 import { loadAgents } from "../../pi/extensions/pi-harness/features/subagent/loader";
 import {
   PER_TASK_OUTPUT_CAP,
@@ -352,7 +355,7 @@ describe("pi-harness subagent", () => {
         "---",
         "name: reviewer",
         "description: Reviews a change",
-        "tools: read, grep",
+        "tools: read, grep, hearth_graph",
         "model: openai-codex/gpt-5.4-mini",
         "pi-codex-stage-modes: prompt,review",
         "---",
@@ -414,8 +417,11 @@ describe("pi-harness subagent", () => {
     expect(recordedArgs).toContain("-p");
     expect(recordedArgs).toContain("--append-system-prompt");
     expect(recordedArgs).toContain("openai-codex/gpt-5.4-mini");
-    expect(recordedArgs).toContain("read,grep");
+    expect(recordedArgs).toContain("read,grep,hearth_graph");
     expect(recordedEnv.PI_HARNESS_CHILD).toBe("1");
+    expect(recordedEnv.PI_HARNESS_RESTRICTED_TOOLS).toBe("1");
+    expect(recordedEnv.PI_HARNESS_RESTRICTED_HEARTH_GRAPH).toBe("1");
+    expect(recordedEnv.PI_HARNESS_RESTRICTED_BUILTINS).toBe("read,grep");
     expect(recordedEnv[CODEX_STAGE_CAPABILITY_ENV]).toBe("prompt,review");
     expect(recordedEnv.PI_HARNESS_AUDIT_LINEAGE_ID).toBe(
       "123e4567-e89b-42d3-a456-426614174000",
@@ -436,7 +442,7 @@ describe("pi-harness subagent", () => {
     registry.dispose();
   });
 
-  test("runs at most four parallel child processes", async () => {
+  test("runs 32 parallel child processes and queues overflow", async () => {
     const home = await makeTempDirectory("pi-subagent-concurrency");
     const agentsDirectory = resolvePaths(home).claudeAgentsDir;
     await fs.mkdir(agentsDirectory, { recursive: true });
@@ -471,7 +477,7 @@ describe("pi-harness subagent", () => {
     const execution = executeTool(
       pi.tools[0],
       {
-        tasks: Array.from({ length: 6 }, (_, index) => ({
+        tasks: Array.from({ length: 34 }, (_, index) => ({
           agent: "worker",
           task: `Task ${index + 1}`,
         })),
@@ -479,25 +485,25 @@ describe("pi-harness subagent", () => {
       pi.ctx,
     );
 
-    await waitFor(() => controllers.length === 4);
-    expect(controllers).toHaveLength(4);
-    expect(highWaterMark).toBe(4);
-    for (const controller of controllers.slice(0, 4)) {
+    await waitFor(() => controllers.length === 32);
+    expect(controllers).toHaveLength(32);
+    expect(highWaterMark).toBe(32);
+    for (const controller of controllers.slice(0, 32)) {
       controller.emitStdout(assistantEvent("done"));
       controller.close();
     }
-    await waitFor(() => controllers.length === 6);
-    expect(controllers).toHaveLength(6);
-    for (const controller of controllers.slice(4)) {
+    await waitFor(() => controllers.length === 34);
+    expect(controllers).toHaveLength(34);
+    for (const controller of controllers.slice(32)) {
       controller.emitStdout(assistantEvent("done"));
       controller.close();
     }
 
     await execution;
-    expect(highWaterMark).toBe(4);
+    expect(highWaterMark).toBe(32);
   });
 
-  test("shares the four-child limit across concurrent tool executions", async () => {
+  test("shares the 32-child limit across concurrent tool executions", async () => {
     const home = await makeTempDirectory("pi-subagent-parent-concurrency");
     await writeAgent(home);
 
@@ -518,7 +524,7 @@ describe("pi-harness subagent", () => {
     const pi = createFakePi({ cwd: home });
     setupSubagent(pi, makeConfig(home), { spawnFn });
     const tasks = (prefix: string) =>
-      Array.from({ length: 3 }, (_, index) => ({
+      Array.from({ length: 17 }, (_, index) => ({
         agent: "worker",
         task: `${prefix} ${index + 1}`,
       }));
@@ -526,20 +532,64 @@ describe("pi-harness subagent", () => {
     const first = executeTool(pi.tools[0], { tasks: tasks("first") }, pi.ctx);
     const second = executeTool(pi.tools[0], { tasks: tasks("second") }, pi.ctx);
 
-    await waitFor(() => controllers.length === 4);
-    expect(highWaterMark).toBe(4);
-    for (const controller of controllers.slice(0, 4)) {
+    await waitFor(() => controllers.length === 32);
+    expect(highWaterMark).toBe(32);
+    for (const controller of controllers.slice(0, 32)) {
       controller.emitStdout(assistantEvent("done"));
       controller.close();
     }
-    await waitFor(() => controllers.length === 6);
-    for (const controller of controllers.slice(4)) {
+    await waitFor(() => controllers.length === 34);
+    for (const controller of controllers.slice(32)) {
       controller.emitStdout(assistantEvent("done"));
       controller.close();
     }
 
     await Promise.all([first, second]);
-    expect(highWaterMark).toBe(4);
+    expect(highWaterMark).toBe(32);
+  });
+
+  test("keeps all 64 parallel results represented within the summary cap", async () => {
+    const home = await makeTempDirectory("pi-subagent-parallel-budget");
+    await writeAgent(home);
+    const spawnFn: SpawnFunction = (_command, args) => {
+      const taskArg = args.at(-1) ?? "";
+      const taskNumber = /Task: Task (\d+)/.exec(taskArg)?.[1] ?? "unknown";
+      const controller = createFakeProcess();
+      queueMicrotask(() => {
+        controller.emitStdout(
+          assistantEvent(`result-${taskNumber}: ${"x".repeat(2_048)}`),
+        );
+        controller.close();
+      });
+      return controller.process;
+    };
+    const pi = createFakePi({ cwd: home });
+    setupSubagent(pi, makeConfig(home), { spawnFn });
+
+    const value = await executeTool(
+      pi.tools[0],
+      {
+        tasks: Array.from({ length: MAX_PARALLEL_TASKS }, (_, index) => ({
+          agent: "worker",
+          task: `Task ${index + 1}`,
+        })),
+      },
+      pi.ctx,
+    );
+    if (!isRecord(value) || !Array.isArray(value.content)) {
+      throw new Error("Expected a tool result with content");
+    }
+    const [firstContent] = value.content;
+    if (!isRecord(firstContent) || typeof firstContent.text !== "string") {
+      throw new Error("Expected text content");
+    }
+
+    expect(Buffer.byteLength(firstContent.text, "utf8")).toBeLessThanOrEqual(
+      PER_TASK_OUTPUT_CAP,
+    );
+    for (let index = 1; index <= MAX_PARALLEL_TASKS; index += 1) {
+      expect(firstContent.text).toContain(`result-${index}:`);
+    }
   });
 
   test("rejects chains deeper than eight before spawning and advertises the cap", async () => {
@@ -1050,7 +1100,11 @@ describe("pi-harness subagent", () => {
       return controller.process;
     };
     const pi = createFakePi({ cwd: home });
-    setupSubagent(pi, makeConfig(home), { spawnFn, termGraceMs: 20 });
+    setupSubagent(pi, makeConfig(home), {
+      spawnFn,
+      termGraceMs: 20,
+      maxConcurrency: 4,
+    });
     const execution = executeTool(
       pi.tools[0],
       {

@@ -121,6 +121,7 @@ export interface SetupChildRunsOptions {
   readonly agentMemory?: AgentMemoryRegistry;
   readonly childExecution?: boolean;
   readonly backgroundDrainTimeoutMs?: number;
+  readonly maxConcurrentChildren?: number;
 }
 
 type CoordinationRefreshOutcome =
@@ -249,9 +250,14 @@ const setupChildRuns = (
             onWorkSettled: invalidateHearthCaches,
             runExternalWork,
           },
-          options.backgroundDrainTimeoutMs === undefined
-            ? {}
-            : { drainTimeoutMs: options.backgroundDrainTimeoutMs },
+          {
+            ...(options.backgroundDrainTimeoutMs === undefined
+              ? {}
+              : { drainTimeoutMs: options.backgroundDrainTimeoutMs }),
+            ...(options.maxConcurrentChildren === undefined
+              ? {}
+              : { maxChildren: options.maxConcurrentChildren }),
+          },
         )
       : undefined;
   panel = new ChildRunsPanelController(registry, {

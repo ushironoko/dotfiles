@@ -24,7 +24,12 @@ import setupBitTask from "../../pi/extensions/pi-harness/features/bit-task/index
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
 import { setupChildRunStatusTool } from "../../pi/extensions/pi-harness/features/child-runs/status-tool";
 import setupSubagent from "../../pi/extensions/pi-harness/features/subagent/index";
+import { MAX_PARALLEL_TASKS } from "../../pi/extensions/pi-harness/features/subagent/limits";
 import setupWorkflow from "../../pi/extensions/pi-harness/features/workflow/index";
+import {
+  MAX_STAGE_TASKS,
+  MAX_WORKFLOW_TASKS,
+} from "../../pi/extensions/pi-harness/features/workflow/plan";
 import setupAskUserQuestion from "../../pi/extensions/pi-harness/features/ask-user-question/index";
 import setupAgentMemory from "../../pi/extensions/pi-harness/features/agent-memory/index";
 import type { ToolDefLike } from "../../pi/extensions/pi-harness/lib/pi-like";
@@ -101,11 +106,41 @@ const canonicalize = (value: unknown): unknown => {
 
 const baseline = typeboxBaseline as Record<string, unknown>;
 
+// Keep the migration golden intact, then overlay intentional post-migration
+// contract changes. This makes changed bounds explicit without weakening the
+// exact comparison for every unaffected field.
+const expectedSchemas = structuredClone(baseline);
+const objectAt = (root: unknown, path: string[]): Record<string, unknown> => {
+  let current = root;
+  for (const segment of path) {
+    if (current === null || typeof current !== "object") {
+      throw new Error(
+        `schema fixture path is not an object: ${path.join(".")}`,
+      );
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  if (current === null || typeof current !== "object") {
+    throw new Error(`schema fixture path is not an object: ${path.join(".")}`);
+  }
+  return current as Record<string, unknown>;
+};
+objectAt(expectedSchemas, ["subagent", "properties", "tasks"]).maxItems =
+  MAX_PARALLEL_TASKS;
+const expectedWorkflowStages = objectAt(expectedSchemas, [
+  "workflow",
+  "properties",
+  "stages",
+]);
+expectedWorkflowStages.description = `Stages executed sequentially; at most ${MAX_WORKFLOW_TASKS} tasks in total`;
+objectAt(expectedWorkflowStages, ["items", "properties", "tasks"]).maxItems =
+  MAX_STAGE_TASKS;
+
 describe("schema contract: equivalence to typebox baseline", () => {
-  for (const toolName of Object.keys(baseline)) {
+  for (const toolName of Object.keys(expectedSchemas)) {
     test(`${toolName} matches the pre-migration schema (modulo N1/N2/N3)`, () => {
       expect(canonicalize(parametersOf(toolName))).toEqual(
-        canonicalize(baseline[toolName]),
+        canonicalize(expectedSchemas[toolName]),
       );
     });
   }
@@ -122,8 +157,8 @@ describe("schema contract: equivalence to typebox baseline", () => {
       }
       return [];
     };
-    for (const toolName of Object.keys(baseline)) {
-      const expected = descriptions(baseline[toolName]).sort();
+    for (const toolName of Object.keys(expectedSchemas)) {
+      const expected = descriptions(expectedSchemas[toolName]).sort();
       const actual = descriptions(parametersOf(toolName)).sort();
       expect(actual).toEqual(expected);
     }
@@ -379,8 +414,17 @@ describe("schema contract: pi validator accepts/rejects (real path)", () => {
     expect(result.confirmed).toBe(true);
   });
 
-  test("enforces the stage-task maxItems bound", () => {
-    const tooMany = Array.from({ length: 9 }, () => ({ task: "t" }));
+  test("accepts 30+ stage tasks and enforces the enlarged maxItems bound", () => {
+    const largeFanout = Array.from({ length: 33 }, () => ({ task: "t" }));
+    expect(() =>
+      validate("workflow", {
+        stages: [{ mode: "fanout", tasks: largeFanout }],
+      }),
+    ).not.toThrow();
+
+    const tooMany = Array.from({ length: MAX_STAGE_TASKS + 1 }, () => ({
+      task: "t",
+    }));
     expect(() =>
       validate("workflow", { stages: [{ mode: "fanout", tasks: tooMany }] }),
     ).toThrow();

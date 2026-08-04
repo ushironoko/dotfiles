@@ -138,6 +138,61 @@ describe("pi-harness coordination browser composition", () => {
     );
   });
 
+  test("keeps the safety floor while invalid child-run config disables orchestrators", async () => {
+    const value = config("pi-composition-invalid-child-runs", {
+      subagent: true,
+      workflow: true,
+      "bit-task": false,
+    });
+    value.childRuns = {
+      maxConcurrent: 32,
+      configurationError: "invalid childRuns fields: maxConcurrent",
+    };
+    const registered = registration(value);
+
+    expect(
+      await registered.pi.emitToolCall({
+        type: "tool_call",
+        toolName: "bash",
+        toolCallId: "invalid-child-runs-safety",
+        input: { command: "rm -rf /" },
+      }),
+    ).toEqual({ block: true, reason: expect.any(String) });
+
+    const invoke = (name: "subagent" | "workflow", params: unknown) => {
+      const tool = registered.pi.tools.find(
+        (candidate) => candidate.name === name,
+      );
+      if (tool === undefined) throw new Error(`missing ${name} tool`);
+      return Promise.resolve(
+        Reflect.apply(tool.execute, undefined, [
+          `invalid-child-runs-${name}`,
+          params,
+          undefined,
+          undefined,
+          registered.pi.ctx,
+        ]),
+      );
+    };
+    await expect(
+      invoke("subagent", { agent: "worker", task: "must not run" }),
+    ).rejects.toThrow(
+      "pi-harness childRuns configuration error: invalid childRuns fields: maxConcurrent",
+    );
+    await expect(
+      invoke("workflow", {
+        stages: [
+          {
+            mode: "single",
+            tasks: [{ agentType: "worker", task: "must not run" }],
+          },
+        ],
+      }),
+    ).rejects.toThrow(
+      "pi-harness childRuns configuration error: invalid childRuns fields: maxConcurrent",
+    );
+  });
+
   test("omits the browser when all three sources are disabled", () => {
     const registered = registration(
       config("pi-composition-disabled", {

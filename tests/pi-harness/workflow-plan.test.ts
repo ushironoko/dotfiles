@@ -2,10 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  DEFAULT_MAX_CONCURRENT_CHILDREN,
+  MAX_CONCURRENT_CHILDREN,
+  MIN_CONCURRENT_CHILDREN,
+} from "../../pi/extensions/pi-harness/features/child-runs/limits";
+import {
   CODEX_AGENT_TYPES,
   DEFAULT_FANOUT_AGENT_TYPE,
   MAX_STAGE_TASKS,
   MAX_WORKFLOW_STAGES,
+  MAX_WORKFLOW_TASKS,
   scopeRoot,
   scopesOverlap,
   validateWorkflowPlan,
@@ -120,11 +126,33 @@ describe("validateWorkflowPlan structure", () => {
     expectErrors(plan(stages), `${MAX_WORKFLOW_STAGES}`);
   });
 
+  test("accepts more than 30 tasks in one fan-out stage", () => {
+    const tasks = Array.from({ length: 33 }, (_, index) =>
+      reviewerTask(`lens ${index}`),
+    );
+    const stages = expectValid(plan([fanout(tasks)]));
+    expect(stages[0]?.tasks).toHaveLength(33);
+  });
+
   test("rejects more tasks than the per-stage cap", () => {
     const tasks = Array.from({ length: MAX_STAGE_TASKS + 1 }, () =>
       reviewerTask(),
     );
     expectErrors(plan([fanout(tasks)]), `${MAX_STAGE_TASKS}`);
+  });
+
+  test("rejects more tasks than the whole-workflow persistence cap", () => {
+    const first = Array.from({ length: 33 }, (_, index) =>
+      reviewerTask(`first ${index}`),
+    );
+    const second = Array.from(
+      { length: MAX_WORKFLOW_TASKS - first.length + 1 },
+      (_, index) => reviewerTask(`second ${index}`),
+    );
+    expectErrors(
+      plan([fanout(first), fanout(second)]),
+      `${MAX_WORKFLOW_TASKS} tasks in total`,
+    );
   });
 
   test("rejects an unknown stage mode", () => {
@@ -352,6 +380,30 @@ describe("multi-model-workflows.md templates", () => {
   // The skill reference is the user-facing contract for this validator; a
   // template the validator rejects is a doc bug (found by review: single-mode
   // stages without agentType shipped in Templates A/B).
+  test("documents the runtime scaling limits without stale fixed-pool values", () => {
+    const source = readFileSync(
+      join(
+        import.meta.dir,
+        "../../pi/skills/start-work/references/multi-model-workflows.md",
+      ),
+      "utf8",
+    );
+    expect(source).toContain(`up to ${MAX_WORKFLOW_STAGES} stages`);
+    expect(source).toContain(`up to ${MAX_WORKFLOW_TASKS} tasks in total`);
+    expect(source).toContain(
+      `A single fan-out stage may use all ${MAX_STAGE_TASKS} tasks`,
+    );
+    expect(source).toContain(
+      `By default, ${DEFAULT_MAX_CONCURRENT_CHILDREN} child processes`,
+    );
+    expect(source).toContain(
+      `from ${MIN_CONCURRENT_CHILDREN} through ${MAX_CONCURRENT_CHILDREN}`,
+    );
+    expect(source).toContain("shared FIFO pool");
+    expect(source).not.toContain("run 4-concurrent");
+    expect(source).not.toContain("Max 8 tasks per stage");
+  });
+
   test("every complete plan template passes the validator", () => {
     const source = readFileSync(
       join(

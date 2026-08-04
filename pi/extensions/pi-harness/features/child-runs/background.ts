@@ -6,10 +6,10 @@ import type {
   PersistedChildRunsV1,
 } from "./model";
 import { ChildRunRegistry } from "./registry";
+import { DEFAULT_MAX_CONCURRENT_CHILDREN } from "./limits";
 
 export const CHILD_RUN_COMPLETION_ENTRY = "pi-harness/child-run-completion";
 export const MAX_ACTIVE_BACKGROUND_INVOCATIONS = 8;
-export const MAX_BACKGROUND_CHILDREN = 4;
 
 const MAX_NOTIFICATION_BYTES = 50 * 1024;
 export const MAX_NOTIFICATION_RESULT_BYTES = 32 * 1024;
@@ -226,7 +226,7 @@ export class BackgroundInvocationManager {
     this.registry = registry;
     this.host = host;
     this.maxActive = options.maxActive ?? MAX_ACTIVE_BACKGROUND_INVOCATIONS;
-    this.maxChildren = options.maxChildren ?? MAX_BACKGROUND_CHILDREN;
+    this.maxChildren = options.maxChildren ?? DEFAULT_MAX_CONCURRENT_CHILDREN;
     this.childrenAvailable = this.maxChildren;
     this.drainTimeoutMs = options.drainTimeoutMs ?? BACKGROUND_DRAIN_TIMEOUT_MS;
   }

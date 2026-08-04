@@ -13,6 +13,10 @@
 import { readFileSync } from "node:fs";
 import { loadTrustConfig, type TrustConfig } from "./lib/trust";
 import { resolvePaths, type HarnessPaths } from "./lib/paths";
+import {
+  DEFAULT_MAX_CONCURRENT_CHILDREN,
+  isValidChildConcurrency,
+} from "./features/child-runs/limits";
 
 export const TOGGLEABLE_FEATURES = [
   "hook-bridge",
@@ -75,6 +79,15 @@ export const DEFAULT_PERMISSION_JUDGE_CONFIG: Readonly<PermissionJudgeConfig> =
     keepAlive: "30m",
   };
 
+export interface ChildRunsConfig {
+  maxConcurrent: number;
+  configurationError?: string;
+}
+
+export const DEFAULT_CHILD_RUNS_CONFIG: Readonly<ChildRunsConfig> = {
+  maxConcurrent: DEFAULT_MAX_CONCURRENT_CHILDREN,
+};
+
 export interface BashSandboxConfig {
   network: {
     allowedDomains: string[];
@@ -128,6 +141,8 @@ export interface HarnessConfig {
   permissionJudge?: PermissionJudgeConfig;
   /** Always materialized by loadConfig; optional for narrow test adapters. */
   bashSandbox?: BashSandboxConfig;
+  /** Always materialized by loadConfig; optional for narrow test adapters. */
+  childRuns?: ChildRunsConfig;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -323,6 +338,53 @@ const readPermissionJudgeConfig = (
           configurationError: `invalid permissionJudge fields: ${errors.join(", ")}`,
         }),
   };
+};
+
+const readChildRunsConfig = (localConfigFile: string): ChildRunsConfig => {
+  let root: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(localConfigFile, "utf8"));
+    if (!isRecord(parsed)) {
+      return {
+        ...DEFAULT_CHILD_RUNS_CONFIG,
+        configurationError: "pi-harness.local.json must contain an object",
+      };
+    }
+    root = parsed;
+  } catch (error) {
+    if (
+      isRecord(error) &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      return { ...DEFAULT_CHILD_RUNS_CONFIG };
+    }
+    return {
+      ...DEFAULT_CHILD_RUNS_CONFIG,
+      configurationError: "pi-harness.local.json could not be parsed",
+    };
+  }
+
+  const value = root.childRuns;
+  if (value === undefined) return { ...DEFAULT_CHILD_RUNS_CONFIG };
+  if (!isRecord(value)) {
+    return {
+      ...DEFAULT_CHILD_RUNS_CONFIG,
+      configurationError: "childRuns must contain an object",
+    };
+  }
+
+  const maxConcurrent =
+    value.maxConcurrent === undefined
+      ? DEFAULT_CHILD_RUNS_CONFIG.maxConcurrent
+      : value.maxConcurrent;
+  if (!isValidChildConcurrency(maxConcurrent)) {
+    return {
+      ...DEFAULT_CHILD_RUNS_CONFIG,
+      configurationError: "invalid childRuns fields: maxConcurrent",
+    };
+  }
+  return { maxConcurrent };
 };
 
 const MAX_SANDBOX_LIST_ENTRIES = 256;
@@ -525,5 +587,6 @@ export const loadConfig = (
     paths,
     permissionJudge: readPermissionJudgeConfig(paths.localConfigFile),
     bashSandbox: readBashSandboxConfig(paths.localConfigFile, platform),
+    childRuns: readChildRunsConfig(paths.localConfigFile),
   };
 };

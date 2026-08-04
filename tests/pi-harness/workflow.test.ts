@@ -159,6 +159,66 @@ const createScriptedProcess = (
   };
 };
 
+const createControlledProcess = (): {
+  process: SpawnedProcess;
+  finish(text: string): void;
+} => {
+  const stdoutListeners: ((chunk: string) => void)[] = [];
+  const stderrListeners: ((chunk: string) => void)[] = [];
+  const closeListeners: ((
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ) => void)[] = [];
+  let finished = false;
+  return {
+    process: {
+      stdout: {
+        on(_event, listener) {
+          stdoutListeners.push(listener);
+          return this;
+        },
+      },
+      stderr: {
+        on(_event, listener) {
+          stderrListeners.push(listener);
+          return this;
+        },
+      },
+      on(event, listener) {
+        if (event === "close") {
+          closeListeners.push(
+            listener as (
+              code: number | null,
+              signal: NodeJS.Signals | null,
+            ) => void,
+          );
+        }
+        return this;
+      },
+      kill() {
+        return true;
+      },
+      killed: false,
+    },
+    finish(text) {
+      if (finished) return;
+      finished = true;
+      for (const listener of stdoutListeners) listener(assistantEvent(text));
+      for (const listener of closeListeners) listener(0, null);
+    },
+  };
+};
+
+const deferred = <Value>() => {
+  let resolve!: (value: Value | PromiseLike<Value>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<Value>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+};
+
 const makeSpawnFn = (
   respond: (taskArg: string) => ScriptedResponse,
 ): { records: RecordedSpawn[]; spawnFn: SpawnFunction } => {
@@ -330,6 +390,7 @@ describe("pi-harness workflow", () => {
     for (const record of records) {
       expect(record.command).toBe("pi");
       expect(record.options.env.PI_HARNESS_CHILD).toBe("1");
+      expect(record.options.env.PI_HARNESS_RESTRICTED_TOOLS).toBe("0");
       expect(record.options.env.PI_HARNESS_AUDIT_LINEAGE_ID).toBe(
         "123e4567-e89b-42d3-a456-426614174000",
       );
@@ -355,6 +416,63 @@ describe("pi-harness workflow", () => {
     ).toBe(1);
     expect(new Set(childCorrelations.map((entry) => entry.runId)).size).toBe(2);
     registry.dispose();
+  });
+
+  test("runs 32 children concurrently and queues the 33rd", async () => {
+    const home = await makeTempDirectory("pi-workflow-large-fanout");
+    await writeAgents(home, ["codex-reviewer"]);
+    const controls: ReturnType<typeof createControlledProcess>[] = [];
+    const firstWaveStarted = deferred<void>();
+    const overflowStarted = deferred<void>();
+    const spawnFn: SpawnFunction = () => {
+      const controlled = createControlledProcess();
+      controls.push(controlled);
+      if (controls.length === 32) firstWaveStarted.resolve();
+      if (controls.length === 33) overflowStarted.resolve();
+      return controlled.process;
+    };
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), { spawnFn });
+
+    const execution = executeTool(
+      findWorkflowTool(pi.tools),
+      {
+        stages: [
+          {
+            mode: "fanout",
+            tasks: Array.from({ length: 33 }, (_, index) => ({
+              agentType: "codex-reviewer",
+              task: `lens ${index}`,
+            })),
+          },
+        ],
+      },
+      pi.ctx,
+    );
+
+    await withTimeout(
+      firstWaveStarted.promise,
+      1_000,
+      "the first 32 workflow children did not start",
+    );
+    expect(controls).toHaveLength(32);
+
+    controls[0]?.finish("first complete");
+    await withTimeout(
+      overflowStarted.promise,
+      1_000,
+      "the queued 33rd workflow child did not start",
+    );
+    expect(controls).toHaveLength(33);
+
+    for (const [index, controlled] of controls.entries()) {
+      controlled.finish(`complete ${index}`);
+    }
+    const { details } = getResult(
+      await withTimeout(execution, 1_000, "large workflow did not finish"),
+    );
+    expect(details.succeeded).toBe(33);
+    expect(details.total).toBe(33);
   });
 
   test("enforces a read-only child tool profile", async () => {
@@ -387,6 +505,11 @@ describe("pi-harness workflow", () => {
     const toolsIndex = records[0]?.args.indexOf("--tools") ?? -1;
     expect(toolsIndex).toBeGreaterThanOrEqual(0);
     expect(records[0]?.args[toolsIndex + 1]).toBe("read");
+    expect(records[0]?.options.env.PI_HARNESS_RESTRICTED_TOOLS).toBe("1");
+    expect(records[0]?.options.env.PI_HARNESS_RESTRICTED_HEARTH_GRAPH).toBe(
+      "0",
+    );
+    expect(records[0]?.options.env.PI_HARNESS_RESTRICTED_BUILTINS).toBe("read");
   });
 
   test("publishes one live child run per stage task while preserving degradation", async () => {
@@ -531,6 +654,153 @@ describe("pi-harness workflow", () => {
     expect(text.match(/### \[codex-reviewer\]/g)).toHaveLength(64);
     expect(text).toContain("## stage-8 (fanout)");
     expect(text).toContain("64/64");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(24 * 1024);
+  });
+
+  test("caps long agent display labels while preserving all 64 structured identities", async () => {
+    const home = await makeTempDirectory("pi-workflow-agent-labels");
+    const longAgentName = `agent-${"a".repeat(500)}`;
+    const agentsDirectory = resolvePaths(home).claudeAgentsDir;
+    await fs.mkdir(agentsDirectory, { recursive: true });
+    await fs.writeFile(
+      join(agentsDirectory, "long-agent.md"),
+      [
+        "---",
+        `name: ${longAgentName}`,
+        "description: Long test agent",
+        "---",
+        "Do the task.",
+      ].join("\n"),
+    );
+    const { spawnFn } = makeSpawnFn(() => ({ text: "ok" }));
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), { spawnFn });
+
+    const result = await executeTool(
+      findWorkflowTool(pi.tools),
+      {
+        stages: [
+          {
+            mode: "fanout",
+            codexSkip: true,
+            tasks: Array.from({ length: 64 }, (_, index) => ({
+              agentType: longAgentName,
+              task: `review ${index + 1}`,
+            })),
+          },
+        ],
+      },
+      pi.ctx,
+    );
+
+    const { text, details } = getResult(result);
+    expect(text.match(/^### \[/gm)).toHaveLength(64);
+    const reports = getStageTaskReports(details, 0);
+    expect(reports).toHaveLength(64);
+    expect(reports.every((report) => report.agentType === longAgentName)).toBe(
+      true,
+    );
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(24 * 1024);
+  });
+
+  test("losslessly compacts a long shared worktree root across 64 task headers", async () => {
+    const home = await makeTempDirectory("pi-workflow-worktree-headers");
+    await writeAgents(home, ["codex-poc"]);
+    const { spawnFn } = makeSpawnFn(() => ({
+      text: `POC-${"x".repeat(2_048)}`,
+    }));
+    let worktreeIndex = 0;
+    const worktreeRoot = `/tmp/${Array.from(
+      { length: 40 },
+      (_, index) => `long-root-${index}`,
+    ).join("/")}`;
+    const worktreePaths: string[] = [];
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      createWorktree: async (_cwd, _name, _signal, onCreated) => {
+        worktreeIndex += 1;
+        const path = `${worktreeRoot}/worktree-${worktreeIndex}`;
+        worktreePaths.push(path);
+        onCreated?.(path);
+        return path;
+      },
+    });
+
+    const result = await executeTool(
+      findWorkflowTool(pi.tools),
+      {
+        stages: [
+          {
+            name: `long-stage-${"s".repeat(1_024)}`,
+            mode: "fanout",
+            tasks: Array.from({ length: 64 }, (_, index) => ({
+              agentType: "codex-poc",
+              task: `poc ${index + 1}`,
+              isolation: "worktree",
+            })),
+          },
+        ],
+      },
+      pi.ctx,
+    );
+
+    const { text, details } = getResult(result);
+    expect(text.match(/### \[codex-poc\]/g)).toHaveLength(64);
+    expect(text).toContain(`Worktree path prefix: ${worktreeRoot}/`);
+    for (let index = 1; index <= 64; index += 1) {
+      expect(text).toContain(`<prefix>worktree-${index}`);
+    }
+    const reports = getStageTaskReports(details, 0);
+    expect(reports).toHaveLength(64);
+    expect(reports[0]?.worktree).toBe(worktreePaths[0]);
+    expect(reports[63]?.worktree).toBe(worktreePaths[63]);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(24 * 1024);
+  });
+
+  test("keeps every header and retains complete paths out of band when suffixes cannot fit", async () => {
+    const home = await makeTempDirectory("pi-workflow-worktree-details");
+    await writeAgents(home, ["codex-poc"]);
+    const { spawnFn } = makeSpawnFn(() => ({ text: "ok" }));
+    let worktreeIndex = 0;
+    const worktreePaths: string[] = [];
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      createWorktree: async (_cwd, _name, _signal, onCreated) => {
+        worktreeIndex += 1;
+        const path = `/tmp/worktree-${worktreeIndex}-${"w".repeat(1_024)}`;
+        worktreePaths.push(path);
+        onCreated?.(path);
+        return path;
+      },
+    });
+
+    const result = await executeTool(
+      findWorkflowTool(pi.tools),
+      {
+        stages: [
+          {
+            mode: "fanout",
+            tasks: Array.from({ length: 64 }, (_, index) => ({
+              agentType: "codex-poc",
+              task: `poc ${index + 1}`,
+              isolation: "worktree",
+            })),
+          },
+        ],
+      },
+      pi.ctx,
+    );
+
+    const { text, details } = getResult(result);
+    expect(text.match(/### \[codex-poc\]/g)).toHaveLength(64);
+    expect(text).toContain(
+      "complete canonical paths remain in child-run details",
+    );
+    const reports = getStageTaskReports(details, 0);
+    expect(reports[0]?.worktree).toBe(worktreePaths[0]);
+    expect(reports[63]?.worktree).toBe(worktreePaths[63]);
     expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(24 * 1024);
   });
 
@@ -913,7 +1183,7 @@ describe("pi-harness workflow", () => {
     const pi = createFakePi({ cwd: home });
     setupWorkflow(pi, makeConfig(home), { spawnFn });
 
-    const tasks = Array.from({ length: 8 }, (_unused, index) => ({
+    const tasks = Array.from({ length: 33 }, (_unused, index) => ({
       agentType: "codex-reviewer",
       task: `lens ${index}`,
     }));
@@ -927,7 +1197,7 @@ describe("pi-harness workflow", () => {
       ),
     ).rejects.toThrow(/abort/i);
     // Some early tasks may already be in flight, but the run must stop pulling
-    // new work, so strictly fewer than all 8 tasks ever spawn.
+    // new work, so strictly fewer than all 33 tasks ever spawn.
     expect(records.length).toBeGreaterThanOrEqual(1);
     expect(records.length).toBeLessThan(tasks.length);
   });
@@ -964,8 +1234,8 @@ describe("pi-harness workflow {previous} injection", () => {
   test("expands {previous} to a prior-stage digest with the worktree path, fenced as untrusted", async () => {
     const home = await makeTempDirectory("pi-workflow-prev");
     await writeAgents(home, ["codex-poc", "codex-reviewer"]);
-    const worktreePath = join(home, "wt", "s1");
-    const { records } = await runStages(
+    const worktreePath = join(home, "wt", `s1-${"w".repeat(1_024)}`);
+    const { records, text } = await runStages(
       home,
       [
         {
@@ -984,6 +1254,7 @@ describe("pi-harness workflow {previous} injection", () => {
       { createWorktree: async () => worktreePath },
     );
     const { taskArg } = review(records);
+    expect(text).toContain(worktreePath);
     expect(taskArg).toContain("## Stage 1 (fanout)");
     expect(taskArg).toContain(worktreePath);
     expect(taskArg).toContain("STAGE1_OUT");
@@ -1310,10 +1581,14 @@ describe("pi-harness workflow cwd boundary (#7:3)", () => {
     await fs.symlink(safe, alias);
     const { records, spawnFn } = makeSpawnFn(() => ({ text: "escaped" }));
     const registry = new ChildRunRegistry();
-    const background = new BackgroundInvocationManager(registry, {
-      appendEntry() {},
-      sendMessage() {},
-    });
+    const background = new BackgroundInvocationManager(
+      registry,
+      {
+        appendEntry() {},
+        sendMessage() {},
+      },
+      { maxChildren: 4 },
+    );
     const heldReleases = await Promise.all(
       Array.from({ length: 4 }, () => background.acquireChildSlot()),
     );
@@ -1384,10 +1659,14 @@ describe("pi-harness workflow cwd boundary (#7:3)", () => {
     await fs.symlink(first, alias);
     const { records, spawnFn } = makeSpawnFn(() => ({ text: "ok" }));
     const registry = new ChildRunRegistry();
-    const background = new BackgroundInvocationManager(registry, {
-      appendEntry() {},
-      sendMessage() {},
-    });
+    const background = new BackgroundInvocationManager(
+      registry,
+      {
+        appendEntry() {},
+        sendMessage() {},
+      },
+      { maxChildren: 4 },
+    );
     const heldReleases = await Promise.all(
       Array.from({ length: 4 }, () => background.acquireChildSlot()),
     );
@@ -1448,10 +1727,14 @@ describe("pi-harness workflow cwd boundary (#7:3)", () => {
     await fs.symlink(originalRoot, rootAlias);
     const { records, spawnFn } = makeSpawnFn(() => ({ text: "ok" }));
     const registry = new ChildRunRegistry();
-    const background = new BackgroundInvocationManager(registry, {
-      appendEntry() {},
-      sendMessage() {},
-    });
+    const background = new BackgroundInvocationManager(
+      registry,
+      {
+        appendEntry() {},
+        sendMessage() {},
+      },
+      { maxChildren: 4 },
+    );
     const heldReleases = await Promise.all(
       Array.from({ length: 4 }, () => background.acquireChildSlot()),
     );
@@ -1520,10 +1803,14 @@ describe("pi-harness workflow cwd boundary (#7:3)", () => {
     const explicitCwd = join(rootAlias, "task");
     const { records, spawnFn } = makeSpawnFn(() => ({ text: "escaped" }));
     const registry = new ChildRunRegistry();
-    const background = new BackgroundInvocationManager(registry, {
-      appendEntry() {},
-      sendMessage() {},
-    });
+    const background = new BackgroundInvocationManager(
+      registry,
+      {
+        appendEntry() {},
+        sendMessage() {},
+      },
+      { maxChildren: 4 },
+    );
     const heldReleases = await Promise.all(
       Array.from({ length: 4 }, () => background.acquireChildSlot()),
     );
