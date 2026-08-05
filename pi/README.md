@@ -24,12 +24,13 @@ child-process behavior): `tests/fixtures/pi-harness/raw/`.
 ## Install
 
 ```bash
-bun install --frozen-lockfile                           # reproducible local test baseline
+bun install --frozen-lockfile                           # reproducible patched local baseline
 bun install -g @earendil-works/pi-coding-agent@0.83.0  # initial known-good global install
+bun run apply:pi-patches                                # pin editor/footer + verify global pi
 bun run src/index.ts install                            # deploys the symlinks
 pi                                                      # /login → provider of choice
 bun run check:pi-compat                                 # compile + offline real-pi RPC smoke
-bun run update:pi                                       # preflight, update, verify, auto-rollback
+bun run update:pi                                       # preflight, update, patch, verify, auto-rollback
 ```
 
 Select `transparent-dark` from `/settings` after installation. The theme keeps
@@ -37,17 +38,43 @@ only the user-message background opaque; tool, skill/custom-message, and
 selection backgrounds use the terminal default background.
 
 The exact versions in `package.json`/`bun.lock` are the **local development
-baseline**, not a global-version allowlist. A newer global pi is accepted when
-its public declarations compile the self-contained extensions and its real CLI
-passes the isolated RPC probe. `check:pi-version` remains as a backward-
-compatible alias for `check:pi-compat`.
+baseline**, not a global-version allowlist. A newer global pi remains compatible
+when its public declarations compile the self-contained extensions and its real
+CLI passes the isolated RPC probe. The sticky viewport is stricter: its two Bun
+`patchedDependencies` target exact package versions, and
+`apply:pi-patches` fails closed on version drift or source mismatch. Refresh and
+requalify both patches before accepting a newer global Pi. The safe updater may
+use an unsupported older installation as its known-good transition source and
+restore that same generation during rollback/recovery; the candidate must have
+an exact patch generation. When the source has a patch generation, retain its
+specification through rollout so automatic rollback can reapply it.
+Before modifying a global package, the applicator validates every target and
+atomically copies each target file onto a private inode; this prevents direct
+patching from mutating Bun cache files through shared hardlinks.
+`check:pi-version` remains as a backward-compatible alias for
+`check:pi-compat`.
+
+The viewport keeps extension widgets, the active editor, and the footer at the
+bottom of the terminal while conversation history scrolls internally. Use
+PageUp/PageDown or the mouse wheel to navigate history; submitting input follows
+the newest output again. Mouse tracking is enabled only while this viewport is
+active and is disabled on shutdown. Hold Shift when selecting terminal text in
+terminals that reserve ordinary dragging for mouse-reporting applications.
 
 Prefer `bun run update:pi` over raw `pi update`. It verifies the current install
-before mutation, locks concurrent updates, runs pi's self-update with the
-captured Bun installation, and checks the candidate. An incompatible candidate
-is automatically reinstalled at the previous version and verified again.
-Rollback is best-effort because Bun's registry/cache can be unavailable; a
-recovery journal and exact manual command are retained when restoration fails.
+and read-only probes its exact patch state before mutation, locks concurrent
+updates, runs pi's self-update with the captured Bun installation, applies the
+exact sticky patches, and checks the candidate. The recovery journal therefore
+preserves whether the source cohort was already patched across an interruption.
+An incompatible or unpatched candidate is automatically reinstalled at the
+previous version, repatched when required, and verified against the full
+recorded package cohort.
+Rollback is best-effort because Bun's registry/cache can be unavailable. When
+restoration fails, the recovery journal retains a forced install of the
+validated top-level package plus every recorded core package at its exact
+version. Rerun `bun run update:pi` when Bun's registry/cache is available; it
+executes that argv without a shell, reapplies required patches, and verifies the
+full restored cohort before clearing the journal.
 The compatibility smoke uses temporary HOME/config/session directories, runs
 no model turn/provider request, and never reads user auth or sessions.
 

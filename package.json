@@ -21,6 +21,7 @@
     "check:pi-schemas": "bun scripts/gen-pi-schemas.ts --check",
     "check:pi-compat": "bun scripts/check-pi-compat.ts",
     "check:pi-version": "bun scripts/check-pi-version.ts",
+    "apply:pi-patches": "bun scripts/apply-pi-patches.ts",
     "qualify:pi-permission-judge": "bun scripts/qualify-permission-judge.ts",
     "update:pi": "bun scripts/update-pi.ts",
     "gen:pi-schemas": "bun scripts/gen-pi-schemas.ts",
@@ -55,5 +56,9 @@
     "oxlint": "1.14.0",
     "prettier": "3.6.2",
     "vitest": "3.2.4"
+  },
+  "patchedDependencies": {
+    "@earendil-works/pi-tui@0.83.0": "patches/@earendil-works%2Fpi-tui@0.83.0.patch",
+    "@earendil-works/pi-coding-agent@0.83.0": "patches/@earendil-works%2Fpi-coding-agent@0.83.0.patch"
   }
 }
