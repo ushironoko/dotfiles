@@ -6,15 +6,15 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   fauxAssistantMessage,
+  fauxProvider,
   fauxToolCall,
-  registerFauxProvider,
-} from "@earendil-works/pi-ai/compat";
+  InMemoryCredentialStore,
+} from "@earendil-works/pi-ai";
 import {
-  AuthStorage,
   createAgentSession,
   createSyntheticSourceInfo,
   DefaultResourceLoader,
-  ModelRegistry,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -254,18 +254,17 @@ describe("active skill allowed-tools permission grants", () => {
     const agentDir = join(root, "agent");
     await fs.mkdir(agentDir);
 
-    const faux = registerFauxProvider({
+    const faux = fauxProvider({
       api: `permission-skill-${crypto.randomUUID()}`,
       provider: `permission-skill-${crypto.randomUUID()}`,
       tokensPerSecond: 100_000,
     });
     const model = faux.getModel();
-    const authStorage = AuthStorage.inMemory();
-    authStorage.setRuntimeApiKey(model.provider, "test-key");
-    const modelRegistry = ModelRegistry.create(
-      authStorage,
-      join(agentDir, "models.json"),
-    );
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsPath: null,
+    });
+    modelRuntime.registerNativeProvider(faux.provider);
     let expandedPrompt: string | undefined;
     const loader = new DefaultResourceLoader({
       cwd: root,
@@ -310,8 +309,7 @@ describe("active skill allowed-tools permission grants", () => {
     const { session } = await createAgentSession({
       cwd: root,
       agentDir,
-      authStorage,
-      modelRegistry,
+      modelRuntime,
       model,
       resourceLoader: loader,
       sessionManager: SessionManager.inMemory(),
@@ -336,7 +334,7 @@ describe("active skill allowed-tools permission grants", () => {
       expect(chatRequests(upstream)).toHaveLength(1);
     } finally {
       session.dispose();
-      faux.unregister();
+      modelRuntime.unregisterProvider(faux.provider.id);
     }
   });
 

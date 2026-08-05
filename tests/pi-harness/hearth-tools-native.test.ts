@@ -34,7 +34,13 @@ const settings: PiToolSettings = {
   shell,
 };
 
-const context = { model: undefined } as never;
+const context = {
+  model: undefined,
+  sessionManager: {
+    getSessionId: () => "hearth-tools-test",
+    getSessionFile: () => undefined,
+  },
+} as never;
 
 interface NativeAbortController {
   readonly signal: AbortSignal;

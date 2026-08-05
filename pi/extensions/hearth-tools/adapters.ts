@@ -52,7 +52,7 @@ const GLOB_SCAN_MULTIPLIER = 100;
 const MILLISECONDS_PER_SECOND = 1_000;
 const HEARTH_SIGNAL_EXIT_CODE = -1;
 
-// Mirrors pi 0.80.7's bounded image sniffer and supported MIME contract.
+// Mirrors pi's bounded image sniffer and supported MIME contract.
 const IMAGE_TYPE_SNIFF_BYTES = 4_100;
 const ASCII_ENCODING = "ascii";
 const IMAGE_MIME = {

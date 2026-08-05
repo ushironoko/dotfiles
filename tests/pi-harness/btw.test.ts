@@ -3,14 +3,18 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { UserMessage } from "@earendil-works/pi-ai/compat";
+import {
+  InMemoryCredentialStore,
+  type UserMessage,
+} from "@earendil-works/pi-ai";
 import {
   buildSessionContext,
   createEventBus,
   type CreateAgentSessionOptions,
   type ExtensionCommandContext,
   type ExtensionContext,
-  type ModelRegistry,
+  ModelRegistry,
+  ModelRuntime,
   type RegisteredCommand,
   type ResourceLoader,
   SessionManager,
@@ -44,6 +48,11 @@ const parentModel = {
   id: "test-model",
   name: "Test model",
 } as NonNullable<ExtensionCommandContext["model"]>;
+const parentModelRuntime = await ModelRuntime.create({
+  credentials: new InMemoryCredentialStore(),
+  modelsPath: null,
+});
+const parentModelRegistry = new ModelRegistry(parentModelRuntime);
 
 const userMessage = (text: string): UserMessage => ({
   role: "user",
@@ -211,7 +220,7 @@ const snapshot = (): BtwSnapshot => ({
   systemPrompt: "parent system prompt",
   messages: [userMessage("parent context")],
   model: parentModel,
-  modelRegistry: {} as ModelRegistry,
+  modelRegistry: parentModelRegistry,
   thinkingLevel: "low",
 });
 
@@ -287,7 +296,7 @@ describe("BTW read-only fork runner", () => {
       ...BTW_DENIED_TOOLS,
     ]);
     expect(harness.createOptions[0].model).toBe(parentModel);
-    expect(harness.createOptions[0].modelRegistry).toBe(parent.modelRegistry);
+    expect(harness.createOptions[0].modelRuntime).toBe(parentModelRuntime);
     expect(harness.createOptions[0].thinkingLevel).toBe("low");
     expect(harness.loaderOptions[0].settingsManager).toBe(
       harness.createOptions[0].settingsManager,
@@ -651,7 +660,7 @@ const commandContext = (
     hasUI: options.hasUI ?? true,
     mode: options.mode ?? "tui",
     model: parentModel,
-    modelRegistry: {} as ModelRegistry,
+    modelRegistry: parentModelRegistry,
     sessionManager,
     signal: undefined,
     ui: {

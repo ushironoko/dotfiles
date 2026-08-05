@@ -25,7 +25,7 @@ child-process behavior): `tests/fixtures/pi-harness/raw/`.
 
 ```bash
 bun install --frozen-lockfile                           # reproducible local test baseline
-bun install -g @earendil-works/pi-coding-agent@0.80.7  # initial known-good global install
+bun install -g @earendil-works/pi-coding-agent@0.83.0  # initial known-good global install
 bun run src/index.ts install                            # deploys the symlinks
 pi                                                      # /login → provider of choice
 bun run check:pi-compat                                 # compile + offline real-pi RPC smoke
@@ -375,7 +375,7 @@ config, a missing/incompatible native addon, or an effective competing override
 for one of the five built-in names or `hearth_graph` terminates pi at startup
 with exit code 1; there is no built-in fallback. Registration restores the prior
 active built-in names, so replacing `grep` does not enable it, then activates the
-new read-only `hearth_graph` tool. Pi 0.80.7 exposes only the first effective tool per
+new read-only `hearth_graph` tool. Pi 0.83.0 exposes only the first effective tool per
 name: a later inert losing registration cannot be enumerated, but it also cannot
 execute. Hearth checks effective ownership before registration, immediately
 after registration, before each agent turn, and again at the tool-call boundary.

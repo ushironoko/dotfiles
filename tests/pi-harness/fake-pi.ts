@@ -185,6 +185,7 @@ export const createFakePi = (
     model?: ModelLike;
     contextUsage?: ContextUsageLike;
     sessionId?: string;
+    sessionFile?: string;
   } = {},
 ): FakePi => {
   const store: HandlerStore = {
@@ -249,6 +250,7 @@ export const createFakePi = (
     sessionManager: {
       getBranch: () => [...sessionBranch],
       getSessionId: () => options.sessionId ?? "fake-session",
+      getSessionFile: () => options.sessionFile,
     },
     getContextUsage: () => contextUsage,
     ui: {
