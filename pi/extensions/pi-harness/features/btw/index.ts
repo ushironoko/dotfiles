@@ -18,10 +18,11 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
 import type { PiLike } from "../../lib/pi-like";
 import { stripTerminalControls } from "../../lib/terminal-text";
+import { BtwAnswerPaneComponent } from "./ui";
 
 const HISTORY_TYPE = "pi-harness:btw";
 const STATUS_KEY = "pi-harness-btw";
@@ -32,6 +33,10 @@ const ANSWER_MAX_BYTES = 64 * 1024;
 const ERROR_MAX_BYTES = 4 * 1024;
 const TRUNCATION_MARKER = "\n\n[BTW answer truncated in parent history.]";
 const ERROR_TRUNCATION_MARKER = "…";
+const EMPTY_OVERLAY_COMPONENT: Component = {
+  render: () => [],
+  invalidate: () => {},
+};
 
 // pi's grep/find wrappers auto-install missing rg/fd binaries. Keep the BTW
 // capability set to built-ins that never perform package or binary installs.
@@ -514,12 +519,138 @@ const setupBtw = (
   let running = false;
   let activeAbort: BtwCancellationController | undefined;
   let activeOperation: Promise<void> | undefined;
+  let paneClose: (() => void) | undefined;
+  let paneHandle: OverlayHandle | undefined;
+  let paneTui: TUI | undefined;
+  let panePromise: Promise<void> | undefined;
   let sessionGeneration = 0;
   let branchGeneration = 0;
+
+  const closePane = (): void => {
+    const close = paneClose;
+    const handle = paneHandle;
+    const tui = paneTui;
+    paneClose = undefined;
+    paneHandle = undefined;
+    paneTui = undefined;
+    if (close === undefined) return;
+    if (handle === undefined || tui === undefined) {
+      close();
+      return;
+    }
+
+    // Pi 0.80's custom-overlay done callback always pops the newest overlay,
+    // not the overlay that owns the callback. Remove our owned overlay by
+    // handle and temporarily put a sentinel on top for done() to consume, so a
+    // newer unrelated overlay survives while Pi still resolves/disposes the
+    // custom component normally.
+    const sentinel = tui.showOverlay(EMPTY_OVERLAY_COMPONENT, {
+      nonCapturing: true,
+    });
+    try {
+      handle.hide();
+      close();
+    } finally {
+      sentinel.hide();
+    }
+  };
+  const openPane = (
+    ctx: ExtensionCommandContext,
+    selected?: BtwHistoryData,
+  ): void => {
+    const histories = new Map<string, BtwHistoryData>();
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (
+        entry.type === "custom" &&
+        entry.customType === HISTORY_TYPE &&
+        isHistoryData(entry.data)
+      ) {
+        histories.set(entry.data.id, entry.data);
+      }
+    }
+    if (selected !== undefined) histories.set(selected.id, selected);
+    const ordered = [...histories.values()];
+
+    const { ui } = ctx;
+    const selectedRecord = selected ?? ordered.at(-1);
+    if (selectedRecord === undefined) {
+      ui.notify("No BTW answers are available on this branch.", "warning");
+      return;
+    }
+    if (typeof ui.custom !== "function") {
+      ui.notify("BTW answer pane requires custom TUI support.", "warning");
+      return;
+    }
+    closePane();
+
+    let detailPromise: Promise<void>;
+    try {
+      detailPromise = ui.custom<void>(
+        (tui, theme, keybindings, done) => {
+          let closed = false;
+          const close = (): void => {
+            if (closed) return;
+            closed = true;
+            if (paneClose === close) {
+              paneClose = undefined;
+              paneHandle = undefined;
+              paneTui = undefined;
+            }
+            done(undefined);
+          };
+          paneClose = close;
+          paneTui = tui;
+          return new BtwAnswerPaneComponent(
+            ordered,
+            selectedRecord.id,
+            tui,
+            keybindings,
+            closePane,
+            theme,
+          );
+        },
+        {
+          overlay: true,
+          overlayOptions: {
+            width: "100%",
+            maxHeight: "100%",
+            anchor: "center",
+            margin: 0,
+          },
+          onHandle: (handle) => {
+            if (panePromise === detailPromise) paneHandle = handle;
+          },
+        },
+      );
+    } catch (error) {
+      ui.notify(
+        `BTW answer pane could not open: ${errorText(error)}`,
+        "warning",
+      );
+      return;
+    }
+
+    panePromise = detailPromise;
+    void detailPromise
+      .catch((error) => {
+        ui.notify(
+          `BTW answer pane could not open: ${errorText(error)}`,
+          "warning",
+        );
+      })
+      .finally(() => {
+        if (panePromise !== detailPromise) return;
+        panePromise = undefined;
+        paneClose = undefined;
+        paneHandle = undefined;
+        paneTui = undefined;
+      });
+  };
 
   pi.on("session_start", () => {
     sessionGeneration += 1;
     activeAbort?.abort();
+    closePane();
     requestHearthService();
   });
   pi.on("session_before_tree", () => {
@@ -528,10 +659,12 @@ const setupBtw = (
     // answer must never move from its snapshotted branch to another branch.
     branchGeneration += 1;
     activeAbort?.abort();
+    closePane();
   });
   pi.on("session_shutdown", async () => {
     sessionGeneration += 1;
     activeAbort?.abort();
+    closePane();
     const operation = activeOperation;
     await operation;
     unsubscribeHearthReady();
@@ -582,34 +715,19 @@ const setupBtw = (
     description: "Cancel the active BTW side question",
     handler: cancelActive,
   });
-
-  pi.registerEntryRenderer<BtwHistoryData>(
-    HISTORY_TYPE,
-    (entry, { expanded }, theme) => {
-      if (!isHistoryData(entry.data)) {
-        return new Text(
-          theme.fg("warning", "BTW history entry is malformed"),
-          1,
-          0,
-        );
+  pi.registerCommand("btw-history", {
+    description: "Open BTW answer history for the active branch",
+    handler: async (_args, ctx) => {
+      if (ctx.mode !== "tui") {
+        if (!ctx.hasUI) {
+          throw new Error("BTW answer history requires TUI mode");
+        }
+        ctx.ui.notify("BTW answer history requires TUI mode.", "warning");
+        return;
       }
-      const { data } = entry;
-      const question = stripTerminalControls(data.question);
-      const answer = stripTerminalControls(data.answer);
-      const model = stripTerminalControls(data.model);
-      let text = `${theme.fg("accent", theme.bold("BTW"))}\n`;
-      text += `${theme.fg("muted", "Q:")} ${question}\n\n${answer}`;
-      if (expanded) {
-        text += `\n\n${theme.fg(
-          "dim",
-          `${model} · ${new Date(data.createdAt).toLocaleString()}${
-            data.answerTruncated ? " · retained answer truncated" : ""
-          }`,
-        )}`;
-      }
-      return new Text(text, 1, 0);
+      openPane(ctx);
     },
-  );
+  });
 
   pi.registerCommand("btw", {
     description:
@@ -718,6 +836,8 @@ const setupBtw = (
           pi.appendEntry<BtwHistoryData>(HISTORY_TYPE, record);
           if (uiMode === "rpc") {
             ui.notify(`BTW\nQ: ${record.question}\n\n${record.answer}`, "info");
+          } else if (uiMode === "tui") {
+            openPane(ctx, record);
           }
         } catch (error) {
           if (!invocationIsStale() && !invocationAbort.signal.aborted) {
