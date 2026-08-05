@@ -8,7 +8,6 @@ import {
   buildSessionContext,
   createEventBus,
   type CreateAgentSessionOptions,
-  type EntryRenderer,
   type ExtensionCommandContext,
   type ExtensionContext,
   type ModelRegistry,
@@ -36,6 +35,8 @@ import { loadConfig } from "../../pi/extensions/pi-harness/config";
 import { setupHarness } from "../../pi/extensions/pi-harness/index";
 import type { PiLike } from "../../pi/extensions/pi-harness/lib/pi-like";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
+import { visibleWidth } from "../../pi/extensions/pi-harness/lib/terminal-text";
+import { BtwAnswerPaneComponent } from "../../pi/extensions/pi-harness/features/btw/ui";
 import { createFakePi } from "./fake-pi";
 
 const parentModel = {
@@ -420,7 +421,7 @@ interface CommandHarness {
   pi: PiLike;
   command: (name?: string) => RegisteredCommand;
   shortcut: (name: string) => (ctx: ExtensionContext) => Promise<void> | void;
-  renderer: () => EntryRenderer<BtwHistoryData>;
+  rendererRegistered(): boolean;
   entries: { customType: string; data: unknown }[];
   emitSessionBeforeTree(): Promise<void>;
   emitSessionCompact(ctx: ExtensionCommandContext): Promise<void>;
@@ -436,7 +437,7 @@ const commandHarness = (
     string,
     (ctx: ExtensionContext) => Promise<void> | void
   >();
-  let renderer: EntryRenderer<BtwHistoryData> | undefined;
+  let rendererRegistrations = 0;
   let compactHandler:
     | ((
         event: { type: string },
@@ -477,11 +478,8 @@ const commandHarness = (
     ) {
       shortcuts.set(name, options.handler);
     },
-    registerEntryRenderer(
-      customType: string,
-      value: EntryRenderer<BtwHistoryData>,
-    ) {
-      if (customType === HISTORY_TYPE) renderer = value;
+    registerEntryRenderer(customType: string) {
+      if (customType === HISTORY_TYPE) rendererRegistrations += 1;
     },
     appendEntry(customType: string, data: unknown) {
       entries.push({ customType, data });
@@ -501,10 +499,7 @@ const commandHarness = (
       if (!shortcut) throw new Error(`${name} shortcut was not registered`);
       return shortcut;
     },
-    renderer: () => {
-      if (!renderer) throw new Error("renderer was not registered");
-      return renderer;
-    },
+    rendererRegistered: () => rendererRegistrations > 0,
     entries,
     emitSessionBeforeTree: async () => {
       await beforeTreeHandler?.();
@@ -521,11 +516,30 @@ const commandHarness = (
   };
 };
 
+interface FakeOverlayHandle {
+  hide(): void;
+  setHidden(hidden: boolean): void;
+  isHidden(): boolean;
+  focus(): void;
+  unfocus(): void;
+  isFocused(): boolean;
+}
+
+interface CustomPaneCall {
+  component: BtwAnswerPaneComponent;
+  options: unknown;
+  isClosed(): boolean;
+  hasHandle(): boolean;
+  isMounted(): boolean;
+}
+
 interface ContextHarness {
   ctx: ExtensionCommandContext;
   order: string[];
   notifications: { message: string; level?: string }[];
   statuses: { key: string; value: string | undefined }[];
+  panes: CustomPaneCall[];
+  mountForeignOverlay(): { isMounted(): boolean };
   sessionManager: SessionManager;
 }
 
@@ -533,7 +547,8 @@ const commandContext = (
   options: {
     hasUI?: boolean;
     idle?: boolean;
-    mode?: "tui" | "rpc";
+    mode?: "tui" | "rpc" | "json" | "print";
+    customUi?: boolean;
   } = {},
 ): ContextHarness => {
   const sessionManager = SessionManager.inMemory("/repo");
@@ -541,7 +556,96 @@ const commandContext = (
   const order: string[] = [];
   const notifications: { message: string; level?: string }[] = [];
   const statuses: { key: string; value: string | undefined }[] = [];
+  const panes: CustomPaneCall[] = [];
+  const overlayStack: FakeOverlayHandle[] = [];
+  const mounted = new Set<FakeOverlayHandle>();
+  let focused: FakeOverlayHandle | undefined;
   let idle = options.idle ?? false;
+
+  const showOverlay = (): FakeOverlayHandle => {
+    let hidden = false;
+    const handle: FakeOverlayHandle = {
+      hide: () => {
+        const index = overlayStack.indexOf(handle);
+        if (index !== -1) overlayStack.splice(index, 1);
+        mounted.delete(handle);
+        if (focused === handle) focused = overlayStack.at(-1);
+      },
+      setHidden: (value) => {
+        hidden = value;
+      },
+      isHidden: () => hidden,
+      focus: () => {
+        focused = handle;
+      },
+      unfocus: () => {
+        if (focused === handle) focused = undefined;
+      },
+      isFocused: () => focused === handle,
+    };
+    overlayStack.push(handle);
+    mounted.add(handle);
+    focused = handle;
+    return handle;
+  };
+  const hideTopOverlay = (): void => {
+    const handle = overlayStack.at(-1);
+    handle?.hide();
+  };
+  const tui = {
+    terminal: { rows: 16 },
+    requestRender: () => {},
+    showOverlay: (_component: unknown, _options?: unknown) => showOverlay(),
+  };
+  const custom = <T>(
+    factory: (
+      value: typeof tui,
+      theme: {
+        fg(color: string, text: string): string;
+        bg(color: string, text: string): string;
+        bold(text: string): string;
+      },
+      keybindings: { matches(data: string, keybinding: string): boolean },
+      done: (result: T) => void,
+    ) => BtwAnswerPaneComponent,
+    customOptions?: unknown,
+  ): Promise<T> =>
+    new Promise<T>((resolve) => {
+      let closed = false;
+      let ownedHandle: FakeOverlayHandle | undefined;
+      const component = factory(
+        tui,
+        {
+          fg: (_color, text) => text,
+          bg: (_color, text) => text,
+          bold: (text) => text,
+        },
+        { matches: () => false },
+        (result) => {
+          if (closed) return;
+          closed = true;
+          hideTopOverlay();
+          resolve(result);
+        },
+      );
+      panes.push({
+        component,
+        options: customOptions,
+        isClosed: () => closed,
+        hasHandle: () => ownedHandle !== undefined,
+        isMounted: () => ownedHandle !== undefined && mounted.has(ownedHandle),
+      });
+      queueMicrotask(() => {
+        if (closed) return;
+        ownedHandle = showOverlay();
+        const onHandle = (
+          customOptions as
+            | { onHandle?: (handle: FakeOverlayHandle) => void }
+            | undefined
+        )?.onHandle;
+        onHandle?.(ownedHandle);
+      });
+    });
   const ctx = {
     cwd: "/repo",
     hasUI: options.hasUI ?? true,
@@ -558,6 +662,7 @@ const commandContext = (
       setStatus: (key: string, value: string | undefined) => {
         statuses.push({ key, value });
       },
+      ...(options.customUi === false ? {} : { custom }),
     },
     isIdle: () => idle,
     waitForIdle: async () => {
@@ -566,8 +671,144 @@ const commandContext = (
     },
     getSystemPrompt: () => "current system",
   } as unknown as ExtensionCommandContext;
-  return { ctx, order, notifications, statuses, sessionManager };
+  return {
+    ctx,
+    order,
+    notifications,
+    statuses,
+    panes,
+    mountForeignOverlay: () => {
+      const handle = showOverlay();
+      return { isMounted: () => mounted.has(handle) };
+    },
+    sessionManager,
+  };
 };
+
+const historyRecord = (
+  id: string,
+  question: string,
+  answer: string,
+  createdAt: number,
+): BtwHistoryData => ({
+  version: 1,
+  id,
+  question,
+  answer,
+  answerTruncated: false,
+  model: "test-provider/test-model",
+  createdAt,
+});
+
+const answerPane = (
+  histories: BtwHistoryData[],
+  selectedId?: string,
+  rows = 10,
+) => {
+  let renders = 0;
+  let closes = 0;
+  const component = new BtwAnswerPaneComponent(
+    histories,
+    selectedId,
+    {
+      terminal: { rows },
+      requestRender: () => {
+        renders += 1;
+      },
+    },
+    { matches: () => false },
+    () => {
+      closes += 1;
+    },
+  );
+  return {
+    component,
+    renderCount: () => renders,
+    closeCount: () => closes,
+  };
+};
+
+describe("BTW answer pane", () => {
+  test("starts on the selected latest answer and switches history with Up/Down", () => {
+    const oldest = historyRecord("oldest", "old question", "old answer", 1);
+    const middle = historyRecord(
+      "middle",
+      "middle question",
+      "middle answer",
+      2,
+    );
+    const latest = historyRecord(
+      "latest",
+      "latest question",
+      "latest answer",
+      3,
+    );
+    const pane = answerPane([oldest, middle, latest], latest.id);
+
+    expect(pane.component.getSelectedId()).toBe("latest");
+    expect(pane.component.render(60).join("\n")).toContain("latest answer");
+
+    pane.component.handleInput("up");
+    expect(pane.component.getSelectedId()).toBe("middle");
+    expect(pane.component.render(60).join("\n")).toContain("middle answer");
+
+    pane.component.handleInput("up");
+    pane.component.handleInput("up");
+    expect(pane.component.getSelectedId()).toBe("oldest");
+    pane.component.handleInput("down");
+    expect(pane.component.getSelectedId()).toBe("middle");
+    expect(pane.renderCount()).toBe(3);
+  });
+
+  test("scrolls long answers with page and boundary keys and resets on history change", () => {
+    const long = historyRecord(
+      "long",
+      "long question",
+      Array.from({ length: 30 }, (_, index) => `answer line ${index}`).join(
+        "\n",
+      ),
+      2,
+    );
+    const pane = answerPane(
+      [historyRecord("short", "short question", "short answer", 1), long],
+      long.id,
+      8,
+    );
+    pane.component.render(40);
+
+    pane.component.handleInput("pagedown");
+    expect(pane.component.getOffset()).toBeGreaterThan(0);
+    pane.component.handleInput("end");
+    expect(pane.component.render(40).join("\n")).toContain("answer line 29");
+    pane.component.handleInput("home");
+    expect(pane.component.getOffset()).toBe(0);
+
+    pane.component.handleInput("pagedown");
+    pane.component.handleInput("up");
+    expect(pane.component.getSelectedId()).toBe("short");
+    expect(pane.component.getOffset()).toBe(0);
+  });
+
+  test("sanitizes and width-bounds content and supports detail-view close keys", () => {
+    const unsafe = historyRecord(
+      "unsafe",
+      "question\u001b]2;owned\u0007safe",
+      "answer\u001b[31m red\u001b[0m 界😀".repeat(8),
+      1,
+    );
+    const pane = answerPane([unsafe], unsafe.id, 12);
+    const lines = pane.component.render(24);
+    expect(lines.join("\n")).not.toContain("\u001b");
+    expect(lines.join("\n")).toContain("questionsafe");
+    expect(lines.every((item) => visibleWidth(item) <= 24)).toBe(true);
+
+    pane.component.handleInput("escape");
+    pane.component.handleInput("left");
+    pane.component.handleInput("b");
+    pane.component.handleInput("q");
+    expect(pane.closeCount()).toBe(4);
+  });
+});
 
 describe("BTW parent command", () => {
   test("starts from an immediate snapshot and retains Q/A only as a parent custom entry", async () => {
@@ -606,7 +847,20 @@ describe("BTW parent command", () => {
       },
     ]);
 
-    // Custom entries are durable/renderable session state, not LLM messages.
+    expect(harness.rendererRegistered()).toBe(false);
+    expect(context.panes).toHaveLength(1);
+    expect(context.panes[0]?.component.getSelectedId()).toBe("btw-1");
+    expect(context.panes[0]?.options).toMatchObject({
+      overlay: true,
+      overlayOptions: {
+        width: "100%",
+        maxHeight: "100%",
+        anchor: "center",
+        margin: 0,
+      },
+    });
+
+    // Custom entries are durable hidden session state, not LLM messages.
     context.sessionManager.appendCustomEntry(
       HISTORY_TYPE,
       harness.entries[0].data,
@@ -614,6 +868,143 @@ describe("BTW parent command", () => {
     expect(
       buildSessionContext(context.sessionManager.getEntries()).messages,
     ).toEqual([userMessage("main question")]);
+  });
+
+  test("loads branch history into the pane and closes it on tree and session changes", async () => {
+    const harness = commandHarness();
+    const context = commandContext({ idle: true });
+    context.sessionManager.appendCustomEntry(
+      HISTORY_TYPE,
+      historyRecord("older", "older question", "older answer", 1),
+    );
+    context.sessionManager.appendCustomEntry(HISTORY_TYPE, {
+      version: 1,
+      id: "malformed",
+      question: "ignored",
+    });
+    let invocation = 0;
+    setupBtw(harness.pi, {
+      now: () => 10 + invocation,
+      createId: () => `current-${++invocation}`,
+      answerQuestion: async () => `current answer ${invocation + 1}`,
+    });
+
+    await harness.command().handler("current question", context.ctx);
+    await waitFor(() => context.panes.length === 1);
+    const [firstPane] = context.panes;
+    await waitFor(() => firstPane?.hasHandle() === true);
+    expect(firstPane?.component.getSelectedId()).toBe("current-1");
+    firstPane?.component.handleInput("up");
+    expect(firstPane?.component.getSelectedId()).toBe("older");
+    expect(firstPane?.component.render(60).join("\n")).toContain(
+      "older answer",
+    );
+
+    const foreignOverlay = context.mountForeignOverlay();
+    expect(foreignOverlay.isMounted()).toBe(true);
+    await harness.emitSessionBeforeTree();
+    expect(firstPane?.isClosed()).toBe(true);
+    expect(firstPane?.isMounted()).toBe(false);
+    expect(foreignOverlay.isMounted()).toBe(true);
+
+    await harness.command().handler("another question", context.ctx);
+    await waitFor(() => context.panes.length === 2);
+    const [, secondPane] = context.panes;
+    await waitFor(() => secondPane?.hasHandle() === true);
+    expect(secondPane?.isClosed()).toBe(false);
+    await harness.emitSessionStart();
+    expect(secondPane?.isClosed()).toBe(true);
+    expect(secondPane?.isMounted()).toBe(false);
+    expect(foreignOverlay.isMounted()).toBe(true);
+  });
+
+  test("reopens persisted history without a model call and preserves branch order", async () => {
+    const harness = commandHarness();
+    const context = commandContext({ idle: true });
+    context.sessionManager.appendCustomEntry(
+      HISTORY_TYPE,
+      historyRecord("first", "first question", "first answer", 100),
+    );
+    context.sessionManager.appendCustomEntry(
+      HISTORY_TYPE,
+      historyRecord("second", "second question", "second answer", 1),
+    );
+    let answerCalls = 0;
+    setupBtw(harness.pi, {
+      answerQuestion: async () => {
+        answerCalls += 1;
+        return "unexpected";
+      },
+    });
+
+    await harness.command("btw-history").handler("", context.ctx);
+    expect(context.panes).toHaveLength(1);
+    const [firstPane] = context.panes;
+    expect(firstPane?.component.getSelectedId()).toBe("second");
+    firstPane?.component.handleInput("up");
+    expect(firstPane?.component.getSelectedId()).toBe("first");
+    firstPane?.component.handleInput("b");
+    expect(firstPane?.isClosed()).toBe(true);
+
+    await harness.command("btw-history").handler("", context.ctx);
+    expect(context.panes).toHaveLength(2);
+    expect(context.panes[1]?.component.getSelectedId()).toBe("second");
+    expect(answerCalls).toBe(0);
+  });
+
+  test("reports unavailable or unsupported BTW history without opening a pane", async () => {
+    const emptyHarness = commandHarness();
+    const emptyContext = commandContext({ idle: true });
+    setupBtw(emptyHarness.pi);
+    await emptyHarness.command("btw-history").handler("", emptyContext.ctx);
+    expect(emptyContext.panes).toHaveLength(0);
+    expect(emptyContext.notifications.at(-1)).toEqual({
+      message: "No BTW answers are available on this branch.",
+      level: "warning",
+    });
+
+    const rpcHarness = commandHarness();
+    const rpcContext = commandContext({ idle: true, mode: "rpc" });
+    rpcContext.sessionManager.appendCustomEntry(
+      HISTORY_TYPE,
+      historyRecord("saved", "question", "answer", 1),
+    );
+    setupBtw(rpcHarness.pi);
+    await rpcHarness.command("btw-history").handler("", rpcContext.ctx);
+    expect(rpcContext.panes).toHaveLength(0);
+    expect(rpcContext.notifications.at(-1)).toEqual({
+      message: "BTW answer history requires TUI mode.",
+      level: "warning",
+    });
+
+    const printHarness = commandHarness();
+    const printContext = commandContext({
+      idle: true,
+      mode: "print",
+      hasUI: false,
+    });
+    setupBtw(printHarness.pi);
+    await expect(
+      printHarness.command("btw-history").handler("", printContext.ctx),
+    ).rejects.toThrow("BTW answer history requires TUI mode");
+  });
+
+  test("warns without mixing the answer into notifications when custom TUI is unavailable", async () => {
+    const harness = commandHarness();
+    const context = commandContext({ idle: true, customUi: false });
+    setupBtw(harness.pi, {
+      answerQuestion: async () => "pane-only answer",
+    });
+
+    await harness.command().handler("question", context.ctx);
+    await waitFor(() => harness.entries.length === 1);
+    expect(context.panes).toHaveLength(0);
+    expect(context.notifications).toEqual([
+      {
+        message: "BTW answer pane requires custom TUI support.",
+        level: "warning",
+      },
+    ]);
   });
 
   test("freezes an inline default snapshot before yielding to parent updates", async () => {
@@ -1337,7 +1728,7 @@ describe("BTW parent command", () => {
     ).toBe(true);
   });
 
-  test("sanitizes terminal controls before persistence and rendering", async () => {
+  test("sanitizes terminal controls before persistence and pane rendering", async () => {
     const harness = commandHarness();
     const context = commandContext({ idle: true });
     setupBtw(harness.pi, {
@@ -1349,21 +1740,10 @@ describe("BTW parent command", () => {
     const data = harness.entries[0].data as BtwHistoryData;
     expect(JSON.stringify(data)).not.toContain("\u001b");
 
-    const component = harness.renderer()(
-      {
-        data: {
-          ...data,
-          answer: "raw\u001b[31mcontrol",
-          model: "model\u001b]2;owned\u0007",
-        },
-      } as never,
-      { expanded: true },
-      {
-        fg: (_color: string, text: string) => text,
-        bold: (text: string) => text,
-      } as never,
-    );
-    expect(component?.render(80).join("\n")).not.toContain("\u001b");
+    await waitFor(() => context.panes.length === 1);
+    const rendered = context.panes[0]?.component.render(80).join("\n") ?? "";
+    expect(rendered).not.toContain("\u001b");
+    expect(rendered).toContain("answersafe");
 
     const emptyHarness = commandHarness();
     const emptyContext = commandContext({ idle: true });
@@ -1417,15 +1797,10 @@ describe("BTW parent command", () => {
     }
   });
 
-  test("renders malformed resumed history defensively", () => {
+  test("does not register a transcript renderer for persisted BTW history", () => {
     const harness = commandHarness();
     setupBtw(harness.pi);
-    const renderer = harness.renderer();
-    const component = renderer({ data: null } as never, { expanded: false }, {
-      fg: (_color: string, text: string) => text,
-      bold: (text: string) => text,
-    } as never);
-    expect(component?.render(80).join("\n")).toContain("malformed");
+    expect(harness.rendererRegistered()).toBe(false);
   });
 });
 
@@ -1438,6 +1813,7 @@ describe("BTW umbrella lifecycle", () => {
     parentConfig.features.workflow = false;
     setupHarness(parent, parentConfig);
     expect(parent.commands.has("btw")).toBe(true);
+    expect(parent.commands.has("btw-history")).toBe(true);
     expect(parent.commands.has("btw-cancel")).toBe(true);
     expect(parent.shortcuts.has("ctrl+alt+b")).toBe(true);
 
@@ -1447,5 +1823,6 @@ describe("BTW umbrella lifecycle", () => {
     childConfig.features.workflow = false;
     setupHarness(child, childConfig);
     expect(child.commands.has("btw")).toBe(false);
+    expect(child.commands.has("btw-history")).toBe(false);
   });
 });

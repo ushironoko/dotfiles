@@ -543,9 +543,13 @@ answers in a read-only child while the parent agent may continue streaming.
 the snapshot. `--wait` is recognized only as the first complete command-line
 token; text entered in the question dialog is always treated literally. With no
 question (`/btw` or `/btw --wait`), TUI/RPC UI modes open that dialog. The
-command requires one of those UI-capable modes; RPC answers are also sent through
-the UI notification channel. Print/JSON mode reports an unsupported-mode error
-instead of producing an invisible answer.
+command requires one of those UI-capable modes. TUI answers open a dedicated
+full-screen pane rather than appearing in the parent transcript; use Up/Down to
+move through older/newer BTW answers on the active branch, PgUp/PgDn or Home/End
+to scroll a long answer, and Escape/Left/b/q to close it. `/btw-history` reopens
+the latest saved answer without making a model request. RPC answers continue to
+use the UI notification channel; `/btw-history` itself is TUI-only. Print/JSON
+mode reports an unsupported-mode error instead of producing an invisible answer.
 
 The default snapshot contains only messages already recorded on the parent's
 active SessionManager leaf when the inline command is accepted, or when the
@@ -573,10 +577,11 @@ concurrent requests to the selected
 provider/model, so provider concurrency limits, rate limits, and quota apply to
 both; either request can fail or be cancelled without aborting the other.
 
-Successful Q/A records are appended as custom entries in the parent session.
-They remain visible after resuming that parent (hidden records are replayed
-after parent compaction) but are never sent to its LLM, and no independently
-resumable child session or child file is created. Stored and rendered fields are
+Successful Q/A records are appended as hidden custom entries in the parent
+session. They are not rendered into the normal transcript, remain available in
+the dedicated pane after resuming that parent (hidden records are replayed after
+parent compaction), and are never sent to its LLM. No independently resumable
+child session or child file is created. Stored and pane-rendered fields are
 terminal-control sanitized. A persistent parent must already contain one
 completed assistant response so this history can be durably retained. Deleting
 the parent session therefore deletes BTW history with it. BTW is not registered
