@@ -252,6 +252,8 @@ export interface SessionManagerLike {
   getBranch(): unknown[];
   /** Stable Pi session identifier, including in-memory/no-session runtimes. */
   getSessionId?(): string;
+  /** Active JSONL session path; absent for in-memory/no-session runtimes. */
+  getSessionFile?(): string | undefined;
 }
 
 export interface CtxLike {

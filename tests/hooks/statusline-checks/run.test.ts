@@ -94,8 +94,16 @@ describe("runner: TS pnpm typecheck-fail fixture", () => {
     tmps.push(tmp);
     const project = await copyFixture("ts-pnpm-typecheck-fail", tmp);
     const cacheDir = join(tmp, "cache");
+    const bin = join(tmp, "bin");
+    await fs.mkdir(bin);
+    await fs.writeFile(
+      join(bin, "pnpm"),
+      '#!/bin/sh\n[ "$1" = run ] || exit 2\ncase "$2" in\n  typecheck) exit 1 ;;\n  lint|test) exit 0 ;;\n  *) exit 2 ;;\nesac\n',
+      { mode: 0o755 },
+    );
 
     const r = await runRunner(project, {
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
       STATUSLINE_CACHE_DIR: cacheDir,
       STATUSLINE_NOW_OVERRIDE: "2000",
     });
