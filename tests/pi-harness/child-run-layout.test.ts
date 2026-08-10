@@ -3,7 +3,7 @@ import {
   Editor,
   Spacer,
   Text,
-  TUI,
+  TuiMainScreen,
   type EditorTheme,
   type Terminal,
 } from "@earendil-works/pi-tui";
@@ -105,7 +105,7 @@ const createLayout = async (
   }
 
   const terminal = createTerminal(columns, rows);
-  const tui = new TUI(terminal);
+  const tui = new TuiMainScreen(terminal);
   const chat = new Text(
     Array.from(
       { length: 30 },

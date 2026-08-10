@@ -62,6 +62,11 @@ export const createChildProtocolParser = (
   const toolIds = new Map<string, { localId: number; name: string }>();
   let toolIdBytes = 0;
   let nextToolId = 1;
+  let assistantDraft: string | undefined;
+  let assistantDraftBlocks = new Map<number, string>();
+  let assistantDraftLastContentIndex: number | undefined;
+  let assistantDraftBytes = 0;
+  let assistantDraftFull = false;
 
   const observe = (observation: ChildObservation): void => {
     try {
@@ -111,16 +116,76 @@ export const createChildProtocolParser = (
         return undefined;
       }
 
-      if (value.type === "message_update") {
+      if (value.type === "message_start") {
         const message = isRecord(value.message) ? value.message : undefined;
-        if (message?.role === "assistant") {
-          const draft = textParts(message).join("\n");
-          if (draft !== "") {
-            observe({
-              type: "assistant_draft",
-              text: capUtf8(stripTerminalControls(draft), MAX_LIVE_DRAFT_BYTES),
-            });
-          }
+        assistantDraft = message?.role === "assistant" ? "" : undefined;
+        assistantDraftBlocks = new Map();
+        assistantDraftLastContentIndex = undefined;
+        assistantDraftBytes = 0;
+        assistantDraftFull = false;
+        return undefined;
+      }
+
+      if (value.type === "message_update") {
+        if (assistantDraft === undefined || assistantDraftFull)
+          return undefined;
+        const event = isRecord(value.assistantMessageEvent)
+          ? value.assistantMessageEvent
+          : undefined;
+        if (event?.type !== "text_delta" || typeof event.delta !== "string") {
+          return undefined;
+        }
+
+        const delta = stripTerminalControls(event.delta);
+        if (delta === "") return undefined;
+        const explicitContentIndex =
+          typeof event.contentIndex === "number" &&
+          Number.isSafeInteger(event.contentIndex) &&
+          event.contentIndex >= 0
+            ? event.contentIndex
+            : undefined;
+        const contentIndex =
+          explicitContentIndex ?? assistantDraftLastContentIndex ?? 0;
+        const previousBlock = assistantDraftBlocks.get(contentIndex);
+        if (
+          previousBlock === undefined &&
+          assistantDraftBlocks.size >= MAX_RUN_TRANSCRIPT_ITEMS
+        ) {
+          assistantDraftFull = true;
+          return undefined;
+        }
+        const separatorBytes =
+          previousBlock === undefined && assistantDraftBlocks.size > 0 ? 1 : 0;
+        const remainingBytes =
+          MAX_LIVE_DRAFT_BYTES - assistantDraftBytes - separatorBytes;
+        if (remainingBytes <= 0) {
+          assistantDraftFull = true;
+          return undefined;
+        }
+        const acceptedDelta = capUtf8(delta, remainingBytes);
+        if (acceptedDelta === "") {
+          assistantDraftFull = true;
+          return undefined;
+        }
+        const acceptedBytes = Buffer.byteLength(acceptedDelta, "utf8");
+        assistantDraftBlocks.set(
+          contentIndex,
+          `${previousBlock ?? ""}${acceptedDelta}`,
+        );
+        assistantDraftBytes += separatorBytes + acceptedBytes;
+        assistantDraftFull =
+          Buffer.byteLength(delta, "utf8") >= remainingBytes ||
+          assistantDraftBytes >= MAX_LIVE_DRAFT_BYTES;
+        if (explicitContentIndex !== undefined) {
+          assistantDraftLastContentIndex = explicitContentIndex;
+        }
+        const nextDraft = [...assistantDraftBlocks.entries()]
+          .sort(([left], [right]) => left - right)
+          .map(([, text]) => text)
+          .join("\n");
+        if (nextDraft !== assistantDraft) {
+          assistantDraft = nextDraft;
+          observe({ type: "assistant_draft", text: assistantDraft });
         }
         return undefined;
       }
@@ -143,6 +208,11 @@ export const createChildProtocolParser = (
       }
 
       if (value.type !== "message_end") return undefined;
+      assistantDraft = undefined;
+      assistantDraftBlocks.clear();
+      assistantDraftLastContentIndex = undefined;
+      assistantDraftBytes = 0;
+      assistantDraftFull = false;
       const message = isRecord(value.message) ? value.message : undefined;
       const projection: LegacyMessageProjection = {
         stopReason: getString(value, message, "stopReason"),

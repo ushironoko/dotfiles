@@ -1,3 +1,4 @@
+import type { ProviderHeaders } from "@earendil-works/pi-ai";
 import { normalizeProviderSourceUrl } from "./schema";
 
 const CODEX_RESPONSES_ENDPOINT =
@@ -17,7 +18,7 @@ const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
 
 interface CodexAuthInput {
   apiKey?: string;
-  headers?: Record<string, string>;
+  headers?: ProviderHeaders;
 }
 
 interface CodexWebRequest {
@@ -142,14 +143,19 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
 const getHeader = (
-  headers: Record<string, string> | undefined,
+  headers: ProviderHeaders | undefined,
   wanted: string,
 ): string | undefined => {
   if (!headers) return undefined;
   const normalizedWanted = wanted.toLowerCase();
   for (const [name, value] of Object.entries(headers)) {
-    if (name.toLowerCase() === normalizedWanted && value.trim())
+    if (
+      name.toLowerCase() === normalizedWanted &&
+      typeof value === "string" &&
+      value.trim()
+    ) {
       return value.trim();
+    }
   }
   return undefined;
 };

@@ -24,6 +24,11 @@ describe("Pi settings management", () => {
     expect(settings.skills).toContain(MANAGED_SKILL_EXCLUSION);
   });
 
+  test("uses native fullscreen mode without an opaque scrollbar", () => {
+    expect(settings.tuiMode).toBe("fullscreen");
+    expect(settings.fullscreenScrollbar).toBe("hidden");
+  });
+
   test("requires the Pi clean filter for the live settings file", async () => {
     const [attributes, setup] = await Promise.all([
       readFile(resolve(REPO_ROOT, ".gitattributes"), "utf8"),

@@ -24,13 +24,12 @@ child-process behavior): `tests/fixtures/pi-harness/raw/`.
 ## Install
 
 ```bash
-bun install --frozen-lockfile                           # reproducible patched local baseline
-bun install -g @earendil-works/pi-coding-agent@0.83.0  # initial known-good global install
-bun run apply:pi-patches                                # pin editor/footer + verify global pi
+bun install --frozen-lockfile                           # reproducible local baseline
+bun install -g @earendil-works/pi-coding-agent@0.84.1  # initial known-good global install
 bun run src/index.ts install                            # deploys the symlinks
 pi                                                      # /login → provider of choice
 bun run check:pi-compat                                 # compile + offline real-pi RPC smoke
-bun run update:pi                                       # preflight, update, patch, verify, auto-rollback
+bun run update:pi                                       # preflight, update, verify, auto-rollback
 ```
 
 Select `transparent-dark` from `/settings` after installation. The theme keeps
@@ -40,41 +39,60 @@ selection backgrounds use the terminal default background.
 The exact versions in `package.json`/`bun.lock` are the **local development
 baseline**, not a global-version allowlist. A newer global pi remains compatible
 when its public declarations compile the self-contained extensions and its real
-CLI passes the isolated RPC probe. The sticky viewport is stricter: its two Bun
-`patchedDependencies` target exact package versions, and
-`apply:pi-patches` fails closed on version drift or source mismatch. Refresh and
-requalify both patches before accepting a newer global Pi. The safe updater may
-use an unsupported older installation as its known-good transition source and
-restore that same generation during rollback/recovery; the candidate must have
-an exact patch generation. When the source has a patch generation, retain its
-specification through rollout so automatic rollback can reapply it.
-Before modifying a global package, the applicator validates every target and
-atomically copies each target file onto a private inode; this prevents direct
-patching from mutating Bun cache files through shared hardlinks.
-`check:pi-version` remains as a backward-compatible alias for
-`check:pi-compat`.
+CLI passes the isolated RPC probe. `check:pi-version` remains as a
+backward-compatible alias for `check:pi-compat`.
 
-The viewport keeps extension widgets, the active editor, and the footer at the
-bottom of the terminal while conversation history scrolls internally. Use
-PageUp/PageDown or the mouse wheel to navigate history; submitting input follows
-the newest output again. Mouse tracking is enabled only while this viewport is
-active and is disabled on shutdown. Hold Shift when selecting terminal text in
-terminals that reserve ordinary dragging for mouse-reporting applications.
+Pi 0.84.1 provides the fullscreen viewport natively. The tracked settings select
+`tuiMode: "fullscreen"` and `fullscreenScrollbar: "hidden"`, so extension
+widgets, the editor, status, and footer stay in the bottom dock while the
+transcript scrolls without reserving an opaque scrollbar column. PageUp/PageDown
+and Home/End navigate the transcript; their Ctrl variants remain available to
+the editor. The mouse wheel scrolls the region under the pointer, and native
+primary-button dragging selects and copies transcript text. Pi owns mouse-mode
+startup and shutdown for this viewport.
 
 Prefer `bun run update:pi` over raw `pi update`. It verifies the current install
-and read-only probes its exact patch state before mutation, locks concurrent
-updates, runs pi's self-update with the captured Bun installation, applies the
-exact sticky patches, and checks the candidate. The recovery journal therefore
-preserves whether the source cohort was already patched across an interruption.
-An incompatible or unpatched candidate is automatically reinstalled at the
-previous version, repatched when required, and verified against the full
-recorded package cohort.
-Rollback is best-effort because Bun's registry/cache can be unavailable. When
-restoration fails, the recovery journal retains a forced install of the
-validated top-level package plus every recorded core package at its exact
-version. Rerun `bun run update:pi` when Bun's registry/cache is available; it
-executes that argv without a shell, reapplies required patches, and verifies the
-full restored cohort before clearing the journal.
+before mutation, acquires an atomic update lock, and records the validated exact
+package cohort in a v6 recovery journal. A temporary, private snapshot preserves
+the actual preflight bytes of every cohort package tree (including a patched
+0.83 source), any pre-existing candidate-only package tree, Bun's global
+`package.json`, `bun.lock`, and `bun.lockb`, internal `node_modules/.bin`, and
+the actual global `pi`/`pi-ai` executable entries. It records absent paths plus
+the name, canonical root, and SHA-256 of every global package tree. Newly created
+recovery ancestors, snapshot data and directories, the journal, and all rename
+parent directories are synced to durable storage before mutation. The updater
+then uses the captured Bun installation to install the exact Pi cohort validated
+from the local lockfile and checks the candidate. The journal records that
+executable's SHA-256, allowing recovery after the current Bun path moves while
+refusing a changed captured binary. An incompatible candidate first verifies
+that non-Pi global package metadata has not changed concurrently, then restores
+preflight Bun metadata so reinstall uses the old dependency graph. The previous
+exact cohort, snapshots, and executable entries are restored and the complete
+package-content inventory must match; a nonzero reinstall, concurrent unrelated
+install, or any restore/verification error retains recovery state. Restored or
+accepted candidate state and its affected directory entries are synced before
+the journal deletion itself is made durable.
+
+Bun exposes no cross-process global-install lock that this wrapper can share.
+Do not run another raw `bun install -g`, `bun remove -g`, or equivalent global
+operation while `update:pi` is active or recovery is pending. Detected non-Pi
+`package.json` drift fails closed without rollback, but lockfile-only or `.bin`
+changes racing between verification and restore cannot be made atomic without
+moving Pi to a dedicated Bun global root. Missing, malformed, or symlinked
+global `package.json` also stops before candidate mutation.
+
+Rollback remains best-effort if both the installation and Bun's registry/cache
+are unavailable. After a transient install failure, the journal and package
+snapshot remain in `~/.cache/pi-harness`; rerun `bun run update:pi` to retry the
+recorded argv without a shell, restore the preflight contents, and verify the
+result. A changed captured Bun or a missing/corrupt snapshot instead stops before
+reinstall and requires manual recovery from a trusted Bun or backup. Legacy
+v1 journals containing `restorePatches`, v2 journals without content snapshots,
+v3 journals without Bun global metadata and absent-package state, v4 journals
+without the package inventory and executable-link snapshot, and v5 journals
+without actual global-bin state, inventory content digests, and collision-free
+transaction staging are retained and rejected explicitly because they cannot
+truthfully restore and verify the historical global installation.
 The compatibility smoke uses temporary HOME/config/session directories, runs
 no model turn/provider request, and never reads user auth or sessions.
 
@@ -402,7 +420,7 @@ config, a missing/incompatible native addon, or an effective competing override
 for one of the five built-in names or `hearth_graph` terminates pi at startup
 with exit code 1; there is no built-in fallback. Registration restores the prior
 active built-in names, so replacing `grep` does not enable it, then activates the
-new read-only `hearth_graph` tool. Pi 0.83.0 exposes only the first effective tool per
+new read-only `hearth_graph` tool. Pi 0.84.1 exposes only the first effective tool per
 name: a later inert losing registration cannot be enumerated, but it also cannot
 execute. Hearth checks effective ownership before registration, immediately
 after registration, before each agent turn, and again at the tool-call boundary.

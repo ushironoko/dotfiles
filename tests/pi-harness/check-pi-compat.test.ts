@@ -18,6 +18,7 @@ import { PI_BASELINE_PACKAGES } from "../../scripts/pi-compat/baseline";
 import { checkPiCompatibility } from "../../scripts/pi-compat/index";
 import {
   discoverPiInstallation,
+  piCohortPackagesForVersion,
   satisfiesManifestRange,
   type PiInstallation,
 } from "../../scripts/pi-compat/installation";
@@ -48,6 +49,21 @@ const installation = (version = "0.99.0"): PiInstallation => ({
     },
     "@earendil-works/pi-agent-core": {
       root: "/global/node_modules/@earendil-works/pi-agent-core",
+      version,
+      manifest: {},
+    },
+    "@earendil-works/pi-client": {
+      root: "/global/node_modules/@earendil-works/pi-client",
+      version,
+      manifest: {},
+    },
+    "@earendil-works/pi-protocol": {
+      root: "/global/node_modules/@earendil-works/pi-protocol",
+      version,
+      manifest: {},
+    },
+    "@earendil-works/pi-telemetry": {
+      root: "/global/node_modules/@earendil-works/pi-telemetry",
       version,
       manifest: {},
     },
@@ -109,6 +125,22 @@ describe("pi compatibility policy", () => {
 });
 
 describe("global pi installation discovery", () => {
+  test("uses the legacy source cohort only until Pi 0.84", () => {
+    expect(piCohortPackagesForVersion("0.83.0")).toEqual([
+      "@earendil-works/pi-coding-agent",
+      "@earendil-works/pi-ai",
+      "@earendil-works/pi-agent-core",
+      "@earendil-works/pi-tui",
+      "typebox",
+    ]);
+    expect(piCohortPackagesForVersion("0.84.0")).toEqual([
+      ...PI_BASELINE_PACKAGES,
+    ]);
+    expect(() => piCohortPackagesForVersion("latest")).toThrow(
+      "invalid version",
+    );
+  });
+
   test("uses the non-project pi on PATH when sandbox cache isolation breaks Bun global discovery", async () => {
     if (process.platform === "win32") return;
     const root = await mkdtemp(join(tmpdir(), "pi-installation-"));
@@ -121,7 +153,7 @@ describe("global pi installation discovery", () => {
 
       const globalRoot = join(root, "global");
       const globalModules = join(globalRoot, "node_modules");
-      const packageVersion = "0.83.0";
+      const packageVersion = "0.84.1";
       let codingAgentRoot = "";
       for (const name of PI_BASELINE_PACKAGES) {
         const packageRoot = join(globalModules, ...name.split("/"));
@@ -239,7 +271,7 @@ describe("bounded compatibility subprocesses", () => {
     const root = await mkdtemp(join(tmpdir(), "pi-process-group-"));
     const pidFile = join(root, "grandchild.pid");
     try {
-      const command = `(trap '' TERM; echo $BASHPID > ${JSON.stringify(pidFile)}; while true; do sleep 1; done) & wait`;
+      const command = `(trap '' TERM; while true; do sleep 1; done) & child=$!; echo $child > ${JSON.stringify(pidFile)}; wait`;
       const commandResult = await runCommand(["bash", "-c", command], {
         timeoutMs: 20,
       });

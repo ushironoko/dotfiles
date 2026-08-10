@@ -1,7 +1,6 @@
 import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { PI_BASELINE_PACKAGES } from "./baseline";
 import type { PiInstallation } from "./installation";
 import { runCommand, type CommandRunner } from "./process";
 
@@ -86,10 +85,7 @@ export const compileExtensionsAgainstGlobalPi = async (
     // Recreate only pi's captured package closure under a temporary
     // node_modules. TypeScript now honors package exports/types normally.
     const tempModules = join(tempRoot, "node_modules");
-    for (const name of PI_BASELINE_PACKAGES) {
-      const pkg = installation.corePackages[name];
-      if (pkg === undefined)
-        throw new Error(`global type package missing: ${name}`);
+    for (const [name, pkg] of Object.entries(installation.corePackages)) {
       const target = join(tempModules, ...name.split("/"));
       await mkdir(resolve(target, ".."), { recursive: true });
       await symlink(pkg.root, target, "dir");

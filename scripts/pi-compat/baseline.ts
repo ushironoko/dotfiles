@@ -5,6 +5,9 @@ export const PI_BASELINE_PACKAGES = [
   "@earendil-works/pi-coding-agent",
   "@earendil-works/pi-ai",
   "@earendil-works/pi-agent-core",
+  "@earendil-works/pi-client",
+  "@earendil-works/pi-protocol",
+  "@earendil-works/pi-telemetry",
   "@earendil-works/pi-tui",
   "typebox",
 ] as const;
@@ -17,7 +20,7 @@ const DIRECT_PI_PINS = [
 const DIRECT_PI_PIN_SET = new Set<string>(DIRECT_PI_PINS);
 const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
-type BaselinePackage = (typeof PI_BASELINE_PACKAGES)[number];
+export type PiBaselinePackage = (typeof PI_BASELINE_PACKAGES)[number];
 
 interface PackageManifest {
   name?: string;
@@ -35,7 +38,7 @@ interface Lockfile {
 }
 
 export interface PiBaselinePackageState {
-  name: BaselinePackage;
+  name: PiBaselinePackage;
   lockedVersion?: string;
   installedVersion?: string;
   installedRoot?: string;
@@ -69,7 +72,7 @@ const versionFromLockEntry = (
 
 const installedPackage = async (
   repoRoot: string,
-  name: BaselinePackage,
+  name: PiBaselinePackage,
 ): Promise<{ root?: string; version?: string }> => {
   const root = join(repoRoot, "node_modules", ...name.split("/"));
   try {

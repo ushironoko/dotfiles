@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   MAX_ASSISTANT_ITEM_BYTES,
+  MAX_LIVE_DRAFT_BYTES,
   MAX_RUN_TRANSCRIPT_BYTES,
   MAX_RUN_TRANSCRIPT_ITEMS,
   type ChildObservation,
@@ -72,7 +73,7 @@ describe("child JSON protocol normalization", () => {
     }
   });
 
-  test("emits only text as a live draft", () => {
+  test("assembles Pi 0.84 assistant text deltas into a live draft", () => {
     const observations: ChildObservation[] = [];
     const parser = createChildProtocolParser({
       observe: (item) => observations.push(item),
@@ -80,30 +81,169 @@ describe("child JSON protocol normalization", () => {
 
     parser.processLine(
       JSON.stringify({
+        type: "message_start",
+        message: { role: "assistant", content: [] },
+      }),
+    );
+    parser.processLine(
+      JSON.stringify({
         type: "message_update",
         assistantMessageEvent: {
-          type: "thinking_delta",
-          delta: "SECRET_DELTA",
+          type: "text_delta",
+          delta: "safe ",
         },
         message: {
           role: "assistant",
-          content: [
-            { type: "thinking", thinking: "SECRET_THINKING" },
-            { type: "text", text: "safe draft" },
-            {
-              type: "toolCall",
-              id: "SECRET_ID",
-              arguments: { value: "SECRET_ARGS" },
-            },
-          ],
+          content: [{ type: "text", text: "SECRET_CUMULATIVE_MESSAGE" }],
         },
+      }),
+    );
+    parser.processLine(
+      JSON.stringify({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "draft" },
       }),
     );
 
     expect(observations).toEqual([
+      { type: "assistant_draft", text: "safe " },
       { type: "assistant_draft", text: "safe draft" },
     ]);
     expect(JSON.stringify(observations)).not.toContain("SECRET");
+  });
+
+  test("recomposes interleaved assistant text blocks in content-index order", () => {
+    const observations: ChildObservation[] = [];
+    const parser = createChildProtocolParser({
+      observe: (item) => observations.push(item),
+    });
+
+    parser.processLine(
+      JSON.stringify({
+        type: "message_start",
+        message: { role: "assistant", content: [] },
+      }),
+    );
+    for (const [contentIndex, delta] of [
+      [0, "first "],
+      [2, "second "],
+      [0, "block"],
+      [2, "block"],
+    ] as const) {
+      parser.processLine(
+        JSON.stringify({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            contentIndex,
+            delta,
+          },
+        }),
+      );
+    }
+
+    expect(observations).toEqual([
+      { type: "assistant_draft", text: "first " },
+      { type: "assistant_draft", text: "first \nsecond " },
+      { type: "assistant_draft", text: "first block\nsecond " },
+      { type: "assistant_draft", text: "first block\nsecond block" },
+    ]);
+  });
+
+  test("isolates draft lifecycles and ignores non-text payloads", () => {
+    const observations: ChildObservation[] = [];
+    const parser = createChildProtocolParser({
+      observe: (item) => observations.push(item),
+    });
+    const update = (type: string, delta: string): void => {
+      parser.processLine(
+        JSON.stringify({
+          type: "message_update",
+          assistantMessageEvent: { type, delta },
+        }),
+      );
+    };
+    const start = (role: string): void => {
+      parser.processLine(
+        JSON.stringify({ type: "message_start", message: { role } }),
+      );
+    };
+
+    update("text_delta", "OUT_OF_ORDER");
+    start("assistant");
+    update("text_delta", "first");
+    update("thinking_delta", "SECRET_THINKING");
+    update("toolcall_delta", "SECRET_TOOL_PAYLOAD");
+    start("assistant");
+    update("text_delta", "second");
+    parser.processLine(
+      JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "authoritative" }],
+        },
+      }),
+    );
+    update("text_delta", "AFTER_END");
+    start("user");
+    update("text_delta", "AFTER_USER_START");
+    start("assistant");
+    update("text_delta", "third");
+
+    expect(observations).toEqual([
+      { type: "assistant_draft", text: "first" },
+      { type: "assistant_draft", text: "second" },
+      {
+        type: "assistant_final",
+        text: "authoritative",
+        at: expect.any(Number),
+        model: undefined,
+        stopReason: undefined,
+      },
+      { type: "assistant_draft", text: "third" },
+    ]);
+    expect(JSON.stringify(observations)).not.toContain("SECRET");
+    expect(JSON.stringify(observations)).not.toContain("OUT_OF_ORDER");
+    expect(JSON.stringify(observations)).not.toContain("AFTER_");
+  });
+
+  test("bounds a live draft and stops accumulating after overflow", () => {
+    const observations: ChildObservation[] = [];
+    const parser = createChildProtocolParser({
+      observe: (item) => observations.push(item),
+    });
+    parser.processLine(
+      JSON.stringify({ type: "message_start", message: { role: "assistant" } }),
+    );
+    parser.processLine(
+      JSON.stringify({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: "界".repeat(MAX_LIVE_DRAFT_BYTES),
+        },
+      }),
+    );
+    for (let index = 0; index < 100; index += 1) {
+      parser.processLine(
+        JSON.stringify({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "overflow" },
+        }),
+      );
+    }
+
+    expect(observations).toHaveLength(1);
+    const [draft] = observations;
+    expect(draft?.type).toBe("assistant_draft");
+    if (draft?.type === "assistant_draft") {
+      expect(Buffer.byteLength(draft.text, "utf8")).toBeLessThanOrEqual(
+        MAX_LIVE_DRAFT_BYTES,
+      );
+      expect(draft.text).not.toContain("overflow");
+      expect(draft.text).not.toContain("�");
+    }
   });
 
   test("maps raw tool ids to stable local ordinals and drops payloads", () => {
