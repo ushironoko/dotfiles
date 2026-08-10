@@ -221,6 +221,23 @@ describe("codex-web authentication boundary", () => {
     });
   });
 
+  test("treats null provider headers as absent and preserves auth fallback", () => {
+    const headers = buildCodexAuthHeaders({
+      apiKey: tokenFor("acct_fallback"),
+      headers: {
+        Authorization: null,
+        "ChatGPT-Account-ID": null,
+        Cookie: null,
+      },
+    });
+    expect(headers.get("authorization")).toBe(
+      `Bearer ${tokenFor("acct_fallback")}`,
+    );
+    expect(headers.get("chatgpt-account-id")).toBe("acct_fallback");
+    expect([...headers.values()]).not.toContain("null");
+    expect(headers.has("cookie")).toBe(false);
+  });
+
   test("fails closed without usable OAuth credentials", () => {
     expect(() => buildCodexAuthHeaders({})).toThrow(/\/login/);
     expect(() =>
@@ -514,8 +531,14 @@ describe("pi codex-web extension", () => {
     if (!search) throw new Error("web_search was not registered");
 
     const previousFetch = globalThis.fetch;
-    globalThis.fetch = (async () =>
-      sseResponse(successEvents())) as unknown as typeof fetch;
+    const fetchMock: FetchLike = async (_input, init) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe(`Bearer ${tokenFor()}`);
+      expect(headers.get("chatgpt-account-id")).toBe("acct_test");
+      expect([...headers.values()]).not.toContain("null");
+      return sseResponse(successEvents());
+    };
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
     const updates: unknown[] = [];
     let approvalMessage = "";
     try {
@@ -531,7 +554,14 @@ describe("pi codex-web extension", () => {
             api: "openai-codex-responses",
           },
           modelRegistry: {
-            getApiKeyAndHeaders: async () => ({ ok: true, apiKey: tokenFor() }),
+            getApiKeyAndHeaders: async () => ({
+              ok: true,
+              apiKey: tokenFor(),
+              headers: {
+                Authorization: null,
+                "ChatGPT-Account-ID": null,
+              },
+            }),
           },
           ui: {
             confirm: async (_title, message) => {

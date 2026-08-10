@@ -1,16 +1,24 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { PiCompatibilityResult } from "../../scripts/pi-compat/index";
 import type { PiInstallation } from "../../scripts/pi-compat/installation";
 import type { CommandResult } from "../../scripts/pi-compat/process";
 import {
   acquireUpdateLock,
-  allowsUnsupportedPatchGeneration,
   assertNoPendingUpdateRecovery,
   updatePiSafely,
+  type UpdatePiSnapshotStore,
 } from "../../scripts/pi-compat/update-state";
 
 const roots: string[] = [];
@@ -21,16 +29,17 @@ afterEach(async () => {
 });
 
 const installation = (version: string): PiInstallation => ({
-  bunExecutable: "/tools/bun",
+  bunExecutable: process.execPath,
   globalBin: "/global/bin",
   binaryPath: "/global/bin/pi",
-  binaryRealPath: "/global/node_modules/pi/dist/cli.js",
-  packageRoot: "/global/node_modules/pi",
+  binaryRealPath:
+    "/global/node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
+  packageRoot: "/global/node_modules/@earendil-works/pi-coding-agent",
   packageName: "@earendil-works/pi-coding-agent",
   packageVersion: version,
   corePackages: {
     "@earendil-works/pi-coding-agent": {
-      root: "/global/node_modules/pi",
+      root: "/global/node_modules/@earendil-works/pi-coding-agent",
       version,
       manifest: {},
     },
@@ -47,7 +56,7 @@ const installationWithTui = (
     corePackages: {
       ...value.corePackages,
       "@earendil-works/pi-tui": {
-        root: "/global/node_modules/pi-tui",
+        root: "/global/node_modules/@earendil-works/pi-tui",
         version: tuiVersion,
         manifest: {},
       },
@@ -55,10 +64,28 @@ const installationWithTui = (
   };
 };
 
-const compatible = (value: PiInstallation): PiCompatibilityResult => ({
-  baseline: { ok: true, issues: [], packages: [] },
+const compatible = (
+  value: PiInstallation,
+  targetVersion = "0.81.0",
+): PiCompatibilityResult => ({
+  baseline: {
+    ok: true,
+    issues: [],
+    packages: [
+      {
+        name: "@earendil-works/pi-coding-agent",
+        lockedVersion: targetVersion,
+        installedVersion: targetVersion,
+        installedRoot: "/local/node_modules/pi",
+      },
+    ],
+  },
   installation: value,
 });
+
+const isCandidateInstall = (argv: string[]): boolean =>
+  argv.includes("@earendil-works/pi-coding-agent@0.81.0") ||
+  argv.includes("@earendil-works/pi-coding-agent@0.84.1");
 
 const result = (exitCode = 0, stderr = ""): CommandResult => ({
   argv: [],
@@ -69,33 +96,108 @@ const result = (exitCode = 0, stderr = ""): CommandResult => ({
   truncated: false,
 });
 
+const memorySnapshotStore: UpdatePiSnapshotStore = {
+  async create(value, _journalPath, candidatePackageNames) {
+    let modulesRoot = value.packageRoot;
+    for (const _segment of value.packageName.split("/")) {
+      modulesRoot = dirname(modulesRoot);
+    }
+    const packageNames = [
+      ...new Set([
+        ...Object.keys(value.corePackages),
+        ...candidatePackageNames,
+      ]),
+    ].sort((left, right) => left.localeCompare(right));
+    const binNames: ("pi" | "pi-ai" | "pi-ai.exe" | "pi.exe")[] =
+      process.platform === "win32" ? ["pi.exe", "pi-ai.exe"] : ["pi", "pi-ai"];
+    return {
+      transactionId: "00000000-0000-4000-8000-000000000001",
+      packages: packageNames.map((packageName) => {
+        const pkg = value.corePackages[packageName];
+        const packageRoot = join(modulesRoot, ...packageName.split("/"));
+        return {
+          packageName,
+          packageRoot,
+          digest:
+            pkg === undefined
+              ? null
+              : createHash("sha256")
+                  .update(`${packageName}:${pkg.root}:${pkg.version}`)
+                  .digest("hex"),
+        };
+      }),
+      metadata: [
+        {
+          name: "bun.lock",
+          path: join(dirname(modulesRoot), "bun.lock"),
+          digest: null,
+        },
+        {
+          name: "bun.lockb",
+          path: join(dirname(modulesRoot), "bun.lockb"),
+          digest: null,
+        },
+        {
+          name: "node_modules/.bin",
+          path: join(modulesRoot, ".bin"),
+          digest: null,
+        },
+        {
+          name: "package.json",
+          path: join(dirname(modulesRoot), "package.json"),
+          digest: null,
+        },
+      ],
+      globalBins: binNames.map((name) => ({
+        name,
+        path: join(value.globalBin, name),
+        digest: null,
+      })),
+      packageInventory: Object.entries(value.corePackages)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([packageName, pkg]) => ({
+          packageName,
+          packageRoot: join(modulesRoot, ...packageName.split("/")),
+          digest: createHash("sha256")
+            .update(`${packageName}:${pkg.root}:${pkg.version}`)
+            .digest("hex"),
+        })),
+    };
+  },
+  async validate() {},
+  async restoreMetadata() {},
+  async restore() {},
+  async unrelatedStateMatches() {
+    return true;
+  },
+  async matches() {
+    return true;
+  },
+  async cleanup() {},
+  async sync() {},
+  async remove() {},
+};
+
 const paths = async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-update-test-"));
   roots.push(root);
   return {
     lockPath: join(root, "update.lock"),
     journalPath: join(root, "recovery.json"),
+    snapshotStore: memorySnapshotStore,
+    executableDigest: async () => "a".repeat(64),
   };
 };
 
-const toLegacyJournal = (source: string): string =>
+const toLegacyPatchJournal = (
+  source: string,
+  restorePatches: boolean,
+): string =>
   source
-    .replace('    "--force",\n', "")
-    .replace(
-      /\n  "rollbackPackages": \[[\s\S]*?\],(?=\n  "restorePatches")/,
-      "",
-    )
-    .replace(/,\n  "restorePatches": (?:true|false)(?=\n})/, "");
+    .replace('"version": 6', '"version": 1')
+    .replace(/\n}\n$/, `,\n  "restorePatches": ${restorePatches}\n}\n`);
 
 describe("safe pi updater", () => {
-  test("allows unsupported generations only before candidate mutation", () => {
-    expect(allowsUnsupportedPatchGeneration("preflight")).toBe(true);
-    expect(allowsUnsupportedPatchGeneration("candidate")).toBe(false);
-    expect(allowsUnsupportedPatchGeneration("rollback")).toBe(false);
-    expect(allowsUnsupportedPatchGeneration("recovery")).toBe(false);
-    expect(allowsUnsupportedPatchGeneration("unchanged")).toBe(true);
-  });
-
   test("aborts before mutation when preflight is not known-good", async () => {
     const temp = await paths();
     let runs = 0;
@@ -115,128 +217,155 @@ describe("safe pi updater", () => {
     expect(runs).toBe(0);
   });
 
-  test("preserves an already-patched source across an initial-journal interruption", async () => {
-    const temp = await paths();
-    const current = installation("0.80.7");
-    const phases: string[] = [];
-    let runs = 0;
-    const dependencies = {
-      ...temp,
-      checkCompatibility: async () => compatible(current),
-      discover: async () => current,
-      inspectPatches: async () => true,
-      applyPatches: async (_candidate: PiInstallation, phase: string) => {
-        phases.push(phase);
-        if (phase === "preflight") {
-          throw new Error("interrupted before preflight journal rewrite");
-        }
-        return true;
-      },
-      run: async () => {
-        runs += 1;
-        return result(1, "rollback interrupted");
+  test("rejects non-file global metadata before running a candidate command", async () => {
+    const { snapshotStore: _snapshotStore, ...temp } = await paths();
+    const globalRoot = join(temp.journalPath, "..", "global");
+    const packageRoot = join(
+      globalRoot,
+      "node_modules",
+      "@earendil-works",
+      "pi-coding-agent",
+    );
+    await mkdir(packageRoot, { recursive: true });
+    const metadataTarget = join(globalRoot, "actual-package.json");
+    await writeFile(metadataTarget, "metadata target\n");
+    await symlink(metadataTarget, join(globalRoot, "package.json"));
+    const current = {
+      ...installation("0.80.7"),
+      globalBin: join(globalRoot, "bin"),
+      packageRoot,
+      corePackages: {
+        "@earendil-works/pi-coding-agent": {
+          root: packageRoot,
+          version: "0.80.7",
+          manifest: {},
+        },
       },
     };
+    let runs = 0;
 
-    const interrupted = await updatePiSafely(dependencies);
-    expect(interrupted.manualRecoveryArgv).toBeDefined();
-    const recovered = await updatePiSafely(dependencies);
-
-    expect(recovered).toMatchObject({ ok: false, rolledBack: true });
-    expect(recovered.message).toContain("already-restored");
-    expect(phases).toEqual(["preflight", "recovery"]);
-    expect(runs).toBe(1);
+    await expect(
+      updatePiSafely({
+        ...temp,
+        checkCompatibility: async () => compatible(current),
+        discover: async () => current,
+        run: async () => {
+          runs += 1;
+          return result();
+        },
+      }),
+    ).rejects.toThrow("is not a file");
+    expect(runs).toBe(0);
   });
 
-  test("restores pristine packages when patched preflight verification fails", async () => {
-    const temp = await paths();
-    const current = installation("0.80.7");
-    let patched = false;
-    const calls: string[] = [];
-    const phases: string[] = [];
+  test("rejects malformed global package metadata before candidate mutation", async () => {
+    const { snapshotStore: _snapshotStore, ...temp } = await paths();
+    const globalRoot = join(temp.journalPath, "..", "global");
+    const packageRoot = join(
+      globalRoot,
+      "node_modules",
+      "@earendil-works",
+      "pi-coding-agent",
+    );
+    await mkdir(packageRoot, { recursive: true });
+    await mkdir(join(globalRoot, "bin"), { recursive: true });
+    await writeFile(join(globalRoot, "package.json"), "not json\n");
+    const current = {
+      ...installation("0.80.7"),
+      globalBin: join(globalRoot, "bin"),
+      packageRoot,
+      corePackages: {
+        "@earendil-works/pi-coding-agent": {
+          root: packageRoot,
+          version: "0.80.7",
+          manifest: {},
+        },
+      },
+    };
+    let runs = 0;
+
+    await expect(
+      updatePiSafely({
+        ...temp,
+        checkCompatibility: async () => compatible(current),
+        discover: async () => current,
+        run: async () => {
+          runs += 1;
+          return result();
+        },
+      }),
+    ).rejects.toThrow();
+    expect(runs).toBe(0);
+  });
+
+  test("publishes durable recovery state before running the candidate command", async () => {
+    const { snapshotStore: _snapshotStore, ...temp } = await paths();
+    const globalRoot = join(temp.journalPath, "..", "global");
+    const journalPath = join(
+      dirname(temp.journalPath),
+      "new",
+      "nested",
+      "recovery.json",
+    );
+    const packageRoot = join(
+      globalRoot,
+      "node_modules",
+      "@earendil-works",
+      "pi-coding-agent",
+    );
+    await mkdir(packageRoot, { recursive: true });
+    await mkdir(join(globalRoot, "bin"), { recursive: true });
+    await writeFile(join(packageRoot, "package.json"), "package bytes\n");
+    await writeFile(join(globalRoot, "package.json"), "{}\n");
+    const atVersion = (version: string): PiInstallation => ({
+      ...installation(version),
+      globalBin: join(globalRoot, "bin"),
+      packageRoot,
+      corePackages: {
+        "@earendil-works/pi-coding-agent": {
+          root: packageRoot,
+          version,
+          manifest: {},
+        },
+      },
+    });
+    let current = atVersion("0.80.7");
+    let recoveryPublished = false;
     const update = await updatePiSafely({
       ...temp,
-      checkCompatibility: async () => {
-        if (patched) throw new Error("patched preflight is incompatible");
-        return compatible(current);
-      },
+      journalPath,
+      checkCompatibility: async () => compatible(current),
       discover: async () => current,
-      applyPatches: async (_candidate, phase) => {
-        phases.push(phase);
-        if (phase === "preflight") patched = true;
-        return true;
-      },
-      run: async (argv) => {
-        calls.push(argv.includes("update") ? "update" : "rollback");
-        patched = false;
-        return result();
-      },
-    });
-
-    expect(update).toMatchObject({ ok: false, rolledBack: true });
-    expect(calls).toEqual(["rollback"]);
-    expect(phases).toEqual(["preflight"]);
-    expect(patched).toBe(false);
-    await expect(readFile(temp.journalPath, "utf8")).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
-  test("reinstalls an interrupted partial preflight patch cohort", async () => {
-    const temp = await paths();
-    const current = installation("0.80.7");
-    const packageState: { value: "pristine" | "partial" } = {
-      value: "pristine",
-    };
-    let rejectPartial = true;
-    let rollbackAvailable = false;
-    const calls: string[] = [];
-    const phases: string[] = [];
-    const dependencies = {
-      ...temp,
-      checkCompatibility: async () => {
-        if (packageState.value === "partial" && rejectPartial) {
-          throw new Error("preflight patch cohort is partial");
-        }
-        return compatible(current);
-      },
-      discover: async () => current,
-      applyPatches: async (_candidate: PiInstallation, phase: string) => {
-        phases.push(phase);
-        if (phase === "preflight") packageState.value = "partial";
-        return true;
-      },
       run: async () => {
-        calls.push("rollback");
-        if (!rollbackAvailable) return result(1, "rollback interrupted");
-        packageState.value = "pristine";
+        const journal = JSON.parse(await readFile(journalPath, "utf8")) as {
+          version?: number;
+        };
+        const snapshotStats = await lstat(`${journalPath}.packages`);
+        recoveryPublished =
+          journal.version === 6 && snapshotStats.isDirectory();
+        current = atVersion("0.81.0");
         return result();
       },
-    };
+    });
 
-    const interrupted = await updatePiSafely(dependencies);
-    expect(interrupted.manualRecoveryArgv).toBeDefined();
-    expect(packageState.value).toBe("partial");
-
-    rejectPartial = false;
-    rollbackAvailable = true;
-    const recovered = await updatePiSafely(dependencies);
-    expect(recovered).toMatchObject({ ok: false, rolledBack: true });
-    expect(packageState.value).toBe("pristine");
-    expect(calls).toEqual(["rollback", "rollback"]);
-    expect(phases).toEqual(["preflight"]);
+    expect(update).toMatchObject({ ok: true, updated: true });
+    expect(recoveryPublished).toBe(true);
   });
 
   test("accepts an updated candidate after compatibility verification", async () => {
     const temp = await paths();
     let current = installation("0.80.7");
     const calls: string[] = [];
+    const commands: string[][] = [];
+    const environments: (NodeJS.ProcessEnv | undefined)[] = [];
     const update = await updatePiSafely({
       ...temp,
       checkCompatibility: async () => compatible(current),
       discover: async () => current,
-      run: async (argv) => {
-        calls.push(argv.includes("update") ? "update" : "rollback");
+      run: async (argv, options) => {
+        commands.push(argv);
+        environments.push(options?.env);
+        calls.push(isCandidateInstall(argv) ? "update" : "rollback");
         current = installation("0.81.0");
         return result();
       },
@@ -250,96 +379,47 @@ describe("safe pi updater", () => {
       currentVersion: "0.81.0",
     });
     expect(calls).toEqual(["update"]);
+    expect(commands).toEqual([
+      [
+        process.execPath,
+        "install",
+        "-g",
+        "--ignore-scripts",
+        "--force",
+        "@earendil-works/pi-coding-agent@0.81.0",
+      ],
+    ]);
+    expect(environments[0]).toMatchObject({
+      BUN_INSTALL_GLOBAL_DIR: "/global",
+      BUN_INSTALL_BIN: "/global/bin",
+    });
   });
 
-  test("applies sticky patches before candidate compatibility verification", async () => {
+  test("rolls back a successful install that leaves the target cohort unmet", async () => {
     const temp = await paths();
-    let current = installation("0.80.7");
-    const patchedVersions = new Set<string>();
-    const patchCalls: string[] = [];
+    const current = installation("0.80.7");
+    let compatibilityChecks = 0;
     const update = await updatePiSafely({
       ...temp,
       checkCompatibility: async () => {
-        if (
-          current.packageVersion === "0.81.0" &&
-          !patchedVersions.has("0.81.0")
-        ) {
-          throw new Error("candidate was checked before patching");
-        }
+        compatibilityChecks += 1;
         return compatible(current);
       },
       discover: async () => current,
-      applyPatches: async (candidate) => {
-        patchCalls.push(candidate.packageVersion);
-        patchedVersions.add(candidate.packageVersion);
-        return true;
-      },
-      run: async () => {
-        current = installation("0.81.0");
-        return result();
-      },
-    });
-
-    expect(update).toMatchObject({ ok: true, currentVersion: "0.81.0" });
-    expect(patchCalls).toEqual(["0.80.7", "0.81.0"]);
-  });
-
-  test("crosses from an unsupported preflight patch generation to a supported candidate", async () => {
-    const temp = await paths();
-    let current = installation("0.80.7");
-    let candidatePatched = false;
-    const phases: string[] = [];
-    const update = await updatePiSafely({
-      ...temp,
-      checkCompatibility: async () => {
-        if (current.packageVersion === "0.81.0" && !candidatePatched) {
-          throw new Error("new generation was not patched");
-        }
-        return compatible(current);
-      },
-      discover: async () => current,
-      applyPatches: async (candidate, phase) => {
-        phases.push(`${phase}:${candidate.packageVersion}`);
-        if (phase === "preflight") return false;
-        if (phase === "candidate") candidatePatched = true;
-        return true;
-      },
-      run: async () => {
-        current = installation("0.81.0");
-        return result();
-      },
-    });
-
-    expect(update).toMatchObject({ ok: true, currentVersion: "0.81.0" });
-    expect(phases).toEqual(["preflight:0.80.7", "candidate:0.81.0"]);
-  });
-
-  test("restores an unsupported source without invoking a nonexistent patch", async () => {
-    const temp = await paths();
-    let current = installation("0.80.7");
-    const phases: string[] = [];
-    const update = await updatePiSafely({
-      ...temp,
-      checkCompatibility: async () => compatible(current),
-      discover: async () => current,
-      applyPatches: async (candidate, phase) => {
-        phases.push(`${phase}:${candidate.packageVersion}`);
-        if (phase === "preflight") return false;
-        if (phase === "candidate") throw new Error("unsupported candidate");
-        throw new Error("unsupported source patch hook must be skipped");
-      },
-      run: async (argv) => {
-        current = installation(argv.includes("update") ? "0.81.0" : "0.80.7");
-        return result();
-      },
+      run: async () => result(),
     });
 
     expect(update).toMatchObject({
       ok: false,
+      updated: false,
       rolledBack: true,
+      previousVersion: "0.80.7",
       currentVersion: "0.80.7",
     });
-    expect(phases).toEqual(["preflight:0.80.7", "candidate:0.81.0"]);
+    expect(compatibilityChecks).toBe(3);
+    await expect(readFile(temp.journalPath, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   test("does not reinstall when update fails without changing installation", async () => {
@@ -351,7 +431,7 @@ describe("safe pi updater", () => {
       checkCompatibility: async () => compatible(current),
       discover: async () => current,
       run: async (argv) => {
-        calls.push(argv.includes("update") ? "update" : "rollback");
+        calls.push(isCandidateInstall(argv) ? "update" : "rollback");
         return result(1, "updater failed");
       },
     });
@@ -374,7 +454,7 @@ describe("safe pi updater", () => {
       },
       discover: async () => current,
       run: async (argv) => {
-        if (argv.includes("update")) {
+        if (isCandidateInstall(argv)) {
           calls.push("update");
           broken = true;
           return result(1, "partial update");
@@ -403,7 +483,7 @@ describe("safe pi updater", () => {
       },
       discover: async () => current,
       run: async (argv) => {
-        if (argv.includes("update")) {
+        if (isCandidateInstall(argv)) {
           calls.push("update");
           current = installation("0.81.0");
         } else {
@@ -422,23 +502,126 @@ describe("safe pi updater", () => {
     expect(calls).toEqual(["update", "rollback"]);
   });
 
-  test("reapplies the previous sticky patch after an unsupported candidate rollback", async () => {
+  test("keeps recovery state when rollback install exits nonzero despite matching final state", async () => {
     const temp = await paths();
     let current = installation("0.80.7");
-    const patchCalls: string[] = [];
     const update = await updatePiSafely({
       ...temp,
-      checkCompatibility: async () => compatible(current),
-      discover: async () => current,
-      applyPatches: async (candidate) => {
-        patchCalls.push(candidate.packageVersion);
-        if (candidate.packageVersion === "0.81.0") {
-          throw new Error("no sticky patch for candidate");
+      checkCompatibility: async () => {
+        if (current.packageVersion === "0.81.0") {
+          throw new Error("candidate incompatible");
         }
-        return true;
+        return compatible(current);
       },
+      discover: async () => current,
       run: async (argv) => {
-        current = installation(argv.includes("update") ? "0.81.0" : "0.80.7");
+        if (isCandidateInstall(argv)) {
+          current = installation("0.81.0");
+          return result();
+        }
+        current = installation("0.80.7");
+        return result(1, "rollback install ended after partial work");
+      },
+    });
+
+    expect(update).toMatchObject({ ok: false, rolledBack: false });
+    expect(update.message).toContain("did not complete successfully");
+    expect(update.message).toContain(
+      "rollback install ended after partial work",
+    );
+    expect(await readFile(temp.journalPath, "utf8")).toContain(
+      "pi-harness/update-recovery",
+    );
+  });
+
+  test("keeps recovery state when snapshot restoration throws despite matching final state", async () => {
+    const temp = await paths();
+    let current = installation("0.80.7");
+    const update = await updatePiSafely({
+      ...temp,
+      snapshotStore: {
+        ...memorySnapshotStore,
+        async restore() {
+          throw new Error("replacement copy failed");
+        },
+      },
+      checkCompatibility: async () => {
+        if (current.packageVersion === "0.81.0") {
+          throw new Error("candidate incompatible");
+        }
+        return compatible(current);
+      },
+      discover: async () => current,
+      run: async (argv) => {
+        current = isCandidateInstall(argv)
+          ? installation("0.81.0")
+          : installation("0.80.7");
+        return result();
+      },
+    });
+
+    expect(update).toMatchObject({ ok: false, rolledBack: false });
+    expect(update.message).toContain("restoration did not complete");
+    expect(update.message).toContain("replacement copy failed");
+    expect(await readFile(temp.journalPath, "utf8")).toContain(
+      "pi-harness/update-recovery",
+    );
+  });
+
+  test("restores exact preflight package contents after reinstalling a rollback", async () => {
+    const { snapshotStore: _snapshotStore, ...temp } = await paths();
+    const globalRoot = join(temp.journalPath, "..", "global");
+    const packageRoot = join(
+      globalRoot,
+      "node_modules",
+      "@earendil-works",
+      "pi-coding-agent",
+    );
+    const patchedFile = join(packageRoot, "dist", "interactive-mode.js");
+    await mkdir(join(packageRoot, "dist"), { recursive: true });
+    await mkdir(join(globalRoot, "bin"), { recursive: true });
+    await writeFile(patchedFile, "patched 0.83 viewport\n");
+    await writeFile(join(globalRoot, "package.json"), "{}\n");
+
+    const atVersion = (version: string): PiInstallation => {
+      const value = installation(version);
+      return {
+        ...value,
+        globalBin: join(globalRoot, "bin"),
+        binaryRealPath: join(packageRoot, "dist", "cli.js"),
+        packageRoot,
+        corePackages: {
+          [value.packageName]: {
+            root: packageRoot,
+            version,
+            manifest: {},
+          },
+        },
+      };
+    };
+    let current = atVersion("0.83.0");
+    const update = await updatePiSafely({
+      ...temp,
+      checkCompatibility: async () => {
+        if (current.packageVersion === "0.84.1") {
+          throw new Error("candidate incompatible");
+        }
+        if (
+          (await readFile(patchedFile, "utf8")) !== "patched 0.83 viewport\n"
+        ) {
+          throw new Error("patched preflight contents were not restored");
+        }
+        return compatible(current, "0.84.1");
+      },
+      discover: async () => current,
+      run: async (argv) => {
+        if (isCandidateInstall(argv)) {
+          await writeFile(patchedFile, "candidate 0.84 contents\n");
+          current = atVersion("0.84.1");
+        } else {
+          await writeFile(patchedFile, "pristine 0.83 registry contents\n");
+          current = atVersion("0.83.0");
+        }
         return result();
       },
     });
@@ -446,9 +629,348 @@ describe("safe pi updater", () => {
     expect(update).toMatchObject({
       ok: false,
       rolledBack: true,
-      currentVersion: "0.80.7",
+      currentVersion: "0.83.0",
     });
-    expect(patchCalls).toEqual(["0.80.7", "0.81.0", "0.80.7"]);
+    expect(await readFile(patchedFile, "utf8")).toBe("patched 0.83 viewport\n");
+    await expect(
+      readFile(`${temp.journalPath}.packages`, "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("restores global metadata and removes or restores candidate-only packages", async () => {
+    const { snapshotStore: _snapshotStore, ...temp } = await paths();
+    const globalRoot = join(temp.journalPath, "..", "global");
+    const modulesRoot = join(globalRoot, "node_modules");
+    const packageRoot = join(modulesRoot, "@earendil-works", "pi-coding-agent");
+    const clientRoot = join(modulesRoot, "@earendil-works", "pi-client");
+    const protocolRoot = join(modulesRoot, "@earendil-works", "pi-protocol");
+    const extraRoot = join(modulesRoot, "grok-mermaid");
+    const binRoot = join(modulesRoot, ".bin");
+    const globalBinRoot = join(globalRoot, "bin");
+    const packageJson = join(globalRoot, "package.json");
+    const bunLock = join(globalRoot, "bun.lock");
+    const bunLockb = join(globalRoot, "bun.lockb");
+    const topFile = join(packageRoot, "dist", "interactive-mode.js");
+    const clientFile = join(clientRoot, "dist", "index.js");
+    const protocolFile = join(protocolRoot, "dist", "index.js");
+    const extraFile = join(extraRoot, "dist", "index.js");
+    const piBin = join(binRoot, "pi");
+    const extraBin = join(binRoot, "grok-mermaid");
+    const actualPiBin = join(globalBinRoot, "pi");
+    const actualPiAiBin = join(globalBinRoot, "pi-ai");
+    const preflightPackageMetadata =
+      '{"dependencies":{"@earendil-works/pi-coding-agent":"0.83.0","unrelated":"1.0.0"}}\n';
+    const candidatePackageMetadata =
+      '{"dependencies":{"@earendil-works/pi-client":"0.84.1","@earendil-works/pi-coding-agent":"0.84.1","@earendil-works/pi-protocol":"0.84.1","unrelated":"1.0.0"}}\n';
+    await mkdir(join(packageRoot, "dist"), { recursive: true });
+    await mkdir(join(protocolRoot, "dist"), { recursive: true });
+    await mkdir(binRoot, { recursive: true });
+    await mkdir(globalBinRoot, { recursive: true });
+    await writeFile(topFile, "patched 0.83 viewport\n");
+    await writeFile(protocolFile, "preflight protocol bytes\n");
+    await writeFile(piBin, "preflight pi executable link\n");
+    await writeFile(actualPiBin, "preflight actual pi executable\n");
+    await writeFile(packageJson, preflightPackageMetadata);
+    await writeFile(bunLock, "preflight text lock\n");
+
+    const atVersion = (version: string): PiInstallation => {
+      const value = installation(version);
+      return {
+        ...value,
+        globalBin: join(globalRoot, "bin"),
+        binaryRealPath: join(packageRoot, "dist", "cli.js"),
+        packageRoot,
+        corePackages: {
+          [value.packageName]: {
+            root: packageRoot,
+            version,
+            manifest: {},
+          },
+        },
+      };
+    };
+    const withCandidateCohort = (
+      value: PiInstallation,
+    ): PiCompatibilityResult => ({
+      ...compatible(value, "0.84.1"),
+      baseline: {
+        ok: true,
+        issues: [],
+        packages: [
+          {
+            name: "@earendil-works/pi-coding-agent",
+            lockedVersion: "0.84.1",
+            installedVersion: "0.84.1",
+            installedRoot: "/local/node_modules/pi",
+          },
+          {
+            name: "@earendil-works/pi-client",
+            lockedVersion: "0.84.1",
+            installedVersion: "0.84.1",
+            installedRoot: "/local/node_modules/pi-client",
+          },
+          {
+            name: "@earendil-works/pi-protocol",
+            lockedVersion: "0.84.1",
+            installedVersion: "0.84.1",
+            installedRoot: "/local/node_modules/pi-protocol",
+          },
+        ],
+      },
+    });
+    let current = atVersion("0.83.0");
+    const update = await updatePiSafely({
+      ...temp,
+      checkCompatibility: async () => {
+        if (current.packageVersion === "0.84.1") {
+          throw new Error("candidate incompatible");
+        }
+        if (
+          (await readFile(packageJson, "utf8")) !== preflightPackageMetadata ||
+          (await readFile(bunLock, "utf8")) !== "preflight text lock\n" ||
+          (await readFile(protocolFile, "utf8")) !==
+            "preflight protocol bytes\n" ||
+          (await readFile(piBin, "utf8")) !==
+            "preflight pi executable link\n" ||
+          (await readFile(actualPiBin, "utf8")) !==
+            "preflight actual pi executable\n"
+        ) {
+          throw new Error("global install state was not restored");
+        }
+        await expect(readFile(clientFile, "utf8")).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(readFile(bunLockb, "utf8")).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(readFile(extraFile, "utf8")).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(readFile(extraBin, "utf8")).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(readFile(actualPiAiBin, "utf8")).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        return withCandidateCohort(current);
+      },
+      discover: async () => current,
+      run: async (argv) => {
+        if (isCandidateInstall(argv)) {
+          await writeFile(topFile, "candidate 0.84 contents\n");
+          await mkdir(join(clientRoot, "dist"), { recursive: true });
+          await writeFile(clientFile, "candidate client bytes\n");
+          await writeFile(protocolFile, "candidate protocol bytes\n");
+          await mkdir(join(extraRoot, "dist"), { recursive: true });
+          await writeFile(extraFile, "candidate transitive dependency\n");
+          await writeFile(piBin, "candidate pi executable link\n");
+          await writeFile(extraBin, "candidate executable link\n");
+          await writeFile(actualPiBin, "candidate actual pi executable\n");
+          await writeFile(actualPiAiBin, "candidate pi-ai executable\n");
+          await writeFile(packageJson, candidatePackageMetadata);
+          await writeFile(bunLock, "candidate text lock\n");
+          await writeFile(bunLockb, "candidate binary lock\n");
+          current = atVersion("0.84.1");
+        } else {
+          expect(await readFile(packageJson, "utf8")).toBe(
+            preflightPackageMetadata,
+          );
+          expect(await readFile(bunLock, "utf8")).toBe("preflight text lock\n");
+          expect(await readFile(piBin, "utf8")).toBe(
+            "preflight pi executable link\n",
+          );
+          await expect(readFile(extraBin, "utf8")).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          expect(await readFile(actualPiBin, "utf8")).toBe(
+            "preflight actual pi executable\n",
+          );
+          await expect(readFile(actualPiAiBin, "utf8")).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          await rm(extraRoot, { recursive: true });
+          await writeFile(topFile, "pristine 0.83 registry contents\n");
+          current = atVersion("0.83.0");
+        }
+        return result();
+      },
+    });
+
+    expect(update).toMatchObject({
+      ok: false,
+      rolledBack: true,
+      currentVersion: "0.83.0",
+    });
+    expect(await readFile(packageJson, "utf8")).toBe(preflightPackageMetadata);
+    expect(await readFile(bunLock, "utf8")).toBe("preflight text lock\n");
+    expect(await readFile(protocolFile, "utf8")).toBe(
+      "preflight protocol bytes\n",
+    );
+    expect(await readFile(piBin, "utf8")).toBe(
+      "preflight pi executable link\n",
+    );
+    expect(await readFile(actualPiBin, "utf8")).toBe(
+      "preflight actual pi executable\n",
+    );
+    await expect(readFile(clientFile, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(bunLockb, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(extraFile, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(extraBin, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(actualPiAiBin, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(temp.journalPath, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  test("refuses rollback without overwriting a concurrent unrelated global install", async () => {
+    const { snapshotStore: _snapshotStore, ...temp } = await paths();
+    const globalRoot = join(temp.journalPath, "..", "global");
+    const modulesRoot = join(globalRoot, "node_modules");
+    const packageRoot = join(modulesRoot, "@earendil-works", "pi-coding-agent");
+    const concurrentRoot = join(modulesRoot, "unrelated-global-package");
+    const packageFile = join(packageRoot, "dist", "cli.js");
+    const concurrentFile = join(concurrentRoot, "index.js");
+    const packageJson = join(globalRoot, "package.json");
+    const concurrentMetadata =
+      '{"dependencies":{"@earendil-works/pi-coding-agent":"0.81.0","unrelated-global-package":"2.0.0"}}\n';
+    await mkdir(join(packageRoot, "dist"), { recursive: true });
+    await mkdir(join(globalRoot, "bin"), { recursive: true });
+    await writeFile(packageFile, "preflight package bytes\n");
+    await writeFile(
+      packageJson,
+      '{"dependencies":{"@earendil-works/pi-coding-agent":"0.80.7","unrelated-global-package":"1.0.0"}}\n',
+    );
+
+    const atVersion = (version: string): PiInstallation => {
+      const value = installation(version);
+      return {
+        ...value,
+        globalBin: join(globalRoot, "bin"),
+        binaryRealPath: packageFile,
+        packageRoot,
+        corePackages: {
+          [value.packageName]: {
+            root: packageRoot,
+            version,
+            manifest: {},
+          },
+        },
+      };
+    };
+    let current = atVersion("0.80.7");
+    const calls: string[] = [];
+    const update = await updatePiSafely({
+      ...temp,
+      checkCompatibility: async () => {
+        if (current.packageVersion === "0.81.0") {
+          throw new Error("candidate incompatible");
+        }
+        return compatible(current);
+      },
+      discover: async () => current,
+      run: async (argv) => {
+        calls.push(isCandidateInstall(argv) ? "update" : "rollback");
+        if (isCandidateInstall(argv)) {
+          await writeFile(packageFile, "candidate package bytes\n");
+          await mkdir(concurrentRoot, { recursive: true });
+          await writeFile(concurrentFile, "concurrent package bytes\n");
+          await writeFile(packageJson, concurrentMetadata);
+          current = atVersion("0.81.0");
+        }
+        return result();
+      },
+    });
+
+    expect(update).toMatchObject({ ok: false, rolledBack: false });
+    expect(update.message).toContain("unrelated Bun global metadata changed");
+    expect(calls).toEqual(["update"]);
+    expect(await readFile(packageJson, "utf8")).toBe(concurrentMetadata);
+    expect(await readFile(concurrentFile, "utf8")).toBe(
+      "concurrent package bytes\n",
+    );
+    expect(await readFile(temp.journalPath, "utf8")).toContain(
+      "pi-harness/update-recovery",
+    );
+  });
+
+  test("validates recovery snapshots before reinstalling rollback packages", async () => {
+    const temp = await paths();
+    let current = installation("0.80.7");
+    const calls: string[] = [];
+    const update = await updatePiSafely({
+      ...temp,
+      snapshotStore: {
+        ...memorySnapshotStore,
+        async validate() {
+          throw new Error("snapshot missing");
+        },
+      },
+      checkCompatibility: async () => {
+        if (current.packageVersion === "0.81.0") {
+          throw new Error("candidate incompatible");
+        }
+        return compatible(current);
+      },
+      discover: async () => current,
+      run: async (argv) => {
+        calls.push(isCandidateInstall(argv) ? "update" : "rollback");
+        if (isCandidateInstall(argv)) current = installation("0.81.0");
+        return result();
+      },
+    });
+
+    expect(update).toMatchObject({ ok: false, rolledBack: false });
+    expect(update.message).toContain("before changing Pi");
+    expect(update.manualRecoveryArgv).toBeUndefined();
+    expect(calls).toEqual(["update"]);
+    expect(await readFile(temp.journalPath, "utf8")).toContain(
+      "pi-harness/update-recovery",
+    );
+  });
+
+  test("keeps the journal when preflight metadata cannot be restored before reinstall", async () => {
+    const temp = await paths();
+    let current = installation("0.80.7");
+    const calls: string[] = [];
+    const update = await updatePiSafely({
+      ...temp,
+      snapshotStore: {
+        ...memorySnapshotStore,
+        async restoreMetadata() {
+          throw new Error("metadata restore failed");
+        },
+      },
+      checkCompatibility: async () => {
+        if (current.packageVersion === "0.81.0") {
+          throw new Error("candidate incompatible");
+        }
+        return compatible(current);
+      },
+      discover: async () => current,
+      run: async (argv) => {
+        calls.push(isCandidateInstall(argv) ? "update" : "rollback");
+        if (isCandidateInstall(argv)) current = installation("0.81.0");
+        return result();
+      },
+    });
+
+    expect(update).toMatchObject({ ok: false, rolledBack: false });
+    expect(update.message).toContain("before reinstall");
+    expect(update.message).toContain("metadata restore failed");
+    expect(calls).toEqual(["update"]);
+    expect(await readFile(temp.journalPath, "utf8")).toContain(
+      "pi-harness/update-recovery",
+    );
   });
 
   test("keeps the journal when a rollback dependency cohort drifts", async () => {
@@ -456,14 +978,15 @@ describe("safe pi updater", () => {
     let current = installationWithTui("0.80.7", "0.80.7");
     const update = await updatePiSafely({
       ...temp,
-      checkCompatibility: async () => compatible(current),
-      discover: async () => current,
-      applyPatches: async (_candidate, phase) => {
-        if (phase === "candidate") throw new Error("candidate incompatible");
-        return true;
+      checkCompatibility: async () => {
+        if (current.packageVersion === "0.81.0") {
+          throw new Error("candidate incompatible");
+        }
+        return compatible(current);
       },
+      discover: async () => current,
       run: async (argv) => {
-        current = argv.includes("update")
+        current = isCandidateInstall(argv)
           ? installationWithTui("0.81.0", "0.81.0")
           : installationWithTui("0.80.7", "0.80.8");
         return result();
@@ -478,6 +1001,8 @@ describe("safe pi updater", () => {
     );
     const journal = await readFile(temp.journalPath, "utf8");
     expect(journal).toContain("pi-harness/update-recovery");
+    expect(journal).toContain('"version": 6');
+    expect(journal).not.toContain("restorePatches");
     await writeFile(
       temp.journalPath,
       journal.replace(
@@ -502,7 +1027,7 @@ describe("safe pi updater", () => {
       },
       discover: async () => current,
       run: async (argv) => {
-        if (argv.includes("update")) {
+        if (isCandidateInstall(argv)) {
           current = installation("0.81.0");
           return result();
         }
@@ -520,83 +1045,174 @@ describe("safe pi updater", () => {
     ).rejects.toThrow("run `bun run update:pi`");
   });
 
-  test("restores a legacy unsupported-source journal without patching", async () => {
-    const temp = await paths();
-    let current = installation("0.80.7");
-    let rollbackAvailable = false;
-    const phases: string[] = [];
+  test.each([
+    [2, "lacks package-content snapshots"],
+    [3, "lacks global install metadata and absent-package snapshots"],
+    [4, "lacks the complete global package inventory"],
+    [5, "lacks actual global-bin state"],
+  ])(
+    "retains a legacy v%s journal without complete restoration state",
+    async (version, expectedMessage) => {
+      const temp = await paths();
+      let current = installation("0.80.7");
+      let runs = 0;
+      const dependencies = {
+        ...temp,
+        checkCompatibility: async () => {
+          if (current.packageVersion === "0.81.0") {
+            throw new Error("candidate incompatible");
+          }
+          return compatible(current);
+        },
+        discover: async () => current,
+        run: async (argv: string[]) => {
+          runs += 1;
+          if (isCandidateInstall(argv)) {
+            current = installation("0.81.0");
+            return result();
+          }
+          return result(1, "registry unavailable");
+        },
+      };
+
+      const failed = await updatePiSafely(dependencies);
+      expect(failed.manualRecoveryArgv).toBeDefined();
+      const currentJournal = await readFile(temp.journalPath, "utf8");
+      const legacyJournal = currentJournal.replace(
+        '"version": 6',
+        `"version": ${version}`,
+      );
+      await writeFile(temp.journalPath, legacyJournal);
+      const runsBeforeRecovery = runs;
+
+      await expect(updatePiSafely(dependencies)).rejects.toThrow(
+        expectedMessage,
+      );
+      expect(runs).toBe(runsBeforeRecovery);
+      expect(await readFile(temp.journalPath, "utf8")).toBe(legacyJournal);
+    },
+  );
+
+  test.each([false, true])(
+    "retains a legacy v1 journal with restorePatches=%s without executing it",
+    async (restorePatches) => {
+      const temp = await paths();
+      let current = installation("0.80.7");
+      let runs = 0;
+      const dependencies = {
+        ...temp,
+        checkCompatibility: async () => {
+          if (current.packageVersion === "0.81.0") {
+            throw new Error("candidate incompatible");
+          }
+          return compatible(current);
+        },
+        discover: async () => current,
+        run: async (argv: string[]) => {
+          runs += 1;
+          if (isCandidateInstall(argv)) {
+            current = installation("0.81.0");
+            return result();
+          }
+          return result(1, "registry unavailable");
+        },
+      };
+
+      const failed = await updatePiSafely(dependencies);
+      expect(failed.manualRecoveryArgv).toBeDefined();
+      const legacyJournal = toLegacyPatchJournal(
+        await readFile(temp.journalPath, "utf8"),
+        restorePatches,
+      );
+      await writeFile(temp.journalPath, legacyJournal);
+      const runsBeforeRecovery = runs;
+
+      await expect(updatePiSafely(dependencies)).rejects.toThrow(
+        "automatic recovery is disabled because the patch mechanism was removed",
+      );
+      expect(runs).toBe(runsBeforeRecovery);
+      expect(await readFile(temp.journalPath, "utf8")).toBe(legacyJournal);
+    },
+  );
+
+  test("cleans a stable rollback temporary before clearing an already-restored journal", async () => {
+    const { snapshotStore: _snapshotStore, ...temp } = await paths();
+    const globalRoot = join(temp.journalPath, "..", "global");
+    const modulesRoot = join(globalRoot, "node_modules");
+    const packageRoot = join(modulesRoot, "@earendil-works", "pi-coding-agent");
+    const collisionRoot = join(modulesRoot, "typebox.pi-harness-rollback.tmp");
+    const packageFile = join(packageRoot, "dist", "cli.js");
+    const collisionFile = join(collisionRoot, "index.js");
+    const packageJson = join(globalRoot, "package.json");
+    await mkdir(join(packageRoot, "dist"), { recursive: true });
+    await mkdir(collisionRoot, { recursive: true });
+    await mkdir(join(globalRoot, "bin"), { recursive: true });
+    await writeFile(packageFile, "preflight package bytes\n");
+    await writeFile(collisionFile, "unrelated package bytes\n");
+    await writeFile(packageJson, "{}\n");
+
+    const atVersion = (version: string): PiInstallation => {
+      const value = installation(version);
+      return {
+        ...value,
+        globalBin: join(globalRoot, "bin"),
+        binaryRealPath: packageFile,
+        packageRoot,
+        corePackages: {
+          [value.packageName]: {
+            root: packageRoot,
+            version,
+            manifest: {},
+          },
+        },
+      };
+    };
+    let current = atVersion("0.80.7");
+    let runs = 0;
     const dependencies = {
       ...temp,
-      checkCompatibility: async () => compatible(current),
-      discover: async () => current,
-      applyPatches: async (candidate: PiInstallation, phase: string) => {
-        phases.push(`${phase}:${candidate.packageVersion}`);
-        if (phase === "preflight") return false;
-        if (phase === "candidate") throw new Error("candidate incompatible");
-        throw new Error("legacy unsupported source must not invoke patching");
+      checkCompatibility: async () => {
+        if (current.packageVersion === "0.81.0") {
+          throw new Error("candidate incompatible");
+        }
+        return compatible(current);
       },
+      discover: async () => current,
       run: async (argv: string[]) => {
-        if (argv.includes("update")) {
-          current = installation("0.81.0");
+        runs += 1;
+        if (isCandidateInstall(argv)) {
+          await writeFile(packageFile, "candidate package bytes\n");
+          current = atVersion("0.81.0");
           return result();
         }
-        if (!rollbackAvailable) return result(1, "rollback interrupted");
-        current = installation("0.80.7");
-        return result();
+        return result(1, "rollback interrupted before reinstall");
       },
     };
 
     const failed = await updatePiSafely(dependencies);
-    expect(failed.manualRecoveryArgv).toBeDefined();
-    const journal = await readFile(temp.journalPath, "utf8");
-    const legacyJournal = toLegacyJournal(journal);
-    expect(legacyJournal).not.toBe(journal);
-    await writeFile(temp.journalPath, legacyJournal);
-
-    rollbackAvailable = true;
-    const recovered = await updatePiSafely(dependencies);
-    expect(recovered).toMatchObject({ ok: false, rolledBack: true });
-    expect(current.packageVersion).toBe("0.80.7");
-    expect(phases).toEqual(["preflight:0.80.7", "candidate:0.81.0"]);
-  });
-
-  test("clears an already-restored legacy journal without registry access", async () => {
-    const temp = await paths();
-    let current = installation("0.80.7");
-    let rollbackCalls = 0;
-    const phases: string[] = [];
-    const dependencies = {
-      ...temp,
-      checkCompatibility: async () => compatible(current),
-      discover: async () => current,
-      applyPatches: async (candidate: PiInstallation, phase: string) => {
-        phases.push(`${phase}:${candidate.packageVersion}`);
-        if (phase === "preflight") return false;
-        if (phase === "candidate") throw new Error("candidate incompatible");
-        throw new Error("legacy recovery must not invoke patching");
-      },
-      run: async (argv: string[]) => {
-        if (argv.includes("update")) {
-          current = installation("0.81.0");
-          return result();
-        }
-        rollbackCalls += 1;
-        return result(1, "registry unavailable");
-      },
+    expect(failed).toMatchObject({ ok: false, rolledBack: false });
+    const journal = JSON.parse(await readFile(temp.journalPath, "utf8")) as {
+      snapshots: { transactionId: string };
     };
-
-    const failed = await updatePiSafely(dependencies);
-    expect(failed.manualRecoveryArgv).toBeDefined();
-    const journal = await readFile(temp.journalPath, "utf8");
-    await writeFile(temp.journalPath, toLegacyJournal(journal));
-    current = installation("0.80.7");
-    const callsBeforeRecovery = rollbackCalls;
+    const staleReplacement = join(
+      globalRoot,
+      `.package.json.pi-harness-rollback-${journal.snapshots.transactionId}.tmp`,
+    );
+    current = atVersion("0.80.7");
+    await writeFile(packageFile, "preflight package bytes\n");
+    await writeFile(staleReplacement, "partial replacement\n");
+    const runsBeforeRecovery = runs;
 
     const recovered = await updatePiSafely(dependencies);
     expect(recovered).toMatchObject({ ok: false, rolledBack: true });
     expect(recovered.message).toContain("already-restored");
-    expect(rollbackCalls).toBe(callsBeforeRecovery);
-    expect(phases).toEqual(["preflight:0.80.7", "candidate:0.81.0"]);
+    expect(runs).toBe(runsBeforeRecovery);
+    expect(await readFile(collisionFile, "utf8")).toBe(
+      "unrelated package bytes\n",
+    );
+    await expect(readFile(staleReplacement, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   test("clears an unfinished journal when restoration already completed", async () => {
@@ -611,10 +1227,9 @@ describe("safe pi updater", () => {
         return compatible(current);
       },
       discover: async () => current,
-      applyPatches: async () => true,
       run: async (argv: string[]) => {
         calls += 1;
-        if (argv.includes("update")) {
+        if (isCandidateInstall(argv)) {
           current = installation("0.81.0");
           return result();
         }
@@ -645,7 +1260,7 @@ describe("safe pi updater", () => {
       },
       discover: async () => current,
       run: async (argv: string[]) => {
-        if (argv.includes("update")) {
+        if (isCandidateInstall(argv)) {
           current = installation("0.81.0");
           return result();
         }
@@ -661,6 +1276,87 @@ describe("safe pi updater", () => {
     const recovered = await updatePiSafely(dependencies);
     expect(recovered).toMatchObject({ ok: false, rolledBack: true });
     expect(current.packageVersion).toBe("0.80.7");
+  });
+
+  test("recovers with the captured Bun after the current runtime path changes", async () => {
+    const temp = await paths();
+    const capturedBun = "/opt/previous-bun/bin/bun";
+    const atVersion = (version: string): PiInstallation => ({
+      ...installation(version),
+      bunExecutable: capturedBun,
+    });
+    let current = atVersion("0.80.7");
+    let rollbackAvailable = false;
+    const rollbackExecutables: string[] = [];
+    const dependencies = {
+      ...temp,
+      checkCompatibility: async () => {
+        if (current.packageVersion !== "0.80.7") {
+          throw new Error("bad candidate");
+        }
+        return compatible(current);
+      },
+      discover: async () => current,
+      run: async (argv: string[]) => {
+        if (isCandidateInstall(argv)) {
+          current = atVersion("0.81.0");
+          return result();
+        }
+        rollbackExecutables.push(argv[0] ?? "");
+        if (!rollbackAvailable) return result(1, "temporary registry failure");
+        current = atVersion("0.80.7");
+        return result();
+      },
+    };
+
+    const failed = await updatePiSafely(dependencies);
+    expect(failed.manualRecoveryArgv?.[0]).toBe(capturedBun);
+    rollbackAvailable = true;
+    const recovered = await updatePiSafely(dependencies);
+
+    expect(recovered).toMatchObject({ ok: false, rolledBack: true });
+    expect(rollbackExecutables).toEqual([capturedBun, capturedBun]);
+  });
+
+  test("refuses rollback when the captured Bun executable digest changes", async () => {
+    const temp = await paths();
+    let current = installation("0.80.7");
+    let executableDigest = "a".repeat(64);
+    let runs = 0;
+    const dependencies = {
+      ...temp,
+      executableDigest: async () => executableDigest,
+      checkCompatibility: async () => {
+        if (current.packageVersion !== "0.80.7") {
+          throw new Error("bad candidate");
+        }
+        return compatible(current);
+      },
+      discover: async () => current,
+      run: async (argv: string[]) => {
+        runs += 1;
+        if (isCandidateInstall(argv)) {
+          current = installation("0.81.0");
+          return result();
+        }
+        return result(1, "temporary registry failure");
+      },
+    };
+
+    const failed = await updatePiSafely(dependencies);
+    expect(failed.manualRecoveryArgv).toBeDefined();
+    const runsBeforeRecovery = runs;
+    executableDigest = "b".repeat(64);
+    const refused = await updatePiSafely(dependencies);
+
+    expect(refused).toMatchObject({ ok: false, rolledBack: false });
+    expect(refused.message).toContain("digest changed");
+    expect(refused.message).toContain("manual recovery required");
+    expect(refused.manualRecoveryArgv).toBeUndefined();
+    expect(runs).toBe(runsBeforeRecovery);
+    expect(await readFile(temp.journalPath, "utf8")).toContain(
+      '"rollbackExecutableDigest"',
+    );
   });
 
   test("never releases a replacement lock owned by another generation", async () => {
@@ -776,9 +1472,9 @@ describe("safe pi updater", () => {
           : `${temp.lockPath}.recovery-${depth + 1}-${generation}`;
     }
 
-    await expect(
-      acquireUpdateLock(temp.lockPath, process.pid),
-    ).rejects.toThrow("recovery nesting exceeds the safety limit");
+    await expect(acquireUpdateLock(temp.lockPath, process.pid)).rejects.toThrow(
+      "recovery nesting exceeds the safety limit",
+    );
   });
 
   test("rejects a concurrent lock and reclaims a stale lock", async () => {

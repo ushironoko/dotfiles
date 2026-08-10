@@ -4,6 +4,7 @@ import type {
   ExtensionAPI,
   ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
+import type { ProviderHeaders } from "@earendil-works/pi-ai";
 import type { TSchema } from "typebox";
 import {
   requestCodexWeb,
@@ -26,7 +27,7 @@ interface ModelLike {
 interface ResolvedAuthLike {
   ok: boolean;
   apiKey?: string;
-  headers?: Record<string, string>;
+  headers?: ProviderHeaders;
 }
 
 interface ModelRegistryLike {

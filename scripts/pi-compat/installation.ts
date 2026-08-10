@@ -10,7 +10,7 @@ import {
   resolve,
   sep,
 } from "node:path";
-import { PI_BASELINE_PACKAGES } from "./baseline";
+import { PI_BASELINE_PACKAGES, type PiBaselinePackage } from "./baseline";
 import {
   runCommand,
   type CommandRunner,
@@ -139,6 +139,29 @@ const compareVersion = (
   return 0;
 };
 
+const PI_084_ADDED_PACKAGES = new Set<PiBaselinePackage>([
+  "@earendil-works/pi-client",
+  "@earendil-works/pi-protocol",
+  "@earendil-works/pi-telemetry",
+]);
+
+/**
+ * Pi 0.84 split three new packages out of the coding-agent closure. Keep the
+ * legacy cohort discoverable so the safe updater can verify and migrate an
+ * installed 0.83 source before requiring the complete 0.84+ cohort.
+ */
+export const piCohortPackagesForVersion = (
+  version: string,
+): readonly PiBaselinePackage[] => {
+  const parsed = parseVersion(version);
+  if (parsed === undefined) {
+    throw new Error(`global pi package has an invalid version: ${version}`);
+  }
+  return compareVersion(parsed, [0, 84, 0]) >= 0
+    ? PI_BASELINE_PACKAGES
+    : PI_BASELINE_PACKAGES.filter((name) => !PI_084_ADDED_PACKAGES.has(name));
+};
+
 /** Minimal fail-closed support for the exact/caret ranges in pi manifests. */
 export const satisfiesManifestRange = (
   version: string,
@@ -247,8 +270,9 @@ export const discoverPiInstallation = async (
   }
 
   const globalModules = findNodeModulesRoot(packageRoot);
+  const packageCohort = piCohortPackagesForVersion(packageVersion);
   const corePackages: Record<string, PiCorePackage> = {};
-  for (const name of PI_BASELINE_PACKAGES) {
+  for (const name of packageCohort) {
     const root =
       name === packageName
         ? packageRoot
@@ -267,7 +291,7 @@ export const discoverPiInstallation = async (
     };
   }
 
-  const cohortNames = new Set<string>(PI_BASELINE_PACKAGES);
+  const cohortNames = new Set<string>(packageCohort);
   for (const [owner, pkg] of Object.entries(corePackages)) {
     for (const [dependency, range] of Object.entries(
       pkg.manifest.dependencies ?? {},
