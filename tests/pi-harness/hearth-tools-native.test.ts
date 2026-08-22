@@ -9,12 +9,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createHearthBashDefinition,
+  createHearthBashOperations,
   createHearthEditDefinition,
+  createHearthFindDefinition,
   createHearthGrepDefinition,
   createHearthReadDefinition,
   createHearthWriteDefinition,
 } from "../../pi/extensions/hearth-tools/adapters";
-import type { PiToolSettings } from "../../pi/extensions/hearth-tools/engine";
+import {
+  HearthEngineGate,
+  type PiToolSettings,
+} from "../../pi/extensions/hearth-tools/engine";
 
 const roots: string[] = [];
 const root = async (): Promise<string> => {
@@ -272,6 +277,97 @@ describe("Hearth-backed pi tool contracts", () => {
     ).rejects.toThrow(
       "Could not find the exact text in spaces.txt. The old text must match exactly including all whitespace and newlines.",
     );
+  });
+
+  test("find preserves Pi output while reusing Hearth's resident walk cache", async () => {
+    const cwd = await root();
+    await mkdir(join(cwd, "src", "nested"), { recursive: true });
+    await mkdir(join(cwd, "node_modules", "pkg"), { recursive: true });
+    await writeFile(join(cwd, ".hidden.ts"), "");
+    await writeFile(join(cwd, "src", "a.ts"), "");
+    await writeFile(join(cwd, "src", "nested", "b.ts"), "");
+    await writeFile(join(cwd, "node_modules", "pkg", "ignored.ts"), "");
+    const hearth = engine(cwd);
+    const find = createHearthFindDefinition(cwd, hearth);
+
+    const result = await find.execute(
+      "find-1",
+      { pattern: "*.ts", path: ".", limit: 10 },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: [".hidden.ts", "src/a.ts", "src/nested/b.ts"].join("\n"),
+    });
+    expect(result.details).toBeUndefined();
+
+    const subdirectory = await find.execute(
+      "find-subdirectory",
+      { pattern: "*.ts", path: "src", limit: 10 },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(subdirectory.content[0]).toEqual({
+      type: "text",
+      text: ["a.ts", "nested/b.ts"].join("\n"),
+    });
+    expect(
+      hearth.find({
+        pattern: "*.ts",
+        path: cwd,
+        limit: 10,
+        excludeGlobs: ["**/node_modules/**", "**/.git/**"],
+      }).walkCacheHit,
+    ).toBe(true);
+  });
+
+  test("find forwards abort and keeps its Engine lease until native settlement", async () => {
+    const cwd = await root();
+    let markStarted = (): void => {};
+    const started = new Promise<void>((resolveStarted) => {
+      markStarted = resolveStarted;
+    });
+    let finishFind = (_result: { paths: string[]; root: string }): void => {};
+    const nativeFinished = new Promise<{ paths: string[]; root: string }>(
+      (resolveFinished) => {
+        finishFind = resolveFinished;
+      },
+    );
+    let receivedSignal: AbortSignal | undefined;
+    const fakeEngine = {
+      findAsync(_params: unknown, signal?: AbortSignal) {
+        receivedSignal = signal;
+        markStarted();
+        return nativeFinished;
+      },
+    } as unknown as HearthEngine;
+    const gate = new HearthEngineGate();
+    const find = createHearthFindDefinition(cwd, fakeEngine, gate);
+    const controller = nativeAbortController();
+
+    const executing = find.execute(
+      "find-abort",
+      { pattern: "*.ts", path: ".", limit: 10 },
+      controller.signal,
+      undefined,
+      context,
+    );
+    await started;
+    expect(receivedSignal).toBe(controller.signal);
+    controller.abort();
+    await expect(executing).rejects.toThrow("Operation aborted");
+
+    let writerRan = false;
+    const writer = gate.exclusive(async () => {
+      writerRan = true;
+    });
+    expect(writerRan).toBe(false);
+    finishFind({ paths: [], root: cwd });
+    await writer;
+    expect(writerRan).toBe(true);
   });
 
   test("grep formats relative paths, context, and a global limit", async () => {
@@ -550,6 +646,42 @@ describe("Hearth-backed pi tool contracts", () => {
     expect(maxTotalCount).toBeLessThanOrEqual(100_000);
   });
 
+  test("grep surfaces a native incomplete-search warning even with no matches", async () => {
+    const cwd = await root();
+    const fakeEngine = {
+      async grepAsync() {
+        return {
+          files: [],
+          totalMatches: 0,
+          filesSearched: 1,
+          walkCacheHit: false,
+          limitReached: false,
+          incomplete: true,
+          root: cwd,
+          rootIsDir: true,
+        };
+      },
+    } as unknown as HearthEngine;
+    const grep = createHearthGrepDefinition(cwd, fakeEngine);
+
+    const result = await grep.execute(
+      "grep-incomplete",
+      { pattern: "missing", path: "." },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: [
+        "No matches found",
+        "",
+        "[Search incomplete: Hearth could not fully search at least one selected file. Use read or narrow the path to verify omitted content]",
+      ].join("\n"),
+    });
+  });
+
   test("grep maps a pre-aborted request to pi's error", async () => {
     const cwd = await root();
     const controller = nativeAbortController();
@@ -595,6 +727,48 @@ describe("Hearth-backed pi tool contracts", () => {
     expect(updates.join("\n")).toContain("yes");
     const reread = await hearth.readAsync({ path });
     expect(reread.content).toBe("new\n");
+  });
+
+  test("bash marks output omitted by Hearth's native stream cap", async () => {
+    const cwd = await root();
+    const fakeEngine = {
+      async bashStream(
+        _params: unknown,
+        onChunk: (chunk: {
+          seq: number;
+          channel: "stdout";
+          text: string;
+        }) => void,
+      ) {
+        onChunk({ seq: 1, channel: "stdout", text: "kept" });
+        return {
+          stdout: "",
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+          aborted: false,
+          durationUs: 1,
+          chunks: 1,
+          outputTruncated: true,
+        };
+      },
+      clearCaches() {
+        return { filesInvalidated: 0, walksInvalidated: 0 };
+      },
+    } as unknown as HearthEngine;
+    const operations = createHearthBashOperations(fakeEngine, shell);
+    const chunks: Buffer[] = [];
+
+    const result = await operations.exec("printf kept", cwd, {
+      onData(data) {
+        chunks.push(data);
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(Buffer.concat(chunks).toString("utf8")).toBe(
+      "kept\n[Hearth native output limit reached; omitted output is unavailable]\n",
+    );
   });
 
   test("bash reports the effective Engine timeout and maps aborts", async () => {
@@ -653,12 +827,27 @@ describe("Hearth-backed pi tool contracts", () => {
 
   test("bash never retries an indeterminate warm-shell signal", async () => {
     const cwd = await root();
-    const bash = createHearthBashDefinition(cwd, engine(cwd), settings);
+    const pooledShell: ShellSpec = {
+      program: "/bin/sh",
+      args: ["-c"],
+      transport: "arg" as ShellSpec["transport"],
+    };
+    const hearth = new HearthEngine({
+      cwd,
+      trustCache: true,
+      warmShell: true,
+      enableOptimizer: false,
+      shell: pooledShell,
+    });
+    const bash = createHearthBashDefinition(cwd, hearth, {
+      ...settings,
+      shell: pooledShell,
+    });
 
     await expect(
       bash.execute(
         "bash-warm-signal",
-        { command: "kill -TERM $$" },
+        { command: "kill -9 $$" },
         undefined,
         undefined,
         context,

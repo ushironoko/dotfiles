@@ -182,7 +182,10 @@ export interface HearthEngineRuntime {
 
 // Bump the symbol whenever the slot shape changes so /reload cannot interpret
 // a runtime created by an older extension revision as the current contract.
-const ENGINE_SLOT = Symbol.for("ushironoko.pi-hearth-tools.engine.v3");
+const ENGINE_SLOT = Symbol.for("ushironoko.pi-hearth-tools.engine.v4");
+const LEGACY_ENGINE_SLOT_V3 = Symbol.for(
+  "ushironoko.pi-hearth-tools.engine.v3",
+);
 const LEGACY_ENGINE_SLOT_V2 = Symbol.for(
   "ushironoko.pi-hearth-tools.engine.v2",
 );
@@ -195,6 +198,7 @@ const RETIRED_ENGINE_SLOT = Symbol.for(
 
 interface GlobalWithEngine {
   [ENGINE_SLOT]?: HearthEngineRuntime;
+  [LEGACY_ENGINE_SLOT_V3]?: unknown;
   [LEGACY_ENGINE_SLOT_V2]?: unknown;
   [LEGACY_ENGINE_SLOT_V1]?: unknown;
   [RETIRED_ENGINE_SLOT]?: unknown[];
@@ -203,6 +207,7 @@ interface GlobalWithEngine {
 const retireLegacyEngines = (host: GlobalWithEngine): void => {
   let retired = host[RETIRED_ENGINE_SLOT];
   for (const legacy of [
+    host[LEGACY_ENGINE_SLOT_V3],
     host[LEGACY_ENGINE_SLOT_V2],
     host[LEGACY_ENGINE_SLOT_V1],
   ]) {
@@ -211,6 +216,7 @@ const retireLegacyEngines = (host: GlobalWithEngine): void => {
     if (!retired.includes(legacy)) retired.push(legacy);
   }
   if (retired !== undefined) host[RETIRED_ENGINE_SLOT] = retired;
+  delete host[LEGACY_ENGINE_SLOT_V3];
   delete host[LEGACY_ENGINE_SLOT_V2];
   delete host[LEGACY_ENGINE_SLOT_V1];
 };
@@ -262,13 +268,13 @@ export const getOrCreateEngineRuntime = (
   shell: ShellSpec,
 ): HearthEngineRuntime => {
   const host = globalThis as GlobalWithEngine;
-  // A live /reload must detach pre-graph and pre-gate slots before constructing
-  // v3. Keep their native runtimes strongly reachable, though: dropping a warm
-  // HearthEngine during extension reload can block native finalization and
-  // prevent Pi from ever loading the new extension. Hearth has no async close
-  // boundary, so an ordinary forward migration deliberately keeps at most the
-  // two named legacy runtimes (including their caches, optimizer, and shells)
-  // until the process restarts.
+  // A live /reload must detach pre-0.3, pre-graph, and pre-gate slots before
+  // constructing v4. Keep their native runtimes strongly reachable, though:
+  // dropping a warm HearthEngine during extension reload can block native
+  // finalization and prevent Pi from ever loading the new extension. Hearth has
+  // no async close boundary, so a forward migration deliberately retains the
+  // three named legacy runtimes (including caches, optimizer, and shells) until
+  // the process restarts.
   retireLegacyEngines(host);
   const options = createOptions(cwd, config, shell);
   const existing = host[ENGINE_SLOT];
@@ -291,6 +297,7 @@ export const getOrCreateEngineRuntime = (
 export const clearProcessEngineForTests = (): void => {
   const host = globalThis as GlobalWithEngine;
   delete host[ENGINE_SLOT];
+  delete host[LEGACY_ENGINE_SLOT_V3];
   delete host[LEGACY_ENGINE_SLOT_V2];
   delete host[LEGACY_ENGINE_SLOT_V1];
   delete host[RETIRED_ENGINE_SLOT];

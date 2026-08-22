@@ -1,6 +1,7 @@
 import {
   createBashToolDefinition,
   createEditToolDefinition,
+  createFindToolDefinition,
   createGrepToolDefinition,
   createReadTool,
   createReadToolDefinition,
@@ -46,11 +47,15 @@ const FIRST_LINE_NUMBER = 1;
 const NO_CONTEXT_LINES = 0;
 const GREP_LIMIT_REFINEMENT_MULTIPLIER = 2;
 const GREP_MAX_LINE_LENGTH = 500;
+const HEARTH_GREP_INCOMPLETE_NOTICE =
+  "Search incomplete: Hearth could not fully search at least one selected file. Use read or narrow the path to verify omitted content";
 const GLOB_SCAN_MIN = 1_000;
 const GLOB_SCAN_MAX = 100_000;
 const GLOB_SCAN_MULTIPLIER = 100;
 const MILLISECONDS_PER_SECOND = 1_000;
 const HEARTH_SIGNAL_EXIT_CODE = -1;
+const HEARTH_BASH_OUTPUT_LIMIT_NOTICE =
+  "\n[Hearth native output limit reached; omitted output is unavailable]\n";
 
 // Mirrors pi's bounded image sniffer and supported MIME contract.
 const IMAGE_TYPE_SNIFF_BYTES = 4_100;
@@ -528,6 +533,55 @@ const limitFileMatches = (
   return limited;
 };
 
+export const createHearthFindDefinition = (
+  cwd: string,
+  engine: HearthEngine,
+  gate: HearthAccessGate = IMMEDIATE_HEARTH_ACCESS_GATE,
+) => {
+  const base = withStatusTitle(createFindToolDefinition(cwd), "all-content");
+  const definition: typeof base = {
+    ...base,
+    execute(id, input, signal, onUpdate, ctx) {
+      const delegated = createFindToolDefinition(cwd, {
+        operations: {
+          exists: (path) =>
+            access(path).then(
+              () => true,
+              () => false,
+            ),
+          // Pi's custom glob options do not carry an AbortSignal, so capture
+          // execute's outer signal. Keep the gate around the native promise so
+          // cancellation settles before a writer may clear shared caches.
+          glob: (pattern, root, options) =>
+            gate.shared(() =>
+              engine
+                .findAsync(
+                  {
+                    pattern,
+                    path: root,
+                    limit: options.limit,
+                    hidden: true,
+                    respectGitignore: true,
+                    followSymlinks: false,
+                    excludeGlobs: options.ignore,
+                  },
+                  signal,
+                )
+                .then((result) =>
+                  result.paths.map((path) => {
+                    const absolute = resolve(result.root, path);
+                    return path.endsWith("/") ? `${absolute}/` : absolute;
+                  }),
+                ),
+            ),
+        },
+      });
+      return delegated.execute(id, input, signal, onUpdate, ctx);
+    },
+  };
+  return definition;
+};
+
 export const createHearthGrepDefinition = (
   cwd: string,
   engine: HearthEngine,
@@ -595,7 +649,16 @@ export const createHearthGrepDefinition = (
         }
         if (totalMatches === 0) {
           return {
-            content: [{ type: "text" as const, text: "No matches found" }],
+            content: [
+              {
+                type: "text" as const,
+                text: `No matches found${
+                  result.incomplete
+                    ? `\n\n[${HEARTH_GREP_INCOMPLETE_NOTICE}]`
+                    : ""
+                }`,
+              },
+            ],
             details: undefined,
           };
         }
@@ -662,6 +725,7 @@ export const createHearthGrepDefinition = (
           : result.limitReached;
         const matchLimitReached = limitReached ? limit : undefined;
         const notices: string[] = [];
+        if (result.incomplete) notices.push(HEARTH_GREP_INCOMPLETE_NOTICE);
         if (matchLimitReached !== undefined) {
           notices.push(
             `${limit} matches limit reached. Use limit=${limit * GREP_LIMIT_REFINEMENT_MULTIPLIER} for more, or refine pattern`,
@@ -752,6 +816,9 @@ export const createHearthBashOperations = (
           (chunk: BashChunk) => options.onData(Buffer.from(chunk.text, "utf8")),
           options.signal,
         );
+        if (result.outputTruncated) {
+          options.onData(Buffer.from(HEARTH_BASH_OUTPUT_LIMIT_NOTICE, "utf8"));
+        }
         if (result.aborted) throw new Error("aborted");
         if (result.timedOut)
           throw new Error(

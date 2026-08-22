@@ -13,6 +13,7 @@ import { Type } from "typebox";
 import {
   createHearthBashDefinition,
   createHearthEditDefinition,
+  createHearthFindDefinition,
   createHearthGrepDefinition,
   createHearthReadDefinition,
   createHearthWriteDefinition,
@@ -320,6 +321,11 @@ describe("Hearth tool status title", () => {
         createHearthGrepDefinition("/workspace", engine, gate),
         { pattern: "needle", path: "." },
         "grep",
+      ],
+      [
+        createHearthFindDefinition("/workspace", engine, gate),
+        { pattern: "*.ts", path: "." },
+        "find",
       ],
     ] as const;
 
