@@ -7,7 +7,7 @@
       "dependencies": {
         "@anthropic-ai/sandbox-runtime": "0.0.26",
         "@clack/prompts": "0.11.0",
-        "@hearthdev/napi": "0.1.1",
+        "@hearthdev/napi": "0.3.0",
         "c12": "3.2.0",
         "consola": "3.4.2",
         "defu": "6.1.4",
@@ -184,15 +184,15 @@
 
     "@google/genai": ["@google/genai@1.52.0", "", { "dependencies": { "google-auth-library": "^10.3.0", "p-retry": "^4.6.2", "protobufjs": "^7.5.4", "ws": "^8.18.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.2" }, "optionalPeers": ["@modelcontextprotocol/sdk"] }, "sha512-gwSvbpiN/17O9TbsqSsE/OzZcpv5Fo4RQjdngGgogtuB9RsyJ8ZHhX5KjHj1bp5N9snN2eK8LDGXSaWW2hof8Q=="],
 
-    "@hearthdev/napi": ["@hearthdev/napi@0.1.1", "", { "optionalDependencies": { "@hearthdev/napi-darwin-arm64": "0.1.1", "@hearthdev/napi-darwin-x64": "0.1.1", "@hearthdev/napi-linux-arm64-gnu": "0.1.1", "@hearthdev/napi-linux-x64-gnu": "0.1.1" } }, "sha512-hTtKgFQHZHoLhqui1Bdr1RNLDwyy3hDZRPvUtycTY5ItlNLLcEWeBo2MRjUb2kuT4n9vEbFk0PUVWCQe3Y6d1w=="],
+    "@hearthdev/napi": ["@hearthdev/napi@0.3.0", "", { "optionalDependencies": { "@hearthdev/napi-darwin-arm64": "0.3.0", "@hearthdev/napi-darwin-x64": "0.3.0", "@hearthdev/napi-linux-arm64-gnu": "0.3.0", "@hearthdev/napi-linux-x64-gnu": "0.3.0" } }, "sha512-NSCwxKPyTOuEnhjX8wHDMxFykjFK+CdKiB5Q8z4Pi4WJl2yxfaoqh0ptyVg4HLO1PY5UgVVd92oCDU9DWJlXdA=="],
 
-    "@hearthdev/napi-darwin-arm64": ["@hearthdev/napi-darwin-arm64@0.1.1", "", { "os": "darwin", "cpu": "arm64" }, "sha512-Fob3k4L8UB6UFC7hXk2TPG7wTRIj1OVI9ZOgOFJ4pDsarI21CEqAh3iLnzXUAufdp2I4vXDuN9VOAoylvTMHSg=="],
+    "@hearthdev/napi-darwin-arm64": ["@hearthdev/napi-darwin-arm64@0.3.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-fxdBIAC+uKG5qzoemy+ff4RD9mnp00GvJjItA3geaqlnYXNuxNjy6PjLBLz38UOL6YpCiCiXnf4U5leurcOkWQ=="],
 
-    "@hearthdev/napi-darwin-x64": ["@hearthdev/napi-darwin-x64@0.1.1", "", { "os": "darwin", "cpu": "x64" }, "sha512-8nBlw1RubYZN/Gg+pH2JeLNUQXYnRqan/VMMyrrxUEbdIDJG9M7t/v2akX5KUi0p1t6IlVPMNRxa4DBRCPPftA=="],
+    "@hearthdev/napi-darwin-x64": ["@hearthdev/napi-darwin-x64@0.3.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-rAfEAiNU7jl9F31RU19aqRFZu4sPQqAZ/F+TmWUVCy/4jtIA5tyY/ecYQccTSA3lwzw5sOywcWvt0sq8GIDB1A=="],
 
-    "@hearthdev/napi-linux-arm64-gnu": ["@hearthdev/napi-linux-arm64-gnu@0.1.1", "", { "os": "linux", "cpu": "arm64" }, "sha512-zWYN5MQclaSO8G1Rn2gRbUQD7U4+ERkOvwTO7TXLm34hQ1zUUaxQNi4j0YD9SZeqngbas/LU1oLCUHZLeYP7Kg=="],
+    "@hearthdev/napi-linux-arm64-gnu": ["@hearthdev/napi-linux-arm64-gnu@0.3.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-ByyzdRu0NTjbcmHOYgCX6gU/0Of5kbSCsEysGnKKFDNBRy9LyWRILuNrBV760ZA6BsHF5dpyhtn6EapU0MMSeQ=="],
 
-    "@hearthdev/napi-linux-x64-gnu": ["@hearthdev/napi-linux-x64-gnu@0.1.1", "", { "os": "linux", "cpu": "x64" }, "sha512-8/nZWMt/07gixBRlgyoln02EYRMX+kTc72PtAih2NWQSnlK1thcg6dyvfjSjfWBLt1qFP3xZlN7SctaR7p7QvQ=="],
+    "@hearthdev/napi-linux-x64-gnu": ["@hearthdev/napi-linux-x64-gnu@0.3.0", "", { "os": "linux", "cpu": "x64" }, "sha512-M+z5SLcnOsCyGexz05d0JLyfBCJx++CIZcjE4gOa0qFcNCDgRIf/8nWd9GstaMvfs5apvoVMqAR0vL9TavqD0Q=="],
 
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
 

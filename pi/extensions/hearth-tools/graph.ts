@@ -18,8 +18,9 @@ import { stripTerminalControls } from "./terminal-text";
 
 export const HEARTH_GRAPH_TOOL_NAME = "hearth_graph";
 
-const AUTO_INDEX_BATCH_SIZE = 128;
-const AUTO_INDEX_SENTINEL = "__pi_hearth_graph_auto_index__";
+// Keep each observer batch within Hearth's native graphPrefetch seed cap so no
+// observed file is silently dropped from a successful request.
+const AUTO_INDEX_BATCH_SIZE = 32;
 const DEFAULT_RESULT_LIMIT = 50;
 const MAX_RESULT_LIMIT = 200;
 const DEFAULT_GRAPH_DEPTH = 1;
@@ -383,14 +384,17 @@ export class HearthGraphObserver implements HearthGraphRuntime {
         await this.runQuery(
           () =>
             this.gate.shared(async () => {
-              await this.engine.graphDefinitionsAsync(
+              await this.engine.graphPrefetchAsync(
                 {
                   root: this.root,
-                  name: AUTO_INDEX_SENTINEL,
                   files,
+                  maxSeeds: AUTO_INDEX_BATCH_SIZE,
                   hidden: true,
                   respectGitignore: true,
-                  followSymlinks: false,
+                  // Project cwd may itself contain a symlink component (for
+                  // example macOS /var -> /private/var). Native canonical
+                  // containment still rejects targets that escape the root.
+                  followSymlinks: true,
                 },
                 this.controller.signal,
               );

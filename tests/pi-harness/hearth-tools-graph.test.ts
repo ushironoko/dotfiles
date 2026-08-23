@@ -257,28 +257,26 @@ describe("Hearth graph integration", () => {
     const hearth = engine(cwd);
     const gate = new HearthEngineGate();
     const observer = new HearthGraphObserver(cwd, hearth, gate);
-    observer.observe([dependency, join(cwd, "..", "outside.ts")]);
+    observer.observe([importer, join(cwd, "..", "outside.ts")]);
     await observer.flush();
 
     const partial = await hearth.graphStatusAsync({ root: cwd });
-    expect(partial.status?.built).toBe(true);
-    expect(partial.status?.indexedFiles).toBe(1);
+    expect(partial.status?.built).toBe(false);
+    expect(partial.status?.indexedFiles).toBe(2);
     expect(observer.status().observedFiles).toBe(1);
+    const warmedDependency = await hearth.readAsync({ path: dependency });
+    expect(warmedDependency.cacheHit).toBe(true);
 
-    observer.observe([importer]);
-    await observer.flush();
-    const observedStatus = await hearth.graphStatusAsync({ root: cwd });
-    expect(observedStatus.status?.indexedFiles).toBe(2);
     const partialText = formatGraphResult(
       cwd,
       "status",
-      observedStatus,
+      partial,
       observer.status(),
     ).text;
     expect(partialText).toContain(
-      "guarantee=approximate scope=observed-partial indexed=2 lastSweepFiles=1",
+      "guarantee=approximate scope=observed-partial indexed=2",
     );
-    expect(partialText).not.toContain("indexed=2/1");
+    expect(partialText).not.toMatch(/indexed=2\/\d+/);
 
     const tool = createHearthGraphDefinition(cwd, hearth, gate, observer);
     const definitions = await tool.execute(
@@ -316,7 +314,7 @@ describe("Hearth graph integration", () => {
     await writeFile(healthy, "export const healthy = true;\n");
     let brokenFails = true;
     const fakeEngine = {
-      async graphDefinitionsAsync(params: { files?: string[] }) {
+      async graphPrefetchAsync(params: { files?: string[] }) {
         if (brokenFails && params.files?.includes(broken)) {
           throw new Error("synthetic graph failure");
         }
@@ -349,6 +347,32 @@ describe("Hearth graph integration", () => {
     expect(observer.status().lastError).toBeUndefined();
   });
 
+  test("keeps observer batches within Hearth's native prefetch seed cap", async () => {
+    const cwd = await root();
+    const batchSizes: number[] = [];
+    const fakeEngine = {
+      async graphPrefetchAsync(params: { files?: string[] }) {
+        batchSizes.push(params.files?.length ?? 0);
+        return {};
+      },
+    } as unknown as HearthEngine;
+    const observer = new HearthGraphObserver(
+      cwd,
+      fakeEngine,
+      new HearthEngineGate(),
+    );
+
+    observer.observe(
+      Array.from({ length: 33 }, (_value, index) =>
+        join(cwd, `observed-${index}.ts`),
+      ),
+    );
+    await observer.flush();
+
+    expect(batchSizes).toEqual([32, 1]);
+    expect(observer.status().observedFiles).toBe(33);
+  });
+
   test("lets a graph call stop waiting for session-scoped warmup", async () => {
     const cwd = await root();
     const path = join(cwd, "slow.ts");
@@ -362,7 +386,7 @@ describe("Hearth graph integration", () => {
       markFinished = resolveFinished;
     });
     const fakeEngine = {
-      graphDefinitionsAsync(_params: unknown, signal: AbortSignal | undefined) {
+      graphPrefetchAsync(_params: unknown, signal: AbortSignal | undefined) {
         markStarted();
         return new Promise((_resolve, reject) => {
           if (signal === undefined) return;

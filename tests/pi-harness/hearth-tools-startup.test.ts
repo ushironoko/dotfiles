@@ -434,7 +434,7 @@ describe("hearth-tools startup", () => {
     );
   });
 
-  test("registers five overrides plus an active graph tool without activating grep", async () => {
+  test("registers six overrides plus an active graph tool without activating grep or find", async () => {
     const fake = fakePi();
     await setupHearthTools(fake.pi, {
       loadModule: async () => ({ HearthEngine: FakeEngine as never }),
@@ -634,6 +634,7 @@ describe("hearth-tools startup", () => {
     const legacySlots = [
       Symbol.for("ushironoko.pi-hearth-tools.engine.v1"),
       Symbol.for("ushironoko.pi-hearth-tools.engine.v2"),
+      Symbol.for("ushironoko.pi-hearth-tools.engine.v3"),
     ];
     const legacyRuntimes = legacySlots.map((legacySlot) => {
       const runtime = { engine: {}, options: {} };
@@ -659,6 +660,7 @@ describe("hearth-tools startup", () => {
       expect(Reflect.has(globalThis, legacySlot)).toBe(false);
     }
     expect(Reflect.get(globalThis, retiredSlot)).toEqual([
+      legacyRuntimes[2],
       legacyRuntimes[1],
       legacyRuntimes[0],
     ]);
@@ -675,7 +677,7 @@ describe("hearth-tools startup", () => {
       },
     });
     await fake.emit("session_start", { reason: "reload" });
-    expect(Reflect.get(globalThis, retiredSlot)).toHaveLength(2);
+    expect(Reflect.get(globalThis, retiredSlot)).toHaveLength(3);
   });
 
   test("clears caches after mutation hooks and child completion", async () => {

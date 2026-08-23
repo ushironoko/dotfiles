@@ -14,6 +14,7 @@ import {
   createHearthBashDefinition,
   createHearthBashOperations,
   createHearthEditDefinition,
+  createHearthFindDefinition,
   createHearthGrepDefinition,
   createHearthReadDefinition,
   createHearthWriteDefinition,
@@ -43,6 +44,7 @@ export const HEARTH_OVERRIDE_TOOL_NAMES = [
   "edit",
   "bash",
   "grep",
+  "find",
 ] as const;
 export const HEARTH_TOOL_NAMES = [
   ...HEARTH_OVERRIDE_TOOL_NAMES,
@@ -179,6 +181,7 @@ const definitions = (
           }),
     }),
     createHearthGrepDefinition(cwd, runtime.engine, runtime.gate, graph),
+    createHearthFindDefinition(cwd, runtime.engine, runtime.gate),
     createHearthGraphDefinition(cwd, runtime.engine, runtime.gate, graph),
   ] as const;
 
@@ -401,7 +404,7 @@ export const setupHearthTools = async (
 
       assertNoExistingOverride(pi, ownedToolNames);
       const activeBefore = pi.getActiveTools();
-      const [read, write, edit, bash, grep, hearthGraph] = definitions(
+      const [read, write, edit, bash, grep, find, hearthGraph] = definitions(
         ctx.cwd,
         runtime,
         settings,
@@ -418,6 +421,7 @@ export const setupHearthTools = async (
         pi.registerTool(edit);
         pi.registerTool(bash);
         pi.registerTool(grep);
+        pi.registerTool(find);
         pi.registerTool(hearthGraph);
       }
       pi.setActiveTools([

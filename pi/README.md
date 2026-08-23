@@ -391,15 +391,15 @@ uses the verified read-only route described above.
 
 ## Hearth-backed built-in tools
 
-`pi/extensions/hearth-tools` pins `@hearthdev/napi` exactly to `0.1.1` and
+`pi/extensions/hearth-tools` pins `@hearthdev/napi` exactly to `0.3.0` and
 constructs one in-process `HearthEngine` per pi process. The same resident
 Engine owns file/walk caches, the warm-shell pool, and the Hearth symbol/module
 graph. Parent pi and every subagent/workflow child have separate resident state;
 `/reload` reuses the process Engine when every Engine option is unchanged. The
-0.1.1 integration uses a new process slot, so a live reload cannot reuse a
-pre-graph 0.1.0 Engine. A config, cwd, or inherited shell change during reload
-fails with a bounded
-restart-required diagnostic instead of silently retaining old settings. BTW
+0.3.0 integration uses a new v4 process slot, so a live reload cannot reuse a
+pre-0.3 Engine that lacks resident find and dependency prefetch. A config, cwd,
+or inherited shell change during reload fails with a bounded restart-required
+diagnostic instead of silently retaining old settings. BTW
 keeps extension/package discovery off but receives a custom Hearth-backed
 `read`; its active tools remain `read` and `ls`.
 
@@ -417,15 +417,15 @@ The checked-in maximum-speed defaults are:
 Override these fields, plus optional `maxCachedFiles`, in
 `~/.pi/agent/hearth-tools.local.json`; unknown keys are rejected. Invalid
 config, a missing/incompatible native addon, or an effective competing override
-for one of the five built-in names or `hearth_graph` terminates pi at startup
+for one of the six built-in names or `hearth_graph` terminates pi at startup
 with exit code 1; there is no built-in fallback. Registration restores the prior
-active built-in names, so replacing `grep` does not enable it, then activates the
-new read-only `hearth_graph` tool. Pi 0.84.1 exposes only the first effective tool per
+active built-in names, so replacing `grep` or `find` does not enable either one,
+then activates the new read-only `hearth_graph` tool. Pi 0.84.1 exposes only the first effective tool per
 name: a later inert losing registration cannot be enumerated, but it also cannot
 execute. Hearth checks effective ownership before registration, immediately
 after registration, before each agent turn, and again at the tool-call boundary.
 
-Hearth decorates the inherited call renderers for those five tools because pi's
+Hearth decorates the inherited call renderers for those six tools because pi's
 standard tool shell applies completion state only through background tokens.
 Pending titles stay unchanged. A settled title receives a `✓` in the theme's
 `success` foreground or a `✗` in its `error` foreground, and the title uses the
@@ -449,18 +449,22 @@ covers formatters and child writers independently of parent-message delivery.
 External editors and unmanaged processes still require `/hearth-clear-cache`,
 a restart, or `trustCache: false`. Cache invalidation also marks retained graph
 state stale; the next graph sweep revalidates it rather than trusting old module
-edges. An `indeterminate` command is never retried automatically. In particular, a command that terminates its pooled warm shell
-may be indeterminate; set `warmShell: false` when exact signal-exit reporting is
-more important than shell reuse.
+edges. An `indeterminate` command is never retried automatically. In
+particular, a command that terminates its pooled warm shell may be indeterminate;
+set `warmShell: false` when exact signal-exit reporting is more important than
+shell reuse. Hearth 0.3.0 admits only eligible `/bin/sh -c` calls to that pool;
+other configured shells preserve their semantics through a fresh process.
 
 Successful `read` calls (including BTW reads) enqueue their in-project file for
 incremental graph analysis. Successful `grep` calls enqueue the matching files
-that remain after glob post-filtering. The session observer deduplicates paths,
-indexes batches of up to 128 files asynchronously through the shared Engine
-gate, skips paths outside the project root, and aborts pending native work on
-session shutdown. Graph indexing is advisory: failed paths and their bounded
-diagnostic remain visible until that path is observed and indexed successfully;
-a failure never changes an otherwise successful `read` or `grep` result.
+that remain after glob post-filtering. The session observer deduplicates paths
+and asynchronously prefetches batches of up to 32 observed seeds plus their
+resolved direct in-root imports through the shared Engine gate. Prefetch performs
+no directory walk, skips paths outside the project root, and aborts pending native
+work on session shutdown. Graph warming is advisory: rejected batches and their
+bounded diagnostics remain visible until their paths are observed and prefetched
+successfully; a failure never changes an otherwise successful `read` or `grep`
+result.
 
 `hearth_graph` exposes `symbols`, `outline`, `search`, `definitions`, `deps`,
 `rdeps`, `neighborhood`, and `status`. A query first drains pending observed-file
@@ -477,21 +481,36 @@ keeps Hearth `exact`/`approximate` metadata, and the agent guidelines require
 consequential approximate results or unresolved imports to be confirmed with
 `read` or `grep`. Traversal depth is limited to four and symbol result limits to 200.
 
+`find` delegates Pi's custom glob operation to resident `findAsync`, preserving
+hidden-file discovery, root-relative POSIX output, directory suffixes, result and
+50 KiB output limits, plus Pi's `node_modules`/`.git` exclusions. Repeated finds
+reuse the same walk snapshots as grep. Hearth deliberately reads only root-local
+`.ignore`/`.rgignore` files rather than ancestor/global Git configuration. The
+adapter captures the outer tool `AbortSignal` because Pi's custom glob options do
+not carry it; queued and active native work cancel through that signal, and the
+Engine read lease remains held until cancellation settles.
+
 Grep translates cwd-relative positive and negative ripgrep globs to Hearth,
 preserves root anchors, ignores valid globs for an explicit file operand like
 ripgrep, and still validates malformed classes, ranges, alternates, and escapes
 through Hearth's strict native glob parser. Negative globs, rooted positive
 globs, directory-only globs ending in `/`, and positive globs containing `/`
-use separator-aware post-filtering because Hearth 0.1.1 has no native exclusion
+use separator-aware post-filtering because Hearth grep has no native exclusion
 glob and lets `*` cross separators in path globs. Negative matching also filters
 matching ancestor directories like ripgrep's walker. The adapter bounds native
 candidates and fails closed with a refinement error rather than returning an
-incomplete result if that bound is exhausted.
+incomplete result if that bound is exhausted. Hearth also marks a result
+`incomplete` when at least one selected file is binary, unreadable, or exceeds
+its 16 MiB search bound; the adapter preserves available matches but appends an
+explicit verification warning, including to an otherwise empty result.
 
 Bash streams once into pi's existing accumulator, preserving progress updates,
-tail truncation, and full-output files. Hearth 0.1.1 streams valid UTF-8 text,
+tail truncation, and full-output files. Hearth 0.3.0 streams valid UTF-8 text,
 so invalid binary bytes are replacement-decoded and are not byte-identical in
-full-output files.
+full-output files. Pi's full-output file contains every byte Hearth delivered;
+when Hearth reaches its 16 MiB native stream cap, the adapter appends an explicit
+notice that the omitted output is unavailable instead of presenting that file as
+complete.
 
 ### Benchmarking
 
