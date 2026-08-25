@@ -354,9 +354,7 @@ export const renderStatusline = (
   const directory = singleLine(snapshot.directory);
 
   if (snapshot.git.isRepository && snapshot.git.repository !== undefined) {
-    fields.push([
-      { text: singleLine(snapshot.git.repository), tone: "muted" },
-    ]);
+    fields.push([{ text: singleLine(snapshot.git.repository), tone: "muted" }]);
   }
   // Claude always starts with the current directory, even when its basename
   // is empty (for example, the filesystem root).

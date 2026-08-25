@@ -148,3 +148,7 @@ expansion = "dotfiles logproxy tail --full --session "
 [[abbr]]
 keyword = "zl"
 expansion = "zellij"
+
+[[abbr]]
+keyword = "ob"
+expansion = "or --browse"
