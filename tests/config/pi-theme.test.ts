@@ -31,6 +31,6 @@ describe("transparent pi theme", () => {
 
   test("uses the requested skill label color", () => {
     expect(theme.colors.customMessageBg).toBe("transparent");
-    expect(theme.colors.customMessageLabel).toBe("#7e479a");
+    expect(theme.colors.customMessageLabel).toBe("#ededed");
   });
 });
