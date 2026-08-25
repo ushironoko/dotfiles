@@ -20,6 +20,16 @@ const commandAvailable = (command: string): boolean =>
     stdio: "ignore",
   }).status === 0;
 
+const loopbackBindingAvailable = (): boolean =>
+  spawnSync(
+    process.execPath,
+    [
+      "-e",
+      'const { createServer } = require("node:net"); const server = createServer(); server.once("error", () => process.exit(1)); server.listen(0, "127.0.0.1", () => server.close(() => process.exit(0)));',
+    ],
+    { stdio: "ignore", timeout: 5_000 },
+  ).status === 0;
+
 const requiredCommands = (): readonly string[] => {
   if (process.platform === "linux") return ["bwrap", "socat", "rg"];
   if (process.platform === "darwin") return ["rg"];
@@ -32,9 +42,12 @@ const unavailableReason = (): string | undefined => {
   if (process.platform !== "darwin" && process.platform !== "linux") {
     return `unsupported platform ${process.platform}`;
   }
-  return missingCommands.length > 0
-    ? `missing ${missingCommands.join(", ")}`
-    : undefined;
+  if (missingCommands.length > 0) {
+    return `missing ${missingCommands.join(", ")}`;
+  }
+  return loopbackBindingAvailable()
+    ? undefined
+    : "loopback binding unavailable";
 };
 
 const shellQuote = (value: string): string =>
