@@ -194,7 +194,7 @@ const toLegacyPatchJournal = (
   restorePatches: boolean,
 ): string =>
   source
-    .replace('"version": 6', '"version": 1')
+    .replace('"version": 7', '"version": 1')
     .replace(/\n}\n$/, `,\n  "restorePatches": ${restorePatches}\n}\n`);
 
 describe("safe pi updater", () => {
@@ -298,6 +298,60 @@ describe("safe pi updater", () => {
     expect(runs).toBe(0);
   });
 
+  test("snapshots Bun bin symlinks when fs.cp normalizes their mode", async () => {
+    const { snapshotStore: _snapshotStore, ...temp } = await paths();
+    const globalRoot = join(temp.journalPath, "..", "global");
+    const modulesRoot = join(globalRoot, "node_modules");
+    const packageRoot = join(modulesRoot, "@earendil-works", "pi-coding-agent");
+    const packageBinary = join(packageRoot, "dist", "cli.js");
+    const binRoot = join(modulesRoot, ".bin");
+    await mkdir(join(packageRoot, "dist"), { recursive: true });
+    await mkdir(binRoot, { recursive: true });
+    await mkdir(join(globalRoot, "bin"), { recursive: true });
+    await writeFile(packageBinary, "preflight CLI bytes\n");
+    await writeFile(join(globalRoot, "package.json"), "{}\n");
+    await symlink(
+      "../@earendil-works/pi-coding-agent/dist/cli.js",
+      join(binRoot, "pi"),
+    );
+
+    const atVersion = (version: string): PiInstallation => {
+      const value = installation(version);
+      return {
+        ...value,
+        globalBin: join(globalRoot, "bin"),
+        binaryRealPath: packageBinary,
+        packageRoot,
+        corePackages: {
+          [value.packageName]: {
+            root: packageRoot,
+            version,
+            manifest: {},
+          },
+        },
+      };
+    };
+    let current = atVersion("0.80.7");
+    let runs = 0;
+    const update = await updatePiSafely({
+      ...temp,
+      checkCompatibility: async () => compatible(current),
+      discover: async () => current,
+      run: async () => {
+        runs += 1;
+        current = atVersion("0.81.0");
+        return result();
+      },
+    });
+
+    expect(update).toMatchObject({
+      ok: true,
+      updated: true,
+      currentVersion: "0.81.0",
+    });
+    expect(runs).toBe(1);
+  });
+
   test("publishes durable recovery state before running the candidate command", async () => {
     const { snapshotStore: _snapshotStore, ...temp } = await paths();
     const globalRoot = join(temp.journalPath, "..", "global");
@@ -342,7 +396,7 @@ describe("safe pi updater", () => {
         };
         const snapshotStats = await lstat(`${journalPath}.packages`);
         recoveryPublished =
-          journal.version === 6 && snapshotStats.isDirectory();
+          journal.version === 7 && snapshotStats.isDirectory();
         current = atVersion("0.81.0");
         return result();
       },
@@ -1001,7 +1055,7 @@ describe("safe pi updater", () => {
     );
     const journal = await readFile(temp.journalPath, "utf8");
     expect(journal).toContain("pi-harness/update-recovery");
-    expect(journal).toContain('"version": 6');
+    expect(journal).toContain('"version": 7');
     expect(journal).not.toContain("restorePatches");
     await writeFile(
       temp.journalPath,
@@ -1050,6 +1104,7 @@ describe("safe pi updater", () => {
     [3, "lacks global install metadata and absent-package snapshots"],
     [4, "lacks the complete global package inventory"],
     [5, "lacks actual global-bin state"],
+    [6, "uses non-portable symlink mode digests"],
   ])(
     "retains a legacy v%s journal without complete restoration state",
     async (version, expectedMessage) => {
@@ -1079,7 +1134,7 @@ describe("safe pi updater", () => {
       expect(failed.manualRecoveryArgv).toBeDefined();
       const currentJournal = await readFile(temp.journalPath, "utf8");
       const legacyJournal = currentJournal.replace(
-        '"version": 6',
+        '"version": 7',
         `"version": ${version}`,
       );
       await writeFile(temp.journalPath, legacyJournal);

@@ -55,7 +55,7 @@ export interface RecoverySnapshotManifest {
 
 interface RecoveryJournal {
   schema: "pi-harness/update-recovery";
-  version: 6;
+  version: 7;
   createdAt: string;
   packageName: string;
   previousVersion: string;
@@ -346,7 +346,9 @@ const packageTreeDigest = async (root: string): Promise<string> => {
       return;
     }
     if (stats.isSymbolicLink()) {
-      updateDigestField(hash, `symlink:${mode}`);
+      // Symlink mode bits are not portable or meaningfully restorable. Bun's
+      // fs.cp preserves the link target on macOS but normalizes 0777 to 0755.
+      updateDigestField(hash, "symlink");
       updateDigestField(hash, relativePath);
       updateDigestField(hash, await readlink(path));
       return;
@@ -1381,6 +1383,11 @@ const readJournal = async (
         "legacy pi update recovery journal lacks actual global-bin state, inventory content digests, and collision-free transaction staging; automatic recovery is disabled; journal retained for manual recovery",
       );
     }
+    if (value.version === 6) {
+      throw new Error(
+        "legacy pi update recovery journal uses non-portable symlink mode digests; automatic recovery is disabled; journal retained for manual recovery",
+      );
+    }
     const signature =
       typeof value.previousSignature === "string"
         ? parseRecordedSignature(value.previousSignature)
@@ -1411,7 +1418,7 @@ const readJournal = async (
     const transactionId = snapshotsValue?.transactionId;
     if (
       value.schema !== "pi-harness/update-recovery" ||
-      value.version !== 6 ||
+      value.version !== 7 ||
       Object.hasOwn(value, "restorePatches") ||
       typeof value.createdAt !== "string" ||
       typeof value.packageName !== "string" ||
@@ -1866,7 +1873,7 @@ export const updatePiSafely = async (
     }
     const journal: RecoveryJournal = {
       schema: "pi-harness/update-recovery",
-      version: 6,
+      version: 7,
       createdAt: new Date().toISOString(),
       packageName: previous.packageName,
       previousVersion: previous.packageVersion,
