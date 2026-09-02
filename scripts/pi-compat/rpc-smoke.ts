@@ -1,9 +1,22 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { constants, createReadStream } from "node:fs";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import type { PiInstallation } from "./installation";
-import { StrictJsonlDecoder, terminateProcessGroup } from "./process";
+import {
+  runCommand,
+  StrictJsonlDecoder,
+  terminateProcessGroup,
+} from "./process";
 
 const HEARTH_TOOLS = ["read", "write", "edit", "bash", "grep"];
 
@@ -23,6 +36,7 @@ export interface RpcSmokeOptions {
   repoRoot: string;
   timeoutMs?: number;
   keepTemp?: boolean;
+  nodeExecutable?: string;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -32,6 +46,119 @@ const appendBounded = (current: string, chunk: string, max = 256 * 1024) => {
   const combined = `${current}${chunk}`;
   if (Buffer.byteLength(combined) <= max) return combined;
   return Buffer.from(combined).subarray(0, max).toString("utf8");
+};
+
+export const resolveNodeExecutable = async (
+  configured?: string,
+): Promise<string> => {
+  const executable = process.platform === "win32" ? "node.exe" : "node";
+  const candidates =
+    configured === undefined
+      ? (process.env.PATH?.split(delimiter) ?? [])
+          .filter((entry) => entry !== "")
+          .map((entry) => join(entry, executable))
+      : [configured];
+  let commandPath: string | undefined;
+  for (const candidate of candidates) {
+    const executablePath = resolve(candidate);
+    try {
+      await access(
+        executablePath,
+        process.platform === "win32" ? constants.F_OK : constants.X_OK,
+      );
+      commandPath = executablePath;
+      break;
+    } catch {
+      // Continue to the next PATH entry.
+    }
+  }
+  if (commandPath === undefined) {
+    throw new Error("could not resolve the Node command for the Pi RPC smoke");
+  }
+
+  // Resolve version-manager shims while their caller environment is intact.
+  // The isolated smoke environment must execute the resulting Node binary,
+  // not a shim that may depend on HOME or manager-specific configuration.
+  const resolution = await runCommand(
+    [
+      commandPath,
+      "-p",
+      "JSON.stringify({execPath:process.execPath,nodeVersion:process.versions.node,bunVersion:process.versions.bun??null})",
+    ],
+    { timeoutMs: 5_000, maxOutputBytes: 4 * 1024 },
+  );
+  let runtime: unknown;
+  try {
+    runtime = JSON.parse(resolution.stdout.trim());
+  } catch {
+    // Invalid output is rejected by the structured checks below.
+  }
+  const runtimePath = isRecord(runtime) ? runtime.execPath : undefined;
+  const nodeVersion = isRecord(runtime) ? runtime.nodeVersion : undefined;
+  const bunVersion = isRecord(runtime) ? runtime.bunVersion : undefined;
+  if (
+    resolution.timedOut ||
+    resolution.exitCode !== 0 ||
+    resolution.truncated ||
+    typeof runtimePath !== "string" ||
+    !isAbsolute(runtimePath) ||
+    typeof nodeVersion !== "string" ||
+    !/^\d+\.\d+\.\d+(?:[-+].*)?$/.test(nodeVersion) ||
+    bunVersion !== null
+  ) {
+    throw new Error(
+      "could not resolve a real Node runtime for the Pi RPC smoke",
+    );
+  }
+  const runtimeRealPath = await realpath(runtimePath);
+  await access(
+    runtimeRealPath,
+    process.platform === "win32" ? constants.F_OK : constants.X_OK,
+  );
+  return runtimeRealPath;
+};
+
+const fileDigest = async (path: string): Promise<string> => {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) {
+    hash.update(chunk as Buffer);
+  }
+  return hash.digest("hex");
+};
+
+interface RuntimeIdentity {
+  nodeRealPath: string;
+  nodeDigest: string;
+  piDigest: string;
+}
+
+const captureRuntimeIdentity = async (
+  nodeExecutable: string,
+  installation: PiInstallation,
+): Promise<RuntimeIdentity> => {
+  const [nodeRealPath, binaryTarget] = await Promise.all([
+    realpath(nodeExecutable),
+    realpath(installation.binaryPath),
+  ]);
+  if (binaryTarget !== installation.binaryRealPath) {
+    throw new Error("Pi executable identity changed before RPC verification");
+  }
+  const [nodeDigest, piDigest] = await Promise.all([
+    fileDigest(nodeRealPath),
+    fileDigest(installation.binaryRealPath),
+  ]);
+  return { nodeRealPath, nodeDigest, piDigest };
+};
+
+const smokePath = (nodeExecutable: string): string => {
+  const entries = [dirname(nodeExecutable)];
+  if (process.platform === "win32") {
+    const comSpec = process.env.ComSpec;
+    if (comSpec !== undefined) entries.push(dirname(comSpec));
+  } else {
+    entries.push("/usr/bin", "/bin");
+  }
+  return [...new Set(entries)].join(delimiter);
 };
 
 const probeSource = (command: string, marker: string): string => `
@@ -97,6 +224,11 @@ export const smokeGlobalPiRpc = async (
     const probe = join(tempRoot, "probe.ts");
     await writeFile(probe, probeSource(command, marker), { mode: 0o600 });
 
+    const nodeExecutable = await resolveNodeExecutable(options.nodeExecutable);
+    const runtimeIdentity = await captureRuntimeIdentity(
+      nodeExecutable,
+      installation,
+    );
     const args = [
       installation.binaryRealPath,
       "--mode",
@@ -123,7 +255,7 @@ export const smokeGlobalPiRpc = async (
     ];
     const env: NodeJS.ProcessEnv = {
       HOME: home,
-      PATH: "/usr/bin:/bin",
+      PATH: smokePath(nodeExecutable),
       TMPDIR: tempRoot,
       PI_CODING_AGENT_DIR: agentDir,
       PI_CODING_AGENT_SESSION_DIR: join(tempRoot, "sessions"),
@@ -132,7 +264,7 @@ export const smokeGlobalPiRpc = async (
       PI_TELEMETRY: "0",
       LANG: "C.UTF-8",
     };
-    child = spawn(installation.bunExecutable, args, {
+    child = spawn(nodeExecutable, args, {
       cwd,
       env,
       shell: false,
@@ -255,14 +387,33 @@ export const smokeGlobalPiRpc = async (
     } catch (error) {
       setFailure(error instanceof Error ? error : new Error(String(error)));
     }
+    try {
+      const verifiedIdentity = await captureRuntimeIdentity(
+        nodeExecutable,
+        installation,
+      );
+      if (
+        verifiedIdentity.nodeRealPath !== runtimeIdentity.nodeRealPath ||
+        verifiedIdentity.nodeDigest !== runtimeIdentity.nodeDigest ||
+        verifiedIdentity.piDigest !== runtimeIdentity.piDigest
+      ) {
+        setFailure(
+          new Error("Pi or Node executable changed during RPC verification"),
+        );
+      }
+    } catch (error) {
+      setFailure(error instanceof Error ? error : new Error(String(error)));
+    }
     if (failure !== undefined) throw failure;
     if (!commandFound || !markerFound || !promptSucceeded) {
       throw new Error(
         `pi RPC compatibility probe incomplete: command=${commandFound} marker=${markerFound} response=${promptSucceeded} stderr=${stderr}`,
       );
     }
-    if (exit.code !== 0 && exit.signal === null) {
-      throw new Error(`pi RPC exited ${exit.code}: ${stderr}`);
+    if (exit.code !== 0 || exit.signal !== null) {
+      throw new Error(
+        `pi RPC exited abnormally (code=${exit.code}, signal=${exit.signal}): ${stderr}`,
+      );
     }
     if (/extension|failed|error/i.test(stderr)) {
       throw new Error(`pi RPC reported startup diagnostics: ${stderr}`);

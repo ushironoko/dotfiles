@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -26,6 +27,13 @@ import {
   runCommand,
   StrictJsonlDecoder,
 } from "../../scripts/pi-compat/process";
+import {
+  resolveNodeExecutable,
+  smokeGlobalPiRpc,
+} from "../../scripts/pi-compat/rpc-smoke";
+
+const shellSingleQuote = (value: string): string =>
+  `'${value.replaceAll("'", `'"'"'`)}'`;
 
 const installation = (version = "0.99.0"): PiInstallation => ({
   bunExecutable: "/tools/bun",
@@ -122,6 +130,147 @@ describe("pi compatibility policy", () => {
     ).rejects.toThrow("stale baseline");
     expect(discovered).toBe(false);
   });
+});
+
+describe("real Pi RPC smoke launcher", () => {
+  const localBundle = async (): Promise<{
+    repoRoot: string;
+    candidate: PiInstallation;
+  }> => {
+    const repoRoot = join(import.meta.dir, "../..");
+    const packageRoot = join(
+      repoRoot,
+      "node_modules/@earendil-works/pi-coding-agent",
+    );
+    const binaryRealPath = await realpath(
+      join(packageRoot, "dist/bundle/cli.js"),
+    );
+    return {
+      repoRoot,
+      candidate: {
+        ...installation("0.84.4"),
+        binaryPath: binaryRealPath,
+        binaryRealPath,
+        packageRoot,
+      },
+    };
+  };
+
+  test("launches the verified local bundle with Node rather than Bun", async () => {
+    if (process.platform === "win32") return;
+    const { repoRoot, candidate } = await localBundle();
+    await smokeGlobalPiRpc(candidate, { repoRoot, timeoutMs: 20_000 });
+  }, 30_000);
+
+  test("rejects Bun when it is presented as the Node command", async () => {
+    await expect(resolveNodeExecutable(process.execPath)).rejects.toThrow(
+      "real Node runtime",
+    );
+  });
+
+  test("resolves a version-manager shim before isolating the environment", async () => {
+    if (process.platform === "win32") return;
+    const callerHome = process.env.HOME;
+    if (callerHome === undefined) throw new Error("test HOME is unavailable");
+    const root = await mkdtemp(join(tmpdir(), "pi-node-shim-"));
+    try {
+      const actualNode = await resolveNodeExecutable();
+      const dispatcher = join(root, "runtime-dispatch");
+      const nodeShim = join(root, "node");
+      await writeFile(
+        dispatcher,
+        `#!/bin/sh
+case "\${0##*/}" in
+  node) ;;
+  *) exit 97 ;;
+esac
+[ "$HOME" = ${shellSingleQuote(callerHome)} ] || exit 98
+exec ${shellSingleQuote(actualNode)} "$@"
+`,
+      );
+      await chmod(dispatcher, 0o755);
+      await symlink(dispatcher, nodeShim);
+
+      const { repoRoot, candidate } = await localBundle();
+      await smokeGlobalPiRpc(candidate, {
+        repoRoot,
+        timeoutMs: 20_000,
+        nodeExecutable: nodeShim,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("rejects a signal exit after a complete RPC response", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "pi-signal-exit-"));
+    try {
+      const binaryPath = join(root, "fake-pi.mjs");
+      await writeFile(
+        binaryPath,
+        `#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+
+const probePath = process.argv.at(-1);
+const source = readFileSync(probePath, "utf8");
+const command = source.match(/pi-compat-[0-9a-f-]+/)?.[0];
+const marker = source.match(/PI_COMPAT_OK:[0-9a-f-]+/)?.[0];
+if (command === undefined || marker === undefined) process.exit(2);
+
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+  while (true) {
+    const newline = input.indexOf("\\n");
+    if (newline === -1) break;
+    const line = input.slice(0, newline);
+    input = input.slice(newline + 1);
+    if (line === "") continue;
+    const request = JSON.parse(line);
+    if (request.id === "commands") {
+      send({
+        type: "response",
+        id: "commands",
+        success: true,
+        data: { commands: [{ name: command }] },
+      });
+    } else if (request.id === "probe") {
+      send({
+        type: "extension_ui_request",
+        method: "notify",
+        message: marker,
+      });
+      process.stdout.write(
+        JSON.stringify({ type: "response", id: "probe", success: true }) +
+          "\\n",
+        () => process.kill(process.pid, "SIGTERM"),
+      );
+    }
+  }
+});
+`,
+      );
+      await chmod(binaryPath, 0o755);
+      const binaryRealPath = await realpath(binaryPath);
+      const candidate = installation("0.84.4");
+      await expect(
+        smokeGlobalPiRpc(
+          {
+            ...candidate,
+            binaryPath,
+            binaryRealPath,
+            packageRoot: root,
+          },
+          { repoRoot: join(import.meta.dir, "../.."), timeoutMs: 10_000 },
+        ),
+      ).rejects.toThrow("signal=SIGTERM");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
 
 describe("global pi installation discovery", () => {
