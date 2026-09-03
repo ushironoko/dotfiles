@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -7,7 +7,7 @@ import {
   type HarnessConfig,
   type PermissionJudgeConfig,
 } from "../../pi/extensions/pi-harness/config";
-import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
+import setupPermissionPolicyImpl from "../../pi/extensions/pi-harness/features/permission-policy";
 import type { PermissionAuditIntegration } from "../../pi/extensions/pi-harness/features/permission-audit";
 import type { PermissionAuditStage } from "../../pi/extensions/pi-harness/features/permission-audit/model";
 import {
@@ -21,62 +21,168 @@ import {
   pinCodexStageCommand,
 } from "../../pi/extensions/pi-harness/features/permission-policy/codex-stage-capability";
 import type { PermissionProjectContext } from "../../pi/extensions/pi-harness/features/permission-policy/context";
-import type { PermissionJudge } from "../../pi/extensions/pi-harness/features/permission-policy/judge";
+import {
+  PERMISSION_JUDGE_POLICY_VERSION,
+  PERMISSION_JUDGE_REASONING_EFFORT,
+  type JudgeContext,
+  type JudgeDecisionAudit,
+  type PermissionJudge,
+} from "../../pi/extensions/pi-harness/features/permission-policy/judge";
 import { loadRules } from "../../pi/extensions/pi-harness/features/permission-policy/rules";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import type { ToolCallEvent } from "../../pi/extensions/pi-harness/lib/pi-like";
-import { startMockUpstream, type MockUpstream } from "../test-helpers";
 import { createFakePi } from "./fake-pi";
 
-const upstreams: MockUpstream[] = [];
+interface RecordedJudgeCall {
+  readonly command: string;
+  readonly body: string;
+}
+
+interface JudgeProbe {
+  readonly judge: PermissionJudge;
+  readonly received: RecordedJudgeCall[];
+}
+
+const injectedJudges = new WeakMap<PermissionJudgeConfig, PermissionJudge>();
+
+const recordedBody = (command: string, context: JudgeContext): string =>
+  JSON.stringify({
+    content: JSON.stringify({
+      command,
+      ...(context.task === undefined
+        ? {}
+        : {
+            currentTask: {
+              text: context.task.text,
+              source: context.task.source,
+            },
+          }),
+      ...(context.runEvidence === undefined
+        ? {}
+        : { currentRunEvidence: context.runEvidence }),
+      project: context.project,
+      ...(context.leadingNavigation === undefined
+        ? {}
+        : {
+            leadingNavigation: {
+              scope: context.leadingNavigation.scope,
+            },
+          }),
+      ...(context.gitCwd === undefined
+        ? {}
+        : { gitCwd: { scope: context.gitCwd.scope } }),
+      executionBoundary: context.executionBoundary,
+    }),
+  });
 
 const start = async (
-  chatHandler: Parameters<typeof startMockUpstream>[0],
-): Promise<MockUpstream> => {
-  const upstream = await startMockUpstream((request, received) => {
-    if (received.path === "/api/status") {
-      return Response.json({ cloud: { disabled: true, source: "test" } });
-    }
-    if (received.path === "/api/tags") {
-      return Response.json({
-        models: [
-          {
-            name: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-            model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-            digest: DEFAULT_PERMISSION_JUDGE_CONFIG.expectedDigest,
-          },
-        ],
+  handler: () => Response | Promise<Response>,
+): Promise<JudgeProbe> => {
+  const received: RecordedJudgeCall[] = [];
+  const cache = new Set<string>();
+  let unavailable = false;
+  const judge: PermissionJudge = {
+    async judge(command, context = {}) {
+      const key = JSON.stringify({
+        command,
+        cwd: context.cwd,
+        taskCorrelation: context.taskCorrelation,
+        task: context.task?.fingerprint,
+        runEvidence: context.runEvidence?.fingerprint,
+        project: context.project?.fingerprint,
+        executionBoundary: context.executionBoundary,
       });
-    }
-    return chatHandler(request, received);
-  });
-  upstreams.push(upstream);
-  return upstream;
+      const cacheAllowed =
+        context.cacheAllowed !== false &&
+        context.taskCorrelation !== "uncorrelated";
+      if (cacheAllowed && cache.has(key)) {
+        return {
+          kind: "allow",
+          cached: true,
+          audit: {
+            source: "cache",
+            backend: "codex-cli",
+            gates: { safety: "ALLOW", relevance: "ALLOW" },
+            model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+            reasoningEffort: PERMISSION_JUDGE_REASONING_EFFORT,
+            policyVersion: PERMISSION_JUDGE_POLICY_VERSION,
+          },
+        };
+      }
+      if (unavailable) {
+        return {
+          kind: "unavailable",
+          reason: "Codex judge is temporarily unavailable",
+        };
+      }
+      received.push({ command, body: recordedBody(command, context) });
+      const response = await handler();
+      if (!response.ok) {
+        unavailable = true;
+        return {
+          kind: "unavailable",
+          reason: `Codex CLI exited with code ${response.status}`,
+        };
+      }
+      let value: unknown;
+      try {
+        value = await response.json();
+      } catch {
+        return {
+          kind: "invalid-response",
+          reason: "Codex judge returned invalid JSON",
+        };
+      }
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        !("safety" in value) ||
+        !("relevance" in value) ||
+        (value.safety !== "ALLOW" && value.safety !== "ASK") ||
+        (value.relevance !== "ALLOW" && value.relevance !== "ASK")
+      ) {
+        return {
+          kind: "invalid-response",
+          reason: "Codex judge did not return a valid structured decision",
+        };
+      }
+      const audit: JudgeDecisionAudit = {
+        source: "live",
+        backend: "codex-cli",
+        gates: { safety: value.safety, relevance: value.relevance },
+        model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
+        reasoningEffort: PERMISSION_JUDGE_REASONING_EFFORT,
+        policyVersion: PERMISSION_JUDGE_POLICY_VERSION,
+      };
+      if (value.safety === "ALLOW" && value.relevance === "ALLOW") {
+        if (cacheAllowed) cache.add(key);
+        return { kind: "allow", cached: false, audit };
+      }
+      return {
+        kind: "ask",
+        reason: "Codex judge requested user confirmation",
+        audit,
+      };
+    },
+    clear() {
+      cache.clear();
+      unavailable = false;
+    },
+  };
+  return { judge, received };
 };
 
-const chatRequests = (upstream: MockUpstream) =>
-  upstream.received.filter((request) => request.path === "/api/chat");
+const chatRequests = (probe: JudgeProbe): readonly RecordedJudgeCall[] =>
+  probe.received;
 
-afterEach(async () => {
-  await Promise.all(upstreams.splice(0).map((upstream) => upstream.close()));
-});
-
-const ollamaResponse = (verdict: string): Response =>
-  Response.json({
-    model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-    message: {
-      role: "assistant",
-      content: JSON.stringify({ safety: verdict, relevance: verdict }),
-    },
-    done: true,
-    done_reason: "stop",
-  });
+const codexResponse = (verdict: string): Response =>
+  Response.json({ safety: verdict, relevance: verdict });
 
 const askingJudge = (): PermissionJudge => ({
   async judge() {
     return {
       kind: "ask",
-      reason: "local judge requested user confirmation",
+      reason: "Codex judge requested user confirmation",
     };
   },
   clear() {},
@@ -102,10 +208,24 @@ const makeConfig = (
   ...(permissionJudge === undefined ? {} : { permissionJudge }),
 });
 
-const judgeConfig = (upstream: MockUpstream): PermissionJudgeConfig => ({
-  ...DEFAULT_PERMISSION_JUDGE_CONFIG,
-  url: `${upstream.url}/api/chat`,
-});
+const judgeConfig = (probe: JudgeProbe): PermissionJudgeConfig => {
+  const configured = { ...DEFAULT_PERMISSION_JUDGE_CONFIG };
+  injectedJudges.set(configured, probe.judge);
+  return configured;
+};
+
+const setupPermissionPolicy = (
+  ...args: Parameters<typeof setupPermissionPolicyImpl>
+): ReturnType<typeof setupPermissionPolicyImpl> => {
+  const [pi, config, options = {}] = args;
+  const configured = config.permissionJudge;
+  const testJudge =
+    configured === undefined ? undefined : injectedJudges.get(configured);
+  return setupPermissionPolicyImpl(pi, config, {
+    ...(testJudge === undefined ? {} : { judge: testJudge }),
+    ...options,
+  });
+};
 
 const bashCall = (command: string, id = "judge-1"): ToolCallEvent => ({
   type: "tool_call",
@@ -194,24 +314,22 @@ const signalAborted = (value: unknown): boolean =>
   "aborted" in value &&
   value.aborted === true;
 
-describe("permission policy local judge routing", () => {
+describe("permission policy Codex judge routing", () => {
   test("auto-approves an unruled command only on structured ALLOW", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const pi = createFakePi({ cwd: "/tmp/project" });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
 
     expect(
       await pi.emitToolCall(bashCall("git rev-parse HEAD")),
     ).toBeUndefined();
-    expect(upstream.received.map((request) => request.path)).toEqual([
-      "/api/status",
-      "/api/tags",
-      "/api/chat",
+    expect(upstream.received.map((call) => call.command)).toEqual([
+      "git rev-parse HEAD",
     ]);
   });
 
-  test("auto-approves verified no-config project searches before Ollama", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
+  test("auto-approves verified no-config project searches before Codex", async () => {
+    const upstream = await start(() => codexResponse("ASK"));
     const cwd = resolve(import.meta.dir, "../..");
     const pi = createFakePi({ cwd });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -219,7 +337,7 @@ describe("permission policy local judge routing", () => {
     });
 
     for (const command of [
-      'rg --no-config -n "permission.*log|local judge requested" src tests',
+      'rg --no-config -n "permission.*log|Codex judge requested" src tests',
       "rg --no-config -n pattern src | head -200",
     ]) {
       expect(await pi.emitToolCall(bashCall(command))).toBeUndefined();
@@ -228,7 +346,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("keeps helper-capable Git reads on the model route", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
+    const upstream = await start(() => codexResponse("ASK"));
     const cwd = resolve(import.meta.dir, "../..");
     const pi = createFakePi({ cwd });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -238,14 +356,14 @@ describe("permission policy local judge routing", () => {
     expect(await pi.emitToolCall(bashCall("git status --short"))).toEqual({
       block: true,
       reason: expect.stringMatching(
-        /denied by the user[\s\S]*local judge requested user confirmation/,
+        /denied by the user[\s\S]*Codex judge requested user confirmation/,
       ),
     });
     expect(chatRequests(upstream)).toHaveLength(1);
   });
 
-  test("routes a verified same-repository git -C read to the local judge", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+  test("routes a verified same-repository git -C read to the Codex judge", async () => {
+    const upstream = await start(() => codexResponse("ALLOW"));
     const cwd = resolve(import.meta.dir, "../..");
     const linked = resolve(cwd, "../linked-worktree");
     const pi = createFakePi({ cwd, hasUI: false });
@@ -269,8 +387,8 @@ describe("permission policy local judge routing", () => {
     );
   });
 
-  test("keeps an unverified git -C read before the local judge", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+  test("keeps an unverified git -C read before the Codex judge", async () => {
+    const upstream = await start(() => codexResponse("ALLOW"));
     const cwd = resolve(import.meta.dir, "../..");
     const pi = createFakePi({ cwd, hasUI: false });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -297,7 +415,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("never verifies shell-sensitive git -C path spellings", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const cwd = resolve(import.meta.dir, "../..");
     const pi = createFakePi({ cwd, hasUI: false });
     let discoveries = 0;
@@ -325,7 +443,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("uses bounded raw current-turn input instead of the expanded prompt", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const cwd = resolve(import.meta.dir, "../..");
     const pi = createFakePi({ cwd });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -362,7 +480,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("adds only authenticated current-run assistant text and tool-result metadata", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const cwd = resolve(import.meta.dir, "../..");
     const pi = createFakePi({ cwd });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -434,7 +552,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("fails closed when queued expanded input lacks an exact delivery match", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const cwd = resolve(import.meta.dir, "../..");
     const pi = createFakePi({ cwd });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -479,7 +597,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("does not reuse an expandable task cache entry after its queued input is dequeued", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const cwd = resolve(import.meta.dir, "../..");
     const pi = createFakePi({ cwd });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -528,7 +646,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("does not reuse ALLOW cache after queued-task correlation fails", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const cwd = resolve(import.meta.dir, "../..");
     const pi = createFakePi({ cwd });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -569,7 +687,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("keeps unavailable project mutations above a catch-all configured allow", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const cwd = "/tmp/project";
     const pi = createFakePi({ cwd, hasUI: false });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -610,7 +728,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("preserves configured allows only after required navigation and project verification", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
+    const upstream = await start(() => codexResponse("ASK"));
     const cwd = "/tmp/verified-project";
     const pi = createFakePi({ cwd, hasUI: false });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -667,21 +785,21 @@ describe("permission policy local judge routing", () => {
   });
 
   test("a hidden substitution does not inherit the outer explicit allow", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
+    const upstream = await start(() => codexResponse("ASK"));
     const pi = createFakePi({ hasUI: false });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
 
     expect(await pi.emitToolCall(bashCall(`bun "$'$(printf PWN)'"`))).toEqual({
       block: true,
       reason: expect.stringMatching(
-        /interactive UI is unavailable[\s\S]*local judge requested user confirmation/,
+        /interactive UI is unavailable[\s\S]*Codex judge requested user confirmation/,
       ),
     });
     expect(chatRequests(upstream)).toHaveLength(1);
   });
 
   test("hidden substitutions and unsupported `<<` never reach the judge", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const pi = createFakePi();
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
     let deeplyNested = "bit issue claim";
@@ -768,7 +886,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("deny, explicit allow, and built-in ask never discover context or call the judge", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const pi = createFakePi();
     let discoveries = 0;
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -793,8 +911,8 @@ describe("permission policy local judge routing", () => {
     expect(discoveries).toBe(0);
   });
 
-  test("routes recognized command risks to explicit confirmation before Ollama", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+  test("routes recognized command risks to explicit confirmation before Codex", async () => {
+    const upstream = await start(() => codexResponse("ALLOW"));
     const pi = createFakePi({ cwd: "/private/project", hasUI: false });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
       discoverProject: async () => verifiedProject("/private/project"),
@@ -826,7 +944,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("residualizes parser-only uncertainty only inside ordinary sandboxed Bash", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const cwd = "/private/project";
     const pi = createFakePi({ cwd, hasUI: false });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -853,7 +971,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("keeps recognized semantic risks above the sandboxed residual route", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const cwd = "/private/project";
     const pi = createFakePi({ cwd, hasUI: false });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -1086,7 +1204,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("requires a fresh live judge ALLOW for every escalated call", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const cwd = "/private/project";
     const pi = createFakePi({ cwd, hasUI: false });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -1106,7 +1224,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("routes escalated deterministic ASK through the live judge and blocks ASK without UI", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
+    const upstream = await start(() => codexResponse("ASK"));
     const cwd = "/private/project";
     const pi = createFakePi({ cwd, hasUI: false });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -1121,7 +1239,7 @@ describe("permission policy local judge routing", () => {
     ).toEqual({
       block: true,
       reason: expect.stringMatching(
-        /interactive UI is unavailable[\s\S]*local judge requested user confirmation/,
+        /interactive UI is unavailable[\s\S]*Codex judge requested user confirmation/,
       ),
     });
     expect(chatRequests(upstream)).toHaveLength(1);
@@ -1129,7 +1247,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("never records unverified escalated navigation as trusted", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const cwd = "/private/project";
     const pi = createFakePi({ cwd, hasUI: false });
     const audit = captureAuditStages();
@@ -1168,7 +1286,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("allows an interactive confirmation only after an escalated live ASK", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
+    const upstream = await start(() => codexResponse("ASK"));
     const cwd = "/private/project";
     const pi = createFakePi({ cwd });
     pi.queueConfirm(true);
@@ -1187,7 +1305,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("bypasses the judge only for a leading same-repository cd plus an explicit allow", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
+    const upstream = await start(() => codexResponse("ASK"));
     const repoRoot = resolve(import.meta.dir, "../..");
 
     const sameRepo = createFakePi({ cwd: repoRoot, hasUI: false });
@@ -1215,7 +1333,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("never discovers context or calls the judge for ANSI-C command words", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const pi = createFakePi({ cwd: "/private/project", hasUI: false });
     let discoveries = 0;
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
@@ -1238,7 +1356,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("does not trust a leading cd outside registered worktree roots", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
+    const upstream = await start(() => codexResponse("ASK"));
     const cwd = "/private/project";
     const target = "/private/forged-worktree";
     const pi = createFakePi({ cwd, hasUI: false });
@@ -1272,7 +1390,7 @@ describe("permission policy local judge routing", () => {
 
   test("falls back to human confirmation for ASK or invalid output", async () => {
     let content = "ASK";
-    const upstream = await start(() => ollamaResponse(content));
+    const upstream = await start(() => codexResponse(content));
     const accepted = createFakePi();
     accepted.queueConfirm(true);
     setupPermissionPolicy(accepted, makeConfig(judgeConfig(upstream)));
@@ -1289,7 +1407,7 @@ describe("permission policy local judge routing", () => {
     expect(acceptedPatch?.content).toEqual([
       {
         type: "text",
-        text: expect.stringMatching(/local verifier returned ASK/i),
+        text: expect.stringMatching(/Codex verifier returned ASK/i),
       },
       { type: "text", text: "command output" },
     ]);
@@ -1312,12 +1430,12 @@ describe("permission policy local judge routing", () => {
     ).toEqual({
       block: true,
       reason: expect.stringMatching(
-        /denied by the user[\s\S]*local judge did not return a valid structured decision/,
+        /denied by the user[\s\S]*Codex judge did not return a valid structured decision/,
       ),
     });
   });
 
-  test("surfaces accepted local ASK on only the matching tool result", async () => {
+  test("surfaces an accepted Codex ASK on only the matching tool result", async () => {
     const pi = createFakePi();
     pi.queueConfirm(true);
     setupPermissionPolicy(pi, makeConfig(), { judge: askingJudge() });
@@ -1344,14 +1462,14 @@ describe("permission policy local judge routing", () => {
     expect(patch?.content).toEqual([
       {
         type: "text",
-        text: expect.stringMatching(/local verifier returned ASK/i),
+        text: expect.stringMatching(/Codex verifier returned ASK/i),
       },
       { type: "text", text: "command output" },
     ]);
   });
 
   test("bounds confirmation with a composed signal and configured timeout", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
+    const upstream = await start(() => codexResponse("ASK"));
     const pi = createFakePi();
     const controller = createTestAbortController();
     Object.assign(pi.ctx, { signal: controller.signal });
@@ -1394,7 +1512,7 @@ describe("permission policy local judge routing", () => {
     expect(await pi.emitToolCall(bashCall("git rev-parse HEAD"))).toEqual({
       block: true,
       reason: expect.stringMatching(
-        /timed out[\s\S]*user is unavailable[\s\S]*system prompt instructions[\s\S]*local judge requested user confirmation/i,
+        /timed out[\s\S]*user is unavailable[\s\S]*system prompt instructions[\s\S]*Codex judge requested user confirmation/i,
       ),
     });
     expect(signalAborted(pi.confirmDialogs[0]?.dialogOptions?.signal)).toBe(
@@ -1403,20 +1521,20 @@ describe("permission policy local judge routing", () => {
   });
 
   test("blocks non-interactively when the judge does not allow", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
+    const upstream = await start(() => codexResponse("ASK"));
     const pi = createFakePi({ hasUI: false });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
 
     expect(await pi.emitToolCall(bashCall("git rev-parse HEAD"))).toEqual({
       block: true,
       reason: expect.stringMatching(
-        /interactive UI is unavailable[\s\S]*local judge requested user confirmation/,
+        /interactive UI is unavailable[\s\S]*Codex judge requested user confirmation/,
       ),
     });
   });
 
   test("signals child-only permission blocks without changing the tool reason", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
+    const upstream = await start(() => codexResponse("ASK"));
     const pi = createFakePi({ hasUI: false });
     const token = "123e4567-e89b-42d3-a456-426614174000";
     const signals: string[] = [];
@@ -1428,7 +1546,7 @@ describe("permission policy local judge routing", () => {
     expect(await pi.emitToolCall(bashCall("git rev-parse HEAD"))).toEqual({
       block: true,
       reason: expect.stringMatching(
-        /interactive UI is unavailable[\s\S]*local judge requested user confirmation/,
+        /interactive UI is unavailable[\s\S]*Codex judge requested user confirmation/,
       ),
     });
     expect(signals).toEqual([`${formatChildPermissionSignal(token)}\n`]);
@@ -1449,7 +1567,7 @@ describe("permission policy local judge routing", () => {
     }
   });
 
-  test("warns once and confirms when Ollama is unavailable", async () => {
+  test("warns once and confirms when Codex is unavailable", async () => {
     const upstream = await start(() => new Response("down", { status: 503 }));
     const pi = createFakePi();
     pi.queueConfirm(true);
@@ -1468,7 +1586,7 @@ describe("permission policy local judge routing", () => {
     expect(pi.notifications).toEqual([
       {
         level: "warning",
-        message: expect.stringContaining("ローカルコマンド判定器"),
+        message: expect.stringContaining("Codexコマンド判定器"),
       },
     ]);
   });
@@ -1478,7 +1596,7 @@ describe("permission policy local judge routing", () => {
     const upstream = await start(() => {
       calls += 1;
       return calls === 1
-        ? ollamaResponse("ALLOW")
+        ? codexResponse("ALLOW")
         : new Response("down", { status: 503 });
     });
     const pi = createFakePi();
@@ -1496,7 +1614,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("a parent abort blocks without requesting or prompting", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const pi = createFakePi();
     const controller = createTestAbortController();
     controller.abort();
@@ -1512,7 +1630,7 @@ describe("permission policy local judge routing", () => {
   });
 
   test("omitted or disabled judge config preserves rule-only behavior", async () => {
-    const upstream = await start(() => ollamaResponse("ASK"));
+    const upstream = await start(() => codexResponse("ASK"));
 
     const omitted = createFakePi();
     setupPermissionPolicy(omitted, makeConfig());
@@ -1544,13 +1662,13 @@ describe("permission policy local judge routing", () => {
       ),
     ).toEqual({
       block: true,
-      reason: expect.stringContaining("ローカル判定器が無効"),
+      reason: expect.stringContaining("Codex判定器が無効"),
     });
     expect(upstream.received).toHaveLength(0);
   });
 
   test("session shutdown clears cached ALLOW decisions", async () => {
-    const upstream = await start(() => ollamaResponse("ALLOW"));
+    const upstream = await start(() => codexResponse("ALLOW"));
     const pi = createFakePi({ cwd: "/tmp/project" });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)));
 

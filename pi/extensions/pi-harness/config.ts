@@ -58,25 +58,18 @@ const DEFAULT_TOGGLES: Record<ToggleableFeature, boolean> = {
 
 export interface PermissionJudgeConfig {
   enabled: boolean;
-  url: string;
   model: string;
-  expectedDigest: string;
   timeoutMs: number;
   confirmTimeoutMs: number;
-  keepAlive: string;
   configurationError?: string;
 }
 
 export const DEFAULT_PERMISSION_JUDGE_CONFIG: Readonly<PermissionJudgeConfig> =
   {
     enabled: true,
-    url: "http://127.0.0.1:11434/api/chat",
-    model: "granite4.1:3b",
-    expectedDigest:
-      "6fd349357287c7ffc9e38189a93b48ea175d24fc566b38f09cfc564fb7f303eb",
-    timeoutMs: 10_000,
+    model: "gpt-5.6-luna",
+    timeoutMs: 30_000,
     confirmTimeoutMs: 10_000,
-    keepAlive: "30m",
   };
 
 export interface ChildRunsConfig {
@@ -167,42 +160,10 @@ const readLocalToggles = (
   }
 };
 
-const validJudgeUrl = (value: string): boolean => {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === "http:" &&
-      (url.hostname === "127.0.0.1" || url.hostname === "[::1]") &&
-      url.pathname === "/api/chat" &&
-      url.username === "" &&
-      url.password === "" &&
-      url.search === "" &&
-      url.hash === ""
-    );
-  } catch {
-    return false;
-  }
-};
-
 const validModel = (value: string): boolean =>
   value.length > 0 &&
   value.length <= 128 &&
-  /^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$/.test(value) &&
-  !value.toLowerCase().includes("cloud");
-
-const validDigest = (value: string): boolean => /^[0-9a-f]{64}$/.test(value);
-
-const validKeepAlive = (value: string): boolean => {
-  const match = /^(\d{1,4})(ms|s|m|h)$/.exec(value);
-  if (match === null) return false;
-  const amount = Number(match[1]);
-  if (amount < 1) return false;
-  const multiplier = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 }[
-    match[2] as "ms" | "s" | "m" | "h"
-  ];
-  const durationMs = amount * multiplier;
-  return durationMs >= 1_000 && durationMs <= 86_400_000;
-};
+  /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value);
 
 const readPermissionJudgeConfig = (
   localConfigFile: string,
@@ -241,23 +202,23 @@ const readPermissionJudgeConfig = (
   }
 
   const errors: string[] = [];
-  // Only an omitted field inherits its default. JSON null is an explicit,
-  // invalid value and must make the judge unavailable rather than silently
-  // enabling or reconfiguring it.
+  const allowedFields = new Set([
+    "enabled",
+    "model",
+    "timeoutMs",
+    "confirmTimeoutMs",
+  ]);
+  for (const field of Object.keys(value)) {
+    if (!allowedFields.has(field)) errors.push(field);
+  }
   const enabled =
     value.enabled === undefined
       ? DEFAULT_PERMISSION_JUDGE_CONFIG.enabled
       : value.enabled;
-  const url =
-    value.url === undefined ? DEFAULT_PERMISSION_JUDGE_CONFIG.url : value.url;
   const model =
     value.model === undefined
       ? DEFAULT_PERMISSION_JUDGE_CONFIG.model
       : value.model;
-  const expectedDigest =
-    value.expectedDigest === undefined
-      ? DEFAULT_PERMISSION_JUDGE_CONFIG.expectedDigest
-      : value.expectedDigest;
   const timeoutMs =
     value.timeoutMs === undefined
       ? DEFAULT_PERMISSION_JUDGE_CONFIG.timeoutMs
@@ -266,22 +227,14 @@ const readPermissionJudgeConfig = (
     value.confirmTimeoutMs === undefined
       ? DEFAULT_PERMISSION_JUDGE_CONFIG.confirmTimeoutMs
       : value.confirmTimeoutMs;
-  const keepAlive =
-    value.keepAlive === undefined
-      ? DEFAULT_PERMISSION_JUDGE_CONFIG.keepAlive
-      : value.keepAlive;
 
   if (typeof enabled !== "boolean") errors.push("enabled");
-  if (typeof url !== "string" || !validJudgeUrl(url)) errors.push("url");
   if (typeof model !== "string" || !validModel(model)) errors.push("model");
-  if (typeof expectedDigest !== "string" || !validDigest(expectedDigest)) {
-    errors.push("expectedDigest");
-  }
   if (
     typeof timeoutMs !== "number" ||
     !Number.isInteger(timeoutMs) ||
-    timeoutMs < 100 ||
-    timeoutMs > 10_000
+    timeoutMs < 1_000 ||
+    timeoutMs > 120_000
   ) {
     errors.push("timeoutMs");
   }
@@ -293,32 +246,21 @@ const readPermissionJudgeConfig = (
   ) {
     errors.push("confirmTimeoutMs");
   }
-  if (typeof keepAlive !== "string" || !validKeepAlive(keepAlive)) {
-    errors.push("keepAlive");
-  }
 
   return {
     enabled:
       typeof enabled === "boolean"
         ? enabled
         : DEFAULT_PERMISSION_JUDGE_CONFIG.enabled,
-    url:
-      typeof url === "string" && validJudgeUrl(url)
-        ? url
-        : DEFAULT_PERMISSION_JUDGE_CONFIG.url,
     model:
       typeof model === "string" && validModel(model)
         ? model
         : DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-    expectedDigest:
-      typeof expectedDigest === "string" && validDigest(expectedDigest)
-        ? expectedDigest
-        : DEFAULT_PERMISSION_JUDGE_CONFIG.expectedDigest,
     timeoutMs:
       typeof timeoutMs === "number" &&
       Number.isInteger(timeoutMs) &&
-      timeoutMs >= 100 &&
-      timeoutMs <= 10_000
+      timeoutMs >= 1_000 &&
+      timeoutMs <= 120_000
         ? timeoutMs
         : DEFAULT_PERMISSION_JUDGE_CONFIG.timeoutMs,
     confirmTimeoutMs:
@@ -328,14 +270,12 @@ const readPermissionJudgeConfig = (
       confirmTimeoutMs <= 300_000
         ? confirmTimeoutMs
         : DEFAULT_PERMISSION_JUDGE_CONFIG.confirmTimeoutMs,
-    keepAlive:
-      typeof keepAlive === "string" && validKeepAlive(keepAlive)
-        ? keepAlive
-        : DEFAULT_PERMISSION_JUDGE_CONFIG.keepAlive,
     ...(errors.length === 0
       ? {}
       : {
-          configurationError: `invalid permissionJudge fields: ${errors.join(", ")}`,
+          configurationError: `invalid permissionJudge fields: ${[
+            ...new Set(errors),
+          ].join(", ")}`,
         }),
   };
 };

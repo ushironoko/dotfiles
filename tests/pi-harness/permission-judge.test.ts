@@ -1,156 +1,76 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { createServer, type Socket } from "node:net";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import {
   DEFAULT_PERMISSION_JUDGE_CONFIG,
   type PermissionJudgeConfig,
 } from "../../pi/extensions/pi-harness/config";
 import {
+  BoundedCommandError,
+  type BoundedCommandOptions,
+  type BoundedCommandResult,
+  type RunBoundedCommand,
+} from "../../pi/extensions/pi-harness/lib/bounded-process";
+import {
+  createAbortController,
+  isAbortSignal,
+} from "../../pi/extensions/pi-harness/lib/abort";
+import {
   createPermissionJudge,
-  isLocalOllamaChatUrl,
   PERMISSION_JUDGE_POLICY_VERSION,
+  PERMISSION_JUDGE_REASONING_EFFORT,
 } from "../../pi/extensions/pi-harness/features/permission-policy/judge";
 import type {
   BoundedTaskContext,
   PermissionProjectContext,
   PermissionRunEvidence,
 } from "../../pi/extensions/pi-harness/features/permission-policy/context";
-import { startMockUpstream, type MockUpstream } from "../test-helpers";
 
-const upstreams: MockUpstream[] = [];
-const rawUpstreams: { close: () => Promise<void> }[] = [];
+interface Invocation {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly options: BoundedCommandOptions;
+}
 
-const localStatusResponse = (): Response =>
-  Response.json({ cloud: { disabled: true, source: "test" } });
+const encoded = (value: string): Uint8Array => new TextEncoder().encode(value);
 
-const localTagsResponse = (): Response =>
-  Response.json({
-    models: [
-      {
-        name: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-        model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-        digest: DEFAULT_PERMISSION_JUDGE_CONFIG.expectedDigest,
-      },
-    ],
-  });
-
-const startDirect = async (
-  handler: Parameters<typeof startMockUpstream>[0],
-): Promise<MockUpstream> => {
-  const upstream = await startMockUpstream(handler);
-  upstreams.push(upstream);
-  return upstream;
-};
-
-const start = async (
-  chatHandler: Parameters<typeof startMockUpstream>[0],
-): Promise<MockUpstream> =>
-  startDirect((request, received) => {
-    if (received.path === "/api/version") {
-      return Response.json({ version: "0.test.0" });
-    }
-    if (received.path === "/api/status") return localStatusResponse();
-    if (received.path === "/api/tags") return localTagsResponse();
-    return chatHandler(request, received);
-  });
-
-const chatRequests = (upstream: MockUpstream) =>
-  upstream.received.filter((request) => request.path === "/api/chat");
-
-const rawJsonResponse = (socket: Socket, payload: unknown): void => {
-  const body = JSON.stringify(payload);
-  socket.end(
-    `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
-  );
-};
-
-const startRaw = async (
-  respond: (socket: Socket) => void,
-): Promise<{ url: string }> => {
-  const server = createServer((socket) => {
-    socket.on("error", () => {});
-    socket.once("data", (data) => {
-      const [requestLine] = Buffer.from(data)
-        .toString("latin1")
-        .split("\r\n", 1);
-      if (requestLine === "GET /api/status HTTP/1.1") {
-        rawJsonResponse(socket, {
-          cloud: { disabled: true, source: "test" },
-        });
-        return;
-      }
-      if (requestLine === "GET /api/tags HTTP/1.1") {
-        rawJsonResponse(socket, {
-          models: [
-            {
-              name: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-              model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-              digest: DEFAULT_PERMISSION_JUDGE_CONFIG.expectedDigest,
-            },
-          ],
-        });
-        return;
-      }
-      respond(socket);
-    });
-  });
-  await new Promise<void>((resolveListen, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolveListen);
-  });
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    server.close();
-    throw new Error("raw judge test server did not expose a TCP address");
-  }
-  rawUpstreams.push({
-    close: () =>
-      new Promise<void>((resolveClose, reject) => {
-        if (!server.listening) {
-          resolveClose();
-          return;
-        }
-        server.close((error) => {
-          if (error === undefined) resolveClose();
-          else reject(error);
-        });
-      }),
-  });
-  return { url: `http://127.0.0.1:${address.port}` };
-};
-
-afterEach(async () => {
-  await Promise.all([
-    ...upstreams.splice(0).map((upstream) => upstream.close()),
-    ...rawUpstreams.splice(0).map((upstream) => upstream.close()),
-  ]);
+const commandResult = (
+  stdout: string | Uint8Array,
+  exitCode = 0,
+): BoundedCommandResult => ({
+  exitCode,
+  stdout: typeof stdout === "string" ? encoded(stdout) : stdout,
+  stderr: new Uint8Array(),
+  stdoutTruncated: false,
 });
 
-const verdictContent = (safety: string, relevance = safety): string =>
+const verdict = (safety: string, relevance = safety): string =>
   JSON.stringify({ safety, relevance });
 
-const validResponse = (safety = "ALLOW", relevance = safety): Response =>
-  Response.json({
-    model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-    message: {
-      role: "assistant",
-      content: verdictContent(safety, relevance),
-    },
-    done: true,
-    done_reason: "stop",
-  });
+const runner = (
+  outputs: readonly (BoundedCommandResult | Error)[],
+): { run: RunBoundedCommand; calls: Invocation[] } => {
+  const calls: Invocation[] = [];
+  let index = 0;
+  const run: RunBoundedCommand = async (command, args, options) => {
+    calls.push({ command, args, options });
+    const output = outputs[Math.min(index, outputs.length - 1)];
+    index += 1;
+    if (output === undefined) throw new Error("missing test output");
+    if (output instanceof Error) throw output;
+    return output;
+  };
+  return { run, calls };
+};
 
-const configFor = (
-  upstream: MockUpstream,
+const config = (
   overrides: Partial<PermissionJudgeConfig> = {},
 ): PermissionJudgeConfig => ({
   ...DEFAULT_PERMISSION_JUDGE_CONFIG,
-  url: `${upstream.url}/api/chat`,
   ...overrides,
 });
 
-const taskContext = (
+const task = (
   text: string,
   fingerprint = `task:${text}`,
 ): BoundedTaskContext => ({
@@ -170,7 +90,7 @@ const runEvidence = (fingerprint = "run:a"): PermissionRunEvidence => ({
   fingerprint,
 });
 
-const gitProject = (fingerprint = "project:a"): PermissionProjectContext => ({
+const project = (fingerprint = "project:a"): PermissionProjectContext => ({
   kind: "git",
   name: "project",
   cwd: "/private/project-worktree/packages/app",
@@ -180,952 +100,545 @@ const gitProject = (fingerprint = "project:a"): PermissionProjectContext => ({
   fingerprint,
 });
 
-const createTestAbortController = (): {
-  signal: AbortSignal;
-  abort: () => void;
-} => {
-  const value: unknown = new AbortController();
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("abort" in value) ||
-    typeof value.abort !== "function" ||
-    !("signal" in value)
-  ) {
-    throw new Error("AbortController is unavailable");
-  }
-  const { abort, signal } = value;
-  return {
-    signal: signal as AbortSignal,
-    abort: () => Reflect.apply(abort, value, []),
-  };
+const stdinText = (call: Invocation): string => {
+  const { stdin } = call.options;
+  if (stdin === undefined) throw new Error("expected stdin");
+  return typeof stdin === "string" ? stdin : new TextDecoder().decode(stdin);
 };
 
-describe("local Ollama permission judge", () => {
-  test("accepts only an exact local chat endpoint", () => {
-    expect(isLocalOllamaChatUrl("http://127.0.0.1:11434/api/chat")).toBe(true);
-    expect(isLocalOllamaChatUrl("http://[::1]:11434/api/chat")).toBe(true);
-    for (const url of [
-      "https://127.0.0.1:11434/api/chat",
-      "http://localhost:11434/api/chat",
-      "http://127.0.0.2:11434/api/chat",
-      "http://127.0.0.1:11434/api/generate",
-      "http://user@127.0.0.1:11434/api/chat",
-      "http://127.0.0.1:11434/api/chat?x=1",
-    ]) {
-      expect(isLocalOllamaChatUrl(url)).toBe(false);
-    }
-  });
-
-  test("sends bounded task, current-run evidence, and project context with low-latency options", async () => {
-    const upstream = await start(() => validResponse());
-    const judge = createPermissionJudge(configFor(upstream));
+describe("Codex CLI permission judge", () => {
+  test("invokes the pinned model through a bounded non-interactive Codex command", async () => {
+    const probe = runner([commandResult(verdict("ALLOW"))]);
+    let instructions = "";
+    let sourceSchemaFile = "";
+    let cleanupCalls = 0;
+    const judge = createPermissionJudge(config(), {
+      runCommand: probe.run,
+      createWorkspace(value, schemaFile) {
+        instructions = value;
+        sourceSchemaFile = schemaFile;
+        return {
+          cwd: "/isolated/codex-judge",
+          instructionsFile: "/isolated/codex-judge/instructions.md",
+          schemaFile: "/isolated/codex-judge/output-schema.json",
+          cleanup() {
+            cleanupCalls += 1;
+          },
+        };
+      },
+      env: {
+        HOME: "/home/test",
+        PATH: `/usr/bin:${import.meta.dir}`,
+        BASH_ENV: "/tmp/injected",
+        PWD: "/private/project-worktree",
+        OLDPWD: "/private/old-project-worktree",
+        INIT_CWD: "/private/project-worktree",
+        npm_config_local_prefix: "/private/project-worktree",
+        npm_package_json: "/private/project-worktree/package.json",
+      },
+      schemaFile: "/trusted/judge-schema.json",
+    });
 
     expect(
       await judge.judge("git status --short", {
-        cwd: "/private/project-worktree/packages/app",
-        task: taskContext("Inspect the current repository state"),
+        cwd: import.meta.dir,
+        task: task("Inspect the current repository state"),
         runEvidence: runEvidence(),
-        project: gitProject(),
-      }),
-    ).toMatchObject({
-      kind: "allow",
-      cached: false,
-      audit: {
-        source: "live",
-        gates: { safety: "ALLOW", relevance: "ALLOW" },
-        model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-        policyVersion: PERMISSION_JUDGE_POLICY_VERSION,
-      },
-    });
-    expect(upstream.received.map((request) => request.path)).toEqual([
-      "/api/status",
-      "/api/tags",
-      "/api/chat",
-    ]);
-    expect(upstream.received[0]?.body).toBe("");
-    expect(upstream.received[1]?.body).toBe("");
-
-    const [request] = chatRequests(upstream);
-    expect(request?.method).toBe("POST");
-    expect(request?.path).toBe("/api/chat");
-    const body = JSON.parse(request?.body ?? "") as Record<string, unknown>;
-    expect(body).toMatchObject({
-      model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-      stream: false,
-      think: false,
-      keep_alive: "30m",
-      format: {
-        type: "object",
-        properties: {
-          safety: { type: "string", enum: ["ALLOW", "ASK"] },
-          relevance: { type: "string", enum: ["ALLOW", "ASK"] },
-        },
-        required: ["safety", "relevance"],
-        additionalProperties: false,
-      },
-      options: {
-        temperature: 0,
-        seed: 0,
-        num_ctx: 24_576,
-        num_predict: 32,
-      },
-    });
-    expect(
-      (body.options as Record<string, unknown> | undefined)?.stop,
-    ).toBeUndefined();
-    expect(request?.body).toContain("git status --short");
-    expect(request?.body).toContain("Inspect the current repository state");
-    expect(request?.body).toContain(
-      "Inspect the policy after the failed test.",
-    );
-    expect(request?.body).toContain("askUserQuestionResultText");
-    expect(request?.body).toContain("Run the check?");
-    expect(request?.body).toContain("Allow");
-    expect(request?.body).toContain(
-      String.raw`\"toolName\":\"bash\",\"status\":\"error\"`,
-    );
-    expect(request?.body).toContain(
-      String.raw`\"toolName\":\"read\",\"status\":\"ok\"`,
-    );
-    expect(request?.body).toContain("/private/project-worktree");
-    expect(request?.body).toContain("/private/project");
-    expect(request?.body).not.toContain("task:Inspect");
-    expect(request?.body).not.toContain("project:a");
-    expect(request?.body).not.toContain("run:a");
-    expect(request?.body).not.toContain("conversation history");
-    expect(request?.body).not.toContain("systemPromptOptions");
-    expect(request?.body).not.toContain("process.env");
-    expect(request?.body).toContain("double quotes still evaluate");
-    expect(request?.body).toContain("quoted interpreter/program arguments");
-    expect(request?.body).toContain(
-      "Treat AskUserQuestion text as authenticated evidence",
-    );
-    expect(request?.body).toContain("not as a blanket approval");
-  });
-
-  test("keeps a producer-valid maximum context below the model input cap", async () => {
-    const upstream = await start(() => validResponse());
-    const judge = createPermissionJudge(configFor(upstream));
-    const worktrees = Array.from(
-      { length: 16 },
-      (_, index) => `/private/project-worktree/${"w".repeat(88)}${index}`,
-    );
-
-    const outcome = await judge.judge("git status --short", {
-      cwd: "/private/project-worktree/packages/app",
-      task: taskContext("t".repeat(1024), "task:max-bounded"),
-      runEvidence: {
-        assistantText: "a".repeat(2048),
-        askUserQuestionResultText: '"\\\n'.repeat(340),
-        priorToolResults: Array.from({ length: 16 }, (_, index) => ({
-          toolName: `${index}-${"x".repeat(124)}`,
-          status: index % 2 === 0 ? ("ok" as const) : ("error" as const),
-        })),
-        fingerprint: "run:max-bounded",
-      },
-      project: {
-        kind: "git",
-        name: "project",
-        cwd: "/private/project-worktree/packages/app",
-        activeWorktree: worktrees[0] ?? "/private/project-worktree",
-        navigableRoots: worktrees,
-        worktrees,
-        fingerprint: "project:max-bounded",
-      },
-    });
-
-    expect(outcome).toMatchObject({
-      kind: "allow",
-      cached: false,
-      audit: {
-        source: "live",
-        gates: { safety: "ALLOW", relevance: "ALLOW" },
-      },
-    });
-    expect(chatRequests(upstream)).toHaveLength(1);
-  });
-
-  test("copies only precomputed leading-cd scope into the model envelope", async () => {
-    const upstream = await start(() => validResponse());
-    const judge = createPermissionJudge(configFor(upstream));
-    const project = gitProject();
-
-    for (const scope of [
-      "listed-worktree",
-      "outside-listed-worktrees",
-      "unverified",
-    ] as const) {
-      await judge.judge("cd /private/project-worktree && make test", {
-        cwd: project.cwd,
-        project,
+        project: project(),
         leadingNavigation: {
-          scope,
-          sameRepository: scope === "listed-worktree",
+          scope: "listed-worktree",
+          sameRepository: true,
         },
+        gitCwd: { scope: "listed-worktree", sameRepository: true },
+        executionBoundary: {
+          mode: "sandboxed",
+          network: "denied",
+          profileFingerprint: "b".repeat(64),
+        },
+      }),
+    ).toMatchObject({ kind: "allow", cached: false });
+
+    expect(probe.calls).toHaveLength(1);
+    const [call] = probe.calls;
+    if (call === undefined) throw new Error("missing invocation");
+    expect(call.command).toBe("codex");
+    expect(call.args.slice(0, 18)).toEqual([
+      "-a",
+      "never",
+      "exec",
+      "--ephemeral",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--strict-config",
+      "--sandbox",
+      "read-only",
+      "--skip-git-repo-check",
+      "--color",
+      "never",
+      "--model",
+      "gpt-5.6-luna",
+      "-c",
+      'model_instructions_file="/isolated/codex-judge/instructions.md"',
+      "-c",
+      'model_reasoning_effort="low"',
+    ]);
+    expect(
+      call.args.filter((_value, index) => call.args[index - 1] === "--disable"),
+    ).toEqual([
+      "apps",
+      "auth_elicitation",
+      "browser_use",
+      "browser_use_external",
+      "browser_use_full_cdp_access",
+      "code_mode_host",
+      "computer_use",
+      "guardian_approval",
+      "hooks",
+      "image_generation",
+      "multi_agent",
+      "multi_agent_v2",
+      "plugins",
+      "shell_snapshot",
+      "shell_tool",
+      "skill_mcp_dependency_install",
+      "skill_search",
+      "standalone_web_search",
+      "tool_call_mcp_elicitation",
+      "tool_suggest",
+      "unified_exec",
+      "workspace_dependencies",
+    ]);
+    expect(call.args.slice(-3)).toEqual([
+      "--output-schema",
+      "/isolated/codex-judge/output-schema.json",
+      "-",
+    ]);
+    expect(call.options.cwd).toBe("/isolated/codex-judge");
+    expect(call.options.timeoutMs).toBe(30_000);
+    expect(call.options.stdinMaxBytes).toBe(20 * 1024);
+    expect(call.options.stdoutMaxBytes).toBe(64 * 1024);
+    expect(call.options.stderrMaxBytes).toBe(64 * 1024);
+    expect(call.options.env.HOME).toBe("/home/test");
+    expect(call.options.env.PATH).toBe("/usr/bin");
+    expect(call.options.env.PWD).toBe("/isolated/codex-judge");
+    expect(call.options.env.BASH_ENV).toBeUndefined();
+    expect(call.options.env.OLDPWD).toBeUndefined();
+    expect(call.options.env.INIT_CWD).toBeUndefined();
+    expect(call.options.env.npm_config_local_prefix).toBeUndefined();
+    expect(call.options.env.npm_package_json).toBeUndefined();
+
+    expect(sourceSchemaFile).toBe("/trusted/judge-schema.json");
+    expect(instructions).toContain(
+      "Never execute, browse, use tools, or investigate.",
+    );
+    expect(cleanupCalls).toBe(1);
+    const prompt = stdinText(call);
+    expect(prompt).not.toContain(
+      "Never execute, browse, use tools, or investigate.",
+    );
+    expect(prompt).toContain('"command":"git status --short"');
+    expect(prompt).toContain(
+      '"currentTask":{"text":"Inspect the current repository state","source":"interactive"}',
+    );
+    expect(prompt).toContain('"askUserQuestionResultText"');
+    expect(prompt).toContain('"kind":"git"');
+    expect(prompt).toContain('"executionBoundary":{"mode":"sandboxed"');
+    expect(prompt).toContain('"leadingNavigation":{"scope":"listed-worktree"}');
+    expect(prompt).toContain('"gitCwd":{"scope":"listed-worktree"}');
+  });
+
+  test("propagates a configured model to Codex argv and audit metadata", async () => {
+    const model = "gpt-5.6-luna-test-override";
+    const probe = runner([commandResult(verdict("ALLOW"))]);
+    const outcome = await createPermissionJudge(config({ model }), {
+      runCommand: probe.run,
+    }).judge("git status");
+
+    const [call] = probe.calls;
+    if (call === undefined) throw new Error("missing invocation");
+    const modelFlagIndex = call.args.indexOf("--model");
+    expect(call.args[modelFlagIndex + 1]).toBe(model);
+    expect(outcome.audit?.model).toBe(model);
+  });
+
+  test("requires both independent gates to allow", async () => {
+    for (const [safety, relevance, expectedKind] of [
+      ["ALLOW", "ALLOW", "allow"],
+      ["ASK", "ALLOW", "ask"],
+      ["ALLOW", "ASK", "ask"],
+      ["ASK", "ASK", "ask"],
+    ] as const) {
+      const probe = runner([commandResult(verdict(safety, relevance))]);
+      const judge = createPermissionJudge(config(), {
+        runCommand: probe.run,
+      });
+      const outcome = await judge.judge("git status", {
+        task: task("Inspect repository status"),
+      });
+      expect(outcome.kind).toBe(expectedKind);
+      expect(outcome.audit).toEqual({
+        source: "live",
+        backend: "codex-cli",
+        gates: { safety, relevance },
+        model: "gpt-5.6-luna",
+        reasoningEffort: PERMISSION_JUDGE_REASONING_EFFORT,
+        policyVersion: PERMISSION_JUDGE_POLICY_VERSION,
       });
     }
-
-    const bodies = chatRequests(upstream).map((request) => request.body);
-    const scopes = bodies.map((body) => {
-      const payload = JSON.parse(body) as {
-        messages: { role: string; content: string }[];
-      };
-      const content = payload.messages.find(
-        (message) => message.role === "user",
-      )?.content;
-      if (content === undefined) throw new Error("missing classifier input");
-      const envelope = JSON.parse(content.slice(content.indexOf("\n") + 1)) as {
-        leadingNavigation?: { scope?: string };
-      };
-      return envelope.leadingNavigation?.scope;
-    });
-    expect(scopes).toEqual([
-      "listed-worktree",
-      "outside-listed-worktrees",
-      "unverified",
-    ]);
-    expect(bodies.join("\n")).not.toContain("project:a");
-    expect(bodies.join("\n")).not.toContain("sameRepository");
   });
 
-  test("copies only precomputed git -C scope into the model envelope", async () => {
-    const upstream = await start(() => validResponse());
-    const judge = createPermissionJudge(configFor(upstream));
-    const project = gitProject();
-
-    await judge.judge("git -C /private/project-worktree status --short", {
-      cwd: project.cwd,
-      project,
-      gitCwd: {
-        scope: "listed-worktree",
-        sameRepository: true,
-      },
-    });
-
-    const body = chatRequests(upstream)[0]?.body ?? "";
-    const payload = JSON.parse(body) as {
-      messages: { role: string; content: string }[];
-    };
-    const content = payload.messages.find(
-      (message) => message.role === "user",
-    )?.content;
-    if (content === undefined) throw new Error("missing classifier input");
-    const envelope = JSON.parse(content.slice(content.indexOf("\n") + 1)) as {
-      gitCwd?: { scope?: string };
-    };
-    expect(envelope.gitCwd?.scope).toBe("listed-worktree");
-    expect(body).not.toContain("sameRepository");
-  });
-
-  test("fails closed before chat when Ollama cloud is not disabled", async () => {
-    const upstream = await startDirect((_request, received) => {
-      if (received.path === "/api/status") {
-        return Response.json({ cloud: { disabled: false, source: "test" } });
-      }
-      if (received.path === "/api/tags") return localTagsResponse();
-      return validResponse();
-    });
-
-    const outcome = await createPermissionJudge(configFor(upstream)).judge(
-      "echo secret-command",
-    );
-    expect(outcome).toEqual({
-      kind: "unavailable",
-      reason: "local Ollama cloud features are not disabled",
-    });
-    expect(upstream.received.map((request) => request.path)).toEqual([
-      "/api/status",
-    ]);
-  });
-
-  test.each([
-    {
-      label: "digest mismatch",
-      tags: {
-        models: [
-          {
-            name: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-            model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-            digest: "a".repeat(64),
-          },
-        ],
-      },
-    },
-    {
-      label: "remote alias",
-      tags: {
-        models: [
-          {
-            name: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-            model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-            digest: DEFAULT_PERMISSION_JUDGE_CONFIG.expectedDigest,
-            remote_host: "https://ollama.example",
-          },
-        ],
-      },
-    },
-    { label: "missing configured model", tags: { models: [] } },
-    { label: "malformed model list", tags: { models: {} } },
-  ])("fails closed before chat for $label", async ({ tags }) => {
-    const upstream = await startDirect((_request, received) => {
-      if (received.path === "/api/status") return localStatusResponse();
-      if (received.path === "/api/tags") return Response.json(tags);
-      return validResponse();
-    });
-
-    const outcome = await createPermissionJudge(configFor(upstream)).judge(
-      "echo secret-command",
-    );
-    expect(outcome.kind).toBe("unavailable");
-    expect(upstream.received.map((request) => request.path)).toEqual([
-      "/api/status",
-      "/api/tags",
-    ]);
-  });
-
-  test.each([
-    {
-      label: "unexpected model",
-      response: {
-        model: "other:latest",
-        message: { role: "assistant", content: "ALLOW" },
-        done: true,
-        done_reason: "stop",
-      },
-    },
-    {
-      label: "remote response metadata",
-      response: {
-        model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-        remote_model: "upstream-model",
-        remote_host: "https://ollama.example",
-        message: { role: "assistant", content: "ALLOW" },
-        done: true,
-        done_reason: "stop",
-      },
-    },
-  ])("rejects $label after a valid preflight", async ({ response }) => {
-    const upstream = await start(() => Response.json(response));
-    const outcome = await createPermissionJudge(configFor(upstream)).judge(
-      "git status",
-    );
-    expect(outcome.kind).toBe("invalid-response");
-  });
-
-  test("does not start chat after preflight exhausts the shared budget", async () => {
-    const upstream = await start(() => validResponse());
-    let clockCalls = 0;
-    const judge = createPermissionJudge(
-      configFor(upstream, { timeoutMs: 25 }),
-      {
-        monotonicNow: () => (clockCalls++ === 0 ? 0 : 25),
-      },
-    );
-
-    const outcome = await judge.judge("git status");
-    expect(outcome.kind).toBe("timeout");
-    expect(upstream.received.map((request) => request.path)).toEqual([
-      "/api/status",
-      "/api/tags",
-    ]);
-  });
-
-  test("does not accept a chat response after the shared deadline", async () => {
-    const upstream = await start(() => validResponse());
-    const readings = [0, 0, 25];
-    const judge = createPermissionJudge(
-      configFor(upstream, { timeoutMs: 25 }),
-      {
-        monotonicNow: () => readings.shift() ?? 25,
-      },
-    );
-
-    const outcome = await judge.judge("git status");
-    expect(outcome.kind).toBe("timeout");
-    expect(chatRequests(upstream)).toHaveLength(1);
-  });
-
-  test.each([
-    { safety: "ASK", relevance: "ALLOW" },
-    { safety: "ALLOW", relevance: "ASK" },
-    { safety: "ASK", relevance: "ASK" },
-  ])(
-    "returns ask when either gate fails: $safety/$relevance",
-    async ({ safety, relevance }) => {
-      const upstream = await start(() => validResponse(safety, relevance));
-      const outcome = await createPermissionJudge(configFor(upstream)).judge(
-        "curl https://example.test",
-      );
-      expect(outcome.kind).toBe("ask");
-    },
-  );
-
-  test.each([
-    {
-      label: "plain-text verdict",
-      payload: {
-        message: { role: "assistant", content: "ALLOW" },
-        done: true,
-        done_reason: "stop",
-      },
-    },
-    {
-      label: "lowercase structured verdict",
-      payload: {
-        message: { role: "assistant", content: verdictContent("allow") },
-        done: true,
-        done_reason: "stop",
-      },
-    },
-    {
-      label: "prose structured verdict",
-      payload: {
-        message: {
-          role: "assistant",
-          content: verdictContent("ALLOW because it is safe"),
-        },
-        done: true,
-        done_reason: "stop",
-      },
-    },
-    {
-      label: "structured verdict with an extra property",
-      payload: {
-        message: {
-          role: "assistant",
-          content: JSON.stringify({
-            safety: "ALLOW",
-            relevance: "ALLOW",
-            reason: "safe",
-          }),
-        },
-        done: true,
-        done_reason: "stop",
-      },
-    },
-    {
-      label: "structured verdict array",
-      payload: {
-        message: {
-          role: "assistant",
-          content: JSON.stringify([{ safety: "ALLOW", relevance: "ALLOW" }]),
-        },
-        done: true,
-        done_reason: "stop",
-      },
-    },
-    {
-      label: "length-truncated verdict",
-      payload: {
-        message: {
-          role: "assistant",
-          content: verdictContent("ALLOW"),
-        },
-        done: true,
-        done_reason: "length",
-      },
-    },
-    {
-      label: "missing completion reason",
-      payload: {
-        message: {
-          role: "assistant",
-          content: verdictContent("ALLOW"),
-        },
-        done: true,
-      },
-    },
-    {
-      label: "tool call",
-      payload: {
-        message: {
-          role: "assistant",
-          content: verdictContent("ALLOW"),
-          tool_calls: [{ function: { name: "shell" } }],
-        },
-        done: true,
-        done_reason: "stop",
-      },
-    },
-    {
-      label: "empty tool call field",
-      payload: {
-        message: {
-          role: "assistant",
-          content: verdictContent("ALLOW"),
-          tool_calls: [],
-        },
-        done: true,
-        done_reason: "stop",
-      },
-    },
-    {
-      label: "null tool call field",
-      payload: {
-        message: {
-          role: "assistant",
-          content: verdictContent("ALLOW"),
-          tool_calls: null,
-        },
-        done: true,
-        done_reason: "stop",
-      },
-    },
-  ])("escalates $label", async ({ payload }) => {
-    const upstream = await start(() =>
-      Response.json({
-        model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-        ...payload,
-      }),
-    );
-    const outcome = await createPermissionJudge(configFor(upstream)).judge(
-      "git status",
-    );
-    expect(outcome.kind).toBe("invalid-response");
-  });
-
-  test("rejects an oversized response body", async () => {
-    const upstream = await start(() => new Response("x".repeat(64 * 1024 + 1)));
-    const outcome = await createPermissionJudge(configFor(upstream)).judge(
-      "git status",
-    );
-    expect(outcome.kind).toBe("invalid-response");
-  });
-
-  test("never approves a valid JSON prefix after the response grows oversized", async () => {
-    const payload = JSON.stringify({
-      model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-      message: {
-        role: "assistant",
-        content: verdictContent("ALLOW"),
-      },
-      done: true,
-      done_reason: "stop",
-    });
-    const firstBody = payload + " ".repeat(60 * 1024 - payload.length);
-    const upstream = await startRaw((socket) => {
-      socket.write(
-        [
-          "HTTP/1.1 200 OK",
-          "Content-Type: application/json",
-          "Connection: close",
-          "",
-          "",
-        ].join("\r\n") + firstBody,
-        () => {
-          setTimeout(() => socket.end(" ".repeat(32 * 1024)), 10);
-        },
-      );
-    });
-
-    const outcome = await createPermissionJudge({
-      ...DEFAULT_PERMISSION_JUDGE_CONFIG,
-      url: `${upstream.url}/api/chat`,
-    }).judge("git status");
-    expect(outcome.kind).toBe("invalid-response");
-  });
-
-  test.each(["invalid content length", "chunked trailing bytes"])(
-    "rejects malformed HTTP framing: %s",
-    async (variant) => {
-      const payload = JSON.stringify({
-        model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-        message: {
-          role: "assistant",
-          content: verdictContent("ALLOW"),
-        },
-        done: true,
-        done_reason: "stop",
-      });
-      const upstream = await startRaw((socket) => {
-        if (variant === "invalid content length") {
-          socket.end(
-            `HTTP/1.1 200 OK\r\nContent-Length: -1\r\nConnection: close\r\n\r\n${payload} `,
-          );
-          return;
-        }
-        socket.end(
-          `HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n${payload.length.toString(16)}\r\n${payload}\r\n0\r\n\r\ntrailing`,
-        );
-      });
-
-      const outcome = await createPermissionJudge({
-        ...DEFAULT_PERMISSION_JUDGE_CONFIG,
-        url: `${upstream.url}/api/chat`,
+  test("rejects malformed, extra, and invalid structured outputs", async () => {
+    for (const output of [
+      "not-json",
+      "",
+      "null",
+      "[]",
+      JSON.stringify({ safety: "ALLOW" }),
+      JSON.stringify({ safety: "ALLOW", relevance: "ALLOW", reason: "ok" }),
+      JSON.stringify({ safety: "YES", relevance: "ALLOW" }),
+      JSON.stringify({ safety: "ALLOW", relevance: "YES" }),
+    ]) {
+      const probe = runner([commandResult(output)]);
+      const outcome = await createPermissionJudge(config(), {
+        runCommand: probe.run,
       }).judge("git status");
       expect(outcome.kind).toBe("invalid-response");
-    },
-  );
+    }
+  });
 
-  test("rejects invalid UTF-8 even when replacement decoding would preserve ALLOW", async () => {
-    const allowContent = verdictContent("ALLOW");
-    const prefix = Buffer.from(
-      JSON.stringify({
-        model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-        message: { role: "assistant", content: allowContent },
-        done: true,
-        done_reason: "stop",
-        ignored: "",
-      }).replace('"ignored":""', '"ignored":"'),
-    );
-    const body = Buffer.concat([prefix, Buffer.from([255]), Buffer.from('"}')]);
-    expect(JSON.parse(body.toString("utf8"))).toMatchObject({
-      message: { content: allowContent },
-    });
-    const lossyUpstream = await start(
-      () => new Response(body.toString("utf8")),
-    );
+  test("rejects invalid UTF-8", async () => {
+    const probe = runner([commandResult(new Uint8Array([255, 254]))]);
     expect(
-      await createPermissionJudge(configFor(lossyUpstream)).judge("git status"),
-    ).toMatchObject({
-      kind: "allow",
-      cached: false,
-      audit: { source: "live" },
-    });
-
-    const upstream = await startRaw((socket) => {
-      socket.end(
-        Buffer.concat([
-          Buffer.from(
-            `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${body.byteLength}\r\nConnection: close\r\n\r\n`,
-          ),
-          body,
-        ]),
-      );
-    });
-
-    const outcome = await createPermissionJudge({
-      ...DEFAULT_PERMISSION_JUDGE_CONFIG,
-      url: `${upstream.url}/api/chat`,
-    }).judge("git status");
-    expect(outcome).toEqual({
+      await createPermissionJudge(config(), {
+        runCommand: probe.run,
+      }).judge("git status"),
+    ).toEqual({
       kind: "invalid-response",
-      reason: "local judge response was not valid UTF-8",
+      reason: "Codex judge response was not valid UTF-8",
     });
   });
 
-  test("ignores ambient proxy variables and connects directly", async () => {
-    const proxy = await start(() => validResponse("ASK"));
-    const target = await start(() => validResponse("ALLOW"));
-    const moduleUrl = pathToFileURL(
-      resolve(
-        import.meta.dir,
-        "../../pi/extensions/pi-harness/features/permission-policy/judge.ts",
-      ),
-    ).href;
-    const script = `
-      import { createPermissionJudge, readLocalOllamaVersion } from ${JSON.stringify(moduleUrl)};
-      const config = ${JSON.stringify(configFor(target))};
-      const version = await readLocalOllamaVersion(config);
-      const outcome = await createPermissionJudge(config).judge("git status");
-      console.log(JSON.stringify({ version, outcome }));
-    `;
-    const child = Bun.spawn([process.execPath, "-e", script], {
-      env: {
-        ...process.env,
-        HTTP_PROXY: proxy.url,
-        http_proxy: proxy.url,
-        NO_PROXY: "",
-        no_proxy: "",
-      },
-      stdout: "pipe",
-      stderr: "pipe",
+  test("treats nonzero exits as unavailable without exposing stderr", async () => {
+    const calls: Invocation[] = [];
+    const run: RunBoundedCommand = async (command, args, options) => {
+      calls.push({ command, args, options });
+      return {
+        exitCode: 17,
+        stdout: new Uint8Array(),
+        stderr: encoded("secret diagnostic containing command text"),
+        stdoutTruncated: false,
+      };
+    };
+    const outcome = await createPermissionJudge(config(), {
+      runCommand: run,
+    }).judge("cat ~/.ssh/id_ed25519");
+    expect(outcome).toEqual({
+      kind: "unavailable",
+      reason: "Codex CLI exited with code 17",
     });
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ]);
-
-    expect(exitCode, stderr).toBe(0);
-    expect(JSON.parse(stdout.trim())).toMatchObject({
-      version: "0.test.0",
-      outcome: {
-        kind: "allow",
-        cached: false,
-        audit: { source: "live" },
-      },
-    });
-    expect(target.received.map((request) => request.path)).toContain(
-      "/api/version",
-    );
-    expect(chatRequests(target)).toHaveLength(1);
-    expect(proxy.received).toHaveLength(0);
+    expect(calls).toHaveLength(1);
   });
 
-  test("does not follow redirects carrying the command body", async () => {
-    const target = await start(() => validResponse());
-    const origin = await start(
-      () =>
-        new Response(null, {
-          status: 307,
-          headers: { location: `${target.url}/api/chat` },
-        }),
-    );
-    const outcome = await createPermissionJudge(configFor(origin)).judge(
-      "echo secret-command",
-    );
-
-    expect(outcome.kind).toBe("unavailable");
-    expect(chatRequests(origin)).toHaveLength(1);
-    expect(target.received).toHaveLength(0);
+  test("maps bounded process failures without failing open", async () => {
+    for (const [error, expected] of [
+      [
+        new BoundedCommandError("timeout", "codex", "deadline"),
+        { kind: "timeout", reason: "Codex judge timed out" },
+      ],
+      [
+        new BoundedCommandError("missing", "codex", "missing"),
+        {
+          kind: "unavailable",
+          reason: "Codex CLI could not be executed",
+        },
+      ],
+      [
+        new BoundedCommandError("spawn", "codex", "spawn"),
+        {
+          kind: "unavailable",
+          reason: "Codex CLI could not be executed",
+        },
+      ],
+      [
+        new BoundedCommandError("oversize", "codex", "large"),
+        {
+          kind: "invalid-response",
+          reason: "Codex judge output exceeded the size limit",
+        },
+      ],
+    ] as const) {
+      const probe = runner([error]);
+      expect(
+        await createPermissionJudge(config(), {
+          runCommand: probe.run,
+        }).judge("git status"),
+      ).toEqual(expected);
+    }
   });
 
-  test("times out a slow backend", async () => {
-    const upstream = await start(async () => {
-      await Bun.sleep(250);
-      return validResponse();
-    });
-    const outcome = await createPermissionJudge(
-      configFor(upstream, { timeoutMs: 25 }),
-    ).judge("git status");
-    expect(outcome.kind).toBe("timeout");
-  });
-
-  test("times out while waiting for a delayed response body", async () => {
-    const payload = JSON.stringify({
-      model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-      message: {
-        role: "assistant",
-        content: verdictContent("ALLOW"),
-      },
-      done: true,
-      done_reason: "stop",
-    });
-    const upstream = await startRaw((socket) => {
-      socket.write(
-        `HTTP/1.1 200 OK\r\nContent-Length: ${payload.length}\r\nConnection: close\r\n\r\n`,
-        () => setTimeout(() => socket.end(payload), 100),
-      );
-    });
-    const outcome = await createPermissionJudge({
-      ...DEFAULT_PERMISSION_JUDGE_CONFIG,
-      url: `${upstream.url}/api/chat`,
-      timeoutMs: 25,
-    }).judge("git status");
-    expect(outcome.kind).toBe("timeout");
-  });
-
-  test("parent abort cancels without becoming an availability failure", async () => {
-    let markArrived: (() => void) | undefined;
-    const arrived = new Promise<void>((resolve) => {
-      markArrived = resolve;
-    });
-    const upstream = await start(async () => {
-      markArrived?.();
-      await Bun.sleep(500);
-      return validResponse();
-    });
-    const controller = createTestAbortController();
-    const pending = createPermissionJudge(
-      configFor(upstream, { timeoutMs: 1_000 }),
-    ).judge("git status", { signal: controller.signal });
-    await arrived;
+  test("does not invoke Codex after parent cancellation", async () => {
+    const controller = createAbortController();
     controller.abort();
+    const probe = runner([commandResult(verdict("ALLOW"))]);
+    expect(
+      await createPermissionJudge(config(), {
+        runCommand: probe.run,
+      }).judge("git status", { signal: controller.signal }),
+    ).toEqual({
+      kind: "parent-aborted",
+      reason: "the active pi operation was cancelled",
+    });
+    expect(probe.calls).toHaveLength(0);
+  });
 
+  test("propagates parent cancellation to an active Codex process", async () => {
+    const controller = createAbortController();
+    const run: RunBoundedCommand = async (command, _args, options) =>
+      new Promise((_resolve, reject) => {
+        const rejectAbort = () =>
+          reject(new BoundedCommandError("aborted", command, "aborted"));
+        if (!isAbortSignal(options.signal)) {
+          reject(new Error("expected active abort signal"));
+          return;
+        }
+        options.signal.addEventListener("abort", rejectAbort, { once: true });
+      });
+    const pending = createPermissionJudge(config(), {
+      runCommand: run,
+    }).judge("git status", { signal: controller.signal });
+    controller.abort();
     expect(await pending).toEqual({
       kind: "parent-aborted",
       reason: "the active pi operation was cancelled",
     });
   });
 
-  test("rejects overlong commands before making a request", async () => {
-    const upstream = await start(() => validResponse());
-    const outcome = await createPermissionJudge(configFor(upstream)).judge(
-      "x".repeat(2 * 1024 + 1),
-    );
-    expect(outcome.kind).toBe("too-long");
-    expect(upstream.received).toHaveLength(0);
-  });
-
-  test("rejects an escape-expanded prompt that would exceed model context", async () => {
-    const upstream = await start(() => validResponse());
-    const outcome = await createPermissionJudge(configFor(upstream)).judge(
-      "\u0000".repeat(500),
-    );
-    expect(outcome.kind).toBe("too-long");
-    expect(upstream.received).toHaveLength(0);
-  });
-
-  test("caches only completed ALLOW outcomes per cwd", async () => {
-    const upstream = await start(() => validResponse());
-    const judge = createPermissionJudge(configFor(upstream));
-    const unavailableProject: PermissionProjectContext = {
-      kind: "unavailable",
-      reason: "discovery timed out before cwd canonicalization",
-      fingerprint: "project:unavailable-without-cwd",
-    };
-
-    const firstCwd = await judge.judge("git status", {
-      cwd: "/a",
-      project: unavailableProject,
+  test("rejects commands and prompts beyond their byte budgets before execution", async () => {
+    const probe = runner([commandResult(verdict("ALLOW"))]);
+    const judge = createPermissionJudge(config(), { runCommand: probe.run });
+    expect(await judge.judge("x".repeat(2 * 1024 + 1))).toEqual({
+      kind: "too-long",
+      reason: "command is too long for complete Codex classification",
     });
-    expect(firstCwd.kind).toBe("allow");
     expect(
       await judge.judge("git status", {
-        cwd: "/a",
-        project: unavailableProject,
+        task: task("x".repeat(20 * 1024)),
       }),
-    ).toMatchObject({
-      kind: "allow",
-      cached: true,
-      audit: { source: "cache" },
+    ).toEqual({
+      kind: "too-long",
+      reason: "command is too long for complete Codex classification",
     });
-    const secondCwd = await judge.judge("git status", {
-      cwd: "/b",
-      project: unavailableProject,
-    });
-    expect(secondCwd.kind).toBe("allow");
-    expect(chatRequests(upstream)).toHaveLength(2);
+    expect(probe.calls).toHaveLength(0);
   });
 
-  test("does not share ALLOW cache entries across task, run evidence, or project changes", async () => {
-    const upstream = await start(() => validResponse());
-    const judge = createPermissionJudge(configFor(upstream));
-    const command = "make check";
-
-    await judge.judge(command, {
-      cwd: "/private/project",
-      task: taskContext("Run checks…", "complete-task-a"),
-      runEvidence: runEvidence("complete-run-a"),
-      project: gitProject("complete-project-a"),
-    });
-    expect(
-      await judge.judge(command, {
-        cwd: "/private/project",
-        task: taskContext("Run checks…", "complete-task-a"),
-        runEvidence: runEvidence("complete-run-a"),
-        project: gitProject("complete-project-a"),
-      }),
-    ).toMatchObject({
-      kind: "allow",
-      cached: true,
-      audit: { source: "cache" },
-    });
-
-    await judge.judge(command, {
-      cwd: "/private/project",
-      task: taskContext("Run checks…", "complete-task-b"),
-      runEvidence: runEvidence("complete-run-a"),
-      project: gitProject("complete-project-a"),
-    });
-    await judge.judge(command, {
-      cwd: "/private/project",
-      task: taskContext("Run checks…", "complete-task-b"),
-      runEvidence: runEvidence("complete-run-b"),
-      project: gitProject("complete-project-a"),
-    });
-    await judge.judge(command, {
-      cwd: "/private/project",
-      task: taskContext("Run checks…", "complete-task-b"),
-      runEvidence: runEvidence("complete-run-b"),
-      project: gitProject("complete-project-b"),
-    });
-
-    expect(chatRequests(upstream)).toHaveLength(4);
+  test("fails closed on configuration errors and invalid runtime values", async () => {
+    for (const judgeConfig of [
+      config({ configurationError: "invalid permissionJudge fields: url" }),
+      config({ model: "" }),
+      config({ model: "bad:model" }),
+      config({ timeoutMs: 999 }),
+      config({ timeoutMs: 120_001 }),
+    ]) {
+      const probe = runner([commandResult(verdict("ALLOW"))]);
+      const outcome = await createPermissionJudge(judgeConfig, {
+        runCommand: probe.run,
+      }).judge("git status");
+      expect(outcome.kind).toBe("unavailable");
+      expect(probe.calls).toHaveLength(0);
+    }
   });
 
-  test("never reads or writes ALLOW cache while task correlation is unknown", async () => {
-    const upstream = await start(() => validResponse());
-    const judge = createPermissionJudge(configFor(upstream));
-    const context = {
-      cwd: "/private/project",
-      taskCorrelation: "uncorrelated" as const,
-      project: gitProject("complete-project-a"),
-    };
-
-    const firstOutcome = await judge.judge("make check", context);
-    expect(firstOutcome.kind).toBe("allow");
-    const secondOutcome = await judge.judge("make check", context);
-    expect(secondOutcome.kind).toBe("allow");
-    expect(chatRequests(upstream)).toHaveLength(2);
-
-    const noTaskContext = {
-      cwd: "/private/project",
-      taskCorrelation: "none" as const,
-      project: gitProject("complete-project-a"),
-    };
-    const noTaskOutcome = await judge.judge("make check", noTaskContext);
-    expect(noTaskOutcome.kind).toBe("allow");
-    expect(await judge.judge("make check", noTaskContext)).toMatchObject({
-      kind: "allow",
-      cached: true,
-      audit: { source: "cache" },
-    });
-    expect(chatRequests(upstream)).toHaveLength(3);
-  });
-
-  test("keeps caches isolated between judge instances", async () => {
-    const upstream = await start(() => validResponse());
-    const first = createPermissionJudge(configFor(upstream));
-    const second = createPermissionJudge(configFor(upstream));
-
-    const firstOutcome = await first.judge("git status");
-    expect(firstOutcome.kind).toBe("allow");
-    const secondOutcome = await second.judge("git status");
-    expect(secondOutcome.kind).toBe("allow");
-    expect(chatRequests(upstream)).toHaveLength(2);
-  });
-
-  test("uses LRU recency and TTL without sharing raw verdict failures", async () => {
-    let now = 0;
-    const upstream = await start(() => validResponse());
-    const judge = createPermissionJudge(configFor(upstream), {
+  test("caches only complete allows and keys task evidence and execution context", async () => {
+    let now = 1_000;
+    const probe = runner([
+      commandResult(verdict("ALLOW")),
+      commandResult(verdict("ALLOW")),
+      commandResult(verdict("ALLOW")),
+      commandResult(verdict("ALLOW")),
+      commandResult(verdict("ALLOW")),
+      commandResult(verdict("ALLOW")),
+    ]);
+    const judge = createPermissionJudge(config(), {
+      runCommand: probe.run,
       now: () => now,
-      cacheCapacity: 2,
       cacheTtlMs: 100,
     });
+    const base = {
+      cwd: "/repo",
+      task: task("Inspect status", "task:a"),
+      runEvidence: runEvidence("run:a"),
+      project: project("project:a"),
+      executionBoundary: {
+        mode: "sandboxed" as const,
+        network: "denied" as const,
+        profileFingerprint: "a".repeat(64),
+      },
+    };
 
-    await judge.judge("A");
-    await judge.judge("B");
-    await judge.judge("A"); // refresh A, so B is oldest
-    await judge.judge("C");
-    await judge.judge("B");
-    expect(chatRequests(upstream)).toHaveLength(4);
-
-    now = 101;
-    await judge.judge("A");
-    expect(chatRequests(upstream)).toHaveLength(5);
-  });
-
-  test("opens a short fail-closed circuit after backend failure", async () => {
-    const upstream = await start(() => new Response("down", { status: 503 }));
-    const judge = createPermissionJudge(configFor(upstream));
-
-    const firstOutcome = await judge.judge("git status");
-    expect(firstOutcome.kind).toBe("unavailable");
-    const secondOutcome = await judge.judge("git log -1");
-    expect(secondOutcome.kind).toBe("unavailable");
-    expect(chatRequests(upstream)).toHaveLength(1);
-  });
-
-  test("does not cache ASK outcomes and clear removes cached approvals", async () => {
-    let content = "ASK";
-    const upstream = await start(() => validResponse(content));
-    const judge = createPermissionJudge(configFor(upstream));
-
-    await judge.judge("git status");
-    await judge.judge("git status");
-    expect(chatRequests(upstream)).toHaveLength(2);
-
-    content = "ALLOW";
-    await judge.judge("git status");
-    await judge.judge("git status");
-    expect(chatRequests(upstream)).toHaveLength(3);
-    judge.clear();
-    await judge.judge("git status");
-    expect(chatRequests(upstream)).toHaveLength(4);
-  });
-
-  test("fails closed for explicit configuration errors and cloud models", async () => {
-    const upstream = await start(() => validResponse());
-    const badConfig = configFor(upstream, {
-      model: "gpt-oss:120b-cloud",
-      configurationError: "invalid permissionJudge fields: model",
+    expect(await judge.judge("git status", base)).toMatchObject({
+      kind: "allow",
+      cached: false,
     });
-    const outcome = await createPermissionJudge(badConfig).judge("git status");
-    expect(outcome.kind).toBe("unavailable");
-    expect(upstream.received).toHaveLength(0);
+    expect(await judge.judge("git status", base)).toMatchObject({
+      kind: "allow",
+      cached: true,
+      audit: { source: "cache", backend: "codex-cli" },
+    });
+    await judge.judge("git status --short", base);
+    await judge.judge("git status", { ...base, cwd: "/other" });
+    await judge.judge("git status", {
+      ...base,
+      task: task("Inspect status", "task:b"),
+    });
+    await judge.judge("git status", {
+      ...base,
+      runEvidence: runEvidence("run:b"),
+    });
+    await judge.judge("git status", {
+      ...base,
+      project: project("project:b"),
+    });
+    expect(probe.calls).toHaveLength(6);
+
+    now += 101;
+    expect(await judge.judge("git status", base)).toMatchObject({
+      kind: "allow",
+      cached: false,
+    });
+    expect(probe.calls).toHaveLength(7);
+  });
+
+  test("does not cache asks, uncorrelated calls, or explicitly uncached calls", async () => {
+    const probe = runner([
+      commandResult(verdict("ASK")),
+      commandResult(verdict("ASK")),
+      commandResult(verdict("ALLOW")),
+      commandResult(verdict("ALLOW")),
+      commandResult(verdict("ALLOW")),
+      commandResult(verdict("ALLOW")),
+    ]);
+    const judge = createPermissionJudge(config(), { runCommand: probe.run });
+
+    await judge.judge("git status");
+    await judge.judge("git status");
+    await judge.judge("git diff", { taskCorrelation: "uncorrelated" });
+    await judge.judge("git diff", { taskCorrelation: "uncorrelated" });
+    await judge.judge("git log", { cacheAllowed: false });
+    await judge.judge("git log", { cacheAllowed: false });
+    expect(probe.calls).toHaveLength(6);
+  });
+
+  test("enforces LRU capacity and clear resets cache and circuit state", async () => {
+    let now = 0;
+    const probe = runner([
+      commandResult(verdict("ALLOW")),
+      commandResult(verdict("ALLOW")),
+      commandResult(verdict("ALLOW")),
+      commandResult(verdict("ALLOW")),
+    ]);
+    const judge = createPermissionJudge(config(), {
+      runCommand: probe.run,
+      now: () => now,
+      cacheCapacity: 2,
+      circuitMs: 5_000,
+    });
+    await judge.judge("one");
+    await judge.judge("two");
+    expect(await judge.judge("one")).toMatchObject({ cached: true });
+    await judge.judge("three");
+    expect(await judge.judge("two")).toMatchObject({ cached: false });
+    judge.clear();
+    expect(await judge.judge("one")).toMatchObject({ cached: false });
+
+    const failureProbe = runner([
+      new BoundedCommandError("missing", "codex", "missing"),
+      commandResult(verdict("ALLOW")),
+    ]);
+    const circuitJudge = createPermissionJudge(config(), {
+      runCommand: failureProbe.run,
+      now: () => now,
+      circuitMs: 5_000,
+    });
+    const failed = await circuitJudge.judge("git status");
+    expect(failed.kind).toBe("unavailable");
+    expect(await circuitJudge.judge("git diff")).toEqual({
+      kind: "unavailable",
+      reason: "Codex judge is temporarily unavailable",
+    });
+    circuitJudge.clear();
+    const recovered = await circuitJudge.judge("git diff");
+    expect(recovered.kind).toBe("allow");
+  });
+
+  test("copies trusted classifier files into a cleaned private workspace", async () => {
+    const probe = runner([commandResult(verdict("ALLOW"))]);
+    let cwdMode = 0;
+    let instructionsMode = 0;
+    let schemaMode = 0;
+    let schemaText = "";
+    const inspectRun: RunBoundedCommand = async (command, args, options) => {
+      const schemaIndex = args.indexOf("--output-schema");
+      const schemaFile = args[schemaIndex + 1];
+      if (schemaFile === undefined) throw new Error("missing schema file");
+      const instructionsSetting = args.find((value) =>
+        value.startsWith("model_instructions_file="),
+      );
+      if (instructionsSetting === undefined) {
+        throw new Error("missing instructions file");
+      }
+      const instructionsFile: unknown = JSON.parse(
+        instructionsSetting.slice("model_instructions_file=".length),
+      );
+      if (typeof instructionsFile !== "string") {
+        throw new Error("invalid instructions file");
+      }
+      cwdMode = statSync(options.cwd).mode & 0o777;
+      instructionsMode = statSync(instructionsFile).mode & 0o777;
+      schemaMode = statSync(schemaFile).mode & 0o777;
+      schemaText = readFileSync(schemaFile, "utf8");
+      return probe.run(command, args, options);
+    };
+    await createPermissionJudge(config(), { runCommand: inspectRun }).judge(
+      "git status",
+    );
+    const [call] = probe.calls;
+    if (call === undefined) throw new Error("missing invocation");
+    expect(call.options.cwd).toStartWith(`${tmpdir()}/pi-codex-judge-`);
+    expect(call.options.cwd).not.toBe(process.cwd());
+    expect(existsSync(call.options.cwd)).toBe(false);
+    expect(call.args).toContain(
+      `model_instructions_file=${JSON.stringify(`${call.options.cwd}/instructions.md`)}`,
+    );
+    const schemaIndex = call.args.indexOf("--output-schema");
+    expect(schemaIndex).toBeGreaterThan(-1);
+    expect(call.args[schemaIndex + 1]).toBe(
+      `${call.options.cwd}/output-schema.json`,
+    );
+    expect(cwdMode).toBe(0o700);
+    expect(instructionsMode).toBe(0o600);
+    expect(schemaMode).toBe(0o600);
+    expect(JSON.parse(schemaText)).toMatchObject({
+      additionalProperties: false,
+      required: ["safety", "relevance"],
+    });
+  });
+
+  test("fails closed when isolated workspace cleanup fails", async () => {
+    const probe = runner([commandResult(verdict("ALLOW"))]);
+    const outcome = await createPermissionJudge(config(), {
+      runCommand: probe.run,
+      createWorkspace: () => ({
+        cwd: "/isolated/codex-judge",
+        instructionsFile: "/isolated/codex-judge/instructions.md",
+        schemaFile: "/isolated/codex-judge/output-schema.json",
+        cleanup() {
+          throw new Error("cleanup failed");
+        },
+      }),
+    }).judge("git status");
+    expect(outcome).toEqual({
+      kind: "unavailable",
+      reason: "Codex CLI could not be executed",
+    });
   });
 });

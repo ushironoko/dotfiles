@@ -117,8 +117,10 @@ const validStage = (value: unknown): value is PermissionAuditStage => {
       (value.source === undefined ||
         value.source === "live" ||
         value.source === "cache") &&
+      (value.backend === undefined || value.backend === "codex-cli") &&
       optionalString(value.model) &&
-      optionalString(value.expectedDigest) &&
+      (value.reasoningEffort === undefined ||
+        value.reasoningEffort === "low") &&
       optionalString(value.policyVersion) &&
       (gates === undefined ||
         (isRecord(gates) &&

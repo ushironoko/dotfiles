@@ -413,7 +413,7 @@ describe("current permission run evidence", () => {
             role: "assistant",
             content: [
               { type: "thinking", thinking: "PRIVATE THINKING" },
-              { type: "text", text: "Now inspect the local judge logs." },
+              { type: "text", text: "Now inspect the Codex judge logs." },
               {
                 type: "toolCall",
                 id: "current-call",
@@ -434,7 +434,7 @@ describe("current permission run evidence", () => {
 
     expect(evidence).toMatchObject({
       assistantText:
-        "Inspect the policy implementation.\nNow inspect the local judge logs.",
+        "Inspect the policy implementation.\nNow inspect the Codex judge logs.",
       askUserQuestionResultText:
         'Your questions have been answered: "Run tests?"="Allow".',
       priorToolResults: [

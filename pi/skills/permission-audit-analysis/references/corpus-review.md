@@ -1,6 +1,6 @@
 # Permission corpus review guide
 
-Permission audit records are observations. The local judge may be wrong and a
+Permission audit records are observations. The Codex judge may be wrong and a
 user may approve an unsafe command for reasons that do not generalize. Assign
 `expected` only after reviewing the command together with its task, run,
 project, navigation, and stage context.
