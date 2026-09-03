@@ -287,18 +287,18 @@ session-approved host. Visible destructive writes, Git/ref/history destruction,
 credential handling, uploads, deploy/publish, and persistence still reach the
 semantic policy/classifier. Parser uncertainty alone (`eval`, heredocs,
 generated scripts, interpreters, package runners, safe redirection, or compound
-syntax) is residual because OS enforcement contains its effects. If the local
+syntax) is residual because OS enforcement contains its effects. If the Codex
 judge is explicitly disabled, those parser-only residuals return to interactive
 confirmation and block without UI instead of becoming less restrictive.
 
 `bash_escalated` is the only explicit sandbox escape. It is intended only when
 the requested operation genuinely needs an effect blocked by ordinary Bash.
 Calls normally ignore configured/skill automatic allows, bypass the ALLOW
-cache, and require a fresh local classifier ALLOW; any other outcome confirms
+cache, and require a fresh Codex classifier ALLOW; any other outcome confirms
 with an interactive user or blocks in no-UI children. The one managed-child
 exception is a literal `codex-stage.sh` launch whose mode was declared by the
 trusted Codex agent definition. Pi admits that call before project discovery or
-the local judge and does not wrap it in Pi's OS sandbox, copy/pin its staged
+the model judge and does not wrap it in Pi's OS sandbox, copy/pin its staged
 files, or constrain its wrapper arguments. It snapshots only the trusted
 wrapper executable into a private read-only file at child startup, preventing
 the child from replacing the home symlink before its authorized launch; the
@@ -323,54 +323,69 @@ shell-escaped one-liners; explain necessity and exact scope before genuinely
 required dynamic shell or ad-hoc scripts instead of sacrificing correctness.
 This generation preference does not relax any permission boundary.
 
-The safety layer includes a default-on local Ollama fallback for Bash commands
-that remain ambiguous after deterministic routing. Known risky shapes require
-confirmation before Ollama. Stdin-only `head -N` and project-bounded
-`rg --no-config` are approved mechanically; rg operands may be relative or
-absolute inside any verified worktree of the active repository, may be missing
-when their nearest existing ancestor remains inside one, and may use a narrow
-basename-only literal `*` glob after every current match is verified as both
-in-bounds and non-option-like. Exact `/dev/null` output sinks are non-persistent
-rather than file-write prompts.
+The safety layer includes a default-on Codex CLI fallback for Bash commands
+that remain ambiguous after deterministic routing. It invokes
+`gpt-5.6-luna` with low reasoning through bounded `codex exec`. Each call uses
+an empty private temporary cwd, a higher-priority classifier instructions file,
+approval disabled, ephemeral state, ignored user config/rules, strict config,
+a read-only sandbox, explicit disablement of tool-capable features, and a
+strict JSON output schema. Known risky shapes require confirmation before Codex. Stdin-only
+`head -N` and project-bounded `rg --no-config` are approved mechanically; rg
+operands may be relative or absolute inside any verified worktree of the active
+repository, may be missing when their nearest existing ancestor remains inside
+one, and may use a narrow basename-only literal `*` glob after every current
+match is verified as both in-bounds and non-option-like. Exact `/dev/null`
+output sinks are non-persistent rather than file-write prompts.
+
 Other Git reads remain residual because repository/global helper configuration
 can execute programs. A literal single-command `git -C` status/diff/log/show
 reaches that same residual judge path only after the effective cwd is verified
 inside a listed same-repository worktree; tilde-prefixed and `..`-containing
 location spellings remain unverified, and unverified locations still ask before
-Ollama. Residual commands use a bounded JSON envelope containing the command,
-raw current-turn task text, authenticated same-turn assistant text, preceding
+Codex. Residual commands use a bounded stdin JSON envelope containing the
+command, raw current-turn task text, authenticated same-turn assistant text,
+preceding
 tool names plus success/failure status, the latest successful same-turn bundled
 `AskUserQuestion` result when its provenance is verified and its complete JSON
 string fits within 2 KiB, and locally verified cwd/project/worktree context.
 Over-limit answers are omitted rather than partially retained. No other tool
-output content/details is sent. The Ask result is untrusted evidence of the
-user's specific choice, not blanket approval and never an override of the
-safety gate. The judge never receives assistant thinking, tool arguments,
-expanded skills, prior-turn conversation, repository contents, remotes, or
-environment. One cumulative 1,000 ms local discovery deadline covers async child-
+output content/details is placed in the initial prompt. The Ask result is
+untrusted evidence of the user's specific choice, not blanket approval and
+never an override of the safety gate. Assistant thinking, tool arguments,
+expanded skills, prior-turn conversation, remotes, and environment values are
+excluded. One cumulative 1,000 ms local discovery deadline covers async child-
 env sanitization, Git probing, per-root registered-worktree/common-dir
-validation, and path canonicalization before each fallback/cache lookup. Queued
-expanded inputs without an exact delivery match become uncorrelated and cannot
-reuse or populate the `ALLOW` cache; ANSI-C shell words are fixed at the
-deterministic ask floor. An unavailable judge asks in interactive sessions and
-blocks in child/non-UI sessions; set `permissionJudge.enabled` to `false` for
-the previous rule-only behavior. Existing broad explicit grants still bypass
-the fallback by design except for helper-capable Git reads and `rg` reads that
-have not independently satisfied the no-config/canonical-path conditions.
+validation, and path canonicalization before each fallback/cache lookup.
+
+Queued expanded inputs without an exact delivery match become uncorrelated and
+cannot reuse or populate the `ALLOW` cache; ANSI-C shell words are fixed at the
+deterministic ask floor. A missing CLI, authentication/account failure, timeout,
+non-zero exit, oversized output, invalid UTF-8, or malformed schema never
+allows a command. An unavailable judge asks in interactive sessions and blocks
+in child/non-UI sessions; set `permissionJudge.enabled` to `false` for the
+previous rule-only behavior. Existing broad explicit grants still bypass the
+fallback by design except for helper-capable Git reads and `rg` reads that have
+not independently satisfied the no-config/canonical-path conditions. Live
+inference consumes Codex quota or paid tokens; successful contextual ALLOW
+results are cached for five minutes, while escalated calls remain live.
 
 The safety layer also writes an always-on, versioned permission audit record for
 every Bash call it observes, in parent and pi-harness child processes. One JSONL
 record combines npm preflight, deterministic route/basis, verified project and
 worktree scope, the `sandboxed|escalated` execution mode and profile fingerprint
-(no profile paths), local-judge safety/relevance gates and cache source, later
-hook stages, confirmation outcome, and the final pi-harness boundary disposition.
+(no profile paths), Codex backend/model/reasoning/policy metadata,
+safety/relevance gates and cache source, later hook stages, confirmation
+outcome, and the final
+pi-harness boundary disposition.
 ALLOW or an accepted ASK is not released unless that record append succeeds;
 an unavailable sink blocks the command. These records intentionally retain the
 raw shell command and bounded task/run/project context, including the optional
 provenance-verified `AskUserQuestion` result sent to the judge, for corpus
 review, so they are sensitive local data. See
-[`LOCAL_PERMISSION_JUDGE.md`](./LOCAL_PERMISSION_JUDGE.md) for storage,
-retention, schema, analysis, limitations, judge setup, and qualification steps.
+[`CODEX_PERMISSION_JUDGE.md`](./CODEX_PERMISSION_JUDGE.md) for judge setup,
+isolation, limitations, cost, and qualification steps, and
+[Permission audit log](#permission-audit-log) for storage, retention, schema,
+and analysis.
 
 An explicitly invoked `/skill:<name>` may pre-approve parent-session Bash
 commands through its `allowed-tools` frontmatter. The permission policy records
@@ -590,13 +605,13 @@ typebox baseline + acceptance/rejection through pi's real `validateToolArguments
 | AskUserQuestion                      | exact-name `AskUserQuestion` compatibility tool                              |
 | PermissionRequest (asuku)            | TUI shows native + asuku; RPC avoids uncancellable duplicate requests        |
 | Notification (asuku)                 | detached `agent_settled`; Codex 5h/7d headers and HTTP 429 join the message  |
-| permissions.deny / auto fallback     | permission-policy rules + local Ollama judge (fail-closed)                   |
+| permissions.deny / auto fallback     | permission-policy rules + Codex CLI judge (fail-closed)                      |
 | permission decision corpus           | always-on private versioned JSONL audit (parent + child lineage)             |
 | statusLine                           | statusline feature (Claude-equivalent custom footer)                         |
 | logproxy                             | provider-log feature (opt-in, reduced scope)                                 |
 
-Known gaps vs Claude Code: this is a local effect-sandbox plus local-classifier
-implementation rather than Claude's server-side auto mode; there are no LSP
+Known gaps vs Claude Code: this is a local effect sandbox plus Codex CLI
+classifier rather than Claude's server-side auto mode; there are no LSP
 plugins, and provider-log is a request/status logger (not full logproxy).
 
 ## BTW side questions

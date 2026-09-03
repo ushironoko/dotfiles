@@ -303,17 +303,6 @@ export interface CodexStageAuthorization {
   readonly wrapperIndex: number;
 }
 
-/**
- * Recognize a managed Codex child's wrapper launch.
- *
- * Pi deliberately does not re-sandbox, inspect wrapper arguments, pin cwd or
- * worktree identities, copy staged artifacts, or ask the local judge for these
- * launches. codex-stage.sh and Codex's own sandbox own those boundaries. The
- * harness checks only the shell envelope needed to ensure that the escalated
- * call is the literal wrapper (not arbitrary shell) and that its mode was
- * declared by the trusted agent definition. Production setup separately pins
- * the already-trusted wrapper bytes so the child cannot replace its launcher.
- */
 export const authorizeCodexStageEscalation = (
   command: string,
   modes: ReadonlySet<CodexStageMode>,

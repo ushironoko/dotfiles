@@ -1347,14 +1347,14 @@ describe("explicit allow matching", () => {
 });
 
 describe("permission judge config", () => {
-  test("is enabled with local-only defaults when the config file is absent", () => {
+  test("is enabled with Codex defaults when the config file is absent", () => {
     const paths = resolvePaths(join(tmpdir(), `missing-pi-home-${Date.now()}`));
     expect(loadConfig({}, paths).permissionJudge).toEqual(
       DEFAULT_PERMISSION_JUDGE_CONFIG,
     );
   });
 
-  test("loads timeout overrides and matches child profiles", async () => {
+  test("loads model and timeout overrides for parent and child profiles", async () => {
     const home = await mkdtemp(join(tmpdir(), "pi-judge-config-"));
     const paths = resolvePaths(home);
     await mkdir(join(home, ".pi", "agent"), { recursive: true });
@@ -1363,13 +1363,9 @@ describe("permission judge config", () => {
       JSON.stringify({
         permissionJudge: {
           enabled: false,
-          url: "http://[::1]:11500/api/chat",
-          model: "local/model:1.5b",
-          expectedDigest:
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          timeoutMs: 750,
+          model: "gpt-5.6-luna-test-override",
+          timeoutMs: 45_000,
           confirmTimeoutMs: 5_000,
-          keepAlive: "2h",
         },
       }),
     );
@@ -1380,32 +1376,44 @@ describe("permission judge config", () => {
         { PI_HARNESS_CHILD: "1" },
         paths,
       ).permissionJudge;
-      expect(parent).toEqual({
+      const expected = {
         enabled: false,
-        url: "http://[::1]:11500/api/chat",
-        model: "local/model:1.5b",
-        expectedDigest:
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        timeoutMs: 750,
+        model: "gpt-5.6-luna-test-override",
+        timeoutMs: 45_000,
         confirmTimeoutMs: 5_000,
-        keepAlive: "2h",
-      });
-      expect(child).toEqual({
-        enabled: false,
-        url: "http://[::1]:11500/api/chat",
-        model: "local/model:1.5b",
-        expectedDigest:
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        timeoutMs: 750,
-        confirmTimeoutMs: 5_000,
-        keepAlive: "2h",
-      });
+      };
+      expect(parent).toEqual(expected);
+      expect(child).toEqual(expected);
     } finally {
       await rm(home, { recursive: true, force: true });
     }
   });
 
-  test("marks explicit unsafe or out-of-range values unavailable", async () => {
+  test("rejects removed backend-specific fields", async () => {
+    const home = await mkdtemp(join(tmpdir(), "pi-judge-legacy-config-"));
+    const paths = resolvePaths(home);
+    await mkdir(join(home, ".pi", "agent"), { recursive: true });
+    await writeFile(
+      paths.localConfigFile,
+      JSON.stringify({
+        permissionJudge: {
+          endpoint: "https://example.invalid/judge",
+          modelPin: "a".repeat(64),
+          sessionTtl: "30m",
+        },
+      }),
+    );
+
+    try {
+      expect(loadConfig({}, paths).permissionJudge?.configurationError).toBe(
+        "invalid permissionJudge fields: endpoint, modelPin, sessionTtl",
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("marks malformed or out-of-range values unavailable", async () => {
     const home = await mkdtemp(join(tmpdir(), "pi-judge-invalid-config-"));
     const paths = resolvePaths(home);
     await mkdir(join(home, ".pi", "agent"), { recursive: true });
@@ -1413,19 +1421,16 @@ describe("permission judge config", () => {
       paths.localConfigFile,
       JSON.stringify({
         permissionJudge: {
-          url: "https://example.com/api/chat",
-          model: "qwen2.5",
-          expectedDigest: "sha256:not-a-digest",
-          timeoutMs: 10,
+          model: "bad:model",
+          timeoutMs: 999,
           confirmTimeoutMs: 500,
-          keepAlive: "0m",
         },
       }),
     );
 
     try {
       expect(loadConfig({}, paths).permissionJudge?.configurationError).toBe(
-        "invalid permissionJudge fields: url, model, expectedDigest, timeoutMs, confirmTimeoutMs, keepAlive",
+        "invalid permissionJudge fields: model, timeoutMs, confirmTimeoutMs",
       );
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -1441,19 +1446,16 @@ describe("permission judge config", () => {
       JSON.stringify({
         permissionJudge: {
           enabled: null,
-          url: null,
           model: null,
-          expectedDigest: null,
           timeoutMs: null,
           confirmTimeoutMs: null,
-          keepAlive: null,
         },
       }),
     );
 
     try {
       expect(loadConfig({}, paths).permissionJudge?.configurationError).toBe(
-        "invalid permissionJudge fields: enabled, url, model, expectedDigest, timeoutMs, confirmTimeoutMs, keepAlive",
+        "invalid permissionJudge fields: enabled, model, timeoutMs, confirmTimeoutMs",
       );
     } finally {
       await rm(home, { recursive: true, force: true });

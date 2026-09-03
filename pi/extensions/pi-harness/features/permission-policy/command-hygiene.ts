@@ -4,7 +4,7 @@ const COMMAND_HYGIENE_GUIDANCE = `## Bash command hygiene and permission-aware e
 
 The Bash tool already captures stdout and stderr and truncates oversized output. Do not create a temporary file merely to inspect, filter, summarize, or pass command output to another command.
 
-Before using Bash, prefer the first applicable option. When semantically equivalent shell forms exist, use the form expected to receive a deterministic ALLOW instead of one that may reach the local classifier or user confirmation. Do not use ASK or user confirmation as a convenience path.
+Before using Bash, prefer the first applicable option. When semantically equivalent shell forms exist, use the form expected to receive a deterministic ALLOW instead of one that may reach the Codex classifier or user confirmation. Do not use ASK or user confirmation as a convenience path.
 
 1. An available dedicated read, edit, or write tool that directly performs the task. Never assume a tool exists when it is not available.
 2. An existing repository script or the CLI's native --summary, --format, or --json mode.

@@ -95,7 +95,7 @@ const escalatedCall = (command: string, id: string): ToolCallEvent => ({
 });
 
 describe("sandbox Git deterministic allow routing", () => {
-  test("bypasses the local judge for every selected command", async () => {
+  test("bypasses the Codex judge for every selected command", async () => {
     const cwd = resolve(import.meta.dir, "../..");
     const pi = createFakePi({ cwd, hasUI: false });
     const audit = captureAuditStages();

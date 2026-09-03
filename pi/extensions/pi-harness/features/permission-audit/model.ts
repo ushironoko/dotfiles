@@ -110,8 +110,9 @@ export interface JudgePermissionStage {
   readonly reason?: string;
   readonly outcome: string;
   readonly source?: "live" | "cache";
+  readonly backend?: "codex-cli";
   readonly model?: string;
-  readonly expectedDigest?: string;
+  readonly reasoningEffort?: "low";
   readonly policyVersion?: string;
   readonly gates?: {
     readonly safety: "ALLOW" | "ASK";

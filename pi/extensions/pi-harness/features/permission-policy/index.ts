@@ -73,9 +73,9 @@ const readPermissionRules = (): string | undefined => {
 const MALFORMED_REASON =
   "permission-policy: bash ツール入力が不正なため実行をブロックしました（command が文字列ではありません）";
 const JUDGE_DISABLED_RESIDUAL_REASON =
-  "ローカル判定器が無効なため、sandbox内でも動的・不透明なコマンドには確認が必要です";
-const LOCAL_JUDGE_ASK_FEEDBACK =
-  "[pi-harness permission feedback] The local verifier returned ASK for this command. The user approved this one execution; do not treat that approval as an automatic ALLOW label for later commands.";
+  "Codex判定器が無効なため、sandbox内でも動的・不透明なコマンドには確認が必要です";
+const CODEX_JUDGE_ASK_FEEDBACK =
+  "[pi-harness permission feedback] The Codex verifier returned ASK for this command. The user approved this one execution; do not treat that approval as an automatic ALLOW label for later commands.";
 
 type PermissionConfirmationOutcome =
   | "accepted"
@@ -275,7 +275,7 @@ const setupPermissionPolicy = (
         signal,
       ));
   let judgeWarningShown = false;
-  const acceptedLocalJudgeAskCalls = new Map<string, string>();
+  const acceptedCodexJudgeAskCalls = new Map<string, string>();
   let activeSkillBashAllows: readonly AllowRule[] = [];
   let resolveActiveSkillBashAllows: ActiveSkillBashAllowResolver = () => [];
   let lifecycleEventsAvailable = false;
@@ -483,7 +483,7 @@ const setupPermissionPolicy = (
   pi.on("session_shutdown", () => {
     taskTracker.clear();
     clearSkillLifecycle();
-    acceptedLocalJudgeAskCalls.clear();
+    acceptedCodexJudgeAskCalls.clear();
     judge?.clear();
   });
 
@@ -494,9 +494,9 @@ const setupPermissionPolicy = (
     ) {
       return undefined;
     }
-    const feedback = acceptedLocalJudgeAskCalls.get(event.toolCallId);
+    const feedback = acceptedCodexJudgeAskCalls.get(event.toolCallId);
     if (feedback === undefined) return undefined;
-    acceptedLocalJudgeAskCalls.delete(event.toolCallId);
+    acceptedCodexJudgeAskCalls.delete(event.toolCallId);
     return {
       content: [{ type: "text", text: feedback }, ...(event.content ?? [])],
     };
@@ -676,12 +676,12 @@ const setupPermissionPolicy = (
         });
         if (status === "accepted") {
           if (feedbackOnAccept !== undefined) {
-            if (acceptedLocalJudgeAskCalls.size >= 4096) {
-              const oldest = acceptedLocalJudgeAskCalls.keys().next().value;
+            if (acceptedCodexJudgeAskCalls.size >= 4096) {
+              const oldest = acceptedCodexJudgeAskCalls.keys().next().value;
               if (oldest !== undefined)
-                acceptedLocalJudgeAskCalls.delete(oldest);
+                acceptedCodexJudgeAskCalls.delete(oldest);
             }
-            acceptedLocalJudgeAskCalls.set(event.toolCallId, feedbackOnAccept);
+            acceptedCodexJudgeAskCalls.set(event.toolCallId, feedbackOnAccept);
           }
           return undefined;
         }
@@ -835,7 +835,7 @@ const setupPermissionPolicy = (
               "動的なsandbox内コマンドを実行しますか？",
               JUDGE_DISABLED_RESIDUAL_REASON,
               "judge-disabled-sandbox-residual",
-              "local-judge",
+              "codex-judge",
             )
           : undefined;
       }
@@ -973,9 +973,9 @@ const setupPermissionPolicy = (
         if (isEscalated) {
           return confirm(
             "Sandbox外実行を確認しますか？",
-            "ローカル判定器が無効なため自動承認できません",
+            "Codex判定器が無効なため自動承認できません",
             "judge-disabled",
-            "local-judge",
+            "codex-judge",
           );
         }
         return effectSandboxed && isSandboxResidualVerdict(result)
@@ -983,7 +983,7 @@ const setupPermissionPolicy = (
               "動的なsandbox内コマンドを実行しますか？",
               JUDGE_DISABLED_RESIDUAL_REASON,
               "judge-disabled-sandbox-residual",
-              "local-judge",
+              "codex-judge",
             )
           : undefined;
       }
@@ -1027,8 +1027,9 @@ const setupPermissionPolicy = (
           : {
               source: outcome.audit.source,
               gates: outcome.audit.gates,
+              backend: outcome.audit.backend,
               model: outcome.audit.model,
-              expectedDigest: outcome.audit.expectedDigest,
+              reasoningEffort: outcome.audit.reasoningEffort,
               policyVersion: outcome.audit.policyVersion,
             }),
       });
@@ -1055,16 +1056,16 @@ const setupPermissionPolicy = (
       ) {
         judgeWarningShown = true;
         ctx.ui.notify(
-          `ローカルコマンド判定器を利用できません: ${outcome.reason}`,
+          `Codexコマンド判定器を利用できません: ${outcome.reason}`,
           "warning",
         );
       }
       return confirm(
-        "ローカル判定器が自動承認しませんでした",
+        "Codex判定器が自動承認しませんでした",
         outcome.reason,
         `judge-${outcome.kind}`,
-        "local-judge",
-        outcome.kind === "ask" ? LOCAL_JUDGE_ASK_FEEDBACK : undefined,
+        "codex-judge",
+        outcome.kind === "ask" ? CODEX_JUDGE_ASK_FEEDBACK : undefined,
       );
     } catch (error) {
       // Any evaluation or audit-integration failure blocks rather than failing open.

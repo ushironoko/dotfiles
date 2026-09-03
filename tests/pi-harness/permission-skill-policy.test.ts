@@ -23,7 +23,8 @@ import {
   type HarnessConfig,
   type PermissionJudgeConfig,
 } from "../../pi/extensions/pi-harness/config";
-import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
+import setupPermissionPolicyImpl from "../../pi/extensions/pi-harness/features/permission-policy";
+import type { PermissionJudge } from "../../pi/extensions/pi-harness/features/permission-policy/judge";
 import {
   evaluateCommandWithSkillAllows,
   resolveActiveSkillBashAllows,
@@ -35,12 +36,10 @@ import type {
   PiLike,
   ToolCallEvent,
 } from "../../pi/extensions/pi-harness/lib/pi-like";
-import { startMockUpstream, type MockUpstream } from "../test-helpers";
 import { createFakePi, type FakePi } from "./fake-pi";
 
 const execFileAsync = promisify(execFile);
 
-const upstreams: MockUpstream[] = [];
 const temporaryDirectories: string[] = [];
 
 const stripFrontmatter = (markdown: string): string => {
@@ -94,37 +93,35 @@ const makeSkill = async (
   return { filePath, markdown };
 };
 
-const startJudge = async (): Promise<MockUpstream> => {
-  const upstream = await startMockUpstream((_request, received) => {
-    if (received.path === "/api/status") {
-      return Response.json({ cloud: { disabled: true, source: "test" } });
-    }
-    if (received.path === "/api/tags") {
-      return Response.json({
-        models: [
-          {
-            name: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-            model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-            digest: DEFAULT_PERMISSION_JUDGE_CONFIG.expectedDigest,
-          },
-        ],
-      });
-    }
-    return Response.json({
-      model: DEFAULT_PERMISSION_JUDGE_CONFIG.model,
-      message: { role: "assistant", content: "ASK" },
-      done: true,
-      done_reason: "stop",
-    });
-  });
-  upstreams.push(upstream);
-  return upstream;
+interface JudgeProbe {
+  readonly judge: PermissionJudge;
+  readonly received: string[];
+}
+
+const injectedJudges = new WeakMap<PermissionJudgeConfig, PermissionJudge>();
+
+const startJudge = async (): Promise<JudgeProbe> => {
+  const received: string[] = [];
+  return {
+    received,
+    judge: {
+      async judge(command) {
+        received.push(command);
+        return {
+          kind: "ask",
+          reason: "Codex judge requested user confirmation",
+        };
+      },
+      clear() {},
+    },
+  };
 };
 
-const judgeConfig = (upstream: MockUpstream): PermissionJudgeConfig => ({
-  ...DEFAULT_PERMISSION_JUDGE_CONFIG,
-  url: `${upstream.url}/api/chat`,
-});
+const judgeConfig = (probe: JudgeProbe): PermissionJudgeConfig => {
+  const configured = { ...DEFAULT_PERMISSION_JUDGE_CONFIG };
+  injectedJudges.set(configured, probe.judge);
+  return configured;
+};
 
 const makeConfig = (
   permissionJudge: PermissionJudgeConfig,
@@ -153,8 +150,20 @@ const bashCall = (command: string, id = "skill-bash"): ToolCallEvent => ({
   input: { command },
 });
 
-const chatRequests = (upstream: MockUpstream) =>
-  upstream.received.filter((request) => request.path === "/api/chat");
+const chatRequests = (probe: JudgeProbe): readonly string[] => probe.received;
+
+const setupPermissionPolicy = (
+  ...args: Parameters<typeof setupPermissionPolicyImpl>
+): ReturnType<typeof setupPermissionPolicyImpl> => {
+  const [pi, config, options = {}] = args;
+  const configured = config.permissionJudge;
+  const testJudge =
+    configured === undefined ? undefined : injectedJudges.get(configured);
+  return setupPermissionPolicyImpl(pi, config, {
+    ...(testJudge === undefined ? {} : { judge: testJudge }),
+    ...options,
+  });
+};
 
 const userMessage = (text: string, timestamp: number) => ({
   role: "user",
@@ -237,7 +246,6 @@ const makeGitRepositories = async (): Promise<{
 };
 
 afterEach(async () => {
-  await Promise.all(upstreams.splice(0).map((upstream) => upstream.close()));
   await Promise.all(
     temporaryDirectories
       .splice(0)

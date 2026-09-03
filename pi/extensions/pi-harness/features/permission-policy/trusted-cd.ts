@@ -58,8 +58,6 @@ export const resolveTrustedLeadingCd = async (
     const boundary = await validateCwdInSameRepo(target, cwd);
     return boundary.ok ? target : undefined;
   } catch {
-    // Boundary discovery is an approval optimization. Any uncertainty falls
-    // back to the existing local judge instead of blocking or failing open.
     return undefined;
   }
 };

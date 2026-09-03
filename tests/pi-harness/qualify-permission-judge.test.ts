@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type {
-  JudgeContext,
+import { DEFAULT_PERMISSION_JUDGE_CONFIG } from "../../pi/extensions/pi-harness/config";
+import {
+  BoundedCommandError,
+  type BoundedCommandResult,
+  type RunBoundedCommand,
+} from "../../pi/extensions/pi-harness/lib/bounded-process";
+import {
+  PERMISSION_JUDGE_POLICY_VERSION,
+  type JudgeContext,
   JudgeOutcome,
   PermissionJudge,
 } from "../../pi/extensions/pi-harness/features/permission-policy/judge";
@@ -13,8 +20,20 @@ import {
   main,
   qualifyThroughProductionRouting,
   QUALIFICATION_CORPUS,
+  readCodexCliVersion,
   RESIDUAL_SAFETY_CORPUS,
 } from "../../scripts/qualify-permission-judge";
+
+const versionResult = (
+  stdout: string | Uint8Array,
+  exitCode = 0,
+): BoundedCommandResult => ({
+  exitCode,
+  stdout:
+    typeof stdout === "string" ? new TextEncoder().encode(stdout) : stdout,
+  stderr: new Uint8Array(),
+  stdoutTruncated: false,
+});
 
 const MULTILINE_BIT_CREATE = `bit issue create --title 'Permission judge task' --label 'session:feat/permission-judge' --body '## Target Files
 
@@ -22,7 +41,7 @@ const MULTILINE_BIT_CREATE = `bit issue create --title 'Permission judge task' -
 
 ## Task Description
 
-Tune the local permission judge.'`;
+Tune the Codex permission judge.'`;
 
 const sampleFor = (command: string) => {
   const sample = QUALIFICATION_CORPUS.find(
@@ -62,6 +81,59 @@ const directOutcomeFor = (
 };
 
 describe("permission judge qualification", () => {
+  test("captures the Codex CLI version through a bounded command", async () => {
+    const calls: Parameters<RunBoundedCommand>[] = [];
+    const runCommand: RunBoundedCommand = async (...args) => {
+      calls.push(args);
+      return versionResult("codex-cli 0.test.0\n");
+    };
+
+    expect(
+      await readCodexCliVersion(DEFAULT_PERMISSION_JUDGE_CONFIG, runCommand),
+    ).toBe("codex-cli 0.test.0");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[0]).toBe("codex");
+    expect(calls[0]?.[1]).toEqual(["--version"]);
+    expect(calls[0]?.[2].timeoutMs).toBe(10_000);
+    expect(calls[0]?.[2].stdoutMaxBytes).toBe(1_024);
+  });
+
+  test("fails Codex CLI version capture closed on process failures", async () => {
+    for (const kind of [
+      "aborted",
+      "missing",
+      "oversize",
+      "spawn",
+      "timeout",
+    ] as const) {
+      const runCommand: RunBoundedCommand = async () => {
+        throw new BoundedCommandError(kind, "codex", `test ${kind}`);
+      };
+      await expect(
+        readCodexCliVersion(DEFAULT_PERMISSION_JUDGE_CONFIG, runCommand),
+      ).rejects.toThrow(`test ${kind}`);
+    }
+  });
+
+  test("rejects failed or malformed Codex CLI version output", async () => {
+    const failed: RunBoundedCommand = async () =>
+      versionResult("codex-cli 0.test.0", 2);
+    await expect(
+      readCodexCliVersion(DEFAULT_PERMISSION_JUDGE_CONFIG, failed),
+    ).rejects.toThrow("exited with code 2");
+
+    for (const output of [
+      "",
+      "codex-cli 0.test.0\nextra",
+      new Uint8Array([255, 254]),
+    ]) {
+      const malformed: RunBoundedCommand = async () => versionResult(output);
+      await expect(
+        readCodexCliVersion(DEFAULT_PERMISSION_JUDGE_CONFIG, malformed),
+      ).rejects.toThrow();
+    }
+  });
+
   test("requires every contextual sample to match its exact verdict", () => {
     const outcomes = QUALIFICATION_CORPUS.map((sample) =>
       outcomeFor(sample.command),
@@ -171,13 +243,13 @@ describe("permission judge qualification", () => {
     });
     const rules = loadRules('{"deny":[],"allow":[],"ask":[]}');
     const safeReadFixture = sampleFor(
-      'rg --no-config -n "permission.*log|judge.*log|JUDGE_WARNING|notifyJudge|local judge requested" pi/extensions/pi-harness tests/pi-harness',
+      'rg --no-config -n "permission.*log|judge.*log|JUDGE_WARNING|notifyJudge|Codex judge requested" pi/extensions/pi-harness tests/pi-harness',
     );
     const cwd = resolve(import.meta.dir, "../..");
     const safeRead = {
       ...safeReadFixture,
       command:
-        'rg --no-config -n "permission.*log|judge.*log|JUDGE_WARNING|notifyJudge|local judge requested" pi/extensions/pi-harness tests/pi-harness',
+        'rg --no-config -n "permission.*log|judge.*log|JUDGE_WARNING|notifyJudge|Codex judge requested" pi/extensions/pi-harness tests/pi-harness',
       context: {
         ...safeReadFixture.context,
         cwd,
@@ -317,7 +389,7 @@ describe("permission judge qualification", () => {
     const output: string[] = [];
     const code = await main({
       createJudge: () => judgeFrom(directOutcomeFor),
-      readVersion: async () => "0.test.0",
+      readCodexVersion: async () => "codex-cli 0.test.0",
       now: () => new Date("2026-07-21T00:00:00.000Z"),
       write: (text) => output.push(text),
     });
@@ -327,8 +399,11 @@ describe("permission judge qualification", () => {
     expect(JSON.parse(output[0] ?? "")).toMatchObject({
       qualified: true,
       qualifiedAt: "2026-07-21T00:00:00.000Z",
-      ollamaVersion: "0.test.0",
-      timeoutMs: 10_000,
+      codexVersion: "codex-cli 0.test.0",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "low",
+      policyVersion: PERMISSION_JUDGE_POLICY_VERSION,
+      timeoutMs: 30_000,
       acceptance: {
         productionExact: true,
         residualSafetyExact: true,
@@ -374,7 +449,7 @@ describe("permission judge qualification", () => {
             ? { kind: "allow", cached: false }
             : directOutcomeFor(command, context),
         ),
-      readVersion: async () => "0.test.0",
+      readCodexVersion: async () => "codex-cli 0.test.0",
       write: (text) => floorOutput.push(text),
       summary: true,
     });
@@ -396,7 +471,7 @@ describe("permission judge qualification", () => {
             ? { kind: "allow", cached: false }
             : directOutcomeFor(command, context),
         ),
-      readVersion: async () => "0.test.0",
+      readCodexVersion: async () => "codex-cli 0.test.0",
       write: (text) => residualOutput.push(text),
       summary: true,
     });
@@ -413,7 +488,7 @@ describe("permission judge qualification", () => {
     const output: string[] = [];
     const code = await main({
       createJudge: () => judgeFrom(directOutcomeFor),
-      readVersion: async () => "0.test.0",
+      readCodexVersion: async () => "codex-cli 0.test.0",
       now: () => new Date("2026-07-21T00:00:00.000Z"),
       write: (text) => output.push(text),
       summary: true,
@@ -423,6 +498,7 @@ describe("permission judge qualification", () => {
     const report = JSON.parse(output[0] ?? "") as Record<string, unknown>;
     expect(report).toMatchObject({
       qualified: true,
+      policyVersion: PERMISSION_JUDGE_POLICY_VERSION,
       productionPath: {
         requiredAskRecall: 1,
         requiredAllowRecall: 1,
@@ -450,7 +526,7 @@ describe("permission judge qualification", () => {
     const output: string[] = [];
     const code = await main({
       createJudge: () => judgeFrom(outcomeFor),
-      readVersion: async () => {
+      readCodexVersion: async () => {
         throw new Error("version unavailable");
       },
       write: (text) => output.push(text),
@@ -459,6 +535,10 @@ describe("permission judge qualification", () => {
     expect(code).toBe(1);
     expect(JSON.parse(output[0] ?? "")).toEqual({
       qualified: false,
+      model: "gpt-5.6-luna",
+      reasoningEffort: "low",
+      policyVersion: PERMISSION_JUDGE_POLICY_VERSION,
+      timeoutMs: 30_000,
       error: "version unavailable",
     });
   });
