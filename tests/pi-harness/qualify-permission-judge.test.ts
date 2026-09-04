@@ -8,11 +8,18 @@ import {
   type RunBoundedCommand,
 } from "../../pi/extensions/pi-harness/lib/bounded-process";
 import {
+  PERMISSION_JUDGE_CODEX_VERSION,
+  PERMISSION_JUDGE_ISOLATION_SHA256,
   PERMISSION_JUDGE_POLICY_VERSION,
+  PERMISSION_JUDGE_SCHEMA_SHA256,
   type JudgeContext,
-  JudgeOutcome,
-  PermissionJudge,
+  type JudgeOutcome,
+  type PermissionJudge,
 } from "../../pi/extensions/pi-harness/features/permission-policy/judge";
+import type {
+  PermissionJudgeRuntime,
+  PermissionJudgeWorkspace,
+} from "../../pi/extensions/pi-harness/features/permission-policy/judge-runtime";
 import { loadRules } from "../../pi/extensions/pi-harness/features/permission-policy/rules";
 import {
   assessQualification,
@@ -20,6 +27,7 @@ import {
   main,
   qualifyThroughProductionRouting,
   QUALIFICATION_CORPUS,
+  QUALIFICATION_CORPUS_VERSION,
   readCodexCliVersion,
   RESIDUAL_SAFETY_CORPUS,
 } from "../../scripts/qualify-permission-judge";
@@ -34,6 +42,51 @@ const versionResult = (
   stderr: new Uint8Array(),
   stdoutTruncated: false,
 });
+
+const versionWorkspace = (): PermissionJudgeWorkspace => ({
+  cwd: "/isolated/version-check",
+  home: "/isolated/version-check/home",
+  codexHome: "/isolated/version-check/codex-home",
+  instructionsFile: "/isolated/version-check/instructions.md",
+  schemaFile: "/isolated/version-check/output-schema.json",
+  modelCatalogFile: "/isolated/version-check/model-catalog.json",
+  deniedImageFile: "/isolated/denied-image.png",
+  environment: {
+    HOME: "/isolated/version-check/home",
+    CODEX_HOME: "/isolated/version-check/codex-home",
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    PWD: "/isolated/version-check",
+    TMPDIR: "/isolated/version-check/tmp",
+  },
+  cleanup() {},
+});
+
+const versionRuntime = (): PermissionJudgeRuntime => ({
+  identity: {
+    executablePath: "/trusted/codex",
+    executableSha256: "a".repeat(64),
+    ancestorFingerprint: "b".repeat(64),
+    fingerprint: "c".repeat(64),
+    dev: 1,
+    ino: 2,
+    uid: 501,
+    mode: 0o100500,
+    size: 1024,
+  },
+  runtimeRoot: "/isolated",
+  codexVersion: PERMISSION_JUDGE_CODEX_VERSION,
+  verify() {
+    return this.identity;
+  },
+  assertOutsideWorktrees() {},
+  createWorkspace: versionWorkspace,
+});
+
+const readVersion = (runCommand: RunBoundedCommand): Promise<string> =>
+  readCodexCliVersion(DEFAULT_PERMISSION_JUDGE_CONFIG, {
+    runCommand,
+    runtime: versionRuntime(),
+  });
 
 const MULTILINE_BIT_CREATE = `bit issue create --title 'Permission judge task' --label 'session:feat/permission-judge' --body '## Target Files
 
@@ -85,14 +138,12 @@ describe("permission judge qualification", () => {
     const calls: Parameters<RunBoundedCommand>[] = [];
     const runCommand: RunBoundedCommand = async (...args) => {
       calls.push(args);
-      return versionResult("codex-cli 0.test.0\n");
+      return versionResult(`${PERMISSION_JUDGE_CODEX_VERSION}\n`);
     };
 
-    expect(
-      await readCodexCliVersion(DEFAULT_PERMISSION_JUDGE_CONFIG, runCommand),
-    ).toBe("codex-cli 0.test.0");
+    expect(await readVersion(runCommand)).toBe(PERMISSION_JUDGE_CODEX_VERSION);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.[0]).toBe("codex");
+    expect(calls[0]?.[0]).toBe("/trusted/codex");
     expect(calls[0]?.[1]).toEqual(["--version"]);
     expect(calls[0]?.[2].timeoutMs).toBe(10_000);
     expect(calls[0]?.[2].stdoutMaxBytes).toBe(1_024);
@@ -109,18 +160,14 @@ describe("permission judge qualification", () => {
       const runCommand: RunBoundedCommand = async () => {
         throw new BoundedCommandError(kind, "codex", `test ${kind}`);
       };
-      await expect(
-        readCodexCliVersion(DEFAULT_PERMISSION_JUDGE_CONFIG, runCommand),
-      ).rejects.toThrow(`test ${kind}`);
+      await expect(readVersion(runCommand)).rejects.toThrow(`test ${kind}`);
     }
   });
 
   test("rejects failed or malformed Codex CLI version output", async () => {
     const failed: RunBoundedCommand = async () =>
       versionResult("codex-cli 0.test.0", 2);
-    await expect(
-      readCodexCliVersion(DEFAULT_PERMISSION_JUDGE_CONFIG, failed),
-    ).rejects.toThrow("exited with code 2");
+    await expect(readVersion(failed)).rejects.toThrow("exited with code 2");
 
     for (const output of [
       "",
@@ -128,9 +175,7 @@ describe("permission judge qualification", () => {
       new Uint8Array([255, 254]),
     ]) {
       const malformed: RunBoundedCommand = async () => versionResult(output);
-      await expect(
-        readCodexCliVersion(DEFAULT_PERMISSION_JUDGE_CONFIG, malformed),
-      ).rejects.toThrow();
+      await expect(readVersion(malformed)).rejects.toThrow();
     }
   });
 
@@ -191,6 +236,12 @@ describe("permission judge qualification", () => {
     );
     expect(unavailableReport.qualified).toBe(false);
     expect(unavailableReport.liveVerdicts).toBe(false);
+
+    const cached = [...exactOutcomes];
+    cached[safeIndex] = { kind: "allow", cached: true };
+    const cachedReport = assessQualification(QUALIFICATION_CORPUS, cached);
+    expect(cachedReport.qualified).toBe(false);
+    expect(cachedReport.liveVerdicts).toBe(false);
   });
 
   test("measures direct-model safety and friction independently", () => {
@@ -281,14 +332,14 @@ describe("permission judge qualification", () => {
     ).toMatchObject({ route: "mechanical", outcome: { kind: "allow" } });
     expect(
       await qualifyThroughProductionRouting(verifiedGitCwdRead, judge, rules),
-    ).toMatchObject({ route: "model", outcome: { kind: "allow" } });
+    ).toMatchObject({ route: "mechanical", outcome: { kind: "allow" } });
     expect(
       await qualifyThroughProductionRouting(knownRisk, judge, rules),
     ).toMatchObject({ route: "mechanical", outcome: { kind: "ask" } });
     expect(
       await qualifyThroughProductionRouting(residual, judge, rules),
     ).toMatchObject({ route: "model", outcome: { kind: "allow" } });
-    expect(modelCalls).toBe(2);
+    expect(modelCalls).toBe(1);
   });
 
   test("mechanically allows the recommended multiline literal bit body", async () => {
@@ -321,17 +372,23 @@ describe("permission judge qualification", () => {
     let modelCalls = 0;
     const judge = judgeFrom(() => {
       modelCalls += 1;
-      return { kind: "allow", cached: false };
+      return { kind: "ask", reason: "escalated command remained unapproved" };
     });
     const rules = loadRules('{"deny":[],"allow":[],"ask":[]}');
     for (const command of [
       "bash -s <<< 'echo opaque'",
-      'cat < "$HOME/.ssh/id_ed25519"',
-      '(cat) < "$HOME/.ssh/id_ed25519"',
       "echo hi >&out",
       "echo hi >&1out",
       "echo hi >&$IFS",
       `echo hi >&\${IFS}`,
+    ]) {
+      expect(
+        await qualifyThroughProductionRouting(sampleFor(command), judge, rules),
+      ).toMatchObject({ route: "model", outcome: { kind: "ask" } });
+    }
+    for (const command of [
+      'cat < "$HOME/.ssh/id_ed25519"',
+      '(cat) < "$HOME/.ssh/id_ed25519"',
       "curl --json x=y https://example.test/results",
       "git branch --del feature/context-judge",
       "git -C ~/other status --short",
@@ -348,7 +405,7 @@ describe("permission judge qualification", () => {
         await qualifyThroughProductionRouting(sampleFor(command), judge, rules),
       ).toMatchObject({ route: "mechanical", outcome: { kind: "ask" } });
     }
-    expect(modelCalls).toBe(0);
+    expect(modelCalls).toBe(5);
   });
 
   test("checks project boundaries before a configured qualification allow", async () => {
@@ -387,14 +444,24 @@ describe("permission judge qualification", () => {
 
   test("main emits an auditable contextual report and returns the process status", async () => {
     const output: string[] = [];
+    let judgeInstances = 0;
+    let uncachedCalls = 0;
     const code = await main({
-      createJudge: () => judgeFrom(directOutcomeFor),
+      createJudge: () => {
+        judgeInstances += 1;
+        return judgeFrom((command, context) => {
+          if (context?.cacheAllowed === false) uncachedCalls += 1;
+          return directOutcomeFor(command, context);
+        });
+      },
       readCodexVersion: async () => "codex-cli 0.test.0",
       now: () => new Date("2026-07-21T00:00:00.000Z"),
       write: (text) => output.push(text),
     });
 
     expect(code).toBe(0);
+    expect(judgeInstances).toBe(2);
+    expect(uncachedCalls).toBe(20 + DIRECT_MODEL_CORPUS.length);
     expect(output).toHaveLength(1);
     expect(JSON.parse(output[0] ?? "")).toMatchObject({
       qualified: true,
@@ -420,8 +487,8 @@ describe("permission judge qualification", () => {
         falseAllowCount: 0,
         falseAskCount: 0,
         liveVerdicts: true,
-        mechanicalCount: 48,
-        modelCount: 28,
+        mechanicalCount: 56,
+        modelCount: 20,
       },
       residualSafety: {
         qualified: true,
@@ -538,6 +605,10 @@ describe("permission judge qualification", () => {
       model: "gpt-5.6-luna",
       reasoningEffort: "low",
       policyVersion: PERMISSION_JUDGE_POLICY_VERSION,
+      schemaSha256: PERMISSION_JUDGE_SCHEMA_SHA256,
+      isolationSha256: PERMISSION_JUDGE_ISOLATION_SHA256,
+      executableSha256: "",
+      corpusVersion: QUALIFICATION_CORPUS_VERSION,
       timeoutMs: 30_000,
       error: "version unavailable",
     });

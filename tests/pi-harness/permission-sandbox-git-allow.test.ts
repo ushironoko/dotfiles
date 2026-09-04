@@ -30,6 +30,9 @@ const config: HarnessConfig = {
   paths: resolvePaths("/tmp/pi-sandbox-git-allow-test"),
   permissionJudge: {
     ...DEFAULT_PERMISSION_JUDGE_CONFIG,
+    enabled: true,
+    executablePath: "/test/codex",
+    expectedExecutableSha256: "a".repeat(64),
     configurationError: JUDGE_SENTINEL,
   },
 };

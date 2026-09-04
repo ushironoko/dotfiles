@@ -134,6 +134,14 @@ feature toggles live in `~/.pi/agent/pi-harness.local.json` (machine-local):
 }
 ```
 
+The optional Codex Bash permission judge is disabled until the same machine-local
+file pins a canonical absolute Codex executable path and its lowercase SHA-256.
+It executes only that file in a private, minimal environment with an auth-only
+CODEX_HOME, a deny-root/read-one-workspace/no-network permission profile, pinned
+model metadata, and a model-visible isolation attestation. See
+[`CODEX_PERMISSION_JUDGE.md`](./CODEX_PERMISSION_JUDGE.md) for setup, threat
+boundary, upgrade procedure, and live qualification.
+
 `trustedRoots` gates every feature that executes repository-defined commands
 (formatter, lint/typecheck/test) — fail-closed, symlink-resolved. When an
 interactive parent pi starts in an untrusted Git repository, the harness asks
