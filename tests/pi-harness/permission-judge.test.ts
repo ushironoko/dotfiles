@@ -1,6 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   DEFAULT_PERMISSION_JUDGE_CONFIG,
   type PermissionJudgeConfig,
@@ -16,10 +27,17 @@ import {
   isAbortSignal,
 } from "../../pi/extensions/pi-harness/lib/abort";
 import {
-  createPermissionJudge,
+  createPermissionJudge as createRawPermissionJudge,
+  PERMISSION_JUDGE_CODEX_VERSION,
   PERMISSION_JUDGE_POLICY_VERSION,
   PERMISSION_JUDGE_REASONING_EFFORT,
+  type PermissionJudgeOptions,
 } from "../../pi/extensions/pi-harness/features/permission-policy/judge";
+import {
+  createPermissionJudgeRuntime,
+  type PermissionJudgeRuntime,
+  type PermissionJudgeWorkspace,
+} from "../../pi/extensions/pi-harness/features/permission-policy/judge-runtime";
 import type {
   BoundedTaskContext,
   PermissionProjectContext,
@@ -47,6 +65,20 @@ const commandResult = (
 const verdict = (safety: string, relevance = safety): string =>
   JSON.stringify({ safety, relevance });
 
+const capability = (
+  toolNames: readonly string[] = [
+    "functions.update_plan",
+    "functions.view_image",
+  ],
+  instructionSentinelVisible = false,
+  outsideWorkspaceImageReadable = false,
+): string =>
+  JSON.stringify({
+    toolNames,
+    instructionSentinelVisible,
+    outsideWorkspaceImageReadable,
+  });
+
 const runner = (
   outputs: readonly (BoundedCommandResult | Error)[],
 ): { run: RunBoundedCommand; calls: Invocation[] } => {
@@ -67,8 +99,68 @@ const config = (
   overrides: Partial<PermissionJudgeConfig> = {},
 ): PermissionJudgeConfig => ({
   ...DEFAULT_PERMISSION_JUDGE_CONFIG,
+  enabled: true,
+  executablePath: "/trusted/codex",
+  expectedExecutableSha256: "a".repeat(64),
   ...overrides,
 });
+
+const workspace = (
+  overrides: Partial<PermissionJudgeWorkspace> = {},
+): PermissionJudgeWorkspace => ({
+  cwd: "/isolated/codex-judge",
+  home: "/isolated/codex-judge/home",
+  codexHome: "/isolated/codex-judge/codex-home",
+  instructionsFile: "/isolated/codex-judge/instructions.md",
+  schemaFile: "/isolated/codex-judge/output-schema.json",
+  modelCatalogFile: "/isolated/codex-judge/model-catalog.json",
+  deniedImageFile: "/isolated/denied-image.png",
+  environment: {
+    HOME: "/isolated/codex-judge/home",
+    CODEX_HOME: "/isolated/codex-judge/codex-home",
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    PWD: "/isolated/codex-judge",
+    TMPDIR: "/isolated/codex-judge/tmp",
+  },
+  cleanup: () => {},
+  ...overrides,
+});
+
+const runtime = (
+  overrides: Partial<PermissionJudgeRuntime> = {},
+): PermissionJudgeRuntime => ({
+  identity: {
+    executablePath: "/trusted/codex",
+    executableSha256: "a".repeat(64),
+    ancestorFingerprint: "b".repeat(64),
+    fingerprint: "c".repeat(64),
+    dev: 1,
+    ino: 2,
+    uid: 501,
+    mode: 0o100500,
+    size: 1024,
+  },
+  runtimeRoot: "/isolated",
+  codexVersion: PERMISSION_JUDGE_CODEX_VERSION,
+  isolationVerified: true,
+  verify() {
+    return this.identity;
+  },
+  assertOutsideWorktrees: () => {},
+  createWorkspace: () => workspace(),
+  ...overrides,
+});
+
+const EXECUTABLE_IDENTITY = runtime().identity;
+
+const createPermissionJudge = (
+  judgeConfig: PermissionJudgeConfig,
+  options: PermissionJudgeOptions = {},
+) =>
+  createRawPermissionJudge(judgeConfig, {
+    runtime: runtime(),
+    ...options,
+  });
 
 const task = (
   text: string,
@@ -110,33 +202,23 @@ describe("Codex CLI permission judge", () => {
   test("invokes the pinned model through a bounded non-interactive Codex command", async () => {
     const probe = runner([commandResult(verdict("ALLOW"))]);
     let instructions = "";
-    let sourceSchemaFile = "";
+    let schema = "";
+    let modelCatalog = "";
     let cleanupCalls = 0;
     const judge = createPermissionJudge(config(), {
       runCommand: probe.run,
-      createWorkspace(value, schemaFile) {
-        instructions = value;
-        sourceSchemaFile = schemaFile;
-        return {
-          cwd: "/isolated/codex-judge",
-          instructionsFile: "/isolated/codex-judge/instructions.md",
-          schemaFile: "/isolated/codex-judge/output-schema.json",
-          cleanup() {
-            cleanupCalls += 1;
-          },
-        };
-      },
-      env: {
-        HOME: "/home/test",
-        PATH: `/usr/bin:${import.meta.dir}`,
-        BASH_ENV: "/tmp/injected",
-        PWD: "/private/project-worktree",
-        OLDPWD: "/private/old-project-worktree",
-        INIT_CWD: "/private/project-worktree",
-        npm_config_local_prefix: "/private/project-worktree",
-        npm_package_json: "/private/project-worktree/package.json",
-      },
-      schemaFile: "/trusted/judge-schema.json",
+      runtime: runtime({
+        createWorkspace(value, schemaText, modelCatalogText) {
+          instructions = value;
+          schema = schemaText;
+          modelCatalog = modelCatalogText;
+          return workspace({
+            cleanup() {
+              cleanupCalls += 1;
+            },
+          });
+        },
+      }),
     });
 
     expect(
@@ -161,8 +243,8 @@ describe("Codex CLI permission judge", () => {
     expect(probe.calls).toHaveLength(1);
     const [call] = probe.calls;
     if (call === undefined) throw new Error("missing invocation");
-    expect(call.command).toBe("codex");
-    expect(call.args.slice(0, 18)).toEqual([
+    expect(call.command).toBe("/trusted/codex");
+    expect(call.args.slice(0, 16)).toEqual([
       "-a",
       "never",
       "exec",
@@ -170,8 +252,6 @@ describe("Codex CLI permission judge", () => {
       "--ignore-user-config",
       "--ignore-rules",
       "--strict-config",
-      "--sandbox",
-      "read-only",
       "--skip-git-repo-check",
       "--color",
       "never",
@@ -186,28 +266,65 @@ describe("Codex CLI permission judge", () => {
       call.args.filter((_value, index) => call.args[index - 1] === "--disable"),
     ).toEqual([
       "apps",
+      "artifact",
       "auth_elicitation",
       "browser_use",
       "browser_use_external",
       "browser_use_full_cdp_access",
+      "code_mode",
+      "code_mode_buffered_exec",
       "code_mode_host",
+      "code_mode_only",
       "computer_use",
+      "current_time_reminder",
+      "default_mode_request_user_input",
+      "deferred_executor",
+      "enable_mcp_apps",
+      "exec_permission_approvals",
+      "executor_capability_discovery",
+      "external_agent_memory_import",
+      "goals",
       "guardian_approval",
       "hooks",
       "image_generation",
+      "in_app_browser",
+      "memories",
+      "mentions_v2",
       "multi_agent",
       "multi_agent_v2",
+      "network_proxy",
+      "non_prefixed_mcp_tool_names",
+      "plugin_sharing",
       "plugins",
+      "remote_plugin",
+      "request_permissions_tool",
+      "respect_system_proxy",
+      "secret_auth_storage",
       "shell_snapshot",
       "shell_tool",
+      "skill_env_var_dependency_prompt",
       "skill_mcp_dependency_install",
       "skill_search",
       "standalone_web_search",
       "tool_call_mcp_elicitation",
       "tool_suggest",
       "unified_exec",
+      "use_agent_identity",
       "workspace_dependencies",
     ]);
+    expect(call.args).toContain(
+      'model_catalog_json="/isolated/codex-judge/model-catalog.json"',
+    );
+    expect(call.args).toContain(
+      "tools.experimental_request_user_input={enabled=false}",
+    );
+    expect(call.args).toContain('default_permissions="pi_permission_judge"');
+    expect(call.args).toContain(
+      'permissions.pi_permission_judge.filesystem={":root"="deny","/isolated/codex-judge"="read"}',
+    );
+    expect(call.args).toContain(
+      "permissions.pi_permission_judge.network.enabled=false",
+    );
     expect(call.args.slice(-3)).toEqual([
       "--output-schema",
       "/isolated/codex-judge/output-schema.json",
@@ -218,8 +335,11 @@ describe("Codex CLI permission judge", () => {
     expect(call.options.stdinMaxBytes).toBe(20 * 1024);
     expect(call.options.stdoutMaxBytes).toBe(64 * 1024);
     expect(call.options.stderrMaxBytes).toBe(64 * 1024);
-    expect(call.options.env.HOME).toBe("/home/test");
-    expect(call.options.env.PATH).toBe("/usr/bin");
+    expect(call.options.env.HOME).toBe("/isolated/codex-judge/home");
+    expect(call.options.env.CODEX_HOME).toBe(
+      "/isolated/codex-judge/codex-home",
+    );
+    expect(call.options.env.PATH).toBe("/usr/bin:/bin:/usr/sbin:/sbin");
     expect(call.options.env.PWD).toBe("/isolated/codex-judge");
     expect(call.options.env.BASH_ENV).toBeUndefined();
     expect(call.options.env.OLDPWD).toBeUndefined();
@@ -227,10 +347,32 @@ describe("Codex CLI permission judge", () => {
     expect(call.options.env.npm_config_local_prefix).toBeUndefined();
     expect(call.options.env.npm_package_json).toBeUndefined();
 
-    expect(sourceSchemaFile).toBe("/trusted/judge-schema.json");
+    expect(JSON.parse(schema)).toEqual({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        safety: { type: "string", enum: ["ALLOW", "ASK"] },
+        relevance: { type: "string", enum: ["ALLOW", "ASK"] },
+      },
+      required: ["safety", "relevance"],
+      additionalProperties: false,
+    });
     expect(instructions).toContain(
       "Never execute, browse, use tools, or investigate.",
     );
+    expect(JSON.parse(modelCatalog)).toMatchObject({
+      models: [
+        {
+          slug: "gpt-5.6-luna",
+          shell_type: "disabled",
+          apply_patch_tool_type: null,
+          input_modalities: ["text"],
+          supports_search_tool: false,
+          tool_mode: "direct",
+          multi_agent_version: null,
+        },
+      ],
+    });
     expect(cleanupCalls).toBe(1);
     const prompt = stdinText(call);
     expect(prompt).not.toContain(
@@ -245,6 +387,102 @@ describe("Codex CLI permission judge", () => {
     expect(prompt).toContain('"executionBoundary":{"mode":"sandboxed"');
     expect(prompt).toContain('"leadingNavigation":{"scope":"listed-worktree"}');
     expect(prompt).toContain('"gitCwd":{"scope":"listed-worktree"}');
+  });
+
+  test("requires one successful model-visible isolation attestation", async () => {
+    const probe = runner([
+      commandResult(capability()),
+      commandResult(verdict("ALLOW")),
+      commandResult(verdict("ALLOW")),
+    ]);
+    const instructions: string[] = [];
+    const schemas: string[] = [];
+    const sentinels: (string | undefined)[] = [];
+    const judgeRuntime = runtime({
+      isolationVerified: false,
+      createWorkspace(
+        instructionText,
+        schemaText,
+        _modelCatalogText,
+        sentinel,
+      ) {
+        instructions.push(instructionText);
+        schemas.push(schemaText);
+        sentinels.push(sentinel);
+        return workspace();
+      },
+    });
+    const judge = createRawPermissionJudge(config(), {
+      runCommand: probe.run,
+      runtime: judgeRuntime,
+    });
+
+    expect(await judge.judge("git status")).toMatchObject({ kind: "allow" });
+    expect(await judge.judge("git diff")).toMatchObject({ kind: "allow" });
+    expect(probe.calls).toHaveLength(3);
+    expect(stdinText(probe.calls[0] as Invocation)).toContain(
+      "codex-permission-judge-tool-and-instruction-isolation",
+    );
+    expect(stdinText(probe.calls[0] as Invocation)).toContain(
+      '"deniedImagePath":"/isolated/denied-image.png"',
+    );
+    expect(instructions[0]).toContain("actually visible in this request");
+    expect(JSON.parse(schemas[0] ?? "")).toMatchObject({
+      properties: {
+        toolNames: {
+          type: "array",
+          items: { type: "string" },
+        },
+        instructionSentinelVisible: { type: "boolean" },
+        outsideWorkspaceImageReadable: { type: "boolean" },
+      },
+      additionalProperties: false,
+    });
+    expect(instructions[1]).toContain(
+      "Never execute, browse, use tools, or investigate.",
+    );
+    expect(sentinels[0]).toContain(
+      "PI_PERMISSION_JUDGE_HOSTILE_AGENTS_SENTINEL",
+    );
+    expect(sentinels.slice(1)).toEqual([undefined, undefined]);
+    expect(instructions).toHaveLength(3);
+  });
+
+  test("fails closed when the isolation attestation does not allow", async () => {
+    for (const response of [
+      capability([
+        "functions.update_plan",
+        "functions.view_image",
+        "functions.exec",
+      ]),
+      capability(undefined, true),
+      capability(undefined, false, true),
+      capability(["functions.update_plan"]),
+      capability(["functions.update_plan", "functions.update_plan"]),
+      JSON.stringify({
+        toolNames: ["functions.update_plan", "functions.view_image"],
+        instructionSentinelVisible: false,
+        outsideWorkspaceImageReadable: false,
+        extra: false,
+      }),
+      JSON.stringify({
+        toolNames: ["functions.update_plan", 1],
+        instructionSentinelVisible: false,
+        outsideWorkspaceImageReadable: false,
+      }),
+      "not-json",
+    ]) {
+      const probe = runner([commandResult(response)]);
+      const outcome = await createRawPermissionJudge(config(), {
+        runCommand: probe.run,
+        runtime: runtime({ isolationVerified: false }),
+      }).judge("git status");
+      expect(outcome).toEqual({
+        kind: "unavailable",
+        reason: "Codex CLI could not be executed",
+      });
+      expect(probe.calls).toHaveLength(1);
+    }
   });
 
   test("propagates a configured model to Codex argv and audit metadata", async () => {
@@ -508,6 +746,58 @@ describe("Codex CLI permission judge", () => {
     expect(probe.calls).toHaveLength(7);
   });
 
+  test("validates runtime identity before serving a cached allow", async () => {
+    const probe = runner([commandResult(verdict("ALLOW"))]);
+    let valid = true;
+    const judgeRuntime = runtime({
+      verify() {
+        if (!valid) throw new Error("identity changed");
+        return EXECUTABLE_IDENTITY;
+      },
+    });
+    const judge = createPermissionJudge(config(), {
+      runCommand: probe.run,
+      runtime: judgeRuntime,
+    });
+
+    expect(await judge.judge("git status")).toMatchObject({
+      kind: "allow",
+      cached: false,
+    });
+    valid = false;
+    expect(await judge.judge("git status")).toEqual({
+      kind: "unavailable",
+      reason: "Codex judge runtime identity changed",
+    });
+    expect(probe.calls).toHaveLength(1);
+  });
+
+  test("discards an allow when runtime identity changes during execution", async () => {
+    let changed = false;
+    const probe = runner([commandResult(verdict("ALLOW"))]);
+    const run: RunBoundedCommand = async (command, args, options) => {
+      const result = await probe.run(command, args, options);
+      changed = true;
+      return result;
+    };
+    const judgeRuntime = runtime({
+      verify() {
+        if (changed) throw new Error("identity changed");
+        return EXECUTABLE_IDENTITY;
+      },
+    });
+    const judge = createPermissionJudge(config(), {
+      runCommand: run,
+      runtime: judgeRuntime,
+    });
+
+    expect(await judge.judge("git status")).toEqual({
+      kind: "unavailable",
+      reason: "Codex CLI could not be executed",
+    });
+    expect(probe.calls).toHaveLength(1);
+  });
+
   test("does not cache asks, uncorrelated calls, or explicitly uncached calls", async () => {
     const probe = runner([
       commandResult(verdict("ASK")),
@@ -571,6 +861,23 @@ describe("Codex CLI permission judge", () => {
   });
 
   test("copies trusted classifier files into a cleaned private workspace", async () => {
+    const testRoot = realpathSync(
+      mkdtempSync(join(tmpdir(), "pi-codex-runtime-test-")),
+    );
+    const executableFile = join(testRoot, "codex");
+    const executableBytes = "fixture-codex";
+    writeFileSync(executableFile, executableBytes, { mode: 0o500 });
+    chmodSync(executableFile, 0o500);
+    const executablePath = realpathSync(executableFile);
+    const judgeConfig = config({
+      executablePath,
+      expectedExecutableSha256: createHash("sha256")
+        .update(executableBytes)
+        .digest("hex"),
+    });
+    const judgeRuntime = createPermissionJudgeRuntime(judgeConfig, {
+      runtimeRoot: join(testRoot, "runtime"),
+    });
     const probe = runner([commandResult(verdict("ALLOW"))]);
     let cwdMode = 0;
     let instructionsMode = 0;
@@ -598,42 +905,52 @@ describe("Codex CLI permission judge", () => {
       schemaText = readFileSync(schemaFile, "utf8");
       return probe.run(command, args, options);
     };
-    await createPermissionJudge(config(), { runCommand: inspectRun }).judge(
-      "git status",
-    );
-    const [call] = probe.calls;
-    if (call === undefined) throw new Error("missing invocation");
-    expect(call.options.cwd).toStartWith(`${tmpdir()}/pi-codex-judge-`);
-    expect(call.options.cwd).not.toBe(process.cwd());
-    expect(existsSync(call.options.cwd)).toBe(false);
-    expect(call.args).toContain(
-      `model_instructions_file=${JSON.stringify(`${call.options.cwd}/instructions.md`)}`,
-    );
-    const schemaIndex = call.args.indexOf("--output-schema");
-    expect(schemaIndex).toBeGreaterThan(-1);
-    expect(call.args[schemaIndex + 1]).toBe(
-      `${call.options.cwd}/output-schema.json`,
-    );
-    expect(cwdMode).toBe(0o700);
-    expect(instructionsMode).toBe(0o600);
-    expect(schemaMode).toBe(0o600);
-    expect(JSON.parse(schemaText)).toMatchObject({
-      additionalProperties: false,
-      required: ["safety", "relevance"],
-    });
+    try {
+      await createRawPermissionJudge(judgeConfig, {
+        runCommand: inspectRun,
+        runtime: {
+          ...judgeRuntime,
+          codexVersion: PERMISSION_JUDGE_CODEX_VERSION,
+          isolationVerified: true,
+        },
+      }).judge("git status");
+      const [call] = probe.calls;
+      if (call === undefined) throw new Error("missing invocation");
+      expect(call.command).toBe(executablePath);
+      expect(call.options.cwd).toStartWith(`${judgeRuntime.runtimeRoot}/run-`);
+      expect(call.options.cwd).not.toBe(process.cwd());
+      expect(existsSync(call.options.cwd)).toBe(false);
+      expect(call.args).toContain(
+        `model_instructions_file=${JSON.stringify(`${call.options.cwd}/instructions.md`)}`,
+      );
+      const schemaIndex = call.args.indexOf("--output-schema");
+      expect(schemaIndex).toBeGreaterThan(-1);
+      expect(call.args[schemaIndex + 1]).toBe(
+        `${call.options.cwd}/output-schema.json`,
+      );
+      expect(cwdMode).toBe(0o700);
+      expect(instructionsMode).toBe(0o600);
+      expect(schemaMode).toBe(0o600);
+      expect(JSON.parse(schemaText)).toMatchObject({
+        additionalProperties: false,
+        required: ["safety", "relevance"],
+      });
+    } finally {
+      rmSync(testRoot, { recursive: true, force: true });
+    }
   });
 
   test("fails closed when isolated workspace cleanup fails", async () => {
     const probe = runner([commandResult(verdict("ALLOW"))]);
     const outcome = await createPermissionJudge(config(), {
       runCommand: probe.run,
-      createWorkspace: () => ({
-        cwd: "/isolated/codex-judge",
-        instructionsFile: "/isolated/codex-judge/instructions.md",
-        schemaFile: "/isolated/codex-judge/output-schema.json",
-        cleanup() {
-          throw new Error("cleanup failed");
-        },
+      runtime: runtime({
+        createWorkspace: () =>
+          workspace({
+            cleanup() {
+              throw new Error("cleanup failed");
+            },
+          }),
       }),
     }).judge("git status");
     expect(outcome).toEqual({

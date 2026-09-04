@@ -609,6 +609,46 @@ describe("sandbox-only Git classification", () => {
     },
   );
 
+  test.each([
+    'eval "$CMD"',
+    "sh ./unknown-script.sh",
+    "bun x totally-unknown-package",
+    "make lint > /tmp/lint.log",
+  ])(
+    "keeps worktree-arbitrary or outside-output effects as sandbox ASK: %s",
+    (command) => {
+      expect(
+        evaluateCommandWithAudit(command, rules, {
+          ...sandboxed,
+          trustedWritableWorktrees: ["/repo/worktree"],
+        }),
+      ).toEqual({
+        verdict: "ask",
+        reason: expect.any(String),
+        audit: expect.objectContaining({ basis: "structural-ask" }),
+      });
+    },
+  );
+
+  test("allows only the exact bounded sandbox permission-log filename listing", () => {
+    const exact =
+      'find "$HOME/.pi/agent/pi-harness/logs" -maxdepth 1 -type f -print';
+    expect(evaluateCommandWithAudit(exact, rules, sandboxed)).toEqual({
+      verdict: "allow",
+      audit: expect.objectContaining({ basis: "builtin-read-allow" }),
+    });
+    for (const command of [
+      `${exact} -delete`,
+      `${exact} > /tmp/files`,
+      'find "$HOME/.pi/agent/pi-harness/logs" -maxdepth 2 -type f -print',
+      'find "$HOME/.pi/agent/pi-harness/logs" -maxdepth 1 -type f -exec cat {} ;',
+    ]) {
+      expect(
+        evaluateCommandWithAudit(command, rules, sandboxed).verdict,
+      ).not.toBe("allow");
+    }
+  });
+
   test("allows a compound command only when every segment is selected", () => {
     expect(
       evaluateCommand(
@@ -1347,14 +1387,15 @@ describe("explicit allow matching", () => {
 });
 
 describe("permission judge config", () => {
-  test("is enabled with Codex defaults when the config file is absent", () => {
+  test("is disabled without an executable trust anchor", () => {
     const paths = resolvePaths(join(tmpdir(), `missing-pi-home-${Date.now()}`));
     expect(loadConfig({}, paths).permissionJudge).toEqual(
       DEFAULT_PERMISSION_JUDGE_CONFIG,
     );
+    expect(loadConfig({}, paths).permissionJudge?.enabled).toBe(false);
   });
 
-  test("loads model and timeout overrides for parent and child profiles", async () => {
+  test("loads executable identity, model, and timeout overrides for parent and child profiles", async () => {
     const home = await mkdtemp(join(tmpdir(), "pi-judge-config-"));
     const paths = resolvePaths(home);
     await mkdir(join(home, ".pi", "agent"), { recursive: true });
@@ -1362,7 +1403,9 @@ describe("permission judge config", () => {
       paths.localConfigFile,
       JSON.stringify({
         permissionJudge: {
-          enabled: false,
+          enabled: true,
+          executablePath: "/opt/codex/bin/codex",
+          expectedExecutableSha256: "a".repeat(64),
           model: "gpt-5.6-luna-test-override",
           timeoutMs: 45_000,
           confirmTimeoutMs: 5_000,
@@ -1377,7 +1420,9 @@ describe("permission judge config", () => {
         paths,
       ).permissionJudge;
       const expected = {
-        enabled: false,
+        enabled: true,
+        executablePath: "/opt/codex/bin/codex",
+        expectedExecutableSha256: "a".repeat(64),
         model: "gpt-5.6-luna-test-override",
         timeoutMs: 45_000,
         confirmTimeoutMs: 5_000,
@@ -1413,6 +1458,24 @@ describe("permission judge config", () => {
     }
   });
 
+  test("requires an executable trust anchor whenever the judge is enabled", async () => {
+    const home = await mkdtemp(join(tmpdir(), "pi-judge-missing-identity-"));
+    const paths = resolvePaths(home);
+    await mkdir(join(home, ".pi", "agent"), { recursive: true });
+    await writeFile(
+      paths.localConfigFile,
+      JSON.stringify({ permissionJudge: { enabled: true } }),
+    );
+
+    try {
+      expect(loadConfig({}, paths).permissionJudge?.configurationError).toBe(
+        "invalid permissionJudge fields: executablePath, expectedExecutableSha256",
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test("marks malformed or out-of-range values unavailable", async () => {
     const home = await mkdtemp(join(tmpdir(), "pi-judge-invalid-config-"));
     const paths = resolvePaths(home);
@@ -1421,6 +1484,9 @@ describe("permission judge config", () => {
       paths.localConfigFile,
       JSON.stringify({
         permissionJudge: {
+          enabled: true,
+          executablePath: "codex",
+          expectedExecutableSha256: "not-a-digest",
           model: "bad:model",
           timeoutMs: 999,
           confirmTimeoutMs: 500,
@@ -1430,7 +1496,7 @@ describe("permission judge config", () => {
 
     try {
       expect(loadConfig({}, paths).permissionJudge?.configurationError).toBe(
-        "invalid permissionJudge fields: model, timeoutMs, confirmTimeoutMs",
+        "invalid permissionJudge fields: executablePath, expectedExecutableSha256, model, timeoutMs, confirmTimeoutMs",
       );
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -1446,6 +1512,8 @@ describe("permission judge config", () => {
       JSON.stringify({
         permissionJudge: {
           enabled: null,
+          executablePath: null,
+          expectedExecutableSha256: null,
           model: null,
           timeoutMs: null,
           confirmTimeoutMs: null,
@@ -1455,7 +1523,7 @@ describe("permission judge config", () => {
 
     try {
       expect(loadConfig({}, paths).permissionJudge?.configurationError).toBe(
-        "invalid permissionJudge fields: enabled, model, timeoutMs, confirmTimeoutMs",
+        "invalid permissionJudge fields: enabled, executablePath, expectedExecutableSha256, model, timeoutMs, confirmTimeoutMs",
       );
     } finally {
       await rm(home, { recursive: true, force: true });

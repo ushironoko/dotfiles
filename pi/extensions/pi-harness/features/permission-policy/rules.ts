@@ -1496,6 +1496,7 @@ const structuralKnownRisk = (
   segment: Segment,
   normalized: NormalizedSegment,
   trustedGitCwdTarget?: string,
+  trustedWritableWorktrees?: readonly string[],
 ): StructuralRisk | undefined => {
   if (
     containsSensitivePath([...normalized.words, ...segment.redirectionTargets])
@@ -1525,6 +1526,20 @@ const structuralKnownRisk = (
   if (normalized.privileged) {
     return { kind: "parser-only", reason: "sudo 経由の実行には確認が必要です" };
   }
+  if (
+    trustedWritableWorktrees !== undefined &&
+    segment.redirectionTargets.some(
+      (target) =>
+        target !== "/dev/null" &&
+        isAbsolute(target) &&
+        !pathInsideVerifiedRoots(target, trustedWritableWorktrees),
+    )
+  ) {
+    return {
+      kind: "semantic",
+      reason: "検証済みworktree外への出力リダイレクトには確認が必要です",
+    };
+  }
   if (segment.hasOutputRedirection) {
     return {
       kind: "parser-only",
@@ -1533,7 +1548,7 @@ const structuralKnownRisk = (
   }
   if (isPackageRunnerInvocation(normalized.words)) {
     return {
-      kind: "parser-only",
+      kind: "semantic",
       reason: "パッケージランナーによるコード実行には確認が必要です",
     };
   }
@@ -1555,7 +1570,7 @@ const structuralKnownRisk = (
     };
   }
   if (isOpaqueExecutor(normalized.words)) {
-    return { kind: "parser-only", reason: OPAQUE_EXECUTOR_REASON };
+    return { kind: "semantic", reason: OPAQUE_EXECUTOR_REASON };
   }
   return undefined;
 };
@@ -2763,6 +2778,7 @@ const evaluateNormalized = (
       segment,
       normalized,
       trustedGitCwdTarget,
+      trustedWritableWorktrees,
     );
     if (structuralRisk === undefined) {
       return audited({ verdict: "default-continue" }, "default-continue");
@@ -2811,6 +2827,7 @@ const evaluateNormalized = (
     segment,
     normalized,
     trustedGitCwdTarget,
+    trustedWritableWorktrees,
   );
   if (structuralRisk !== undefined) {
     if (!effectSandboxed || structuralRisk.kind === "semantic") {
@@ -3158,11 +3175,24 @@ const hasUnverifiedProjectMutationNavigation = (
 ): boolean =>
   hasUnverifiedProjectMutationNavigationInner(command, 0, allowLeadingCd);
 
+const PERMISSION_LOG_FILENAME_LISTING =
+  'find "$HOME/.pi/agent/pi-harness/logs" -maxdepth 1 -type f -print';
+
 const evaluateCommandWithAudit = (
   command: string,
   rules: LoadedRules,
   options: EvaluationOptions = {},
-): AuditedVerdict => evaluateCommandInner(command, rules, 0, options);
+): AuditedVerdict => {
+  const result = evaluateCommandInner(command, rules, 0, options);
+  if (
+    options.effectSandboxed === true &&
+    command === PERMISSION_LOG_FILENAME_LISTING &&
+    result.verdict === "default-continue"
+  ) {
+    return audited({ verdict: "allow" }, "builtin-read-allow");
+  }
+  return result;
+};
 
 const evaluateCommand = (
   command: string,
