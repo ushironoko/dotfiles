@@ -17,7 +17,7 @@ The judge is disabled unless machine-local configuration provides both:
 - the canonical absolute path of the Codex executable;
 - the lowercase SHA-256 of those exact executable bytes.
 
-The supported runtime is `codex-cli 0.145.0`. The executable must be a regular, single-link, owner-controlled file beneath canonical ancestors owned by the current user or root and not writable by group or other. The runtime verifies path, digest, owner, mode, device, inode, size, link count, and ancestor identity before cache lookup, before and after each process, and before returning ALLOW. A replacement or metadata change fails closed and invalidates cached approvals.
+The supported runtime is `codex-cli 0.153.4`. The executable must be a regular, single-link, owner-controlled file beneath canonical ancestors owned by the current user or root and not writable by group or other. The runtime verifies path, digest, owner, mode, device, inode, size, link count, and ancestor identity before cache lookup, before and after each process, and before returning ALLOW. A replacement or metadata change fails closed and invalidates cached approvals.
 
 These checks detect changes but do not make Node's path-based spawn atomic with verification. A malicious process already running as the same UID can replace user-owned paths between the final check and kernel execution. The executable digest also does not cover an interpreter, shared libraries, or adjacent runtime assets that the executable may load. A pre-existing same-UID host compromise and modification of these transitive dependencies are outside the judge boundary; do not describe the checks as complete TOCTOU prevention.
 
@@ -92,9 +92,9 @@ The private model catalog pins the supported model to direct-tool mode with shel
 
 Every call creates sibling `0700` workspace, HOME, CODEX_HOME, and TMPDIR directories under `~/.pi/agent/pi-harness/permission-judge`. That runtime root must be canonical, private, owner-controlled, and outside every registered project worktree. The trusted classifier policy, output schema, and model catalog are written as `0600` files. The complete invocation directory is removed after success, failure, timeout, or cancellation; a cleanup failure makes the result unavailable.
 
-The child receives a fixed minimal environment. Provider, proxy, CA, loader, shell-startup, Git, package-manager, project-location, and inherited credential variables are not propagated. Only the validated auth snapshot enters isolated CODEX_HOME.
+The child receives a fixed minimal environment. Provider, proxy, CA, loader, shell-startup, Git, package-manager, project-location, and inherited credential variables are not propagated. Only the validated auth snapshot enters isolated CODEX_HOME, and `cli_auth_credentials_store="file"` prevents keyring fallback.
 
-The named Codex permission profile denies filesystem access at `:root`, grants read access only to the private classifier workspace, and disables network. The pinned visible tool inventory is exactly `functions.update_plan` and `functions.view_image`; there is no process execution, write, request-input, web, MCP, plugin, hook, skill, browser, computer-use, or multi-agent tool. `view_image` remains confined to the private workspace, which contains only trusted judge inputs and the hostile project-instruction probe.
+The named Codex permission profile denies filesystem access at `:root`, grants read access only to the private classifier workspace, and disables network. Host skill discovery is skipped, and the versioned feature manifest disables the 0.153.4 shell, REPL, sleep, patch, web, MCP, plugin, hook, browser, computer-use, collaboration, and remote-control surfaces. The pinned visible tool inventory is exactly `functions.view_image` and `multi_tool_use.parallel`; the latter can only wrap the tools in that same inventory. There is no process execution, write, request-input, web, MCP, plugin, hook, skill, browser, computer-use, or multi-agent tool. `view_image` remains confined to the private workspace, which contains only trusted judge inputs and the hostile project-instruction probe.
 
 Before its first classification, each judge process runs a structured capability attestation with a hostile workspace `AGENTS.md` and a valid image immediately outside the readable workspace. It requires the exact pinned tool inventory, requires the instruction sentinel to be invisible, and invokes `view_image` once to require that the outside image is denied. Missing, duplicate, extra, renamed, or malformed tools, visible project instructions, readable outside-workspace data, a changed model surface, an unsupported CLI version, or a failed probe makes the judge unavailable. The attestation is not an allowlist expansion mechanism.
 
@@ -162,7 +162,7 @@ The report records the Codex version, canonical executable and SHA-256, model, r
 
 - `Codex judge is disabled by configuration`: add both machine-local executable trust anchors or set `enabled: false` intentionally.
 - `Codex judge runtime identity changed`: recheck the canonical file, digest, ownership, modes, ancestors, and runtime root; do not update the digest until the new binary is reviewed.
-- `Codex CLI could not be executed`: run the configured absolute executable directly, verify `codex-cli 0.145.0`, authentication, strict settings, and capability inventory.
+- `Codex CLI could not be executed`: run the configured absolute executable directly, verify `codex-cli 0.153.4`, authentication, strict settings, and capability inventory.
 - `Codex judge timed out`: increase `timeoutMs` within the supported range or check service latency.
 - `Codex judge returned invalid JSON`: verify the selected model supports the pinned structured response.
 - repeated confirmation after an outage: the five-second circuit breaker intentionally avoids repeated failing process launches.

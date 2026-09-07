@@ -67,8 +67,8 @@ const verdict = (safety: string, relevance = safety): string =>
 
 const capability = (
   toolNames: readonly string[] = [
-    "functions.update_plan",
     "functions.view_image",
+    "multi_tool_use.parallel",
   ],
   instructionSentinelVisible = false,
   outsideWorkspaceImageReadable = false,
@@ -265,6 +265,7 @@ describe("Codex CLI permission judge", () => {
     expect(
       call.args.filter((_value, index) => call.args[index - 1] === "--disable"),
     ).toEqual([
+      "apply_patch_freeform",
       "apps",
       "artifact",
       "auth_elicitation",
@@ -275,10 +276,12 @@ describe("Codex CLI permission judge", () => {
       "code_mode_buffered_exec",
       "code_mode_host",
       "code_mode_only",
+      "collaboration_modes",
       "computer_use",
       "current_time_reminder",
       "default_mode_request_user_input",
       "deferred_executor",
+      "deferred_tool_world_state",
       "enable_mcp_apps",
       "exec_permission_approvals",
       "executor_capability_discovery",
@@ -288,36 +291,58 @@ describe("Codex CLI permission judge", () => {
       "hooks",
       "image_generation",
       "in_app_browser",
+      "in_app_chat",
+      "in_app_dictation",
+      "in_app_local_automation",
+      "in_app_updates",
+      "js_repl",
       "memories",
       "mentions_v2",
       "multi_agent",
       "multi_agent_v2",
       "network_proxy",
       "non_prefixed_mcp_tool_names",
+      "personality",
       "plugin_sharing",
       "plugins",
+      "psp",
+      "realtime_conversation",
+      "recommended_plugins",
+      "remote_control",
       "remote_plugin",
       "request_permissions_tool",
       "respect_system_proxy",
       "secret_auth_storage",
+      "send_async_message",
       "shell_snapshot",
       "shell_tool",
+      "shell_zsh_fork",
       "skill_env_var_dependency_prompt",
       "skill_mcp_dependency_install",
       "skill_search",
+      "sleep_tool",
       "standalone_web_search",
+      "step_model_switching",
+      "terminal_visualization_instructions",
       "tool_call_mcp_elicitation",
       "tool_suggest",
+      "unbounded_connection_retries",
       "unified_exec",
+      "unified_exec_zsh_fork",
       "use_agent_identity",
       "workspace_dependencies",
+      "write_stdin_approval",
     ]);
+    expect(
+      call.args.filter((_value, index) => call.args[index - 1] === "--enable"),
+    ).toEqual(["skip_host_skill_discovery"]);
     expect(call.args).toContain(
       'model_catalog_json="/isolated/codex-judge/model-catalog.json"',
     );
     expect(call.args).toContain(
       "tools.experimental_request_user_input={enabled=false}",
     );
+    expect(call.args).toContain('cli_auth_credentials_store="file"');
     expect(call.args).toContain('default_permissions="pi_permission_judge"');
     expect(call.args).toContain(
       'permissions.pi_permission_judge.filesystem={":root"="deny","/isolated/codex-judge"="read"}',
@@ -366,8 +391,11 @@ describe("Codex CLI permission judge", () => {
           slug: "gpt-5.6-luna",
           shell_type: "disabled",
           apply_patch_tool_type: null,
+          include_plugin_usage_instructions: false,
+          include_apps_usage_instructions: false,
           input_modalities: ["text"],
           supports_search_tool: false,
+          node_repl_disabled: true,
           tool_mode: "direct",
           multi_agent_version: null,
         },
