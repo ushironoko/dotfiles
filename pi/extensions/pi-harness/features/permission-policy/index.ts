@@ -34,17 +34,15 @@ import {
   type JudgeOutcome,
   type PermissionJudge,
 } from "./judge";
+import { permissionJudgeRuntimeOptions } from "./judge-runtime";
 import {
   evaluateCommandWithAudit,
-  gitReadCwdTarget,
-  hasProjectSensitiveMutation,
-  hasUnverifiedProjectMutationNavigation,
-  isSandboxResidualVerdict,
   loadRules,
   type AllowRule,
   type AuditedVerdict,
   type LoadedRules,
 } from "./rules";
+import { routePermissionCommand } from "./routing";
 import {
   createActiveSkillBashAllowResolver,
   evaluateCommandWithSkillAllows,
@@ -53,7 +51,6 @@ import {
   type ActiveSkillBashAllowResolver,
   type SkillInvocation,
 } from "./skill-allow";
-import { leadingTrustedCdTarget } from "./trusted-cd";
 import {
   PERMISSION_AUDIT_UNAVAILABLE_REASON,
   type PermissionAuditIntegration,
@@ -72,8 +69,6 @@ const readPermissionRules = (): string | undefined => {
 
 const MALFORMED_REASON =
   "permission-policy: bash ツール入力が不正なため実行をブロックしました（command が文字列ではありません）";
-const JUDGE_DISABLED_RESIDUAL_REASON =
-  "Codex判定器が無効なため、sandbox内でも動的・不透明なコマンドには確認が必要です";
 const CODEX_JUDGE_ASK_FEEDBACK =
   "[pi-harness permission feedback] The Codex verifier returned ASK for this command. The user approved this one execution; do not treat that approval as an automatic ALLOW label for later commands.";
 
@@ -260,7 +255,10 @@ const setupPermissionPolicy = (
   const judge =
     options.judge ??
     (judgeConfig?.enabled === true
-      ? createPermissionJudge(judgeConfig)
+      ? createPermissionJudge(
+          judgeConfig,
+          permissionJudgeRuntimeOptions(config.paths.home),
+        )
       : undefined);
   const taskTracker = options.taskTracker ?? createPermissionTaskTracker();
   const consumedCodexStageModes = consumeCodexStageCapability(config.isChild);
@@ -559,8 +557,9 @@ const setupPermissionPolicy = (
         signal !== undefined && "aborted" in signal && signal.aborted === true;
 
       let projectDiscovery: PermissionProjectContext | undefined;
+      let projectResolved = false;
       let gitCwdNavigation: PermissionLeadingNavigation | undefined;
-      let trustedGitReadCwdTarget: string | undefined;
+      let gitCwdResolved = false;
       let result = evaluateCommandWithSkillAllows(
         command,
         evaluationRules,
@@ -583,11 +582,14 @@ const setupPermissionPolicy = (
         } else if (gitCwd !== null && ctx.cwd !== undefined) {
           const candidate = resolve(ctx.cwd, gitCwd);
           projectDiscovery = await discoverProject(ctx.cwd, signal, candidate);
+          projectResolved = true;
+          gitCwdResolved = true;
+          gitCwdNavigation = projectDiscovery.leadingNavigation;
           permissionAudit?.updateContext(event.toolCallId, {
             project: projectDiscovery,
-            ...(projectDiscovery.leadingNavigation === undefined
+            ...(gitCwdNavigation === undefined
               ? {}
-              : { gitCwd: projectDiscovery.leadingNavigation }),
+              : { gitCwd: gitCwdNavigation }),
           });
           if (
             projectDiscovery.leadingNavigation?.scope !== "listed-worktree" ||
@@ -692,18 +694,52 @@ const setupPermissionPolicy = (
         );
       };
 
-      if (result.verdict === "ask") {
-        const readCwdTarget = gitReadCwdTarget(command);
-        if (readCwdTarget !== undefined && ctx.cwd !== undefined) {
-          const candidate = resolve(ctx.cwd, readCwdTarget);
-          projectDiscovery = await discoverProject(ctx.cwd, signal, candidate);
-          gitCwdNavigation = projectDiscovery.leadingNavigation;
-          permissionAudit?.updateContext(event.toolCallId, {
-            project: projectDiscovery,
-            ...(gitCwdNavigation === undefined
-              ? {}
-              : { gitCwd: gitCwdNavigation }),
-          });
+      const route = () =>
+        routePermissionCommand({
+          command,
+          rules,
+          ...(executionBoundary === undefined
+            ? {}
+            : { boundary: executionBoundary }),
+          judgeAvailable: judge !== undefined,
+          initialResult: result,
+          projectResolved,
+          ...(projectDiscovery === undefined
+            ? {}
+            : { project: projectDiscovery }),
+          ...(projectDiscovery?.leadingNavigation === undefined
+            ? {}
+            : { leadingNavigation: projectDiscovery.leadingNavigation }),
+          gitCwdResolved,
+          ...(gitCwdNavigation === undefined
+            ? {}
+            : { gitCwd: gitCwdNavigation }),
+          onEvaluation: (phase, evaluated) => {
+            result = evaluated;
+            recordDeterministic(event.toolCallId, phase, evaluated);
+          },
+        });
+      let routingDecision = route();
+      while (routingDecision.route === "context") {
+        const { requirement, target } = routingDecision;
+        if (requirement === "git-c") {
+          gitCwdResolved = true;
+          if (ctx.cwd !== undefined && target !== undefined) {
+            const candidate = resolve(ctx.cwd, target);
+            projectDiscovery = await discoverProject(
+              ctx.cwd,
+              signal,
+              candidate,
+            );
+            projectResolved = true;
+            gitCwdNavigation = projectDiscovery.leadingNavigation;
+            permissionAudit?.updateContext(event.toolCallId, {
+              project: projectDiscovery,
+              ...(gitCwdNavigation === undefined
+                ? {}
+                : { gitCwd: gitCwdNavigation }),
+            });
+          }
           if (isAborted()) {
             permissionAudit?.addStage(event.toolCallId, {
               type: "error",
@@ -721,7 +757,15 @@ const setupPermissionPolicy = (
           const verifiedGitCwd =
             gitCwdNavigation?.scope === "listed-worktree" &&
             gitCwdNavigation.sameRepository;
-          if (!verifiedGitCwd) {
+          if (verifiedGitCwd) {
+            permissionAudit?.addStage(event.toolCallId, {
+              type: "scope",
+              phase: "git-c",
+              verdict: "allow",
+              reasonCode: "git-c-listed-worktree",
+              navigation: gitCwdNavigation,
+            });
+          } else if (isEscalated) {
             permissionAudit?.addStage(event.toolCallId, {
               type: "scope",
               phase: "git-c",
@@ -733,259 +777,155 @@ const setupPermissionPolicy = (
                 ? {}
                 : { navigation: gitCwdNavigation }),
             });
-            if (!isEscalated) {
-              return confirm(
-                "検証できないGit作業場所を使用しますか？",
-                "git -C の対象を登録済みの同一リポジトリworktree内と確認できませんでした",
-                "git-c-unverified",
-                "git-c-scope",
-              );
-            }
-          } else {
-            permissionAudit?.addStage(event.toolCallId, {
-              type: "scope",
-              phase: "git-c",
-              verdict: "allow",
-              reasonCode: "git-c-listed-worktree",
-              navigation: gitCwdNavigation,
-            });
-            trustedGitReadCwdTarget = readCwdTarget;
-            result = evaluateCommandWithAudit(command, evaluationRules, {
-              ...sandboxEvaluationOptions,
-              trustedGitCwdTarget: readCwdTarget,
-              ...(projectDiscovery.kind !== "git"
+          }
+        } else {
+          projectResolved = true;
+          if (ctx.cwd !== undefined) {
+            projectDiscovery = await discoverProject(ctx.cwd, signal, target);
+            permissionAudit?.updateContext(event.toolCallId, {
+              project: projectDiscovery,
+              ...(target === undefined ||
+              projectDiscovery.leadingNavigation === undefined
                 ? {}
-                : {
-                    trustedReadContext: {
-                      cwd: projectDiscovery.cwd,
-                      navigableRoots: projectDiscovery.navigableRoots,
-                    },
-                  }),
+                : { leadingNavigation: projectDiscovery.leadingNavigation }),
+              ...(gitCwdNavigation === undefined
+                ? {}
+                : { gitCwd: gitCwdNavigation }),
             });
-            recordDeterministic(event.toolCallId, "verified-git-c", result);
+          }
+          if (isAborted()) {
+            permissionAudit?.addStage(event.toolCallId, {
+              type: "error",
+              component: "permission-policy",
+              phase: "project-discovery",
+              verdict: "error",
+              reasonCode: "parent-aborted",
+            });
+            return finalizeBlocked(
+              event.toolCallId,
+              "parent-aborted",
+              "the active pi operation was cancelled",
+            );
+          }
+          if (target !== undefined) {
+            const leadingNavigation = projectDiscovery?.leadingNavigation;
+            const verifiedLeadingNavigation =
+              leadingNavigation?.scope === "listed-worktree" &&
+              leadingNavigation.sameRepository;
+            if (verifiedLeadingNavigation) {
+              permissionAudit?.addStage(event.toolCallId, {
+                type: "scope",
+                phase: "leading-navigation",
+                verdict: "allow",
+                reasonCode: "leading-navigation-listed-worktree",
+                navigation: leadingNavigation,
+              });
+            } else if (isEscalated) {
+              permissionAudit?.addStage(event.toolCallId, {
+                type: "scope",
+                phase: "leading-navigation",
+                verdict: "ask",
+                reasonCode: "leading-navigation-unverified",
+                reason:
+                  "登録済みの同一リポジトリworktreeへの移動と確認できませんでした",
+                ...(leadingNavigation === undefined
+                  ? {}
+                  : { navigation: leadingNavigation }),
+              });
+            }
           }
         }
+        routingDecision = route();
       }
-      if (result.verdict === "deny") {
-        return finalizeBlocked(
-          event.toolCallId,
-          result.audit.reasonCode,
-          result.reason,
-        );
-      }
-      if (result.verdict === "ask" && !isEscalated) {
-        return confirm(
-          "危険なコマンドを実行しますか？",
-          result.reason,
-          result.audit.reasonCode,
-          "deterministic-policy",
-        );
-      }
-
-      const leadingCdTarget = leadingTrustedCdTarget(command);
-      const parserUnverified =
-        effectSandboxed &&
-        (result.audit.basis === "parse-error" ||
-          result.audit.basis === "depth-limit");
-      const projectSensitiveMutation =
-        !parserUnverified && hasProjectSensitiveMutation(command);
-      const unverifiedMutationNavigation =
-        !parserUnverified &&
-        hasUnverifiedProjectMutationNavigation(
-          command,
-          leadingCdTarget !== undefined,
-        );
-      if (unverifiedMutationNavigation) {
-        const reason =
-          "プロジェクト変更前の作業場所を検証できないため確認が必要です";
-        permissionAudit?.addStage(event.toolCallId, {
-          type: "scope",
-          phase: "mutation-navigation",
-          verdict: "ask",
-          reasonCode: "mutation-navigation-unverified",
-          reason,
-        });
-        if (!isEscalated) {
-          return confirm(
-            "検証できない移動後のプロジェクト変更を実行しますか？",
-            reason,
-            "mutation-navigation-unverified",
-            "mutation-navigation",
-          );
+      if (routingDecision.route === "mechanical") {
+        if (
+          routingDecision.phase === "git-c" ||
+          routingDecision.phase === "mutation-navigation" ||
+          routingDecision.phase === "leading-navigation" ||
+          routingDecision.phase === "project-mutation"
+        ) {
+          let navigation: PermissionLeadingNavigation | undefined;
+          if (routingDecision.phase === "git-c") {
+            navigation = gitCwdNavigation;
+          } else if (routingDecision.phase === "leading-navigation") {
+            navigation = projectDiscovery?.leadingNavigation;
+          }
+          permissionAudit?.addStage(event.toolCallId, {
+            type: "scope",
+            phase: routingDecision.phase,
+            verdict: routingDecision.verdict,
+            reasonCode: routingDecision.reasonCode,
+            reason: routingDecision.reason,
+            ...(navigation === undefined ? {} : { navigation }),
+          });
         }
-      }
-      // Context-free allows remain cheap, but an allow cannot bypass verified
-      // leading navigation or the verified-project floor for a Git mutation.
-      if (
-        result.verdict === "allow" &&
-        leadingCdTarget === undefined &&
-        !projectSensitiveMutation &&
-        !isEscalated
-      ) {
-        return undefined;
-      }
-      if (
-        judge === undefined &&
-        leadingCdTarget === undefined &&
-        !projectSensitiveMutation &&
-        !isEscalated
-      ) {
-        return effectSandboxed && isSandboxResidualVerdict(result)
-          ? confirm(
-              "動的なsandbox内コマンドを実行しますか？",
-              JUDGE_DISABLED_RESIDUAL_REASON,
-              "judge-disabled-sandbox-residual",
-              "codex-judge",
-            )
-          : undefined;
-      }
-      const project =
-        ctx.cwd === undefined
-          ? undefined
-          : (projectDiscovery ??
-            (await discoverProject(ctx.cwd, signal, leadingCdTarget)));
-      const leadingNavigation =
-        leadingCdTarget === undefined ? undefined : project?.leadingNavigation;
-      permissionAudit?.updateContext(event.toolCallId, {
-        ...(project === undefined ? {} : { project }),
-        ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
-        ...(gitCwdNavigation === undefined ? {} : { gitCwd: gitCwdNavigation }),
-      });
-      if (isAborted()) {
-        permissionAudit?.addStage(event.toolCallId, {
-          type: "error",
-          component: "permission-policy",
-          phase: "project-discovery",
-          verdict: "error",
-          reasonCode: "parent-aborted",
-        });
-        return finalizeBlocked(
-          event.toolCallId,
-          "parent-aborted",
-          "the active pi operation was cancelled",
-        );
-      }
-      const verifiedLeadingNavigation =
-        leadingCdTarget !== undefined &&
-        leadingNavigation?.scope === "listed-worktree" &&
-        leadingNavigation.sameRepository;
-      if (leadingCdTarget !== undefined && !verifiedLeadingNavigation) {
-        const reason =
-          "登録済みの同一リポジトリworktreeへの移動と確認できませんでした";
-        permissionAudit?.addStage(event.toolCallId, {
-          type: "scope",
-          phase: "leading-navigation",
-          verdict: "ask",
-          reasonCode: "leading-navigation-unverified",
-          reason,
-          ...(leadingNavigation === undefined
-            ? {}
-            : { navigation: leadingNavigation }),
-        });
-        if (!isEscalated) {
-          return confirm(
-            "プロジェクト外へ移動するコマンドを実行しますか？",
-            reason,
-            "leading-navigation-unverified",
-            "leading-navigation",
-          );
-        }
-      }
-      if (verifiedLeadingNavigation) {
-        permissionAudit?.addStage(event.toolCallId, {
-          type: "scope",
-          phase: "leading-navigation",
-          verdict: "allow",
-          reasonCode: "leading-navigation-listed-worktree",
-          navigation: leadingNavigation,
-        });
-      }
-      if (
-        projectSensitiveMutation &&
-        (project === undefined || project.kind === "unavailable")
-      ) {
-        const reason =
-          "プロジェクト境界を検証できないため変更コマンドには確認が必要です";
-        permissionAudit?.addStage(event.toolCallId, {
-          type: "scope",
-          phase: "project-mutation",
-          verdict: "ask",
-          reasonCode: "project-mutation-unverified",
-          reason,
-        });
-        if (!isEscalated) {
-          return confirm(
-            "検証できないプロジェクト変更を実行しますか？",
-            reason,
-            "project-mutation-unverified",
-            "project-mutation",
-          );
-        }
-      }
-      if (result.verdict === "allow" && !isEscalated) return undefined;
-
-      const trustedLeadingCdTarget =
-        leadingCdTarget !== undefined &&
-        leadingNavigation?.scope === "listed-worktree" &&
-        leadingNavigation.sameRepository
-          ? leadingCdTarget
-          : undefined;
-      const trustedReadContext =
-        project?.kind === "git"
-          ? {
-              cwd: trustedLeadingCdTarget ?? project.cwd,
-              navigableRoots: project.navigableRoots,
-            }
-          : undefined;
-      if (
-        trustedLeadingCdTarget !== undefined ||
-        trustedReadContext !== undefined
-      ) {
-        result = evaluateCommandWithAudit(command, evaluationRules, {
-          ...sandboxEvaluationOptions,
-          ...(trustedLeadingCdTarget === undefined
-            ? {}
-            : { trustedLeadingCdTarget }),
-          ...(trustedGitReadCwdTarget === undefined
-            ? {}
-            : { trustedGitCwdTarget: trustedGitReadCwdTarget }),
-          ...(trustedReadContext === undefined ? {} : { trustedReadContext }),
-        });
-        recordDeterministic(event.toolCallId, "verified-project", result);
-        if (result.verdict === "deny") {
+        if (routingDecision.verdict === "deny") {
           return finalizeBlocked(
             event.toolCallId,
-            result.audit.reasonCode,
-            result.reason,
+            routingDecision.reasonCode,
+            routingDecision.reason,
           );
         }
-        if (result.verdict === "ask" && !isEscalated) {
-          return confirm(
-            "危険なコマンドを実行しますか？",
-            result.reason,
-            result.audit.reasonCode,
-            "deterministic-policy",
-          );
+        if (routingDecision.verdict === "allow") return undefined;
+        let confirmation = {
+          title: "危険なコマンドを実行しますか？",
+          challengeSource: "deterministic-policy",
+        };
+        switch (routingDecision.phase) {
+          case "git-c": {
+            confirmation = {
+              title: "検証できないGit作業場所を使用しますか？",
+              challengeSource: "git-c-scope",
+            };
+            break;
+          }
+          case "mutation-navigation": {
+            confirmation = {
+              title: "検証できない移動後のプロジェクト変更を実行しますか？",
+              challengeSource: "mutation-navigation",
+            };
+            break;
+          }
+          case "leading-navigation": {
+            confirmation = {
+              title: "プロジェクト外へ移動するコマンドを実行しますか？",
+              challengeSource: "leading-navigation",
+            };
+            break;
+          }
+          case "project-mutation": {
+            confirmation = {
+              title: "検証できないプロジェクト変更を実行しますか？",
+              challengeSource: "project-mutation",
+            };
+            break;
+          }
+          case "codex-judge": {
+            confirmation = {
+              title:
+                routingDecision.reasonCode === "judge-disabled"
+                  ? "Sandbox外実行を確認しますか？"
+                  : "動的なsandbox内コマンドを実行しますか？",
+              challengeSource: "codex-judge",
+            };
+            break;
+          }
         }
-        if (result.verdict === "allow" && !isEscalated) return undefined;
+        return confirm(
+          confirmation.title,
+          routingDecision.reason,
+          routingDecision.reasonCode,
+          confirmation.challengeSource,
+        );
       }
+
+      const {
+        project,
+        leadingNavigation,
+        gitCwd: routedGitCwd,
+      } = routingDecision;
       if (judge === undefined) {
-        if (isEscalated) {
-          return confirm(
-            "Sandbox外実行を確認しますか？",
-            "Codex判定器が無効なため自動承認できません",
-            "judge-disabled",
-            "codex-judge",
-          );
-        }
-        return effectSandboxed && isSandboxResidualVerdict(result)
-          ? confirm(
-              "動的なsandbox内コマンドを実行しますか？",
-              JUDGE_DISABLED_RESIDUAL_REASON,
-              "judge-disabled-sandbox-residual",
-              "codex-judge",
-            )
-          : undefined;
+        throw new Error("permission routing selected an unavailable judge");
       }
 
       const trackedTask = taskTracker.current();
@@ -1000,7 +940,7 @@ const setupPermissionPolicy = (
         ...(runEvidence === undefined ? {} : { runEvidence }),
         project,
         ...(leadingNavigation === undefined ? {} : { leadingNavigation }),
-        ...(gitCwdNavigation === undefined ? {} : { gitCwd: gitCwdNavigation }),
+        ...(routedGitCwd === undefined ? {} : { gitCwd: routedGitCwd }),
         ...(executionBoundary === undefined
           ? {}
           : {

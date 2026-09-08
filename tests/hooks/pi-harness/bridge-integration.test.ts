@@ -355,8 +355,10 @@ describe("pi-harness hook bridge", () => {
       input: { command: "bun x totally-unknown-package" },
     });
     expect(passedToPolicy?.block).toBe(true);
-    expect(passedToPolicy?.reason).toContain("permission judge should not run");
-    expect(passedToPolicy?.reason).not.toContain("パッケージランナー");
+    expect(passedToPolicy?.reason).toContain("パッケージランナー");
+    expect(passedToPolicy?.reason).not.toContain(
+      "permission judge should not run",
+    );
     expect(permissionSignals).toEqual([
       `${formatChildPermissionSignal(permissionSignalToken)}\n`,
       `${formatChildPermissionSignal(permissionSignalToken)}\n`,
@@ -388,12 +390,8 @@ describe("pi-harness hook bridge", () => {
       }),
       expect.objectContaining({
         type: "deterministic",
-        verdict: "continue",
-      }),
-      expect.objectContaining({
-        type: "judge",
-        outcome: "unavailable",
-        verdict: "error",
+        verdict: "ask",
+        reasonCode: "structural-ask",
       }),
       expect.objectContaining({
         type: "confirmation",

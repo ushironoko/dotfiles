@@ -11,6 +11,7 @@
  *   metadata).
  */
 import { readFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { loadTrustConfig, type TrustConfig } from "./lib/trust";
 import { resolvePaths, type HarnessPaths } from "./lib/paths";
 import {
@@ -58,6 +59,8 @@ const DEFAULT_TOGGLES: Record<ToggleableFeature, boolean> = {
 
 export interface PermissionJudgeConfig {
   enabled: boolean;
+  executablePath: string;
+  expectedExecutableSha256: string;
   model: string;
   timeoutMs: number;
   confirmTimeoutMs: number;
@@ -66,7 +69,9 @@ export interface PermissionJudgeConfig {
 
 export const DEFAULT_PERMISSION_JUDGE_CONFIG: Readonly<PermissionJudgeConfig> =
   {
-    enabled: true,
+    enabled: false,
+    executablePath: "",
+    expectedExecutableSha256: "",
     model: "gpt-5.6-luna",
     timeoutMs: 30_000,
     confirmTimeoutMs: 10_000,
@@ -165,6 +170,16 @@ const validModel = (value: string): boolean =>
   value.length <= 128 &&
   /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value);
 
+const validJudgeExecutablePath = (value: string): boolean =>
+  value.length <= 4_096 &&
+  isAbsolute(value) &&
+  ![...value].some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && (codePoint <= 31 || codePoint === 127);
+  });
+
+const validSha256 = (value: string): boolean => /^[0-9a-f]{64}$/.test(value);
+
 const readPermissionJudgeConfig = (
   localConfigFile: string,
 ): PermissionJudgeConfig => {
@@ -204,6 +219,8 @@ const readPermissionJudgeConfig = (
   const errors: string[] = [];
   const allowedFields = new Set([
     "enabled",
+    "executablePath",
+    "expectedExecutableSha256",
     "model",
     "timeoutMs",
     "confirmTimeoutMs",
@@ -215,6 +232,14 @@ const readPermissionJudgeConfig = (
     value.enabled === undefined
       ? DEFAULT_PERMISSION_JUDGE_CONFIG.enabled
       : value.enabled;
+  const executablePath =
+    value.executablePath === undefined
+      ? DEFAULT_PERMISSION_JUDGE_CONFIG.executablePath
+      : value.executablePath;
+  const expectedExecutableSha256 =
+    value.expectedExecutableSha256 === undefined
+      ? DEFAULT_PERMISSION_JUDGE_CONFIG.expectedExecutableSha256
+      : value.expectedExecutableSha256;
   const model =
     value.model === undefined
       ? DEFAULT_PERMISSION_JUDGE_CONFIG.model
@@ -229,6 +254,25 @@ const readPermissionJudgeConfig = (
       : value.confirmTimeoutMs;
 
   if (typeof enabled !== "boolean") errors.push("enabled");
+  const requiresExecutableIdentity = enabled === true;
+  if (
+    typeof executablePath !== "string" ||
+    (requiresExecutableIdentity && !validJudgeExecutablePath(executablePath)) ||
+    (!requiresExecutableIdentity &&
+      executablePath !== "" &&
+      !validJudgeExecutablePath(executablePath))
+  ) {
+    errors.push("executablePath");
+  }
+  if (
+    typeof expectedExecutableSha256 !== "string" ||
+    (requiresExecutableIdentity && !validSha256(expectedExecutableSha256)) ||
+    (!requiresExecutableIdentity &&
+      expectedExecutableSha256 !== "" &&
+      !validSha256(expectedExecutableSha256))
+  ) {
+    errors.push("expectedExecutableSha256");
+  }
   if (typeof model !== "string" || !validModel(model)) errors.push("model");
   if (
     typeof timeoutMs !== "number" ||
@@ -252,6 +296,16 @@ const readPermissionJudgeConfig = (
       typeof enabled === "boolean"
         ? enabled
         : DEFAULT_PERMISSION_JUDGE_CONFIG.enabled,
+    executablePath:
+      typeof executablePath === "string" &&
+      (executablePath === "" || validJudgeExecutablePath(executablePath))
+        ? executablePath
+        : DEFAULT_PERMISSION_JUDGE_CONFIG.executablePath,
+    expectedExecutableSha256:
+      typeof expectedExecutableSha256 === "string" &&
+      (expectedExecutableSha256 === "" || validSha256(expectedExecutableSha256))
+        ? expectedExecutableSha256
+        : DEFAULT_PERMISSION_JUDGE_CONFIG.expectedExecutableSha256,
     model:
       typeof model === "string" && validModel(model)
         ? model
