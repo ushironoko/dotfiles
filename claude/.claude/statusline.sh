@@ -4,6 +4,7 @@ input=$(cat)
 CURRENT_DIR=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // empty')
 USED_PCT=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
 MODEL_NAME=$(echo "$input" | jq -r '.model.display_name // empty')
+SESSION_ID=$(echo "$input" | jq -r '.session_id // empty')
 
 MODEL_DISPLAY=""
 if [ -n "$MODEL_NAME" ]; then
@@ -71,48 +72,18 @@ EOF
     fi
 fi
 
-# Checks section: always render lint/typecheck/test glyphs when a project is
-# detected. Cache may be absent (hook hasn't completed) or contain "skipped"
-# slots — both states must still be visible to the user. Section is only
-# omitted when no project type can be identified, or when prerequisites
-# (lib, jq) are missing on minimal systems.
-CHECKS_DISPLAY=""
-LIB_PATH="${STATUSLINE_LIB:-$HOME/.claude/hooks/lib/statusline_checks_lib.sh}"
-if [ -n "$CURRENT_DIR" ] && [ -f "$LIB_PATH" ] && command -v jq > /dev/null 2>&1; then
-    # shellcheck disable=SC1090
-    source "$LIB_PATH"
-    PROJECT_ROOT=$(find_project_root "$CURRENT_DIR")
-    if [ -n "$PROJECT_ROOT" ]; then
-        LANG_TYPE=$(detect_project_type "$PROJECT_ROOT")
-        LABEL=$(project_label "$LANG_TYPE")
-        if [ -n "$LABEL" ]; then
-            LINT_ST="pending"
-            TC_ST="pending"
-            TEST_ST="pending"
-            CACHE_FILE=$(cache_file_path "$PROJECT_ROOT")
-            if [ -f "$CACHE_FILE" ]; then
-                CACHE_CONTENT=$(cat "$CACHE_FILE" 2>/dev/null)
-                if printf '%s' "$CACHE_CONTENT" | jq -e . > /dev/null 2>&1; then
-                    CACHED_LABEL=$(printf '%s' "$CACHE_CONTENT" | jq -r '.label // empty')
-                    [ -n "$CACHED_LABEL" ] && LABEL="$CACHED_LABEL"
-                    LINT_ST=$(printf '%s' "$CACHE_CONTENT" | jq -r '.checks.lint.status // "pending"')
-                    TC_ST=$(printf '%s' "$CACHE_CONTENT" | jq -r '.checks.typecheck.status // "pending"')
-                    TEST_ST=$(printf '%s' "$CACHE_CONTENT" | jq -r '.checks.test.status // "pending"')
-                fi
-            fi
-            LINT_G=$(status_to_glyph "$LINT_ST")
-            TC_G=$(status_to_glyph "$TC_ST")
-            TEST_G=$(status_to_glyph "$TEST_ST")
-            CHECKS_DISPLAY=" | ${LABEL} L${LINT_G} T${TC_G} X${TEST_G}"
-        fi
-    fi
+# Session ID section: the session UUID from the statusline input, useful for
+# --resume and transcript lookup. Omitted when the client doesn't send it.
+SESSION_DISPLAY=""
+if [ -n "$SESSION_ID" ]; then
+    SESSION_DISPLAY=" | \033[90m${SESSION_ID}\033[0m"
 fi
 
 DIR_NAME="${CURRENT_DIR##*/}"
 if [ -n "$ORG_REPO" ]; then
-    OUTPUT="${ORG_REPO} | ${DIR_NAME}${GIT_BRANCH}${GIT_DIFF}${CHECKS_DISPLAY}"
+    OUTPUT="${ORG_REPO} | ${DIR_NAME}${GIT_BRANCH}${GIT_DIFF}${SESSION_DISPLAY}"
 else
-    OUTPUT="${DIR_NAME}${GIT_BRANCH}${GIT_DIFF}${CHECKS_DISPLAY}"
+    OUTPUT="${DIR_NAME}${GIT_BRANCH}${GIT_DIFF}${SESSION_DISPLAY}"
 fi
 if [ -n "$MODEL_DISPLAY" ]; then
     OUTPUT="$OUTPUT | $MODEL_DISPLAY"

@@ -22,6 +22,7 @@ ffmpeg = "8.0.1"
 gcloud = "567.0.0"
 "github:koalaman/shellcheck" = "v0.10.0"
 zellij = "0.44.3"
+"github:DataDog/pup" = "latest"
 
 [settings]
 experimental = true

@@ -18,32 +18,29 @@ beforeAll(async () => {
   await fs.access(LIB);
 });
 
-type CheckStatus = "ok" | "fail" | "running" | "skipped";
+const SESSION_ID = "0f9a2b34-5678-4abc-9def-0123456789ab";
 
 const writeCache = async (
   cacheDir: string,
   projectRoot: string,
-  language: "ts" | "moonbit" | "rust",
-  label: "TS" | "MB" | "RS",
-  statuses: { lint: CheckStatus; typecheck: CheckStatus; test: CheckStatus },
 ): Promise<void> => {
   const hash = createHash("sha1").update(projectRoot).digest("hex");
   await fs.mkdir(cacheDir, { recursive: true });
-  const buildSlot = (status: CheckStatus) => ({
-    status,
+  const buildSlot = () => ({
+    status: "ok",
     previous_status: null,
     running_since: null,
-    last_completed_at: status === "skipped" ? null : 12345,
+    last_completed_at: 12345,
   });
   const payload = {
     project_root: projectRoot,
-    language,
-    label,
+    language: "ts",
+    label: "TS",
     updated_at: 12345,
     checks: {
-      lint: buildSlot(statuses.lint),
-      typecheck: buildSlot(statuses.typecheck),
-      test: buildSlot(statuses.test),
+      lint: buildSlot(),
+      typecheck: buildSlot(),
+      test: buildSlot(),
     },
   };
   await fs.writeFile(
@@ -79,169 +76,54 @@ const setupProject = async (): Promise<{ project: string; cache: string }> => {
   return { project, cache };
 };
 
-describe("statusline render: checks section", () => {
+describe("statusline render: session section", () => {
   const tmps: string[] = [];
   afterEach(async () => {
     await Promise.all(tmps.splice(0).map(cleanupTestDirectory));
   });
 
-  test("renders TS L✓ T✓ X✓ when all checks are ok", async () => {
-    const { project, cache } = await setupProject();
+  test("renders the session ID in grey", async () => {
+    const { project } = await setupProject();
     tmps.push(join(project, ".."));
-    await writeCache(cache, project, "ts", "TS", {
-      lint: "ok",
-      typecheck: "ok",
-      test: "ok",
+
+    const r = await runStatusline({
+      workspace: { current_dir: project },
+      session_id: SESSION_ID,
     });
 
-    const r = await runStatusline(
-      { workspace: { current_dir: project } },
-      { STATUSLINE_CACHE_DIR: cache },
-    );
-
-    expect(r.stdout).toContain(
-      "TS L\x1b[32m✓\x1b[0m T\x1b[32m✓\x1b[0m X\x1b[32m✓\x1b[0m",
-    );
+    expect(r.stdout).toContain(`\x1b[90m${SESSION_ID}\x1b[0m`);
   });
 
-  test("renders fail glyph with red color", async () => {
-    const { project, cache } = await setupProject();
-    tmps.push(join(project, ".."));
-    await writeCache(cache, project, "ts", "TS", {
-      lint: "ok",
-      typecheck: "fail",
-      test: "ok",
-    });
-
-    const r = await runStatusline(
-      { workspace: { current_dir: project } },
-      { STATUSLINE_CACHE_DIR: cache },
-    );
-
-    expect(r.stdout).toContain("T\x1b[31m✗\x1b[0m");
-  });
-
-  test("renders running glyph with yellow color", async () => {
-    const { project, cache } = await setupProject();
-    tmps.push(join(project, ".."));
-    await writeCache(cache, project, "ts", "TS", {
-      lint: "running",
-      typecheck: "ok",
-      test: "ok",
-    });
-
-    const r = await runStatusline(
-      { workspace: { current_dir: project } },
-      { STATUSLINE_CACHE_DIR: cache },
-    );
-
-    expect(r.stdout).toContain("L\x1b[33m…\x1b[0m");
-  });
-
-  test("renders skipped glyph with grey color", async () => {
-    const { project, cache } = await setupProject();
-    tmps.push(join(project, ".."));
-    await writeCache(cache, project, "ts", "TS", {
-      lint: "skipped",
-      typecheck: "ok",
-      test: "ok",
-    });
-
-    const r = await runStatusline(
-      { workspace: { current_dir: project } },
-      { STATUSLINE_CACHE_DIR: cache },
-    );
-
-    expect(r.stdout).toContain("L\x1b[90m-\x1b[0m");
-  });
-
-  test("renders all-skipped row with grey dashes when every slot is skipped", async () => {
-    const { project, cache } = await setupProject();
-    tmps.push(join(project, ".."));
-    await writeCache(cache, project, "ts", "TS", {
-      lint: "skipped",
-      typecheck: "skipped",
-      test: "skipped",
-    });
-
-    const r = await runStatusline(
-      { workspace: { current_dir: project } },
-      { STATUSLINE_CACHE_DIR: cache },
-    );
-
-    expect(r.stdout).toContain(
-      "TS L\x1b[90m-\x1b[0m T\x1b[90m-\x1b[0m X\x1b[90m-\x1b[0m",
-    );
-  });
-
-  test("renders pending '?' glyphs when no cache file exists yet", async () => {
-    const { project, cache } = await setupProject();
+  test("omits the session section when session_id is absent", async () => {
+    const { project } = await setupProject();
     tmps.push(join(project, ".."));
 
-    const r = await runStatusline(
-      { workspace: { current_dir: project } },
-      { STATUSLINE_CACHE_DIR: cache },
-    );
+    const r = await runStatusline({ workspace: { current_dir: project } });
 
-    expect(r.stdout).toContain(
-      "TS L\x1b[90m?\x1b[0m T\x1b[90m?\x1b[0m X\x1b[90m?\x1b[0m",
-    );
+    expect(r.stdout.trim()).toBe("proj");
   });
 
-  test("omits section when project type is undetected", async () => {
-    const tmp = await setupTestDirectory("render-no-project");
-    tmps.push(tmp);
-    // No project markers in tmp itself.
-    const cache = join(tmp, "cache");
+  test("does not render the checks section even with a project and cache", async () => {
+    const { project, cache } = await setupProject();
+    tmps.push(join(project, ".."));
+    await writeCache(cache, project);
 
     const r = await runStatusline(
-      { workspace: { current_dir: tmp } },
+      { workspace: { current_dir: project }, session_id: SESSION_ID },
       { STATUSLINE_CACHE_DIR: cache },
     );
 
     expect(r.stdout).not.toContain("TS L");
-    expect(r.stdout).not.toContain("RS L");
-    expect(r.stdout).not.toContain("MB L");
-  });
-
-  test("uses Rust label for Cargo.toml projects", async () => {
-    const tmp = await setupTestDirectory("render-rust");
-    tmps.push(tmp);
-    const project = join(tmp, "proj");
-    await fs.mkdir(project, { recursive: true });
-    await fs.writeFile(join(project, "Cargo.toml"), "[package]\n");
-    const cache = join(tmp, "cache");
-
-    await writeCache(cache, project, "rust", "RS", {
-      lint: "ok",
-      typecheck: "ok",
-      test: "fail",
-    });
-
-    const r = await runStatusline(
-      { workspace: { current_dir: project } },
-      { STATUSLINE_CACHE_DIR: cache },
-    );
-
-    expect(r.stdout).toContain(
-      "RS L\x1b[32m✓\x1b[0m T\x1b[32m✓\x1b[0m X\x1b[31m✗\x1b[0m",
-    );
+    expect(r.stdout).toContain(`\x1b[90m${SESSION_ID}\x1b[0m`);
   });
 
   test("falls back from workspace.current_dir to .cwd", async () => {
-    const { project, cache } = await setupProject();
+    const { project } = await setupProject();
     tmps.push(join(project, ".."));
-    await writeCache(cache, project, "ts", "TS", {
-      lint: "ok",
-      typecheck: "ok",
-      test: "ok",
-    });
 
-    const r = await runStatusline(
-      { cwd: project },
-      { STATUSLINE_CACHE_DIR: cache },
-    );
+    const r = await runStatusline({ cwd: project, session_id: SESSION_ID });
 
-    expect(r.stdout).toContain("TS L\x1b[32m✓\x1b[0m");
+    expect(r.stdout).toContain("proj");
+    expect(r.stdout).toContain(`\x1b[90m${SESSION_ID}\x1b[0m`);
   });
 });

@@ -14,6 +14,14 @@ Utilize `dig` skills for information gathering. Unearth information that users h
 - Specify exact versions: `module@5.5.1` (NOT `^5.0.0` or `@latest`)
 - Do not commit to git until explicitly instructed by the user
 
+## Code Comments
+
+- Do not write code comments. Comments are weak information: they are fragile against change, have lower information density than code, and pollute context
+- If something truly cannot be expressed in the implementation and a comment is unavoidable:
+  - Write the WHY, never the WHAT
+  - Keep it within 200 characters
+  - Do not describe the history of how the code was created or changed
+
 ## TypeScript Projects
 
 - Check for lock files and use the appropriate package manager:

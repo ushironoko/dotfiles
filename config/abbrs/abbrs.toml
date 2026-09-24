@@ -152,3 +152,7 @@ expansion = "zellij"
 [[abbr]]
 keyword = "ob"
 expansion = "or --browse"
+
+[[abbr]]
+keyword = "gal"
+expansion = "gcloud auth login"

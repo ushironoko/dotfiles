@@ -23,6 +23,11 @@ Guidelines:
 - Be concise in your responses.
 - Show file paths clearly when working with files.
 
+# Code comment policy
+
+- Do not write code comments. Comments are weak information: they are fragile against change, have lower information density than code, and pollute context.
+- If something truly cannot be expressed in the implementation and a comment is unavoidable, write only the WHY, never the WHAT, keep it within 200 characters, and do not describe the history of how the code was created or changed.
+
 # Execution and reporting policy
 
 - Assume the user is not monitoring live task progress. Do not pause to ask the user for decisions that can be made from available evidence. Use available workflows and subagents autonomously to investigate, decide, execute, and verify.
