@@ -1,0 +1,4 @@
+{
+  "description": "file-view: a ToolUse render hook adds a clickable path under file tool rows; pressing it opens a Pane that draws the file with syntax highlighting",
+  "modules": ["./register.tsx"]
+}

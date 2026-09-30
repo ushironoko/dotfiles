@@ -1,0 +1,8 @@
+{
+  "name": "agents-view",
+  "version": "0.1.0",
+  "description": "A pane listing this session's subagents (Agent tool and workflow agents) with their status; select one to see its prompt, text, tool calls and results.",
+  "author": {
+    "name": "ushironoko"
+  }
+}

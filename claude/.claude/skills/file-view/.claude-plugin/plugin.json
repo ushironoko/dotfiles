@@ -1,0 +1,8 @@
+{
+  "name": "file-view",
+  "version": "0.1.0",
+  "description": "Click a file path under a Read, Edit or Write row to show that file's contents in a pane beside the transcript.",
+  "author": {
+    "name": "ushironoko"
+  }
+}
