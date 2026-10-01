@@ -1,0 +1,8 @@
+{
+  "name": "pr-view",
+  "version": "0.1.0",
+  "description": "A pane listing the project root repository's open pull requests with titles; click one to open it in the browser.",
+  "author": {
+    "name": "ushironoko"
+  }
+}

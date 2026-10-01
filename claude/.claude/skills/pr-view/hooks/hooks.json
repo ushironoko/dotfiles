@@ -1,0 +1,4 @@
+{
+  "description": "pr-view: /prs toggles a Pane listing open PRs of the project root repo via gh; pressing a row opens its URL in the browser",
+  "modules": ["./register.tsx"]
+}

@@ -37,6 +37,9 @@
     "defaultMode": "auto"
   },
   "model": "opus[1m]",
+  "env": {
+    "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
+  },
   "enableAllProjectMcpServers": true,
   "hooks": {
     "Notification": [
