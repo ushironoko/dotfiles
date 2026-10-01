@@ -28,12 +28,14 @@ template below already implements it; start from that template.
 
 ## Layout patterns
 
-- **KPI cards:** a flex row of equal-width cards, each a label + a big value.
 - **Bar / progress chart:** a track `<div>` with a filled `<div>` whose `width: N%`
   encodes the value; a single muted accent fill, with the number printed alongside.
 - **Tables:** plain `<table>` with `border-collapse`, a hairline header underline and
   hairline row separators (no zebra fills); numbers right-aligned in monospace.
 - **Sections:** a heading + subtitle, generous padding, a hairline divider between groups.
+- **Box-and-arrow figure:** positioned HTML boxes (`data-node`) over an inline SVG of
+  lines with filled arrowhead paths (`data-edge`). Never use SVG `<text>` or `marker-end`
+  — satoru drops both. Contract and the fix loop: `figures.md`.
 - **Status list:** a glyph (`● ◐ ○`) + identifier + plain note, with a legend — state is
   shown by glyph and word, never by color (see `design-format.md`, rule 4).
 
@@ -104,32 +106,14 @@ status shown by glyph + word rather than color. Adapt the content; keep the stru
         color: var(--ink-muted);
         margin-bottom: 16px;
       }
-      .kpis {
-        display: flex;
+      .lead {
+        font-size: 14px;
+        line-height: 1.7;
+        color: var(--ink);
       }
-      .kpi {
-        flex: 1;
-        padding: 0 20px;
-        border-left: 1px solid var(--hairline);
-      }
-      .kpi:first-child {
-        padding-left: 0;
-        border-left: none;
-      }
-      .kpi .label {
-        font-size: 12px;
-        color: var(--ink-muted);
-      }
-      .kpi .value {
-        font-size: 28px;
-        font-weight: 700;
+      .lead code {
+        font-family: var(--mono);
         color: var(--ink-strong);
-        margin-top: 6px;
-      }
-      .kpi .delta {
-        font-size: 12px;
-        color: var(--ink-muted);
-        margin-top: 4px;
       }
       .bars {
         display: flex;
@@ -200,24 +184,11 @@ status shown by glyph + word rather than color. Adapt the content; keep the stru
 
     <div class="rule"></div>
 
-    <h2>主要指標</h2>
-    <div class="kpis">
-      <div class="kpi">
-        <div class="label">総売上</div>
-        <div class="value">¥1,240</div>
-        <div class="delta">前年同期比 +18%</div>
-      </div>
-      <div class="kpi">
-        <div class="label">新規顧客</div>
-        <div class="value">342</div>
-        <div class="delta">前年同期比 +27%</div>
-      </div>
-      <div class="kpi">
-        <div class="label">解約率</div>
-        <div class="value">2.1%</div>
-        <div class="delta">前年同期比 −0.4pt</div>
-      </div>
-    </div>
+    <h2>結論</h2>
+    <p class="lead">
+      売上の伸びは東日本が牽引している。価格改定は全プランに適用を終え、次の焦点は
+      <code>onboarding_v2</code> による解約率の改善である。
+    </p>
 
     <div class="rule"></div>
 
@@ -303,5 +274,7 @@ These restate the design format (`design-format.md`) as quick reminders:
 - Where explanation is needed, write paragraphs led by their conclusion (topic sentence
   first) and order sections so understanding builds in stages — premise, then dependent
   detail, then result.
+- Do not open with a row of tallies or big-value tiles; open with the conclusion or the
+  first section (rule 8).
 - Define every symbolic label (`A-1`, codes, acronyms) in a footnote/glossary block at
   the bottom; render the token the same way (monospace) in the body and the note.

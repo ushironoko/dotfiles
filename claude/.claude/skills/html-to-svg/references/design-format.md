@@ -2,10 +2,10 @@
 
 This is the **default design format** for every SVG this skill produces. The reader
 must understand the report from its structure, hierarchy, and reading flow — not from
-color. Color is decoration; it never carries meaning. Apply all seven rules below unless
+color. Color is decoration; it never carries meaning. Apply all eight rules below unless
 the user explicitly asks for a different style.
 
-## The seven rules
+## The eight rules
 
 ### 1. Whitespace controls information density
 
@@ -72,6 +72,16 @@ the user explicitly asks for a different style.
 - This extends rule 4's legend (glyph → word) to coded labels: every non-obvious mark in
   the report has a written explanation the reader can find.
 
+### 8. No headline tallies
+
+- Never open a report with a row of counts or big numbers ("12 files changed",
+  "8 tasks done", "3 issues found"). A tally of deliverables says nothing about what was
+  done or why it matters.
+- Open with the content itself: the conclusion, the first section, or the finding the
+  reader needs.
+- A number belongs only where it is the data being reported — a table cell or a bar
+  value answering a question — never as a standalone big-value tile.
+
 ## Palette
 
 Two ramps. Pick light (reads as a document) or dark (reads as a console). Use the ink
@@ -118,14 +128,11 @@ sand `#9a8c6f`, moss `#6b7064`. Pick one and use it sparingly.
     `text-transform: uppercase`, `--ink-muted`.
   - Title: `22–24px`, weight `700`, `--ink-strong`.
   - Body: `13–14px`, weight `400`, `--ink`.
-  - Big value (KPI): `26–30px`, weight `700`, `--ink-strong`.
 - Separate sections with a `1px` hairline rule plus generous margin, not with colored
   blocks.
 
 ## Patterns that follow the rules
 
-- **KPI row:** equal columns separated by a left hairline (`border-left`), each a small
-  muted label, a large strong value, and a small muted delta line. No colored cards.
 - **Bar chart:** `grid-template-columns: <name> 1fr <value>`. A hairline-bordered track
   holds a single-accent fill whose `width: N%` is the value; the numeric value sits in a
   monospace column at the right. Length and the printed number both carry the data.

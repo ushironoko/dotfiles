@@ -91,6 +91,13 @@ document at `<html>` instead. (With jsdom hydration the doctype is normalized aw
 jsdom is an optional dependency and, when absent, the CLI silently falls back to the
 raw path — so do not rely on it; just drop the doctype.)
 
+## Gotcha: inline SVG renders shapes only
+
+Inside an inline `<svg>`, satoru draws strokes and filled shapes but silently drops
+`<text>`, `<marker>` (arrowheads from `marker-end`), and `<foreignObject>`; verified with
+1.0.13 and 1.0.15. Put text in HTML positioned over the SVG and draw arrowheads as filled
+paths (see `figures.md`).
+
 ## Other formats (out of scope here, for reference)
 
 The same command yields PNG/WebP/PDF by changing the `-o` extension or `-f`. This skill
