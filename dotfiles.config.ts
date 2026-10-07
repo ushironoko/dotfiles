@@ -47,8 +47,6 @@ const sharedAgentSkills = [
 // name collision (pi 0.80.6 docs/skills.md), so these shadow the shared
 // Claude-vocabulary versions for pi only.
 const piForkedSkills = [
-  "dig",
-  "plan-review",
   "restoring-session",
   "smart-compact",
   "start-work",
@@ -56,7 +54,7 @@ const piForkedSkills = [
 ] as const;
 
 // Pi-only skills that do not shadow a shared harness skill.
-const piOnlySkills = ["permission-audit-analysis", "project-memory"] as const;
+const piOnlySkills = ["project-memory"] as const;
 
 export default defineConfig({
   mappings: [

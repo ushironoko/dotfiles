@@ -722,32 +722,19 @@ hook is advisory):
 
 Templates: `pi/skills/start-work/references/multi-model-workflows.md`.
 
-## Skills (6 forks + 2 pi-only skills)
+## Skills (4 forks + 1 pi-only skill)
 
-`start-work` / `write-session` / `restoring-session` / `plan-review` / `dig`
-/ `smart-compact` are forked into `pi/skills/` with pi vocabulary
-(worktree_create / task_completed / subagent / workflow tools instead of
-Claude hooks and Task tools). The remaining shared skills arrive via
-`~/.agents/skills` unchanged.
-
-`permission-audit-analysis` is a pi-only workflow for body-free permission-log
-summary and top-ASK analysis, explicit sensitive inspection, private unlabeled
-candidate export, and private human-reviewed staging-corpus assembly. It never
-infers labels from observed approval or judge output and does not automatically
-edit rules or
-the checked-in qualification corpus. Invoke it with
-`/skill:permission-audit-analysis`.
+`start-work` / `write-session` / `restoring-session` / `smart-compact` are
+forked into `pi/skills/` with pi vocabulary (worktree_create / task_completed /
+subagent / workflow tools instead of Claude hooks and Task tools). The tracked
+Pi settings exclude `~/.agents/skills`, leaving shared Claude/Codex skills
+unchanged and outside Pi's discovery.
 
 `project-memory` is a pi-only durable-knowledge workflow. It requires
 recall-before-put, keeps already represented content as a no-op, restricts
 logical paths to `project/`, `feedback/`, and `reference/`, and excludes
 secrets, transcripts, full diffs, and generated blobs. Invoke it with
 `/skill:project-memory`.
-
-Collision behavior (pi 0.80.6, docs/skills.md): discovery scans
-`~/.pi/agent/skills` before `~/.agents/skills` and keeps the **first** skill
-on a name collision, so the forks shadow the Claude versions for pi. pi may
-log a duplicate-name warning at startup — expected.
 
 ## Permission audit log
 
