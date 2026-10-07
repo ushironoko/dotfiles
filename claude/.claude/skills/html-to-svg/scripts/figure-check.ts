@@ -202,7 +202,10 @@ else
       "";
     const label = `vlmkit ${gate.slice(0, gate[1] === "a11y" ? 3 : 2).join(" ")}`;
     if (r.error)
-      ng(`${label}: not runnable (${r.error.message})`, "bun install -g @mizchi/vlmkit@0.23.0");
+      ng(
+        `${label}: not runnable (${r.error.message})`,
+        "bun install -g @mizchi/vlmkit@0.23.0",
+      );
     else if (r.status === 0) ok(`${label}: ${verdict}`);
     else
       ng(
