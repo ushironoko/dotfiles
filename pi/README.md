@@ -25,7 +25,7 @@ child-process behavior): `tests/fixtures/pi-harness/raw/`.
 
 ```bash
 bun install --frozen-lockfile                           # reproducible local baseline
-bun install -g @earendil-works/pi-coding-agent@0.84.4  # initial known-good global install
+bun install -g @earendil-works/pi-coding-agent@1.0.4   # initial known-good global install
 bun run src/index.ts install                            # deploys the symlinks
 pi                                                      # /login → provider of choice
 bun run check:pi-compat                                 # compile + offline real-pi RPC smoke
@@ -42,14 +42,14 @@ when its public declarations compile the self-contained extensions and its real
 CLI passes the isolated RPC probe. `check:pi-version` remains as a
 backward-compatible alias for `check:pi-compat`.
 
-Pi 0.84.4 provides the fullscreen viewport natively. The tracked settings select
+Pi 1.0.4 provides the fullscreen viewport natively. The tracked settings select
 `tuiMode: "fullscreen"` and `fullscreenScrollbar: "hidden"`, so extension
 widgets, the editor, status, and footer stay in the bottom dock while the
 transcript scrolls without reserving an opaque scrollbar column. PageUp/PageDown
-and Home/End navigate the transcript; their Ctrl variants remain available to
-the editor. The mouse wheel scrolls the region under the pointer, and native
-primary-button dragging selects and copies transcript text. Pi owns mouse-mode
-startup and shutdown for this viewport.
+and Ctrl+Home/Ctrl+End navigate the transcript; Home/End move the editor cursor
+to the line start/end. The mouse wheel scrolls the region under the pointer, and
+native primary-button dragging selects and copies transcript text. Pi owns
+mouse-mode startup and shutdown for this viewport.
 
 Prefer `bun run update:pi` over raw `pi update`. It verifies the current install
 before mutation, acquires an atomic update lock, and records the validated exact
@@ -443,9 +443,9 @@ config, a missing/incompatible native addon, or an effective competing override
 for one of the six built-in names or `hearth_graph` terminates pi at startup
 with exit code 1; there is no built-in fallback. Registration restores the prior
 active built-in names, so replacing `grep` or `find` does not enable either one,
-then activates the new read-only `hearth_graph` tool. Pi 0.84.4 exposes only the first effective tool per
-name: a later inert losing registration cannot be enumerated, but it also cannot
-execute. Hearth checks effective ownership before registration, immediately
+then activates the new read-only `hearth_graph` tool. Pi 1.0.4 exposes only the
+effective tool per name: a later inert losing registration cannot be enumerated,
+but it also cannot execute. Hearth checks effective ownership before registration, immediately
 after registration, before each agent turn, and again at the tool-call boundary.
 
 Hearth decorates the inherited call renderers for those six tools because pi's

@@ -13,8 +13,9 @@ const versions: Record<(typeof PI_BASELINE_PACKAGES)[number], string> = {
   "@earendil-works/pi-coding-agent": "1.2.3",
   "@earendil-works/pi-ai": "1.2.3",
   "@earendil-works/pi-agent-core": "1.2.3",
-  "@earendil-works/pi-client": "1.2.3",
-  "@earendil-works/pi-protocol": "1.2.3",
+  "@earendil-works/chord": "1.2.3",
+  "@earendil-works/pi-codemode": "1.2.3",
+  "@earendil-works/pi-mcp": "1.2.3",
   "@earendil-works/pi-telemetry": "1.2.3",
   "@earendil-works/pi-tui": "1.2.3",
   typebox: "9.8.7",
@@ -62,13 +63,14 @@ afterEach(async () => {
 });
 
 describe("local pi baseline", () => {
-  test("records the complete Pi 0.84 package cohort", () => {
+  test("records the complete Pi 1.0.4 package cohort", () => {
     expect(PI_BASELINE_PACKAGES).toEqual([
       "@earendil-works/pi-coding-agent",
       "@earendil-works/pi-ai",
       "@earendil-works/pi-agent-core",
-      "@earendil-works/pi-client",
-      "@earendil-works/pi-protocol",
+      "@earendil-works/chord",
+      "@earendil-works/pi-codemode",
+      "@earendil-works/pi-mcp",
       "@earendil-works/pi-telemetry",
       "@earendil-works/pi-tui",
       "typebox",

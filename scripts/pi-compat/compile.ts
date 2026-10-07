@@ -39,7 +39,11 @@ export const assertNoLocalPiResolution = (
       );
     }
     if (!absolute.includes("node_modules")) continue;
-    if (!/node_modules\/(?:@earendil-works\/pi-|typebox\/)/.test(absolute)) {
+    if (
+      !/node_modules\/(?:@earendil-works\/(?:pi-|chord\/)|typebox\/)/.test(
+        absolute,
+      )
+    ) {
       continue;
     }
     const belongsToGlobal = [...globalRoots].some(

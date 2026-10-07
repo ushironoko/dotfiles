@@ -16,7 +16,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { PI_BASELINE_PACKAGES } from "./baseline";
+import { PI_KNOWN_PACKAGES } from "./baseline";
 import type { PiCompatibilityResult } from "./index";
 import type { PiInstallation } from "./installation";
 import { runCommand, type CommandResult, type CommandRunner } from "./process";
@@ -1017,7 +1017,7 @@ const fileSystemSnapshotStore: UpdatePiSnapshotStore = {
 };
 
 const packageVersionPattern = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/;
-const piPackageNameSet = new Set<string>(PI_BASELINE_PACKAGES);
+const piPackageNameSet = new Set<string>(PI_KNOWN_PACKAGES);
 const validPackageSpec = (value: string): boolean => {
   const separator = value.lastIndexOf("@");
   return (

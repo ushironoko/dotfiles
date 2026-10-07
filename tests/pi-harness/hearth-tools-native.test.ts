@@ -89,7 +89,7 @@ describe("Hearth-backed pi tool contracts", () => {
     );
     expect(written.content[0]).toEqual({
       type: "text",
-      text: "Successfully wrote 14 bytes to nested/file.txt",
+      text: "Successfully wrote to nested/file.txt",
     });
 
     const result = await read.execute(
@@ -812,17 +812,15 @@ describe("Hearth-backed pi tool contracts", () => {
     });
     const bash = createHearthBashDefinition(cwd, hearth, settings);
 
-    const result = await bash.execute(
-      "bash-signal",
-      { command: "kill -TERM $$" },
-      undefined,
-      undefined,
-      context,
-    );
-    expect(result.content[0]).toEqual({
-      type: "text",
-      text: "(no output)",
-    });
+    await expect(
+      bash.execute(
+        "bash-signal",
+        { command: "kill -TERM $$" },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow("Command terminated without an exit code");
   });
 
   test("bash never retries an indeterminate warm-shell signal", async () => {

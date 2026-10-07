@@ -5,11 +5,28 @@ export const PI_BASELINE_PACKAGES = [
   "@earendil-works/pi-coding-agent",
   "@earendil-works/pi-ai",
   "@earendil-works/pi-agent-core",
+  "@earendil-works/chord",
+  "@earendil-works/pi-codemode",
+  "@earendil-works/pi-mcp",
+  "@earendil-works/pi-telemetry",
+  "@earendil-works/pi-tui",
+  "typebox",
+] as const;
+
+export const PI_LEGACY_BASELINE_PACKAGES = [
+  "@earendil-works/pi-coding-agent",
+  "@earendil-works/pi-ai",
+  "@earendil-works/pi-agent-core",
   "@earendil-works/pi-client",
   "@earendil-works/pi-protocol",
   "@earendil-works/pi-telemetry",
   "@earendil-works/pi-tui",
   "typebox",
+] as const;
+
+export const PI_KNOWN_PACKAGES = [
+  ...PI_BASELINE_PACKAGES,
+  ...PI_LEGACY_BASELINE_PACKAGES,
 ] as const;
 
 const DIRECT_PI_PINS = [
@@ -20,7 +37,7 @@ const DIRECT_PI_PINS = [
 const DIRECT_PI_PIN_SET = new Set<string>(DIRECT_PI_PINS);
 const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
-export type PiBaselinePackage = (typeof PI_BASELINE_PACKAGES)[number];
+export type PiBaselinePackage = (typeof PI_KNOWN_PACKAGES)[number];
 
 interface PackageManifest {
   name?: string;

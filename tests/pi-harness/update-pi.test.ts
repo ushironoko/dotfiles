@@ -12,7 +12,10 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { PiCompatibilityResult } from "../../scripts/pi-compat/index";
-import type { PiInstallation } from "../../scripts/pi-compat/installation";
+import {
+  piCohortPackagesForVersion,
+  type PiInstallation,
+} from "../../scripts/pi-compat/installation";
 import type { CommandResult } from "../../scripts/pi-compat/process";
 import {
   acquireUpdateLock,
@@ -555,6 +558,75 @@ describe("safe pi updater", () => {
     });
     expect(calls).toEqual(["update", "rollback"]);
   });
+
+  test.each([false, true])(
+    "migrates the 0.84 cohort to 1.0.4 with candidate rejection %s",
+    async (rejectCandidate) => {
+      const temp = await paths();
+      const atVersion = (version: string): PiInstallation => ({
+        ...installation(version),
+        corePackages: Object.fromEntries(
+          piCohortPackagesForVersion(version).map((name) => [
+            name,
+            {
+              root: join("/global/node_modules", name),
+              version: name === "typebox" ? "1.3.27" : version,
+              manifest: {},
+            },
+          ]),
+        ),
+      });
+      const previous = atVersion("0.84.4");
+      const candidate = atVersion("1.0.4");
+      let current = previous;
+      const commands: string[][] = [];
+      const update = await updatePiSafely({
+        ...temp,
+        checkCompatibility: async () => {
+          if (rejectCandidate && current === candidate) {
+            throw new Error("candidate incompatible");
+          }
+          return {
+            baseline: {
+              ok: true,
+              issues: [],
+              packages: piCohortPackagesForVersion("1.0.4").map((name) => ({
+                name,
+                lockedVersion: candidate.corePackages[name]?.version,
+              })),
+            },
+            installation: current,
+          };
+        },
+        discover: async () => current,
+        run: async (argv) => {
+          commands.push(argv);
+          current = argv.includes("@earendil-works/pi-coding-agent@1.0.4")
+            ? candidate
+            : previous;
+          return result();
+        },
+      });
+
+      expect(update).toMatchObject({
+        ok: !rejectCandidate,
+        updated: !rejectCandidate,
+        rolledBack: rejectCandidate,
+        currentVersion: rejectCandidate ? "0.84.4" : "1.0.4",
+      });
+      expect(commands[0]?.slice(5)).toEqual(
+        piCohortPackagesForVersion("1.0.4").map(
+          (name) => `${name}@${candidate.corePackages[name]?.version}`,
+        ),
+      );
+      expect(commands[0]).not.toContain("@earendil-works/pi-client@1.0.4");
+      expect(commands[0]).not.toContain("@earendil-works/pi-protocol@1.0.4");
+      if (rejectCandidate) {
+        expect(commands[1]).toContain("@earendil-works/pi-client@0.84.4");
+        expect(commands[1]).toContain("@earendil-works/pi-protocol@0.84.4");
+      }
+    },
+  );
 
   test("keeps recovery state when rollback install exits nonzero despite matching final state", async () => {
     const temp = await paths();

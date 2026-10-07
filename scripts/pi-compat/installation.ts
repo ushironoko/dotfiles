@@ -10,7 +10,11 @@ import {
   resolve,
   sep,
 } from "node:path";
-import { PI_BASELINE_PACKAGES, type PiBaselinePackage } from "./baseline";
+import {
+  PI_BASELINE_PACKAGES,
+  PI_LEGACY_BASELINE_PACKAGES,
+  type PiBaselinePackage,
+} from "./baseline";
 import {
   runCommand,
   type CommandRunner,
@@ -157,9 +161,22 @@ export const piCohortPackagesForVersion = (
   if (parsed === undefined) {
     throw new Error(`global pi package has an invalid version: ${version}`);
   }
+  if (compareVersion(parsed, [0, 99, 0]) >= 0) return PI_BASELINE_PACKAGES;
+  if (compareVersion(parsed, [0, 86, 0]) >= 0) {
+    return PI_BASELINE_PACKAGES.filter(
+      (name) =>
+        name !== "@earendil-works/pi-codemode" &&
+        name !== "@earendil-works/pi-mcp",
+    );
+  }
+  if (compareVersion(parsed, [0, 85, 0]) >= 0) {
+    return [...PI_LEGACY_BASELINE_PACKAGES, "@earendil-works/chord"];
+  }
   return compareVersion(parsed, [0, 84, 0]) >= 0
-    ? PI_BASELINE_PACKAGES
-    : PI_BASELINE_PACKAGES.filter((name) => !PI_084_ADDED_PACKAGES.has(name));
+    ? PI_LEGACY_BASELINE_PACKAGES
+    : PI_LEGACY_BASELINE_PACKAGES.filter(
+        (name) => !PI_084_ADDED_PACKAGES.has(name),
+      );
 };
 
 /** Minimal fail-closed support for the exact/caret ranges in pi manifests. */
