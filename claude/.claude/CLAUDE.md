@@ -2,14 +2,13 @@
 
 # 1. User Communications
 
-Utilize `dig` skills for information gathering. Unearth information that users haven't fully articulated, incorporate it into the requirements, and refine it.
+Unearth information that users haven't fully articulated, incorporate it into the requirements, and refine it.
 
 # 2. Critical Constraints
 
 ## All time requirements
 
 - Regarding technology, always research and apply the latest best practices. Do not rely solely on your own knowledge to make decisions
-- Before PlanExit, review the created plan file using the `plan-review` skill before showing it to the user
 - Use `start-work` skill for non-trivial changes
 - Specify exact versions: `module@5.5.1` (NOT `^5.0.0` or `@latest`)
 - Do not commit to git until explicitly instructed by the user

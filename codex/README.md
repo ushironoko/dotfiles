@@ -61,8 +61,7 @@ harness-owned marker in the shared Git directory, a clean worktree, and
 
 ## Agent synchronization
 
-Four specialist Claude agents are translated without changing their instruction
-bodies. The three `codex-*` bridge agents are converted to native Codex roles so
+The three maintained `codex-*` bridge agents are converted to native Codex roles so
 they do not recursively invoke another Codex process. Their names remain stable
 for existing skills.
 

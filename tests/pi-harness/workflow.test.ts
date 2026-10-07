@@ -477,7 +477,7 @@ describe("pi-harness workflow", () => {
 
   test("enforces a read-only child tool profile", async () => {
     const home = await makeTempDirectory("pi-workflow-read-only");
-    await writeAgents(home, ["rust-reviewer"]);
+    await writeAgents(home, ["custom-reviewer"]);
     const { records, spawnFn } = makeSpawnFn(() => ({ text: "reviewed" }));
     const pi = createFakePi({ cwd: home });
     setupWorkflow(pi, makeConfig(home), { spawnFn });
@@ -490,7 +490,7 @@ describe("pi-harness workflow", () => {
             mode: "single",
             tasks: [
               {
-                agentType: "rust-reviewer",
+                agentType: "custom-reviewer",
                 task: "review",
                 readOnly: true,
               },

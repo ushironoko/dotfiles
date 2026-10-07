@@ -84,12 +84,6 @@ Rules:
 `;
 
 const AGENTS: readonly AgentSpec[] = [
-  { name: "comment-reviewer", sandboxMode: "read-only" },
-  { name: "rust-reviewer", sandboxMode: "read-only" },
-  // The source agent measures first and only writes after explicit user
-  // approval, so it needs a write-capable role for its refactoring phase.
-  { name: "similarity", sandboxMode: "workspace-write" },
-  { name: "tdd-reviewer", sandboxMode: "read-only" },
   {
     name: "codex-reviewer",
     sandboxMode: "read-only",

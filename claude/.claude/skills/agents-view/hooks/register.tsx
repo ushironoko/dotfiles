@@ -110,7 +110,9 @@ const resultTextOf = (content: unknown): string => {
 const resultEntryOf = (content: unknown, isError: boolean): Entry => {
   const text = resultTextOf(content);
   const lines = text === "" ? 0 : text.split("\n").length;
-  const head = lineOf(text.split("\n").find((line) => line.trim() !== "") ?? "");
+  const head = lineOf(
+    text.split("\n").find((line) => line.trim() !== "") ?? "",
+  );
 
   return {
     kind: "result",
@@ -199,7 +201,11 @@ const prunedOf = (
 ): ReadonlyMap<string, Tracked> =>
   agents.size <= MAX_AGENTS
     ? agents
-    : new Map(orderOf(agents).slice(0, MAX_AGENTS).map((one) => [one.id, one]));
+    : new Map(
+        orderOf(agents)
+          .slice(0, MAX_AGENTS)
+          .map((one) => [one.id, one]),
+      );
 
 const signatureOf = (agents: ReadonlyMap<string, Tracked>): string =>
   [...agents.values()]

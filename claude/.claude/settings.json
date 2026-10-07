@@ -1,4 +1,7 @@
 {
+  "env": {
+    "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
+  },
   "permissions": {
     "allow": [
       "Bash(pnpm:*)",
@@ -22,7 +25,8 @@
       "Bash(bit issue search:*)",
       "Read(**)",
       "Read(~/.bashrc)",
-      "Read(~/.zshrc)"
+      "Read(~/.zshrc)",
+      "SendMessage"
     ],
     "deny": [
       "Bash(bit issue claim:*)",
@@ -36,10 +40,7 @@
     ],
     "defaultMode": "auto"
   },
-  "model": "opus[1m]",
-  "env": {
-    "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
-  },
+  "model": "opus",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "Notification": [

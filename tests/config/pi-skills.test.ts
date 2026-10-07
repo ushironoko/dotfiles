@@ -48,7 +48,7 @@ describe("Pi skill installation", () => {
     const mapping = config.mappings.find(
       ({ target }) => target === "~/.agents/skills",
     );
-    for (const skill of ["dig", "plan-review"]) {
+    for (const skill of ["start-work", "restoring-session", "write-session"]) {
       expect(mapping?.include).toContain(skill);
       expect(
         existsSync(resolve(ROOT, "claude/.claude/skills", skill, "SKILL.md")),

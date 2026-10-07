@@ -180,11 +180,24 @@ const statusView = ({ Text }: Kit, listing: Listing) => {
 };
 
 const rowLabelOf = (pr: PullRequest): string =>
-  `#${pr.number}${pr.isDraft ? " [draft]" : ""} ${pr.title}`;
+  `#${pr.number}${pr.isDraft ? " [draft]" : ""} ${pr.title}${pr.author === "" ? "" : ` @${pr.author}`}`;
+
+const matchesOf = (prs: readonly PullRequest[], query: string) => {
+  const needle = query.trim().toLowerCase();
+
+  return needle === ""
+    ? prs
+    : prs.filter((pr) =>
+        [`#${pr.number}`, pr.title, pr.branch, `@${pr.author}`].some((field) =>
+          field.toLowerCase().includes(needle),
+        ),
+      );
+};
 
 export const register = (on: On) => {
   let listing: Listing = { kind: "idle" };
   let notice: string | null = null;
+  let query = "";
   let host: Host | null = null;
   let isOpen = false;
   let generation = 0;
@@ -262,20 +275,25 @@ export const register = (on: On) => {
       return next(e);
     }
 
-    const { Box, Text, Button } = $.ui.resolve(e);
+    const { Box, Text, Button, Input } = $.ui.resolve(e);
     const kit: Kit = { Box, Text, Button };
     const prs = prsOf(listing);
+    const shown = matchesOf(prs, query);
     const current = host;
 
     return (
       <Box flexDirection="column" paddingRight={1}>
         <Box flexDirection="row" justifyContent="space-between">
-          <Text bold>Open PRs {prs.length}</Text>
+          <Text bold>
+            Open PRs{" "}
+            {shown.length === prs.length
+              ? prs.length
+              : `${shown.length}/${prs.length}`}
+          </Text>
           <Button
             key="refresh"
             plain
             dimColor
-            hotkey="r"
             label="↻ refresh"
             onPress={() => {
               if (current !== null) {
@@ -289,10 +307,27 @@ export const register = (on: On) => {
             {listing.root}
           </Text>
         ) : null}
+        <Input
+          key="filter"
+          label="filter "
+          placeholder="title, #number, branch or @author"
+          value={query}
+          onInput={(value) => {
+            query = value;
+            current?.redraw();
+          }}
+          onSubmit={(value) => {
+            query = value;
+            current?.redraw();
+          }}
+        />
         {statusView(kit, listing)}
+        {shown.length === 0 && prs.length > 0 ? (
+          <Text dimColor>No pull requests match "{query.trim()}".</Text>
+        ) : null}
         {notice === null ? null : <Text color="red">{notice}</Text>}
         <Box flexDirection="column">
-          {prs.map((pr) => (
+          {shown.map((pr) => (
             <Box key={`pr:${pr.number}`} flexDirection="column">
               <Button
                 key={`open:${pr.number}`}
@@ -307,7 +342,7 @@ export const register = (on: On) => {
               />
               <Text dimColor wrap="truncate-end">
                 {"   "}
-                {pr.author} · {pr.branch}
+                {pr.branch}
               </Text>
             </Box>
           ))}
@@ -318,6 +353,7 @@ export const register = (on: On) => {
 
   on("ui.close", { id: PANE_ID }, (_, e, next) => {
     isOpen = false;
+    query = "";
     generation += 1;
 
     return next(e);

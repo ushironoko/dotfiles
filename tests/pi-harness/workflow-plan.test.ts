@@ -211,7 +211,7 @@ describe("codex mandate", () => {
       plan([
         fanout([
           { agentType: "claude", task: "review" },
-          { agentType: "rust-reviewer", task: "review" },
+          { agentType: "custom-reviewer", task: "review" },
         ]),
       ]),
       "stages[0]",

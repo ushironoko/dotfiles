@@ -4,10 +4,6 @@ const codexAgentFiles = [
   "codex-poc.toml",
   "codex-reviewer.toml",
   "codex-runner.toml",
-  "comment-reviewer.toml",
-  "rust-reviewer.toml",
-  "similarity.toml",
-  "tdd-reviewer.toml",
 ] as const;
 
 const codexHookFiles = [
@@ -30,12 +26,10 @@ const codexHookFiles = [
 
 const sharedAgentSkills = [
   "create-pr",
-  "dig",
   "empirical-prompt-tuning",
   "html-to-svg",
   "octorus",
   "output-learn",
-  "plan-review",
   "restoring-session",
   "smart-compact",
   "start-work",

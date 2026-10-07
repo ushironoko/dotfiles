@@ -95,9 +95,6 @@ describe("Codex hooks configuration", () => {
 describe("Codex harness deployment", () => {
   test("links every managed child without owning shared parent directories", async () => {
     const agentEntries = await fs.readdir(join(ROOT, "codex/agents"));
-    const skillEntries = await fs.readdir(join(ROOT, "claude/.claude/skills"), {
-      withFileTypes: true,
-    });
     const cases = [
       {
         target: "~/.codex/agents",
@@ -109,10 +106,17 @@ describe("Codex harness deployment", () => {
       },
       {
         target: "~/.agents/skills",
-        expected: skillEntries
-          .filter((entry) => entry.isDirectory())
-          .map((entry) => entry.name)
-          .sort(),
+        expected: [
+          "create-pr",
+          "empirical-prompt-tuning",
+          "html-to-svg",
+          "octorus",
+          "output-learn",
+          "restoring-session",
+          "smart-compact",
+          "start-work",
+          "write-session",
+        ].sort(),
       },
     ];
 
