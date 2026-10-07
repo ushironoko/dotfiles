@@ -1,5 +1,5 @@
-model = "gpt-5.6-sol"
-model_reasoning_effort = "xhigh"
+model = "gpt-6.1-sol"
+model_reasoning_effort = "high"
 personality = "pragmatic"
 service_tier = "fast"
 
@@ -43,6 +43,12 @@ enabled = true
 [plugins."browser@openai-bundled"]
 enabled = true
 
+[plugins."codex-app-tools@openai-bundled"]
+enabled = true
+
+[plugins."unified-computer-use@openai-bundled"]
+enabled = true
+
 [tui]
 notifications = true
 notification_condition = "unfocused"
@@ -56,15 +62,19 @@ status_line = [
   "model-with-reasoning",
   "context-remaining",
 ]
+screen_reader_detection_done = true
 
 [tui.model_availability_nux]
 "gpt-5.5" = 4
 "gpt-5.6-sol" = 4
+gpt-6-astra = 2
+"gpt-6.1-sol" = 3
 
 [desktop]
 usePointerCursors = true
 followUpQueueMode = "queue"
 dock-icon-preference = "codex-system"
+avatar-overlay-mascot-width-px = 80
 
 [desktop.appearanceLightChromeTheme]
 accent = "#339cff"
@@ -107,4 +117,7 @@ max_threads = 12
 max_depth = 1
 job_max_runtime_seconds = 1800
 interrupt_message = true
+
+[shell_environment_policy.set]
+NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "323bc3e687e17d7e377238d9f4c69111c4d0e6219103b6316d8c52082489533b"
 
