@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import settings from "../../claude/.claude/settings.json";
 import config from "../../dotfiles.config";
 
 const ROOT = resolve(import.meta.dir, "../..");
@@ -35,6 +36,30 @@ const SHARED_SKILLS = [
 ];
 
 describe("maintained harness resources", () => {
+  test("disables Claude account skill synchronization", () => {
+    expect(settings.syncClaudeAiSkills).toBe(false);
+  });
+
+  test("ignores downloaded and trashed skills without ignoring maintained sources", () => {
+    const caches = [
+      "claude/.claude/skills/synced/account/example/SKILL.md",
+      "claude/.claude/skills/.trash/example/SKILL.md",
+    ];
+    const result = Bun.spawnSync(
+      [
+        "git",
+        "check-ignore",
+        "--no-index",
+        "--",
+        ...caches,
+        "claude/.claude/skills/start-work/SKILL.md",
+      ],
+      { cwd: ROOT },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString().trim().split("\n")).toEqual(caches);
+  });
+
   test("keeps exactly the maintained roles in both agent directories and mappings", async () => {
     for (const [directory, extension] of [
       ["claude/.claude/agents", ".md"],

@@ -40,3 +40,5 @@ _research/
 .gistdex/
 gistdex.db
 docs/
+/claude/.claude/skills/synced/
+/claude/.claude/skills/.trash/
