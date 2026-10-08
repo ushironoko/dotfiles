@@ -1,6 +1,22 @@
-import { chmod, lstat, mkdir, readFile, symlink } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+} from "node:fs/promises";
 import { join } from "node:path";
-import { expect, test } from "bun:test";
+import { tmpdir } from "node:os";
+import { afterEach, expect, test } from "bun:test";
+import type { InputEventResult as SdkInputEventResult } from "@earendil-works/pi-coding-agent";
+import type { ImageContent } from "@earendil-works/pi-ai";
+import type {
+  InputEvent,
+  PiLike,
+} from "../../pi/extensions/pi-harness/lib/pi-like";
+import { createSdkExtensionRunner } from "./sdk-extension-runner";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import setupHookBridge from "../../pi/extensions/pi-harness/features/hook-bridge/index";
 import type { BridgeHookSpec } from "../../pi/extensions/pi-harness/features/hook-bridge/registry";
@@ -17,6 +33,16 @@ import {
   setupTestDirectory,
 } from "../test-helpers";
 import { createFakePi } from "./fake-pi";
+
+const sdkDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    sdkDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
+  );
+});
 
 const makeConfig = (home: string): HarnessConfig => ({
   isChild: false,
@@ -173,21 +199,117 @@ test("settings input toggles ultracode without registering a conflicting command
 });
 
 test("fake input result matches Pi aggregate transform behavior", async () => {
-  const pi = createFakePi();
-  const images = [{ type: "image" }];
-  pi.on("input", (event) => ({
-    action: "transform",
-    text: event.text.toUpperCase(),
-  }));
-
-  expect(
-    await pi.emitInputResult({
+  const directory = await mkdtemp(join(tmpdir(), "sdk-input-"));
+  sdkDirectories.push(directory);
+  const images: ImageContent[] = [
+    { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+  ];
+  const replacement: ImageContent[] = [
+    { type: "image", data: "d29ybGQ=", mimeType: "image/jpeg" },
+  ];
+  for (const scenario of [
+    "empty",
+    "undefined",
+    "continue",
+    "identity",
+    "chain",
+    "replace",
+    "clear",
+    "handled",
+  ] as const) {
+    const fakeSeen: InputEvent[] = [];
+    const sdkSeen: InputEvent[] = [];
+    const install = (pi: PiLike, seen: InputEvent[]) => {
+      if (scenario === "empty") return;
+      pi.on("input", (event) => {
+        seen.push({ ...event });
+        if (scenario === "undefined") return undefined;
+        if (scenario === "continue") return { action: "continue" };
+        const text =
+          scenario === "identity" ? event.text : event.text.toUpperCase();
+        if (scenario === "replace")
+          return { action: "transform", text, images: replacement };
+        if (scenario === "clear")
+          return { action: "transform", text, images: [] };
+        return { action: "transform", text };
+      });
+      pi.on("input", (event) => {
+        seen.push({ ...event });
+        if (scenario === "handled") return { action: "handled" };
+        if (scenario === "chain")
+          return { action: "transform", text: `${event.text}!` };
+        return { action: "continue" };
+      });
+      pi.on("input", (event) => {
+        seen.push({ ...event });
+        return { action: "continue" };
+      });
+    };
+    const fake = createFakePi();
+    install(fake, fakeSeen);
+    const sdk = await createSdkExtensionRunner(
+      [(api) => install(api, sdkSeen)],
+      directory,
+    );
+    const payload: InputEvent = {
       type: "input",
       text: "request",
       images,
-      source: "interactive",
-    }),
-  ).toEqual({ action: "transform", text: "REQUEST", images });
+      source: "rpc",
+      streamingBehavior: "followUp",
+    };
+    const actual = await sdk.runner.emitInput(
+      "request",
+      images,
+      "rpc",
+      "followUp",
+    );
+    const expectations: Record<typeof scenario, SdkInputEventResult> = {
+      empty: { action: "continue" },
+      undefined: { action: "continue" },
+      continue: { action: "continue" },
+      identity: { action: "continue" },
+      chain: { action: "transform", text: "REQUEST!", images },
+      replace: { action: "transform", text: "REQUEST", images: replacement },
+      clear: { action: "transform", text: "REQUEST", images: [] },
+      handled: { action: "handled" },
+    };
+    const expected = expectations[scenario];
+    expect(actual).toEqual(expected);
+    expect(await fake.emitInputResult(payload)).toEqual(actual);
+    expect(sdkSeen).toEqual(fakeSeen);
+    const seenCounts = {
+      empty: 0,
+      undefined: 3,
+      continue: 3,
+      identity: 3,
+      chain: 3,
+      replace: 3,
+      clear: 3,
+      handled: 2,
+    };
+    expect(sdkSeen).toHaveLength(seenCounts[scenario]);
+    if (
+      scenario === "chain" ||
+      scenario === "handled" ||
+      scenario === "replace" ||
+      scenario === "clear"
+    ) {
+      expect(sdkSeen[1]?.text).toBe("REQUEST");
+      let expectedImages = images;
+      if (scenario === "replace") expectedImages = replacement;
+      if (scenario === "clear") expectedImages = [];
+      expect(sdkSeen[1]?.images).toEqual(expectedImages);
+    }
+    if (scenario === "chain") expect(sdkSeen[2]?.text).toBe("REQUEST!");
+    for (const event of sdkSeen) {
+      expect(event.source).toBe("rpc");
+      expect(event.streamingBehavior).toBe("followUp");
+    }
+    expect(payload.text).toBe("request");
+    expect(payload.images).toBe(images);
+    expect(sdk.errors).toEqual([]);
+  }
 });
 
 test("umbrella consumes settings before later input trackers", async () => {
@@ -209,6 +331,40 @@ test("umbrella consumes settings before later input trackers", async () => {
       }),
     ).toEqual({ action: "handled" });
     expect(reachedLaterTracker).toBe(false);
+
+    const configFile = resolvePaths(home).localConfigFile;
+    writeUltracodeSetting(configFile, false);
+    expect(JSON.parse(await readFile(configFile, "utf8"))).toMatchObject({
+      ultracode: { autoInjectContext: false },
+    });
+
+    let reachedSdkTracker = false;
+    const sdk = await createSdkExtensionRunner(
+      [
+        (api) => setupHarness(api, makeConfig(home)),
+        (api) => {
+          api.on("input", () => {
+            reachedSdkTracker = true;
+            return { action: "continue" };
+          });
+        },
+      ],
+      home,
+    );
+    expect(
+      await sdk.runner.emitInput(
+        "/settings ultracode on",
+        undefined,
+        "interactive",
+      ),
+    ).toEqual({ action: "handled" });
+    expect(reachedSdkTracker).toBe(false);
+    expect(readUltracodeSetting(configFile).autoInjectContext).toBe(true);
+    expect(JSON.parse(await readFile(configFile, "utf8"))).toMatchObject({
+      ultracode: { autoInjectContext: true },
+    });
+    expect(sdk.errors).toEqual([]);
+    await sdk.runner.emit({ type: "session_shutdown", reason: "quit" });
   } finally {
     await cleanupTestDirectory(home);
   }

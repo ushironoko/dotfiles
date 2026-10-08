@@ -118,6 +118,10 @@ export interface FakePi extends PiLike {
   emitBeforeAgentStart(
     payload: BeforeAgentStartEvent,
   ): Promise<AgentStartInjection | undefined>;
+  emitBeforeAgentStartAggregate(payload: BeforeAgentStartEvent): Promise<{
+    messages: NonNullable<AgentStartInjection["message"]>[];
+    systemPrompt?: string;
+  }>;
   emitContext(messages: unknown[]): Promise<unknown[]>;
   emitTurnEnd(payload: TurnEndEvent): Promise<void>;
   emitToolCall(
@@ -339,6 +343,28 @@ export const createFakePi = (
       : { action: "continue" };
   };
 
+  const emitBeforeAgentStart = async (payload: BeforeAgentStartEvent) => {
+    let current = payload;
+    let injection: AgentStartInjection | undefined;
+    const messages: NonNullable<AgentStartInjection["message"]>[] = [];
+    for (const handler of store.before_agent_start) {
+      const result = await handler(current, ctx);
+      if (result === undefined) continue;
+      if (result.message !== undefined) messages.push(result.message);
+      injection = {
+        ...injection,
+        ...(result.message === undefined ? {} : { message: result.message }),
+        ...(result.systemPrompt === undefined
+          ? {}
+          : { systemPrompt: result.systemPrompt }),
+      };
+      if (result.systemPrompt !== undefined) {
+        current = { ...current, systemPrompt: result.systemPrompt };
+      }
+    }
+    return { injection, messages, systemPrompt: current.systemPrompt };
+  };
+
   return {
     events,
     on<K extends PiEventName>(event: K, handler: PiEventHandler<K>) {
@@ -375,28 +401,12 @@ export const createFakePi = (
     },
     emitInputResult,
     async emitBeforeAgentStart(payload) {
-      let current = payload;
-      let injection: AgentStartInjection | undefined;
-      for (const handler of store.before_agent_start) {
-        const result = await handler(current, ctx);
-        if (result === undefined) continue;
-        injection = {
-          ...(injection?.message === undefined
-            ? {}
-            : { message: injection.message }),
-          ...(injection?.systemPrompt === undefined
-            ? {}
-            : { systemPrompt: injection.systemPrompt }),
-          ...(result.message === undefined ? {} : { message: result.message }),
-          ...(result.systemPrompt === undefined
-            ? {}
-            : { systemPrompt: result.systemPrompt }),
-        };
-        if (result.systemPrompt !== undefined) {
-          current = { ...current, systemPrompt: result.systemPrompt };
-        }
-      }
+      const { injection } = await emitBeforeAgentStart(payload);
       return injection;
+    },
+    async emitBeforeAgentStartAggregate(payload) {
+      const { messages, systemPrompt } = await emitBeforeAgentStart(payload);
+      return { messages, systemPrompt };
     },
     async emitContext(messages) {
       let current = structuredClone(messages);
@@ -428,15 +438,22 @@ export const createFakePi = (
     },
     async emitToolResult(payload) {
       let current = payload;
-      let lastPatch: ToolResultPatch | undefined;
+      let combinedPatch: ToolResultPatch | undefined;
       for (const handler of store.tool_result) {
         const patch = await handler(current, ctx);
-        if (patch !== undefined) {
-          lastPatch = patch;
-          current = { ...current, ...patch };
+        if (
+          patch !== undefined &&
+          (patch.content !== undefined || patch.isError !== undefined)
+        ) {
+          combinedPatch = {
+            ...combinedPatch,
+            ...(patch.content === undefined ? {} : { content: patch.content }),
+            ...(patch.isError === undefined ? {} : { isError: patch.isError }),
+          };
+          current = { ...current, ...combinedPatch };
         }
       }
-      return lastPatch;
+      return combinedPatch;
     },
     async emitAgentSettled(payload = { type: "agent_settled" }) {
       for (const handler of store.agent_settled) await handler(payload, ctx);

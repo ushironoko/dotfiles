@@ -80,29 +80,370 @@ const parametersOf = (name: string): unknown => {
  *        Both keep the object OPEN under pi's validator, so drop the key.
  *  - N2: tskm emits `required: []` for all-optional objects; typebox omits it.
  *  - N3: tskm literal members are `{const}`; typebox is `{type:"string",const}`.
- *        Drop `type` on const-bearing nodes.
  */
-const canonicalize = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value !== null && typeof value === "object") {
-    const source = value as Record<string, unknown>;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const canonicalize = (
+  value: unknown,
+  context: "schema" | "schema-map" | "literal" = "schema",
+): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalize(item, context));
+  }
+  if (isRecord(value)) {
     const out: Record<string, unknown> = {};
-    for (const key of Object.keys(source).sort()) {
-      if (key === "additionalProperties") continue;
-      if (
-        key === "required" &&
-        Array.isArray(source[key]) &&
-        (source[key] as unknown[]).length === 0
-      ) {
-        continue;
+    const keys = Object.keys(value);
+    if (
+      typeof value.description === "string" &&
+      !keys.includes("description")
+    ) {
+      keys.push("description");
+    }
+    for (const key of keys.sort()) {
+      if (context === "schema") {
+        if (
+          key === "additionalProperties" &&
+          value.type === "object" &&
+          value[key] === true
+        ) {
+          continue;
+        }
+        if (
+          key === "required" &&
+          Array.isArray(value[key]) &&
+          value[key].length === 0
+        ) {
+          continue;
+        }
+        if (
+          key === "type" &&
+          value.type === "string" &&
+          typeof value.const === "string"
+        ) {
+          continue;
+        }
       }
-      if (key === "type" && "const" in source) continue;
-      out[key] = canonicalize(source[key]);
+      let childContext: typeof context = "literal";
+      if (context === "schema-map") {
+        childContext = "schema";
+      } else if (context === "schema") {
+        if (
+          [
+            "properties",
+            "patternProperties",
+            "$defs",
+            "definitions",
+            "dependentSchemas",
+          ].includes(key)
+        ) {
+          childContext = "schema-map";
+        } else if (
+          [
+            "items",
+            "prefixItems",
+            "additionalItems",
+            "additionalProperties",
+            "unevaluatedItems",
+            "unevaluatedProperties",
+            "contains",
+            "propertyNames",
+            "anyOf",
+            "allOf",
+            "oneOf",
+            "not",
+            "if",
+            "then",
+            "else",
+            "contentSchema",
+          ].includes(key)
+        ) {
+          childContext = "schema";
+        }
+      }
+      Object.defineProperty(out, key, {
+        value: canonicalize(value[key], childContext),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
     }
     return out;
   }
   return value;
 };
+
+describe("schema contract: local comparison oracle qualification", () => {
+  test("preserves inherited string descriptions", () => {
+    const input = {
+      __proto__: { description: "inherited description" },
+      type: "string",
+    };
+    expect(canonicalize(input)).toEqual({
+      type: "string",
+      description: "inherited description",
+    });
+  });
+
+  test("preserves non-enumerable own string descriptions", () => {
+    const input = Object.defineProperty({ type: "string" }, "description", {
+      value: "non-enumerable description",
+      enumerable: false,
+    });
+    expect(canonicalize(input)).toEqual({
+      type: "string",
+      description: "non-enumerable description",
+    });
+  });
+
+  test("preserves own __proto__ schema-map properties", () => {
+    const actual = canonicalize({
+      type: "object",
+      properties: {
+        ["__proto__"]: {
+          type: "string",
+          const: "special",
+          description: "special property",
+        },
+      },
+    });
+    expect(actual).toEqual({
+      type: "object",
+      properties: {
+        ["__proto__"]: { const: "special", description: "special property" },
+      },
+    });
+    if (!isRecord(actual) || !isRecord(actual.properties)) {
+      throw new Error("canonical properties are not an object");
+    }
+    expect(
+      Object.getOwnPropertyDescriptor(actual.properties, "__proto__"),
+    ).toEqual({
+      value: { const: "special", description: "special property" },
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    expect(Object.getPrototypeOf(actual.properties)).toBe(Object.prototype);
+  });
+
+  test("preserves own __proto__ literal data", () => {
+    const actual = canonicalize({
+      const: {
+        ["__proto__"]: {
+          type: "string",
+          const: "special",
+          additionalProperties: true,
+          required: [],
+        },
+      },
+    });
+    expect(actual).toEqual({
+      const: {
+        ["__proto__"]: {
+          type: "string",
+          const: "special",
+          additionalProperties: true,
+          required: [],
+        },
+      },
+    });
+    if (!isRecord(actual) || !isRecord(actual.const)) {
+      throw new Error("canonical const is not an object");
+    }
+    expect(Object.getOwnPropertyDescriptor(actual.const, "__proto__")).toEqual({
+      value: {
+        type: "string",
+        const: "special",
+        additionalProperties: true,
+        required: [],
+      },
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    expect(Object.getPrototypeOf(actual.const)).toBe(Object.prototype);
+  });
+
+  test.each([
+    {
+      name: "documented equivalents at nested schema paths",
+      input: {
+        type: "object",
+        additionalProperties: true,
+        required: [],
+        properties: {
+          mode: { type: "string", const: "single", description: "mode" },
+          nested: { type: "object", additionalProperties: true, required: [] },
+        },
+      },
+      expected: {
+        type: "object",
+        properties: {
+          mode: { const: "single", description: "mode" },
+          nested: { type: "object" },
+        },
+      },
+    },
+    {
+      name: "already omitted equivalents",
+      input: { type: "object", properties: { mode: { const: "single" } } },
+      expected: { type: "object", properties: { mode: { const: "single" } } },
+    },
+    {
+      name: "keyword-named real properties",
+      input: {
+        type: "object",
+        properties: {
+          type: { type: "string" },
+          const: { type: "string" },
+          additionalProperties: { type: "boolean" },
+          required: { type: "array", items: { type: "string" } },
+        },
+      },
+      expected: {
+        type: "object",
+        properties: {
+          type: { type: "string" },
+          const: { type: "string" },
+          additionalProperties: { type: "boolean" },
+          required: { type: "array", items: { type: "string" } },
+        },
+      },
+    },
+    {
+      name: "schema-map names and literal object values",
+      input: {
+        $defs: {
+          type: { type: "string", const: "x" },
+          const: { type: "number" },
+        },
+        patternProperties: { additionalProperties: { type: "string" } },
+        const: {
+          type: "string",
+          const: "x",
+          additionalProperties: true,
+          required: [],
+        },
+      },
+      expected: {
+        $defs: { type: { const: "x" }, const: { type: "number" } },
+        patternProperties: { additionalProperties: { type: "string" } },
+        const: {
+          type: "string",
+          const: "x",
+          additionalProperties: true,
+          required: [],
+        },
+      },
+    },
+    {
+      name: "openness outside an object schema",
+      input: { additionalProperties: true },
+      expected: { additionalProperties: true },
+    },
+  ])("preserves $name", ({ input, expected }) => {
+    expect(canonicalize(input)).toEqual(expected);
+  });
+
+  test.each([
+    {
+      name: "nested description moved to its parent",
+      input: { type: "array", description: "item", items: { type: "string" } },
+      expected: {
+        type: "array",
+        items: { type: "string", description: "item" },
+      },
+    },
+    {
+      name: "same-multiset sibling descriptions swapped",
+      input: {
+        type: "object",
+        properties: { a: { description: "B" }, b: { description: "A" } },
+      },
+      expected: {
+        type: "object",
+        properties: { a: { description: "A" }, b: { description: "B" } },
+      },
+    },
+    {
+      name: "enum order changed",
+      input: { enum: ["b", "a"] },
+      expected: { enum: ["a", "b"] },
+    },
+    {
+      name: "required order changed",
+      input: { type: "object", required: ["b", "a"] },
+      expected: { type: "object", required: ["a", "b"] },
+    },
+    {
+      name: "nested schema array order changed",
+      input: {
+        type: "array",
+        items: { anyOf: [{ const: "b" }, { const: "a" }] },
+      },
+      expected: {
+        type: "array",
+        items: { anyOf: [{ const: "a" }, { const: "b" }] },
+      },
+    },
+    {
+      name: "nested literal array order changed",
+      input: {
+        const: [
+          [1, 2],
+          [4, 3],
+        ],
+      },
+      expected: {
+        const: [
+          [1, 2],
+          [3, 4],
+        ],
+      },
+    },
+    {
+      name: "closed root object",
+      input: { type: "object", additionalProperties: false },
+      expected: { type: "object" },
+    },
+    {
+      name: "closed nested object",
+      input: {
+        type: "array",
+        items: { type: "object", additionalProperties: false },
+      },
+      expected: { type: "array", items: { type: "object" } },
+    },
+    {
+      name: "schema-valued openness",
+      input: { type: "object", additionalProperties: { type: "string" } },
+      expected: { type: "object" },
+    },
+    {
+      name: "incompatible type with a string const",
+      input: { type: "number", const: "single" },
+      expected: { const: "single" },
+    },
+    {
+      name: "string type with a non-string const",
+      input: { type: "string", const: 1 },
+      expected: { const: 1 },
+    },
+    {
+      name: "undocumented numeric literal normalization",
+      input: { type: "number", const: 1 },
+      expected: { const: 1 },
+    },
+    {
+      name: "nested cardinality changed",
+      input: { type: "array", items: { type: "array", maxItems: 2 } },
+      expected: { type: "array", items: { type: "array", maxItems: 3 } },
+    },
+  ])("distinguishes $name", ({ input, expected }) => {
+    expect(canonicalize(input)).not.toEqual(expected);
+  });
+});
 
 const baseline = typeboxBaseline as Record<string, unknown>;
 
@@ -144,25 +485,6 @@ describe("schema contract: equivalence to typebox baseline", () => {
       );
     });
   }
-
-  test("every field description survives the migration", () => {
-    // Collect all description strings from a schema tree.
-    const descriptions = (value: unknown): string[] => {
-      if (Array.isArray(value)) return value.flatMap(descriptions);
-      if (value !== null && typeof value === "object") {
-        const source = value as Record<string, unknown>;
-        const here =
-          typeof source.description === "string" ? [source.description] : [];
-        return [...here, ...Object.values(source).flatMap(descriptions)];
-      }
-      return [];
-    };
-    for (const toolName of Object.keys(expectedSchemas)) {
-      const expected = descriptions(expectedSchemas[toolName]).sort();
-      const actual = descriptions(parametersOf(toolName)).sort();
-      expect(actual).toEqual(expected);
-    }
-  });
 });
 
 describe("schema contract: registered shape (snapshot)", () => {

@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import type { ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import {
   loadConfig,
   type HarnessConfig,
@@ -19,6 +23,7 @@ import { setupHarness } from "../../pi/extensions/pi-harness/index";
 import type { PiLike } from "../../pi/extensions/pi-harness/lib/pi-like";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import { createFakePi } from "./fake-pi";
+import { createSdkExtensionRunner } from "./sdk-extension-runner";
 
 const config = (
   name: string,
@@ -45,26 +50,19 @@ const config = (
 
 const registration = (value: HarnessConfig) => {
   const pi = createFakePi({ cwd: value.paths.home });
-  const registerKnownEvent = pi.on.bind(pi);
-  const childOnlyEvents = new Set([
-    "agent_start",
-    "message_end",
-    "message_start",
-    "session_tree",
-  ]);
-  Object.assign(pi, {
-    on(
-      event: Parameters<typeof pi.on>[0],
-      handler: Parameters<typeof pi.on>[1],
-    ) {
-      if (childOnlyEvents.has(event)) return;
-      registerKnownEvent(event, handler);
+  const commandCalls: Parameters<PiLike["registerCommand"]>[] = [];
+  const api: PiLike = {
+    ...pi,
+    registerCommand(...args) {
+      commandCalls.push(args);
+      pi.registerCommand(...args);
     },
-  });
-  setupHarness(pi, value);
+  };
+  setupHarness(api, value);
   return {
     pi,
     commands: pi.commands,
+    commandCalls,
     shortcuts: pi.shortcuts,
     tools: pi.tools.map((tool) => tool.name),
   };
@@ -121,11 +119,10 @@ describe("pi-harness coordination browser composition", () => {
       }),
     );
     expect(
-      [...registered.commands].filter((name) => name === "subagents"),
-    ).toHaveLength(1);
-    expect(
-      [...registered.commands].filter((name) => name === "bit-issues"),
-    ).toHaveLength(1);
+      registered.commandCalls
+        .map(([name]) => name)
+        .filter((name) => name === "subagents" || name === "bit-issues"),
+    ).toEqual(["subagents", "bit-issues"]);
     expect(registered.tools).toEqual(
       expect.arrayContaining([
         "subagent",
@@ -701,5 +698,190 @@ describe("project memory browser lifecycle", () => {
     await runtime.emit("session_shutdown");
     expect(runtime.getComponent()).toBeUndefined();
     expect(runtime.hasTerminalInput()).toBe(false);
+  });
+});
+
+describe("public SDK composition authority", () => {
+  const directories: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      directories
+        .splice(0)
+        .map((directory) => fs.rm(directory, { recursive: true, force: true })),
+    );
+  });
+
+  test("accumulates before-agent messages and chains the exact system prompt", async () => {
+    const directory = await fs.mkdtemp(join(tmpdir(), "sdk-before-agent-"));
+    directories.push(directory);
+    const fakeSeen: string[] = [];
+    const sdkSeen: string[] = [];
+    const first = (pi: PiLike, seen: string[]) => {
+      pi.on("before_agent_start", (event) => {
+        seen.push(event.systemPrompt ?? "");
+        return {
+          message: {
+            customType: "first",
+            content: "first context",
+            display: false,
+          },
+          systemPrompt: `${event.systemPrompt}:first`,
+        };
+      });
+    };
+    const second = (pi: PiLike, seen: string[]) => {
+      pi.on("before_agent_start", (event) => {
+        seen.push(event.systemPrompt ?? "");
+        return {
+          message: {
+            customType: "second",
+            content: "second context",
+            display: false,
+          },
+          systemPrompt: `${event.systemPrompt}:second`,
+        };
+      });
+    };
+    const fake = createFakePi();
+    first(fake, fakeSeen);
+    second(fake, fakeSeen);
+    const sdk = await createSdkExtensionRunner(
+      [
+        (api) => first(api, sdkSeen),
+        (api) => second(api, sdkSeen),
+        (api) => {
+          api.on("before_agent_start", (event, ctx) => {
+            expect(ctx.getSystemPrompt()).toBe("base:first:second");
+            expect(event.systemPrompt).toBe(ctx.getSystemPrompt());
+          });
+        },
+      ],
+      directory,
+    );
+    const expected = [
+      { customType: "first", content: "first context", display: false },
+      { customType: "second", content: "second context", display: false },
+    ];
+    const actual = await sdk.runner.emitBeforeAgentStart("request", undefined, {
+      cwd: directory,
+      forceSystemPrompt: "base",
+    });
+    const aggregate = await fake.emitBeforeAgentStartAggregate({
+      type: "before_agent_start",
+      prompt: "request",
+      systemPrompt: "base",
+    });
+    expect(actual.messages).toEqual(expected);
+    expect(actual.messages).toEqual(aggregate.messages);
+    expect(actual.systemPromptOptions.forceSystemPrompt).toBe(
+      "base:first:second",
+    );
+    expect({ systemPrompt: aggregate.systemPrompt }).toEqual({
+      systemPrompt: actual.systemPromptOptions.forceSystemPrompt,
+    });
+    expect(fakeSeen).toEqual(["base", "base:first"]);
+    expect(sdkSeen).toEqual(fakeSeen);
+    expect(sdk.sessionManager.getEntries()).toEqual([]);
+    expect(sdk.errors).toEqual([]);
+
+    const partial = await fake.emitBeforeAgentStart({
+      type: "before_agent_start",
+      prompt: "request",
+      systemPrompt: "base",
+    });
+    expect(partial).toEqual({
+      message: expected[1],
+      systemPrompt: "base:first:second",
+    });
+    const empty = createFakePi();
+    expect(
+      await empty.emitBeforeAgentStart({
+        type: "before_agent_start",
+        prompt: "request",
+      }),
+    ).toBeUndefined();
+    expect(
+      await empty.emitBeforeAgentStartAggregate({
+        type: "before_agent_start",
+        prompt: "request",
+        systemPrompt: "base",
+      }),
+    ).toEqual({ messages: [], systemPrompt: "base" });
+  });
+
+  test("composes the supported tool-result fields without dropping an earlier patch", async () => {
+    const directory = await fs.mkdtemp(join(tmpdir(), "sdk-tool-result-"));
+    directories.push(directory);
+    const fakeSeen: unknown[] = [];
+    const sdkSeen: unknown[] = [];
+    const first = (pi: PiLike) => {
+      pi.on("tool_result", () => ({
+        content: [{ type: "text", text: "patched" }],
+      }));
+    };
+    const second = (pi: PiLike, seen: unknown[]) => {
+      pi.on("tool_result", (event) => {
+        seen.push({ content: event.content, isError: event.isError });
+        return { isError: true, content: undefined };
+      });
+    };
+    const third = (pi: PiLike, seen: unknown[]) => {
+      pi.on("tool_result", (event) => {
+        seen.push({ content: event.content, isError: event.isError });
+        return {};
+      });
+    };
+    const fake = createFakePi();
+    first(fake);
+    second(fake, fakeSeen);
+    third(fake, fakeSeen);
+    const sdk = await createSdkExtensionRunner(
+      [
+        (api) => first(api),
+        (api) => second(api, sdkSeen),
+        (api) => third(api, sdkSeen),
+      ],
+      directory,
+    );
+    const event = {
+      type: "tool_result",
+      toolName: "read",
+      toolCallId: "composition-result",
+      input: { path: "fixture.txt" },
+      content: [{ type: "text", text: "original" }],
+      details: { retained: true },
+      isError: false,
+    } satisfies ToolResultEvent;
+    const actual = await sdk.runner.emitToolResult(event);
+    const patch = await fake.emitToolResult(event);
+    expect(actual?.content).toEqual([{ type: "text", text: "patched" }]);
+    expect(actual?.isError).toBe(true);
+    expect(actual?.details).toEqual({ retained: true });
+    expect(patch).toEqual({
+      content: [{ type: "text", text: "patched" }],
+      isError: true,
+    });
+    expect(fakeSeen).toEqual([
+      { content: [{ type: "text", text: "patched" }], isError: false },
+      { content: [{ type: "text", text: "patched" }], isError: true },
+    ]);
+    expect(sdkSeen).toEqual(fakeSeen);
+    expect(event.content).toEqual([{ type: "text", text: "original" }]);
+    expect(event.isError).toBe(false);
+    const noop = createFakePi();
+    noop.on("tool_result", () => ({}));
+    const nativeNoop = await createSdkExtensionRunner(
+      [
+        (api) => {
+          api.on("tool_result", () => ({}));
+        },
+      ],
+      directory,
+    );
+    expect(await noop.emitToolResult(event)).toBeUndefined();
+    expect(await nativeNoop.runner.emitToolResult(event)).toBeUndefined();
+    expect(sdk.errors).toEqual([]);
+    expect(nativeNoop.errors).toEqual([]);
   });
 });
