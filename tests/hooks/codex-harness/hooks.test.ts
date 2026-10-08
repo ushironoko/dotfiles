@@ -80,6 +80,18 @@ describe("Codex hooks configuration", () => {
       Object.keys(config.hooks).every((event) => supportedEvents.has(event)),
     ).toBe(true);
     expect(config.hooks.SubagentStop).toBeUndefined();
+    expect(config.hooks.SessionStart).toBeUndefined();
+    expect(config.hooks.Stop).toEqual([
+      {
+        hooks: [
+          {
+            type: "command",
+            command: 'bash "$HOME/.codex/hooks/stop/asuku_notification.sh"',
+            timeout: 10,
+          },
+        ],
+      },
+    ]);
     for (const groups of Object.values(config.hooks)) {
       for (const group of groups) {
         for (const handler of group.hooks) {
@@ -323,48 +335,6 @@ describe("PostToolUse adapters", () => {
 
     expect(result.exitCode).toBe(0);
     expect(await Bun.file(join(directory, "format-ran")).exists()).toBe(false);
-  });
-
-  test("Codex status runner records checks for a trusted project", async () => {
-    const directory = await setupTestDirectory("codex-status-runner");
-    const cacheDirectory = join(directory, "cache");
-    const configPath = join(directory, "config.toml");
-    tempDirectories.push(directory);
-    await fs.writeFile(
-      join(directory, "package.json"),
-      JSON.stringify({
-        scripts: { lint: "true", typecheck: "true", test: "true" },
-      }),
-    );
-    await fs.writeFile(join(directory, "bun.lock"), "");
-    await fs.writeFile(join(directory, "tsconfig.json"), "{}");
-    await fs.writeFile(
-      configPath,
-      `[projects.${JSON.stringify(directory)}]\ntrust_level = "trusted"\n`,
-    );
-
-    const result = await runHook(
-      "lib/statusline_checks_run.sh",
-      {},
-      directory,
-      {
-        CODEX_CONFIG_PATH: configPath,
-        STATUSLINE_CACHE_DIR: cacheDirectory,
-        STATUSLINE_NOW_OVERRIDE: "1000",
-      },
-      [directory],
-    );
-
-    expect(result.exitCode).toBe(0);
-    const cacheFiles = await fs.readdir(cacheDirectory);
-    const cacheFile = cacheFiles.find((name) => name.endsWith(".json"));
-    expect(cacheFile).toBeDefined();
-    const cache = JSON.parse(
-      await fs.readFile(join(cacheDirectory, cacheFile ?? ""), "utf8"),
-    ) as { checks: Record<string, { status: string }> };
-    expect(cache.checks.lint?.status).toBe("ok");
-    expect(cache.checks.typecheck?.status).toBe("ok");
-    expect(cache.checks.test?.status).toBe("ok");
   });
 });
 

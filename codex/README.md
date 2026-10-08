@@ -26,9 +26,8 @@ deployment with `bun run src/index.ts install -d` before applying it.
 | `PreToolUse`        | Native `PreToolUse` adapters                                |
 | `PermissionRequest` | Native `PermissionRequest` adapter                          |
 | `PostToolUse`       | Native `PostToolUse` adapters for `apply_patch`             |
-| `SessionStart`      | Native hook; long checks self-background                    |
 | `UserPromptSubmit`  | Native hook with Codex-native ultracode context             |
-| `Stop`              | Native hook; long checks self-background                    |
+| `Stop`              | Native notification hook                                   |
 | `Notification`      | TUI notifications plus the `Stop` notification adapter      |
 | `TaskCompleted`     | Explicit task-complete command after parent verification    |
 | `WorktreeCreate`    | Native App worktree, or explicit create-and-reopen adapter  |
@@ -43,12 +42,10 @@ ultracode context.
 Codex 0.144.1 does not provide the last four Claude event names, asynchronous
 command handlers, or command-rendered status lines. The compatibility layer
 preserves their outcomes without registering unsupported handlers. The TUI
-status line therefore uses built-in Codex items; lint/typecheck/test state is
-still refreshed by the lifecycle checks but cannot be injected into that footer.
+status line therefore uses built-in Codex items.
 
-User hooks are global, so the formatter and background quality checks fail
-closed unless the current path is covered by a `trust_level = "trusted"` project
-in the live Codex config. Missing Bun/TOML support, a missing config, or a
+User hooks are global, so the formatter fails closed unless the current path
+is covered by a `trust_level = "trusted"` project in the live Codex config. Missing Bun/TOML support, a missing config, or a
 parse error means repository-defined commands are skipped. `SubagentStop` is
 not used for task closure because the event does not prove successful
 completion.

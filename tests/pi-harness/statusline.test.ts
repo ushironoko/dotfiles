@@ -11,7 +11,6 @@ import setupStatusline, {
 import {
   formatModelName,
   type GitStatus,
-  parseStatuslineCache,
   remainingContextPercent,
   renderExtensionStatuses,
   renderStatusline,
@@ -19,12 +18,12 @@ import {
   type StatuslineSnapshot,
   visibleStatuslineWidth,
 } from "../../pi/extensions/pi-harness/features/statusline/render";
-import type { DetachedSpawnFunction } from "../../pi/extensions/pi-harness/lib/detached";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import type {
   FooterComponentLike,
   ThemeLike,
   TuiLike,
+  ToolResultEvent,
 } from "../../pi/extensions/pi-harness/lib/pi-like";
 import { worktreeIdentityDetails } from "../../pi/extensions/pi-harness/lib/worktree-identity";
 import { cleanupTestDirectory, setupTestDirectory } from "../test-helpers";
@@ -75,14 +74,6 @@ const makeConfig = (
   paths: resolvePaths(home),
 });
 
-const waitFor = async (condition: () => Promise<boolean>): Promise<void> => {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (await condition()) return;
-    await Bun.sleep(5);
-  }
-  throw new Error("Timed out waiting for condition");
-};
-
 const sampleCache = (label = "TS") => ({
   project_root: "/repo",
   language: "ts",
@@ -122,7 +113,6 @@ const seedCache = async (
   await fs.writeFile(join(cacheDir, `${hash}.json`), JSON.stringify(payload));
 };
 
-/** Make a directory look like a TS project so the root detector accepts it. */
 const markAsProject = async (root: string): Promise<void> => {
   await fs.writeFile(join(root, "package.json"), "{}");
   await fs.writeFile(join(root, "tsconfig.json"), "{}");
@@ -182,8 +172,6 @@ describe("Claude-compatible statusline rendering", () => {
     const lines = renderStatusline(
       snapshot({
         git: gitStatus({ additions: 12, deletions: 3 }),
-        projectLabel: "TS",
-        cache: sampleCache(),
       }),
       {
         branch: "feat/pi",
@@ -195,7 +183,7 @@ describe("Claude-compatible statusline rendering", () => {
     );
 
     expect(lines).toEqual([
-      "ushironoko/dotfiles | dotfiles | feat/pi | +12 -3 | TS L✓ T… X✗ | Opus 4.8 | 42%",
+      "ushironoko/dotfiles | dotfiles | feat/pi | +12 -3 | Opus 4.8 | 42%",
     ]);
   });
 
@@ -264,30 +252,10 @@ describe("Claude-compatible statusline rendering", () => {
     expect(piVisibleWidth(truncated ?? "")).toBeLessThanOrEqual(7);
   });
 
-  test("renders pending checks before the first cache file exists", () => {
-    expect(
-      renderStatusline(
-        snapshot({
-          git: {
-            isRepository: false,
-            additions: 0,
-            deletions: 0,
-          },
-          projectLabel: "TS",
-        }),
-        {},
-        100,
-        identityTheme,
-      ),
-    ).toEqual(["dotfiles | TS L? T? X?"]);
-  });
-
-  test("uses theme colors for metadata, diffs, checks, model, and context", () => {
+  test("uses theme colors for metadata, diffs, model, and context", () => {
     const [line = ""] = renderStatusline(
       snapshot({
         git: gitStatus({ additions: 2, deletions: 1 }),
-        projectLabel: "TS",
-        cache: sampleCache(),
       }),
       { branch: "main", modelName: "Sonnet", remainingContext: 9 },
       200,
@@ -299,12 +267,6 @@ describe("Claude-compatible statusline rendering", () => {
     );
     expect(line).toContain("\u001B[32m+2\u001B[0m");
     expect(line).toContain("\u001B[31m-1\u001B[0m");
-    expect(line).toContain("\u001B[90m | TS L\u001B[0m");
-    expect(line).toContain("L\u001B[0m\u001B[32m✓\u001B[0m");
-    expect(line).toContain("\u001B[90m T\u001B[0m");
-    expect(line).toContain("T\u001B[0m\u001B[33m…\u001B[0m");
-    expect(line).toContain("\u001B[90m X\u001B[0m");
-    expect(line).toContain("X\u001B[0m\u001B[31m✗\u001B[0m");
     expect(line).toContain("\u001B[36mSonnet\u001B[0m");
     expect(line).toContain("\u001B[31m9%\u001B[0m");
   });
@@ -383,35 +345,7 @@ describe("Claude-compatible statusline rendering", () => {
     expect(remainingContextPercent({ percent: null })).toBeUndefined();
   });
 
-  test("malformed inherited status names fall back without reaching the theme", () => {
-    const [line = ""] = renderStatusline(
-      snapshot({
-        projectLabel: "TS",
-        cache: {
-          checks: {
-            lint: { status: "__proto__" },
-            typecheck: { status: "constructor" },
-            test: { status: "toString" },
-          },
-        },
-      }),
-      {},
-      100,
-      ansiTheme,
-    );
-
-    expect(line).toContain(
-      "\u001B[90mushironoko/dotfiles | dotfiles | TS L\u001B[0m" +
-        "\u001B[90m?\u001B[0m" +
-        "\u001B[90m T\u001B[0m\u001B[90m?\u001B[0m" +
-        "\u001B[90m X\u001B[0m\u001B[90m?\u001B[0m",
-    );
-  });
-
-  test("parses cache, remote, and numstat inputs defensively", () => {
-    expect(parseStatuslineCache("not json")).toBeUndefined();
-    expect(parseStatuslineCache('"string"')).toBeUndefined();
-    expect(parseStatuslineCache('{"label":"TS"}')).toEqual({ label: "TS" });
+  test("parses remote and numstat inputs defensively", () => {
     expect(parseOriginRepository("git@github.com:org/repo.git\n")).toBe(
       "org/repo",
     );
@@ -441,26 +375,16 @@ describe("pi-harness statusline lifecycle", () => {
     await runGit(project, ["worktree", "add", "-b", "topic", worktree]);
     const canonicalProject = await fs.realpath(project);
     const canonicalWorktree = await fs.realpath(worktree);
-    const runner = join(
-      resolvePaths(home).claudeHooksDir,
-      "lib/statusline_checks_run.sh",
-    );
-    await fs.mkdir(dirname(runner), { recursive: true });
-    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
 
     const gitReads: string[] = [];
-    const checkLaunches: string[][] = [];
     const pi = createFakePi({ cwd: canonicalProject, gitBranch: "main" });
-    setupStatusline(pi, makeConfig(home, [canonicalProject]), {
-      cacheDir: join(home, "cache"),
+    const config = makeConfig(home, [canonicalProject]);
+    setupStatusline(pi, config, {
       getGitStatus: async (cwd) => {
         gitReads.push(cwd);
         return gitStatus({ repository: undefined });
       },
       getBranch: async (cwd) => (cwd === canonicalWorktree ? "topic" : "main"),
-      spawnDetached: (_command, args) => {
-        checkLaunches.push(args);
-      },
     });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
@@ -479,15 +403,15 @@ describe("pi-harness statusline lifecycle", () => {
       canonicalWorktree,
       canonicalWorktree,
     ]);
-    expect(checkLaunches).toEqual([
-      [
-        runner,
-        canonicalWorktree,
-        canonicalWorktree,
-        details.worktreeIdentity.root.dev,
-        details.worktreeIdentity.root.ino,
-      ],
+
+    config.trust.trustedRoots = [];
+    await pi.emitAgentSettled();
+    expect(gitReads).toEqual([
+      canonicalProject,
+      canonicalWorktree,
+      canonicalWorktree,
     ]);
+    config.trust.trustedRoots = [canonicalProject];
 
     // Git still has stale registration metadata, but neither a plain
     // replacement nor a retargeted symlink may inherit trust.
@@ -503,15 +427,6 @@ describe("pi-harness statusline lifecycle", () => {
       canonicalProject,
       canonicalWorktree,
       canonicalWorktree,
-    ]);
-    expect(checkLaunches).toEqual([
-      [
-        runner,
-        canonicalWorktree,
-        canonicalWorktree,
-        details.worktreeIdentity.root.dev,
-        details.worktreeIdentity.root.ino,
-      ],
     ]);
   });
 
@@ -532,27 +447,16 @@ describe("pi-harness statusline lifecycle", () => {
     const canonicalProject = await fs.realpath(project);
     const canonicalWorktreeA = await fs.realpath(worktreeA);
     const canonicalWorktreeB = await fs.realpath(worktreeB);
-    const runner = join(
-      resolvePaths(home).claudeHooksDir,
-      "lib/statusline_checks_run.sh",
-    );
-    await fs.mkdir(dirname(runner), { recursive: true });
-    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
 
     const gitReads: string[] = [];
-    const checkLaunches: string[][] = [];
     const pi = createFakePi({ cwd: canonicalProject, gitBranch: "main" });
     setupStatusline(pi, makeConfig(home, [canonicalProject]), {
-      cacheDir: join(home, "cache"),
       getGitStatus: async (cwd) => {
         gitReads.push(cwd);
         return gitStatus({ repository: undefined });
       },
       getBranch: async (cwd) =>
         cwd === canonicalWorktreeA ? "topic-a" : "main",
-      spawnDetached: (_command, args) => {
-        checkLaunches.push(args);
-      },
     });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
@@ -565,7 +469,6 @@ describe("pi-harness statusline lifecycle", () => {
       isError: false,
     });
     await pi.emitAgentSettled();
-    expect(checkLaunches).toHaveLength(1);
 
     const foreignGitDir = await gitText(canonicalWorktreeB, [
       "rev-parse",
@@ -616,7 +519,6 @@ describe("pi-harness statusline lifecycle", () => {
       canonicalWorktreeA,
       canonicalWorktreeA,
     ]);
-    expect(checkLaunches).toHaveLength(1);
   });
 
   test("rejects recreation at the same path with the original .git contents", async () => {
@@ -638,26 +540,15 @@ describe("pi-harness statusline lifecycle", () => {
       "rev-parse",
       "--absolute-git-dir",
     ]);
-    const runner = join(
-      resolvePaths(home).claudeHooksDir,
-      "lib/statusline_checks_run.sh",
-    );
-    await fs.mkdir(dirname(runner), { recursive: true });
-    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
 
     const gitReads: string[] = [];
-    const checkLaunches: string[][] = [];
     const pi = createFakePi({ cwd: canonicalProject, gitBranch: "main" });
     setupStatusline(pi, makeConfig(home, [canonicalProject]), {
-      cacheDir: join(home, "cache"),
       getGitStatus: async (cwd) => {
         gitReads.push(cwd);
         return gitStatus({ repository: undefined });
       },
       getBranch: async (cwd) => (cwd === canonicalWorktree ? "topic" : "main"),
-      spawnDetached: (_command, args) => {
-        checkLaunches.push(args);
-      },
     });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
@@ -670,7 +561,6 @@ describe("pi-harness statusline lifecycle", () => {
       isError: false,
     });
     await pi.emitAgentSettled();
-    expect(checkLaunches).toHaveLength(1);
 
     await fs.rm(worktree, { recursive: true, force: true });
     await fs.mkdir(worktree);
@@ -704,7 +594,6 @@ describe("pi-harness statusline lifecycle", () => {
       canonicalWorktree,
       canonicalWorktree,
     ]);
-    expect(checkLaunches).toHaveLength(1);
   });
 
   test("rechecks identity after concurrent Git and backlink validation", async () => {
@@ -723,12 +612,6 @@ describe("pi-harness statusline lifecycle", () => {
     const canonicalWorktree = await fs.realpath(worktree);
     const originalDotGit = await fs.readFile(join(worktree, ".git"));
     const details = await createdWorktreeDetails(canonicalWorktree);
-    const runner = join(
-      resolvePaths(home).claudeHooksDir,
-      "lib/statusline_checks_run.sh",
-    );
-    await fs.mkdir(dirname(runner), { recursive: true });
-    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
 
     let raceEnabled = false;
     let arrivals = 0;
@@ -759,7 +642,6 @@ describe("pi-harness statusline lifecycle", () => {
     };
 
     const gitReads: string[] = [];
-    const checkLaunches: string[][] = [];
     const pi = createFakePi({ cwd: canonicalProject, gitBranch: "main" });
     setupStatusline(pi, makeConfig(home, [canonicalProject]), {
       gitOutput: readGit,
@@ -768,9 +650,6 @@ describe("pi-harness statusline lifecycle", () => {
         return gitStatus({ repository: undefined });
       },
       getBranch: async (cwd) => (cwd === canonicalWorktree ? "topic" : "main"),
-      spawnDetached: (_command, args) => {
-        checkLaunches.push(args);
-      },
     });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
@@ -783,7 +662,6 @@ describe("pi-harness statusline lifecycle", () => {
       isError: false,
     });
     await pi.emitAgentSettled();
-    expect(checkLaunches).toHaveLength(1);
 
     raceEnabled = true;
     await pi.emitAgentSettled();
@@ -793,7 +671,6 @@ describe("pi-harness statusline lifecycle", () => {
       canonicalWorktree,
       canonicalWorktree,
     ]);
-    expect(checkLaunches).toHaveLength(1);
   });
 
   test("accepts a valid relative admin gitdir backlink", async () => {
@@ -822,13 +699,6 @@ describe("pi-harness statusline lifecycle", () => {
     expect(backlinkContents.trim()).toBe(relativeBacklink);
 
     const gitReads: string[] = [];
-    const checkLaunches: string[][] = [];
-    const runner = join(
-      resolvePaths(home).claudeHooksDir,
-      "lib/statusline_checks_run.sh",
-    );
-    await fs.mkdir(dirname(runner), { recursive: true });
-    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
     const pi = createFakePi({ cwd: canonicalProject, gitBranch: "main" });
     setupStatusline(pi, makeConfig(home, [canonicalProject]), {
       getGitStatus: async (cwd) => {
@@ -836,9 +706,6 @@ describe("pi-harness statusline lifecycle", () => {
         return gitStatus({ repository: undefined });
       },
       getBranch: async (cwd) => (cwd === canonicalWorktree ? "topic" : "main"),
-      spawnDetached: (_command, args) => {
-        checkLaunches.push(args);
-      },
     });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
@@ -857,24 +724,13 @@ describe("pi-harness statusline lifecycle", () => {
       canonicalWorktree,
       canonicalWorktree,
     ]);
-    expect(checkLaunches).toEqual([
-      [
-        runner,
-        canonicalWorktree,
-        canonicalWorktree,
-        details.worktreeIdentity.root.dev,
-        details.worktreeIdentity.root.ino,
-      ],
-    ]);
   });
 
-  test("session_start installs a dynamic custom footer from cache", async () => {
+  test("session_start installs a dynamic custom footer", async () => {
     const home = await tempDirectory("pi-statusline-render");
     const project = join(home, "repo");
     await fs.mkdir(project, { recursive: true });
     await markAsProject(project);
-    const cacheDir = join(home, "cache");
-    await seedCache(cacheDir, project, sampleCache("BUN"));
 
     const pi = createFakePi({
       cwd: project,
@@ -883,14 +739,13 @@ describe("pi-harness statusline lifecycle", () => {
       contextUsage: { percent: 58.2 },
     });
     setupStatusline(pi, makeConfig(home, [project]), {
-      cacheDir,
       getGitStatus: async () =>
         gitStatus({ repository: "acme/repo", additions: 5, deletions: 2 }),
     });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
     expect(pi.renderFooter(200)).toEqual([
-      "acme/repo | repo | feat/pi | +5 -2 | BUN L✓ T… X✗ | Opus 4.8 | 42%",
+      "acme/repo | repo | feat/pi | +5 -2 | Opus 4.8 | 42%",
     ]);
     expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toBeUndefined();
     expect(pi.footerRenderRequests).toBeGreaterThan(0);
@@ -987,27 +842,16 @@ describe("pi-harness statusline lifecycle", () => {
     await markAsProject(worktree);
 
     const gitReads: string[] = [];
-    const checkLaunches: string[][] = [];
     let worktreeBranch = "topic";
     let worktreeValid = true;
-    const runner = join(
-      resolvePaths(home).claudeHooksDir,
-      "lib/statusline_checks_run.sh",
-    );
-    await fs.mkdir(dirname(runner), { recursive: true });
-    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
 
     const pi = createFakePi({ cwd: project, gitBranch: "main" });
     setupStatusline(pi, makeConfig(home, [project]), {
-      cacheDir: join(home, "cache"),
       getGitStatus: async (cwd) => {
         gitReads.push(cwd);
         return gitStatus({ repository: undefined });
       },
       getBranch: async (cwd) => (cwd === worktree ? worktreeBranch : "main"),
-      spawnDetached: (_command, args) => {
-        checkLaunches.push(args);
-      },
       validateInheritedWorktree: async () => worktreeValid,
     });
 
@@ -1026,29 +870,19 @@ describe("pi-harness statusline lifecycle", () => {
       }),
       isError: false,
     });
-    expect(pi.renderFooter(100)).toEqual([
-      "topic-worktree | topic | TS L? T? X?",
-    ]);
+    expect(pi.renderFooter(100)).toEqual(["topic-worktree | topic"]);
 
     // The built-in footer provider remains tied to the session checkout. Its
     // stale update must not replace the active worktree branch.
     pi.setGitBranch("stale-main");
     worktreeBranch = "topic-next";
     await pi.emitAgentSettled();
-    expect(pi.renderFooter(100)).toEqual([
-      "topic-worktree | topic-next | TS L? T? X?",
-    ]);
-    expect(checkLaunches).toEqual([[runner, worktree, worktree, "1", "1"]]);
+    expect(pi.renderFooter(100)).toEqual(["topic-worktree | topic-next"]);
 
-    // A later identity failure revokes inherited trust before any Git read or
-    // repository-defined check can run, while retaining the last safe branch.
     worktreeValid = false;
     worktreeBranch = "replacement-branch";
     await pi.emitAgentSettled();
-    expect(pi.renderFooter(100)).toEqual([
-      "topic-worktree | topic-next | TS L? T? X?",
-    ]);
-    expect(checkLaunches).toEqual([[runner, worktree, worktree, "1", "1"]]);
+    expect(pi.renderFooter(100)).toEqual(["topic-worktree | topic-next"]);
     expect(gitReads).toEqual([project, worktree, worktree]);
 
     await pi.emitToolResult({
@@ -1058,8 +892,51 @@ describe("pi-harness statusline lifecycle", () => {
       content: [{ type: "text", text: `Removed worktree: ${worktree}` }],
       isError: false,
     });
-    expect(pi.renderFooter(100)).toEqual(["repo | stale-main | TS L? T? X?"]);
+    expect(pi.renderFooter(100)).toEqual(["repo | stale-main"]);
     expect(gitReads).toEqual([project, worktree, worktree, project]);
+  });
+
+  test("rejects unsuccessful and malformed worktree result identities", async () => {
+    const home = await tempDirectory("pi-statusline-worktree-invalid-result");
+    const project = join(home, "repo");
+    const worktree = join(home, "topic-worktree");
+    await fs.mkdir(project);
+    await fs.mkdir(worktree);
+    let gitReads = 0;
+    const pi = createFakePi({ cwd: project, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home, [project]), {
+      getGitStatus: async () => {
+        gitReads += 1;
+        return gitStatus({ repository: undefined });
+      },
+    });
+    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+    const base: ToolResultEvent = {
+      type: "tool_result",
+      toolName: "worktree_create",
+      input: { name: "topic" },
+      content: [{ type: "text", text: worktree }],
+      isError: false,
+    };
+    const rejected: ToolResultEvent[] = [
+      { ...base, isError: true },
+      { ...base, toolName: "other_tool" },
+      { ...base, content: [] },
+      {
+        ...base,
+        content: [
+          { type: "text", text: worktree },
+          { type: "text", text: worktree },
+        ],
+      },
+      { ...base, content: [{ type: "text", text: "relative-worktree" }] },
+      { ...base, content: [{ type: "text", text: `${worktree}\nextra` }] },
+    ];
+    for (const event of rejected) {
+      await pi.emitToolResult(event);
+      expect(pi.renderFooter(100)).toEqual(["repo | main"]);
+      expect(gitReads).toBe(1);
+    }
   });
 
   test("missing creation details follow display state without inheriting trust", async () => {
@@ -1070,15 +947,8 @@ describe("pi-harness statusline lifecycle", () => {
     await fs.mkdir(worktree, { recursive: true });
     await markAsProject(project);
     await markAsProject(worktree);
-    const runner = join(
-      resolvePaths(home).claudeHooksDir,
-      "lib/statusline_checks_run.sh",
-    );
-    await fs.mkdir(dirname(runner), { recursive: true });
-    await fs.writeFile(runner, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
 
     const gitReads: string[] = [];
-    const checkLaunches: string[][] = [];
     let validatorCalls = 0;
     const pi = createFakePi({ cwd: project, gitBranch: "main" });
     setupStatusline(pi, makeConfig(home, [project]), {
@@ -1087,9 +957,6 @@ describe("pi-harness statusline lifecycle", () => {
         return gitStatus({ repository: undefined });
       },
       getBranch: async () => "main",
-      spawnDetached: (_command, args) => {
-        checkLaunches.push(args);
-      },
       validateInheritedWorktree: async () => {
         validatorCalls += 1;
         return true;
@@ -1106,12 +973,9 @@ describe("pi-harness statusline lifecycle", () => {
     });
     await pi.emitAgentSettled();
 
-    expect(pi.renderFooter(100)).toEqual([
-      "topic-worktree | topic | TS L? T? X?",
-    ]);
+    expect(pi.renderFooter(100)).toEqual(["topic-worktree | topic"]);
     expect(validatorCalls).toBe(0);
     expect(gitReads).toEqual([project]);
-    expect(checkLaunches).toEqual([]);
   });
 
   test("default git collection renders origin and tracked diff totals", async () => {
@@ -1137,167 +1001,165 @@ describe("pi-harness statusline lifecycle", () => {
     );
 
     const pi = createFakePi({ cwd: project, gitBranch: "main" });
-    setupStatusline(pi, makeConfig(home, [project]), {
-      cacheDir: join(home, "cache"),
-    });
+    setupStatusline(pi, makeConfig(home, [project]));
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
 
     expect(pi.renderFooter(200)).toEqual([
-      "owner/project | repo | main | +2 -1 | TS L? T? X?",
+      "owner/project | repo | main | +2 -1",
+    ]);
+    await fs.writeFile(join(project, "source.txt"), "one\ntwo\nthree\n");
+    await pi.emitAgentSettled();
+    expect(pi.renderFooter(200)).toEqual([
+      "owner/project | repo | main | +1 -0",
     ]);
   });
 
-  test("agent_settled launches the checks runner detached for a trusted root", async () => {
-    const home = await tempDirectory("pi-statusline-run");
+  test("lifecycle ignores stale quality caches and executable runners", async () => {
+    const home = await tempDirectory("pi-statusline-retired-checks");
     const project = join(home, "repo");
-    await fs.mkdir(project, { recursive: true });
-    await markAsProject(project);
-    const captureFile = join(home, "runner-called.txt");
+    const worktree = join(home, "topic-worktree");
+    const cacheDir = join(home, "cache");
     const runner = join(
       resolvePaths(home).claudeHooksDir,
       "lib/statusline_checks_run.sh",
     );
-    await fs.mkdir(dirname(runner), { recursive: true });
-    await fs.writeFile(
-      runner,
-      [
-        "#!/bin/bash",
-        `printf '%s\\n' "$1" > "${captureFile}.tmp"`,
-        `mv "${captureFile}.tmp" "${captureFile}"`,
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-
-    const pi = createFakePi({ cwd: project });
-    setupStatusline(pi, makeConfig(home, [project]), {
-      cacheDir: join(home, "cache"),
-      getGitStatus: async () => ({
-        isRepository: false,
-        additions: 0,
-        deletions: 0,
-      }),
-    });
-
-    await pi.emitAgentSettled();
-    await waitFor(async () => {
-      try {
-        await fs.access(captureFile);
-        return true;
-      } catch {
-        return false;
-      }
-    });
-    const captured = await fs.readFile(captureFile, "utf8");
-    expect(captured.trim()).toBe(project);
-  });
-
-  test("passes the canonical trusted root to the runner as a boundary", async () => {
-    const home = await tempDirectory("pi-statusline-boundary");
-    const project = join(home, "repo");
-    await fs.mkdir(project, { recursive: true });
+    const captureFile = join(dirname(runner), "runner-called.txt");
+    await fs.mkdir(project);
     await markAsProject(project);
-    const captureFile = join(home, "runner-args.txt");
-    const runner = join(
-      resolvePaths(home).claudeHooksDir,
-      "lib/statusline_checks_run.sh",
-    );
+    await runGit(project, ["init", "-b", "main"]);
+    await runGit(project, ["config", "user.email", "test@example.com"]);
+    await runGit(project, ["config", "user.name", "Status Test"]);
+    await runGit(project, ["add", "."]);
+    await runGit(project, ["commit", "-m", "initial"]);
+    await runGit(project, ["worktree", "add", "-b", "topic", worktree]);
+    const canonicalProject = await fs.realpath(project);
+    const canonicalWorktree = await fs.realpath(worktree);
     await fs.mkdir(dirname(runner), { recursive: true });
     await fs.writeFile(
       runner,
-      [
-        "#!/bin/bash",
-        `printf '%s\\n%s\\n' "$1" "$2" > "${captureFile}.tmp"`,
-        `mv "${captureFile}.tmp" "${captureFile}"`,
-      ].join("\n"),
+      `#!/bin/bash\nprintf "called\\n" >> "\${0%/*}/runner-called.txt"\n`,
       { mode: 0o755 },
     );
-
-    const pi = createFakePi({ cwd: project });
-    setupStatusline(pi, makeConfig(home, [project]), {
-      cacheDir: join(home, "cache"),
-      getGitStatus: async () => ({
-        isRepository: false,
-        additions: 0,
-        deletions: 0,
-      }),
-    });
-
-    await pi.emitAgentSettled();
-    await waitFor(async () => {
-      try {
-        await fs.access(captureFile);
-        return true;
-      } catch {
-        return false;
+    const previousCache = process.env.STATUSLINE_CACHE_DIR;
+    process.env.STATUSLINE_CACHE_DIR = cacheDir;
+    try {
+      const control = Bun.spawn(["bash", runner], {
+        stdout: "ignore",
+        stderr: "pipe",
+      });
+      expect(await control.exited).toBe(0);
+      expect(await fs.readFile(captureFile, "utf8")).toBe("called\n");
+      await fs.rm(captureFile);
+      const details = await createdWorktreeDetails(canonicalWorktree);
+      for (const label of ["TS", "RS", "MB"]) {
+        await seedCache(cacheDir, canonicalProject, sampleCache(label));
+        await seedCache(cacheDir, canonicalWorktree, sampleCache(label));
+        for (const mode of ["tui", "rpc", "print", "json"] as const) {
+          const pi = createFakePi({
+            cwd: canonicalProject,
+            gitBranch: "main",
+            mode,
+          });
+          setupStatusline(pi, makeConfig(home, [canonicalProject]));
+          await pi.emitSessionStart({
+            type: "session_start",
+            reason: "startup",
+          });
+          await pi.emitToolResult({
+            type: "tool_result",
+            toolName: "worktree_create",
+            input: { name: "topic" },
+            content: [{ type: "text", text: canonicalWorktree }],
+            details,
+            isError: false,
+          });
+          await pi.emitAgentSettled();
+          if (mode === "tui") {
+            expect(pi.renderFooter(200)).toEqual(["topic-worktree | topic"]);
+          } else if (mode === "rpc") {
+            expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toEqual([
+              "topic-worktree | topic",
+            ]);
+          } else {
+            expect(pi.renderFooter(200)).toBeUndefined();
+            expect(pi.widgets.size).toBe(0);
+          }
+          await pi.emitToolResult({
+            type: "tool_result",
+            toolName: "worktree_remove",
+            input: { path: canonicalWorktree, confirmed: true },
+            content: [
+              { type: "text", text: `Removed worktree: ${canonicalWorktree}` },
+            ],
+            isError: false,
+          });
+          await pi.emitAgentSettled();
+          if (mode === "tui") {
+            expect(pi.renderFooter(200)).toEqual(["repo | main"]);
+          } else if (mode === "rpc") {
+            expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toEqual([
+              "repo | main",
+            ]);
+          }
+        }
       }
-    });
-    const captured = await fs.readFile(captureFile, "utf8");
-    const [cwdArgument, boundaryArgument] = captured.trim().split("\n");
-    expect(cwdArgument).toBe(project);
-    expect(await fs.realpath(boundaryArgument ?? "")).toBe(
-      await fs.realpath(project),
-    );
-  });
+      await Bun.sleep(150);
+      expect(await Bun.file(captureFile).exists()).toBe(false);
+    } finally {
+      if (previousCache === undefined) delete process.env.STATUSLINE_CACHE_DIR;
+      else process.env.STATUSLINE_CACHE_DIR = previousCache;
+    }
+  }, 15_000);
 
-  test("an untrusted root never launches the runner but still renders", async () => {
+  test("an untrusted root skips Git and branch reads in TUI and RPC", async () => {
     const home = await tempDirectory("pi-statusline-untrusted");
     const project = join(home, "repo");
-    await fs.mkdir(project, { recursive: true });
-    await markAsProject(project);
-    const cacheDir = join(home, "cache");
-    await seedCache(cacheDir, project, sampleCache());
-    const launches: string[] = [];
-    const spawnDetached: DetachedSpawnFunction = (command) => {
-      launches.push(command);
-    };
-
-    let gitReads = 0;
-    const pi = createFakePi({ cwd: project, gitBranch: "main" });
-    setupStatusline(pi, makeConfig(home), {
-      cacheDir,
-      spawnDetached,
-      getGitStatus: async () => {
-        gitReads += 1;
-        return gitStatus({ repository: undefined });
-      },
-    });
-
-    await pi.emitAgentSettled();
-    expect(launches).toHaveLength(0);
-    expect(gitReads).toBe(0);
-    expect(pi.renderFooter(100)).toEqual(["repo | main | TS L✓ T… X✗"]);
-  });
-
-  test("directory-valued project markers are ignored like the shell -f test", async () => {
-    const home = await tempDirectory("pi-statusline-dirmarker");
-    const project = join(home, "repo");
-    await fs.mkdir(join(project, "package.json"), { recursive: true });
-    await fs.mkdir(join(project, "tsconfig.json"), { recursive: true });
-    await fs.mkdir(join(project, "Cargo.toml"), { recursive: true });
-    const cacheDir = join(home, "cache");
-    await seedCache(cacheDir, project, sampleCache());
-
-    const pi = createFakePi({ cwd: project, gitBranch: "main" });
-    setupStatusline(pi, makeConfig(home), {
-      cacheDir,
-      getGitStatus: async () => gitStatus({ repository: undefined }),
-    });
-    await pi.emitSessionStart({ type: "session_start", reason: "startup" });
-
-    expect(pi.renderFooter(100)).toEqual(["repo | main"]);
+    await fs.mkdir(project);
+    for (const mode of ["tui", "rpc"] as const) {
+      let gitReads = 0;
+      let branchReads = 0;
+      const pi = createFakePi({ cwd: project, gitBranch: "main", mode });
+      setupStatusline(pi, makeConfig(home), {
+        getGitStatus: async () => {
+          gitReads += 1;
+          return gitStatus({ repository: undefined });
+        },
+        getBranch: async () => {
+          branchReads += 1;
+          return "unsafe-branch";
+        },
+      });
+      await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+      await pi.emitAgentSettled();
+      expect(gitReads).toBe(0);
+      expect(branchReads).toBe(0);
+      if (mode === "tui") expect(pi.renderFooter(100)).toEqual(["repo | main"]);
+      else expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toEqual(["repo"]);
+    }
   });
 
   test("skips git and UI collection in print and JSON modes", async () => {
     const home = await tempDirectory("pi-statusline-headless");
     const project = join(home, "repo");
-    await fs.mkdir(project, { recursive: true });
+    const worktree = join(home, "topic-worktree");
+    await fs.mkdir(project);
     await markAsProject(project);
+    await runGit(project, ["init", "-b", "main"]);
+    await runGit(project, ["config", "user.email", "test@example.com"]);
+    await runGit(project, ["config", "user.name", "Status Test"]);
+    await runGit(project, ["add", "."]);
+    await runGit(project, ["commit", "-m", "initial"]);
+    await runGit(project, ["worktree", "add", "-b", "topic", worktree]);
+    const canonicalProject = await fs.realpath(project);
+    const canonicalWorktree = await fs.realpath(worktree);
+    const details = await createdWorktreeDetails(canonicalWorktree);
 
     for (const mode of ["print", "json"] as const) {
       let gitReads = 0;
       let branchReads = 0;
-      const pi = createFakePi({ cwd: project, mode });
-      setupStatusline(pi, makeConfig(home, [project]), {
+      let validationReads = 0;
+      const pi = createFakePi({ cwd: canonicalProject, mode });
+      setupStatusline(pi, makeConfig(home, [canonicalProject]), {
         getGitStatus: async () => {
           gitReads += 1;
           return gitStatus();
@@ -1306,10 +1168,23 @@ describe("pi-harness statusline lifecycle", () => {
           branchReads += 1;
           return "main";
         },
+        gitOutput: async () => {
+          validationReads += 1;
+          return undefined;
+        },
       });
 
       await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+      await pi.emitToolResult({
+        type: "tool_result",
+        toolName: "worktree_create",
+        input: { name: "topic" },
+        content: [{ type: "text", text: canonicalWorktree }],
+        details,
+        isError: false,
+      });
       await pi.emitAgentSettled();
+      expect(validationReads).toBe(0);
       expect(gitReads).toBe(0);
       expect(branchReads).toBe(0);
       expect(pi.renderFooter(100)).toBeUndefined();
@@ -1324,14 +1199,11 @@ describe("pi-harness statusline lifecycle", () => {
     await markAsProject(project);
     const pi = createFakePi({ cwd: project, mode: "rpc" });
     setupStatusline(pi, makeConfig(home, [project]), {
-      cacheDir: join(home, "cache"),
       getGitStatus: async () => gitStatus({ repository: undefined }),
       getBranch: async () => "main",
     });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
-    expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toEqual([
-      "repo | main | TS L? T? X?",
-    ]);
+    expect(pi.widgets.get(STATUSLINE_WIDGET_KEY)).toEqual(["repo | main"]);
   });
 });

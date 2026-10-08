@@ -9,17 +9,6 @@ import { visibleWidth } from "../../lib/terminal-text";
 
 export const STATUSLINE_WIDGET_KEY = "pi-harness-statusline";
 
-export interface StatuslineCheckState {
-  status?: string;
-  [key: string]: unknown;
-}
-
-export interface StatuslineCache {
-  label?: string;
-  checks?: Record<string, StatuslineCheckState | undefined>;
-  [key: string]: unknown;
-}
-
 export interface GitStatus {
   isRepository: boolean;
   repository?: string;
@@ -30,8 +19,6 @@ export interface GitStatus {
 export interface StatuslineSnapshot {
   directory: string;
   git: GitStatus;
-  projectLabel?: string;
-  cache?: StatuslineCache;
 }
 
 export interface StatuslineRuntime {
@@ -45,23 +32,6 @@ interface Span {
   tone?: ThemeColorLike;
 }
 
-const STATUS_STYLES = new Map<string, readonly [string, ThemeColorLike]>([
-  ["ok", ["✓", "success"]],
-  ["fail", ["✗", "error"]],
-  ["running", ["…", "warning"]],
-  ["skipped", ["-", "dim"]],
-]);
-
-/** Display order and Claude-compatible initials for the three check slots. */
-const SLOTS: readonly (readonly [slot: string, display: string])[] = [
-  ["lint", "L"],
-  ["typecheck", "T"],
-  ["test", "X"],
-];
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
-
 const singleLine = (value: string): string =>
   [...value]
     .map((character) => {
@@ -73,16 +43,6 @@ const singleLine = (value: string): string =>
     .join("")
     .replace(/ +/g, " ")
     .trim();
-
-const checkStatus = (
-  cache: StatuslineCache | undefined,
-  slot: string,
-): string => {
-  const state = cache?.checks?.[slot];
-  return isRecord(state) && typeof state.status === "string"
-    ? state.status
-    : "pending";
-};
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 const graphemes = (value: string): string[] =>
@@ -297,17 +257,6 @@ const flattenFields = (fields: Span[][]): Span[] => {
   return spans;
 };
 
-export const parseStatuslineCache = (
-  raw: string,
-): StatuslineCache | undefined => {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return isRecord(parsed) ? (parsed as StatuslineCache) : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
 export const formatModelName = (
   model: ModelLike | undefined,
 ): string | undefined => {
@@ -377,24 +326,6 @@ export const renderStatusline = (
       { text: " " },
       { text: `-${snapshot.git.deletions}`, tone: "error" },
     ]);
-  }
-
-  const cachedLabel =
-    typeof snapshot.cache?.label === "string"
-      ? singleLine(snapshot.cache.label)
-      : "";
-  const projectLabel = cachedLabel || singleLine(snapshot.projectLabel ?? "");
-  if (projectLabel !== "") {
-    const checks: Span[] = [{ text: projectLabel, tone: "muted" }];
-    for (const [slot, display] of SLOTS) {
-      const status = checkStatus(snapshot.cache, slot);
-      const [glyph, tone] = STATUS_STYLES.get(status) ?? ["?", "dim"];
-      checks.push(
-        { text: ` ${display}`, tone: "muted" },
-        { text: glyph, tone },
-      );
-    }
-    fields.push(checks);
   }
 
   const modelName = singleLine(runtime.modelName ?? "");

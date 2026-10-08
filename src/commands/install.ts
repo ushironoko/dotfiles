@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { createBackupManager } from "../core/backup-manager.js";
 import { createConfigManager } from "../core/config-manager.js";
 import {
@@ -21,6 +22,20 @@ import {
 } from "../utils/command-helpers.js";
 
 const NO_PATHS_TO_BACKUP = 0;
+
+const getBackupTargetPaths = (mappings: readonly FileMapping[]): string[] =>
+  mappings.flatMap((mapping) => {
+    if (mapping.backup === false) {
+      return [];
+    }
+
+    if (mapping.type !== "selective") {
+      return [mapping.target];
+    }
+
+    const items = mapping.include ?? mapping.files ?? [];
+    return items.map((item) => join(mapping.target, item));
+  });
 
 const installCommand = define({
   name: "install",
@@ -64,7 +79,7 @@ const installCommand = define({
           }
         }
       }
-      const targetPaths = mappings.map((mapping) => mapping.target);
+      const targetPaths = getBackupTargetPaths(mappings);
 
       const pathsToBackup = [];
       for (const path of targetPaths) {

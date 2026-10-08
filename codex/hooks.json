@@ -47,17 +47,6 @@
         ]
       }
     ],
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$HOME/.codex/hooks/session_start/statusline_checks.sh\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "matcher": ".*",
@@ -73,11 +62,6 @@
     "Stop": [
       {
         "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$HOME/.codex/hooks/stop/statusline_checks.sh\"",
-            "timeout": 10
-          },
           {
             "type": "command",
             "command": "bash \"$HOME/.codex/hooks/stop/asuku_notification.sh\"",

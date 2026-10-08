@@ -8,14 +8,8 @@ const STATUSLINE = resolve(
   import.meta.dir,
   "../../../claude/.claude/statusline.sh",
 );
-const LIB = resolve(
-  import.meta.dir,
-  "../../../claude/.claude/hooks/lib/statusline_checks_lib.sh",
-);
-
 beforeAll(async () => {
   await fs.access(STATUSLINE);
-  await fs.access(LIB);
 });
 
 const SESSION_ID = "0f9a2b34-5678-4abc-9def-0123456789ab";
@@ -54,7 +48,7 @@ const runStatusline = async (
   env: Record<string, string> = {},
 ): Promise<{ stdout: string; exitCode: number }> => {
   const proc = Bun.spawn(["bash", STATUSLINE], {
-    env: { ...process.env, STATUSLINE_LIB: LIB, ...env },
+    env: { ...process.env, ...env },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",

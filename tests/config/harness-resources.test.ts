@@ -36,6 +36,23 @@ const SHARED_SKILLS = [
 ];
 
 describe("maintained harness resources", () => {
+  test("keeps Claude lifecycle adapters after retiring quality checks", () => {
+    expect(settings.hooks).not.toHaveProperty("SessionStart");
+    expect(settings.hooks).not.toHaveProperty("Stop");
+    expect(
+      settings.hooks.PostToolUse[0]?.hooks.map(({ command }) => command),
+    ).toEqual([
+      "~/.claude/hooks/post_tool_use/coding_cycle.sh",
+      "~/.claude/hooks/post_tool_use/type_safety_check.sh",
+    ]);
+    expect(settings.hooks.TaskCompleted[0]?.hooks[0]?.command).toBe(
+      "~/.claude/hooks/task-completed/bit-issue-update.sh",
+    );
+    expect(settings.hooks.Notification[0]?.hooks[0]?.command).toBe(
+      "/Applications/asuku.app/Contents/MacOS/asuku-hook notification",
+    );
+  });
+
   test("disables Claude account skill synchronization", () => {
     expect(settings.syncClaudeAiSkills).toBe(false);
   });

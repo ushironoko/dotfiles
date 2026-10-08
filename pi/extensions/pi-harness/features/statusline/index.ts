@@ -1,24 +1,8 @@
-/**
- * Claude-compatible statusline feature.
- *
- * - agent_settled launches statusline_checks_run.sh detached, gated by the
- *   trusted-root check because the runner executes repository-defined commands.
- * - session_start and agent_settled refresh read-only git/check state.
- * - a custom footer renders repository, directory, branch, tracked diff,
- *   checks, model, and remaining context in the same order as Claude Code.
- *
- * Cache location and project-root detection mirror statusline_checks_lib.sh so
- * Claude Code and pi share one quality-check cache.
- */
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import type { HarnessConfig } from "../../config";
 import { sanitizeChildEnv } from "../../lib/child-env";
-import { launchDetached, type DetachedSpawnFunction } from "../../lib/detached";
 import type {
   CtxLike,
   PiLike,
@@ -34,18 +18,14 @@ import {
 import {
   formatModelName,
   type GitStatus,
-  parseStatuslineCache,
   remainingContextPercent,
   renderExtensionStatuses,
   renderStatusline,
   STATUSLINE_WIDGET_KEY,
-  type StatuslineCache,
   type StatuslineSnapshot,
 } from "./render";
 
 interface StatuslineDeps {
-  cacheDir?: string;
-  spawnDetached?: DetachedSpawnFunction;
   getGitStatus?: (cwd: string) => Promise<GitStatus>;
   getBranch?: (cwd: string) => Promise<string | undefined>;
   gitOutput?: (cwd: string, args: string[]) => Promise<string | undefined>;
@@ -119,56 +99,6 @@ const hasExtensionStatusData = (
 ): footerData is object & ExtensionStatusFooterData =>
   typeof Reflect.get(footerData, "getExtensionStatuses") === "function";
 
-// The shell library tests markers with [ -f ] (regular file, symlinks
-// followed); existsSync would also accept directories and make the two
-// harnesses disagree on the project root — and therefore on the cache file.
-const isRegularFile = (path: string): boolean => {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-};
-
-/** TS port of find_project_root in statusline_checks_lib.sh. */
-const findProjectRoot = (start: string): string | undefined => {
-  let dir = start;
-  for (;;) {
-    if (
-      isRegularFile(join(dir, "Cargo.toml")) ||
-      isRegularFile(join(dir, "moon.mod.json"))
-    ) {
-      return dir;
-    }
-    if (
-      isRegularFile(join(dir, "package.json")) &&
-      (isRegularFile(join(dir, "tsconfig.json")) ||
-        isRegularFile(join(dir, "pnpm-lock.yaml")) ||
-        isRegularFile(join(dir, "bun.lock")) ||
-        isRegularFile(join(dir, "bun.lockb")))
-    ) {
-      return dir;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) return undefined;
-    dir = parent;
-  }
-};
-
-const projectLabel = (root: string): string | undefined => {
-  if (isRegularFile(join(root, "Cargo.toml"))) return "RS";
-  if (isRegularFile(join(root, "moon.mod.json"))) return "MB";
-  if (isRegularFile(join(root, "package.json"))) return "TS";
-  return undefined;
-};
-
-const defaultCacheDir = (): string =>
-  process.env.STATUSLINE_CACHE_DIR ??
-  join(tmpdir(), "claude-statusline-checks");
-
-const cacheFilePath = (cacheDir: string, root: string): string =>
-  join(cacheDir, `${createHash("sha1").update(root).digest("hex")}.json`);
-
 const gitOutput = (cwd: string, args: string[]): Promise<string | undefined> =>
   new Promise((resolve) => {
     execFile(
@@ -189,14 +119,6 @@ const gitOutput = (cwd: string, args: string[]): Promise<string | undefined> =>
     );
   });
 
-/**
- * Revalidate the identity that worktree_create established before extending
- * source-checkout trust to an external gwq path. Git registration, common-dir
- * identity, linked-worktree git-dir placement, and the creation-time root,
- * .git file, and admin git-dir must all still agree. This closes static path
- * replacement; the later runner launch remains a separate best-effort TOCTOU
- * boundary and therefore retains the runner's own trusted-root checks.
- */
 const validateInheritedWorktree = async (
   sourceCwd: string,
   worktreePath: string,
@@ -308,9 +230,6 @@ const validateInheritedWorktree = async (
     ]);
     if (canonicalDotGit !== canonicalBacklink) return false;
 
-    // Git and backlink discovery above are asynchronous. Re-check both inode
-    // identities at the end so a replacement during that interval cannot be
-    // trusted before the runner performs its own pinned-cwd verification.
     const [finalRootStats, finalDotGitStats] = await Promise.all([
       lstat(worktreePath, { bigint: true }),
       lstat(worktreeDotGit, { bigint: true }),
@@ -388,7 +307,6 @@ export default function setupStatusline(
   config: HarnessConfig,
   deps: StatuslineDeps = {},
 ): void {
-  const spawnDetached = deps.spawnDetached ?? launchDetached;
   const getGitStatus = deps.getGitStatus ?? defaultGetGitStatus;
   const getBranch = deps.getBranch ?? defaultGetBranch;
   const validateWorktree =
@@ -400,10 +318,6 @@ export default function setupStatusline(
         identity,
         deps.gitOutput ?? gitOutput,
       ));
-  const runner = join(
-    config.paths.claudeHooksDir,
-    "lib/statusline_checks_run.sh",
-  );
 
   let snapshot: StatuslineSnapshot = {
     directory: "",
@@ -492,15 +406,11 @@ export default function setupStatusline(
     );
   };
 
-  const refresh = async (ctx: CtxLike, launchChecks: boolean) => {
+  const refresh = async (ctx: CtxLike) => {
+    if (ctx.mode === "print" || ctx.mode === "json") return;
     const cwd = activeWorktree?.path ?? ctx.cwd ?? process.cwd();
-    // A worktree created by the validated harness tool inherits the trust of
-    // its source checkout even though gwq places it outside that root. Keep
-    // re-checking the source path so a vanished or retargeted trust root fails
-    // closed. The worktree itself is the shell runner boundary.
     const directlyTrustedRoot = matchedTrustedRoot(cwd, config.trust);
     let trustedRoot = directlyTrustedRoot;
-    let trustedWorktreeIdentity: WorktreeIdentityV1 | undefined;
     if (
       trustedRoot === undefined &&
       activeWorktree?.path === cwd &&
@@ -516,47 +426,11 @@ export default function setupStatusline(
           ))
         ) {
           trustedRoot = cwd;
-          trustedWorktreeIdentity = activeWorktree.identity;
         }
       } catch {
         trustedRoot = undefined;
       }
     }
-    if (launchChecks && trustedRoot !== undefined && existsSync(runner)) {
-      spawnDetached(
-        "bash",
-        [
-          runner,
-          cwd,
-          trustedRoot,
-          ...(trustedWorktreeIdentity === undefined
-            ? []
-            : [
-                trustedWorktreeIdentity.root.dev,
-                trustedWorktreeIdentity.root.ino,
-              ]),
-        ],
-        { cwd },
-      );
-    }
-
-    // Print/JSON modes expose no-op UI methods. Preserve lifecycle checks, but
-    // avoid paying for git/cache collection that no statusline can consume.
-    if (ctx.mode === "print" || ctx.mode === "json") return;
-
-    const root = findProjectRoot(cwd);
-    let cache: StatuslineCache | undefined;
-    if (root !== undefined) {
-      const cacheDir = deps.cacheDir ?? defaultCacheDir();
-      try {
-        cache = parseStatuslineCache(
-          await readFile(cacheFilePath(cacheDir, root), "utf8"),
-        );
-      } catch {
-        cache = undefined;
-      }
-    }
-
     let git: GitStatus = { ...EMPTY_GIT_STATUS };
     if (trustedRoot !== undefined) {
       try {
@@ -575,15 +449,13 @@ export default function setupStatusline(
     snapshot = {
       directory: basename(cwd),
       git,
-      projectLabel: root === undefined ? undefined : projectLabel(root),
-      cache,
     };
     await installOrRefreshFooter(ctx, trustedRoot !== undefined);
   };
 
   pi.on("session_start", async (_event, ctx) => {
     activeWorktree = undefined;
-    await refresh(ctx, false);
+    await refresh(ctx);
   });
   pi.on("tool_result", async (event, ctx) => {
     const createdPath = createdWorktreePath(event);
@@ -595,17 +467,17 @@ export default function setupStatusline(
         sourceCwd: ctx.cwd ?? process.cwd(),
         ...(identity === undefined ? {} : { identity }),
       };
-      await refresh(ctx, false);
+      await refresh(ctx);
       return;
     }
 
     const removedPath = removedWorktreePath(event);
     if (removedPath !== undefined && removedPath === activeWorktree?.path) {
       activeWorktree = undefined;
-      await refresh(ctx, false);
+      await refresh(ctx);
     }
   });
   pi.on("agent_settled", async (_event, ctx) => {
-    await refresh(ctx, true);
+    await refresh(ctx);
   });
 }

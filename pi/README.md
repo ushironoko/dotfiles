@@ -828,10 +828,10 @@ Host-dependent checks:
 - [x] Phase 4: workflow 2-task fan-out completes with degradation reporting;
       poc worktree auto-provisioned via gwq; workflow→codex-stage.sh
       roundtrip returns (2026-07-11)
-- [x] Phase 5: statusline runner launches only for trusted roots (cache JSON
-      written); custom footer mirrors Claude's repo/directory/branch/diff,
-      checks, model, and remaining-context fields; provider-log stays off until
-      opted in, JSONL 0700/0600 when on; asuku binary spawn path verified
+- [x] Phase 5: custom footer mirrors Claude's repo/directory/branch/diff,
+      model, and remaining-context fields; Git reads remain trust-gated;
+      provider-log stays off until opted in, JSONL 0700/0600 when on; asuku
+      binary spawn path verified
 - [x] Phase 6: pi-vocabulary `start-work` walks worktree_create → bit issue
       creation → task_completed close-verified on a real repo (2026-07-11);
       fork shadows the shared skill on name collision (V7 settled)

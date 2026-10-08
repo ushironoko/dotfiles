@@ -7,17 +7,13 @@ const codexAgentFiles = [
 ] as const;
 
 const codexHookFiles = [
-  "lib/statusline_checks_lib.sh",
-  "lib/statusline_checks_run.sh",
   "lib/trusted_project.sh",
   "permission_request/asuku.sh",
   "post_tool_use/coding_cycle.sh",
   "post_tool_use/type_safety_check.sh",
   "pre_tool_use/bit_command_policy.sh",
   "pre_tool_use/npm_script_preference.sh",
-  "session_start/statusline_checks.sh",
   "stop/asuku_notification.sh",
-  "stop/statusline_checks.sh",
   "task_completed/bit_issue_update.sh",
   "user_prompt_submit/ultracode_context.sh",
   "worktree/create.sh",
@@ -76,6 +72,7 @@ export default defineConfig({
       source: "./claude/.claude",
       target: "~/.claude",
       type: "selective",
+      backup: false,
       include: [
         "agents",
         "hooks",
