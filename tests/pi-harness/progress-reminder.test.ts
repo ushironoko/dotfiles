@@ -1,5 +1,14 @@
-import { describe, expect, test } from "bun:test";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { afterEach, describe, expect, test } from "bun:test";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  SessionManager,
+  type ExtensionFactory,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
+import { createSdkExtensionRunner } from "./sdk-extension-runner";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import setupProgressReminder, {
   hasVisibleAssistantText,
@@ -16,6 +25,15 @@ import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import { createFakePi, type FakePi } from "./fake-pi";
 
 const REAL_PI_CONTRACT: ExtensionAPI extends PiLike ? true : false = true;
+const sdkDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    sdkDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
+  );
+});
 
 const makeConfig = (isChild = false): HarnessConfig => ({
   isChild,
@@ -189,35 +207,109 @@ describe("progress reminder lifecycle", () => {
   });
 
   test("composes context handlers in registration order", async () => {
-    const pi = createFakePi();
-    setupProgressReminder(pi);
+    const directory = await fs.mkdtemp(join(tmpdir(), "sdk-progress-"));
+    sdkDirectories.push(directory);
+    const manager = SessionManager.create(
+      directory,
+      join(directory, "sessions"),
+    );
+    manager.appendMessage({ role: "user", content: "work", timestamp: 1 });
     let messagesSeenByLaterHandler: unknown[] = [];
-    pi.on("context", (event) => {
-      messagesSeenByLaterHandler = event.messages;
-      return {
-        messages: [
-          ...event.messages,
-          {
-            role: "custom",
-            customType: "later-handler",
-            content: "later context",
-            display: false,
-            timestamp: Date.now(),
-          },
-        ],
-      };
-    });
-    await emitSilentTurns(pi);
-
-    const messages = await pi.emitContext([]);
+    const later: ExtensionFactory = (api) => {
+      api.on("context", (event) => {
+        messagesSeenByLaterHandler = structuredClone(event.messages);
+        return {
+          messages: [
+            ...event.messages,
+            {
+              role: "custom",
+              customType: "later-handler",
+              content: "later context",
+              display: false,
+              timestamp: 2,
+            },
+          ],
+        };
+      });
+    };
+    const sdk = await createSdkExtensionRunner(
+      [(api) => setupProgressReminder(api), later],
+      directory,
+      manager,
+    );
+    const message = fauxAssistantMessage(
+      fauxToolCall("read", { path: "fixture.txt" }),
+      { stopReason: "toolUse" },
+    );
+    for (let turnIndex = 0; turnIndex < 10; turnIndex += 1) {
+      const messageEntryId = manager.appendMessage(message);
+      const boundary = await sdk.runner.emitBoundary(
+        {
+          type: "turn_end",
+          turnIndex,
+          message,
+          toolResults: [],
+          messageEntryId,
+          toolResultEntryIds: [],
+          outcome: "completed",
+        },
+        () => {
+          const projection = manager.buildSessionProjection();
+          return {
+            contextEntries: projection.entries,
+            contextMessages: projection.messages,
+            llmMessages: [],
+            pendingMessages: [],
+            canContinue: false,
+          };
+        },
+      );
+      expect(boundary.valid).toBe(true);
+      expect(boundary.entries).toEqual([]);
+      expect(boundary.continue).toBe(false);
+      if (turnIndex === 8) {
+        expect(
+          reminders(
+            await sdk.runner.emitContext(
+              manager.buildSessionContext().messages,
+            ),
+          ),
+        ).toEqual([]);
+      }
+    }
+    const history = manager.buildSessionContext().messages;
+    const original = structuredClone(history);
+    const stored = structuredClone(manager.getEntries());
+    const file = manager.getSessionFile();
+    if (file === undefined) throw new Error("Missing session file");
+    const persisted = await fs.readFile(file, "utf8");
+    const messages = await sdk.runner.emitContext(history);
     expect(reminders(messagesSeenByLaterHandler)).toHaveLength(1);
     expect(reminders(messages)).toHaveLength(1);
-    expect(
-      messages.some(
-        (message) =>
-          isRecord(message) && message.customType === "later-handler",
-      ),
-    ).toBe(true);
+    expect(messages.slice(0, history.length)).toEqual(history);
+    expect(messages.slice(history.length)).toEqual([
+      expect.objectContaining({
+        role: "custom",
+        customType: PROGRESS_REMINDER_CUSTOM_TYPE,
+        content: PROGRESS_REMINDER,
+        display: false,
+      }),
+      {
+        role: "custom",
+        customType: "later-handler",
+        content: "later context",
+        display: false,
+        timestamp: 2,
+      },
+    ]);
+    expect(history).toEqual(original);
+    expect(manager.getEntries()).toEqual(stored);
+    expect(await fs.readFile(file, "utf8")).toBe(persisted);
+    const reopened = SessionManager.open(file, join(directory, "sessions"));
+    expect(reopened.getEntries()).toEqual(stored);
+    expect(reminders(reopened.buildSessionContext().messages)).toEqual([]);
+    expect(reminders(await sdk.runner.emitContext(history))).toHaveLength(1);
+    expect(sdk.errors).toEqual([]);
   });
 
   test("the umbrella registers reminders only in parent sessions", async () => {
