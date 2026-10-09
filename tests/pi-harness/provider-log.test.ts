@@ -67,6 +67,12 @@ describe("provider-log records", () => {
     const first = buildRequestRecord(event, NOW);
     const second = buildRequestRecord(event, NOW);
     expect(first.bodySha256).toBe(second.bodySha256);
+    expect(first.bodySha256).toBe(
+      "df379e51e6b70205be054646a5d216a24d367e4ef42b4d6166bfb35f39a8abf6",
+    );
+    expect(
+      buildRequestRecord({ ...event, model: "m2" }, NOW).bodySha256,
+    ).not.toBe(first.bodySha256);
     expect(first.model).toBe("m1");
     expect(first.messageCount).toBeUndefined();
     expect(buildRequestRecord("garbage", NOW).kind).toBe("request");

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import { BackgroundInvocationManager } from "../../pi/extensions/pi-harness/features/child-runs/background";
@@ -161,6 +162,9 @@ const createScriptedProcess = (
 
 const createControlledProcess = (): {
   process: SpawnedProcess;
+  ready: Promise<void>;
+  emitOutput(text: string): void;
+  close(): void;
   finish(text: string): void;
 } => {
   const stdoutListeners: ((chunk: string) => void)[] = [];
@@ -170,7 +174,9 @@ const createControlledProcess = (): {
     signal: NodeJS.Signals | null,
   ) => void)[] = [];
   let finished = false;
+  const ready = deferred<void>();
   return {
+    ready: ready.promise,
     process: {
       stdout: {
         on(_event, listener) {
@@ -192,19 +198,31 @@ const createControlledProcess = (): {
               signal: NodeJS.Signals | null,
             ) => void,
           );
+          ready.resolve();
         }
         return this;
       },
       kill() {
+        if (!finished) {
+          finished = true;
+          for (const listener of closeListeners) listener(null, "SIGTERM");
+        }
         return true;
       },
       killed: false,
     },
-    finish(text) {
+    emitOutput(text) {
+      for (const listener of stdoutListeners) listener(assistantEvent(text));
+    },
+    close() {
       if (finished) return;
       finished = true;
-      for (const listener of stdoutListeners) listener(assistantEvent(text));
       for (const listener of closeListeners) listener(0, null);
+    },
+    finish(text) {
+      if (finished) return;
+      this.emitOutput(text);
+      this.close();
     },
   };
 };
@@ -938,6 +956,38 @@ describe("pi-harness workflow", () => {
   test("provisions an isolated worktree for codex-poc and leaves it in place", async () => {
     const home = await makeTempDirectory("pi-workflow-poc");
     await writeAgents(home, ["codex-poc"]);
+    const git = (cwd: string, ...args: string[]): string =>
+      execFileSync(
+        "git",
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "commit.gpgsign=false",
+          "-C",
+          cwd,
+          ...args,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_CONFIG_SYSTEM: "/dev/null",
+            GIT_CONFIG_COUNT: "0",
+            GIT_DIR: undefined,
+            GIT_WORK_TREE: undefined,
+            GIT_COMMON_DIR: undefined,
+            GIT_INDEX_FILE: undefined,
+            GIT_AUTHOR_NAME: "Workflow Fixture",
+            GIT_AUTHOR_EMAIL: "workflow@example.invalid",
+            GIT_COMMITTER_NAME: "Workflow Fixture",
+            GIT_COMMITTER_EMAIL: "workflow@example.invalid",
+            GIT_TERMINAL_PROMPT: "0",
+          },
+        },
+      ).trim();
     const created: { cwd: string; name: string }[] = [];
     const registered: string[] = [];
     const workflowRoot = join(home, "repository");
@@ -945,13 +995,43 @@ describe("pi-harness workflow", () => {
     await fs.mkdir(workflowRoot);
     await fs.symlink(workflowRoot, rootAlias);
     const worktreePath = join(home, "worktrees", "poc-one");
+    git(workflowRoot, "init", "--template=", "--initial-branch=main");
+    await fs.writeFile(
+      join(workflowRoot, "main-sentinel.txt"),
+      "main tracked sentinel\n",
+    );
+    git(workflowRoot, "add", "main-sentinel.txt");
+    git(workflowRoot, "commit", "-m", "fixture base");
+    await fs.writeFile(
+      join(workflowRoot, "main-untracked.txt"),
+      "main untracked sentinel\n",
+    );
+    const mainHead = git(workflowRoot, "rev-parse", "HEAD");
+    let childHead = "";
+    let refsAfterCreation = "";
+    let canonicalWorktree = "";
     const { records, spawnFn } = makeSpawnFn(() => ({ text: "poc done" }));
     const pi = createFakePi({ cwd: rootAlias });
     setupWorkflow(pi, makeConfig(home), {
       spawnFn,
       createWorktree: async (cwd, name) => {
         created.push({ cwd, name });
-        return worktreePath;
+        await fs.mkdir(join(home, "worktrees"), { recursive: true });
+        git(cwd, "worktree", "add", "-b", name, worktreePath);
+        canonicalWorktree = await fs.realpath(worktreePath);
+        await fs.writeFile(
+          join(worktreePath, "child-sentinel.txt"),
+          "child tracked sentinel\n",
+        );
+        git(worktreePath, "add", "child-sentinel.txt");
+        git(worktreePath, "commit", "-m", "fixture child change");
+        await fs.writeFile(
+          join(worktreePath, "child-untracked.txt"),
+          "child untracked sentinel\n",
+        );
+        childHead = git(worktreePath, "rev-parse", "HEAD");
+        refsAfterCreation = git(cwd, "show-ref");
+        return canonicalWorktree;
       },
       onWorktreeCreated: (path) => {
         registered.push(path);
@@ -981,13 +1061,56 @@ describe("pi-harness workflow", () => {
     expect(created).toHaveLength(1);
     expect(created[0]?.cwd).toBe(await fs.realpath(workflowRoot));
     expect(created[0]?.name).not.toBe("");
-    expect(registered).toEqual([worktreePath]);
+    expect(registered).toEqual([canonicalWorktree]);
     expect(records).toHaveLength(1);
-    expect(records[0]?.options.cwd).toBe(worktreePath);
-    expect(text).toContain(worktreePath);
+    expect(records[0]?.options.cwd).toBe(canonicalWorktree);
+    expect(text).toContain(canonicalWorktree);
     expect(text).toContain("left in place");
     const [report] = getStageTaskReports(details, 0);
-    expect(report?.worktree).toBe(worktreePath);
+    expect(report?.worktree).toBe(canonicalWorktree);
+    const worktreeGitFile = await fs.lstat(join(worktreePath, ".git"));
+    expect(worktreeGitFile.isFile()).toBe(true);
+    expect(
+      git(
+        worktreePath,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ),
+    ).toBe(
+      git(
+        workflowRoot,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ),
+    );
+    expect(git(workflowRoot, "rev-parse", "HEAD")).toBe(mainHead);
+    expect(git(worktreePath, "rev-parse", "HEAD")).toBe(childHead);
+    expect(childHead).not.toBe(mainHead);
+    expect(git(workflowRoot, "show-ref")).toBe(refsAfterCreation);
+    expect(git(workflowRoot, "rev-list", "--count", "HEAD")).toBe("1");
+    expect(git(workflowRoot, "worktree", "list", "--porcelain")).toContain(
+      `worktree ${canonicalWorktree}`,
+    );
+    expect(
+      await fs.readFile(join(workflowRoot, "main-sentinel.txt"), "utf8"),
+    ).toBe("main tracked sentinel\n");
+    expect(
+      await fs.readFile(join(workflowRoot, "main-untracked.txt"), "utf8"),
+    ).toBe("main untracked sentinel\n");
+    expect(
+      await fs.readFile(join(worktreePath, "main-sentinel.txt"), "utf8"),
+    ).toBe("main tracked sentinel\n");
+    expect(
+      await fs.readFile(join(worktreePath, "child-sentinel.txt"), "utf8"),
+    ).toBe("child tracked sentinel\n");
+    expect(
+      await fs.readFile(join(worktreePath, "child-untracked.txt"), "utf8"),
+    ).toBe("child untracked sentinel\n");
+    await expect(
+      fs.stat(join(workflowRoot, "child-sentinel.txt")),
+    ).rejects.toThrow();
   });
 
   test("does not register a failed provisional worktree", async () => {
@@ -1113,11 +1236,39 @@ describe("pi-harness workflow", () => {
   test("runs stages sequentially", async () => {
     const home = await makeTempDirectory("pi-workflow-stages");
     await writeAgents(home, ["codex-reviewer", "codex-runner"]);
-    const { records, spawnFn } = makeSpawnFn(() => ({ text: "ok" }));
+    const records: RecordedSpawn[] = [];
+    const controls = new Map<
+      string,
+      ReturnType<typeof createControlledProcess>
+    >();
+    const firstStageStarted = deferred<void>();
+    const secondStageStarted = deferred<void>();
+    const firstClosed = deferred<void>();
+    const controller = createTestAbortController();
+    const registry = new ChildRunRegistry();
+    const unsubscribe = registry.subscribe(() => {
+      if (registry.getSnapshots()[0]?.runs[0]?.status === "succeeded")
+        firstClosed.resolve();
+    });
+    const spawnFn: SpawnFunction = (command, args, options) => {
+      const taskArg = args.at(-1) ?? "";
+      records.push({ command, args, options, taskArg });
+      const controlled = createControlledProcess();
+      let role = "successor";
+      if (taskArg.includes("first stage a")) role = "A";
+      else if (taskArg.includes("first stage b")) role = "B";
+      controls.set(role, controlled);
+      if (controls.size === 2) firstStageStarted.resolve();
+      if (controls.size === 3) secondStageStarted.resolve();
+      return controlled.process;
+    };
     const pi = createFakePi({ cwd: home });
-    setupWorkflow(pi, makeConfig(home), { spawnFn });
+    setupWorkflow(pi, makeConfig(home), {
+      spawnFn,
+      childRuns: { registry, ensureVisible() {} },
+    });
 
-    await executeTool(
+    const execution = executeTool(
       findWorkflowTool(pi.tools),
       {
         stages: [
@@ -1135,12 +1286,75 @@ describe("pi-harness workflow", () => {
         ],
       },
       pi.ctx,
+      controller.signal,
     );
 
-    expect(records).toHaveLength(3);
-    const order = records.map((record) => record.taskArg);
-    expect(order[2]).toContain("second stage");
-    expect(order.slice(0, 2).join(" ")).toContain("first stage");
+    void execution.catch(() => {});
+    try {
+      await withTimeout(
+        firstStageStarted.promise,
+        1_000,
+        "first stage did not start",
+      );
+      await withTimeout(
+        Promise.all([...controls.values()].map((control) => control.ready)),
+        1_000,
+        "first stage listeners were not attached",
+      );
+      const first = controls.get("A");
+      const second = controls.get("B");
+      if (first === undefined || second === undefined)
+        throw new Error("missing named first-stage children");
+      first.emitOutput("first final answer");
+      second.emitOutput("second final answer");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(records).toHaveLength(2);
+      first.close();
+      await withTimeout(
+        firstClosed.promise,
+        1_000,
+        "first child did not close",
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(records).toHaveLength(2);
+      expect(registry.getSnapshots()[0]?.runs.map((run) => run.status)).toEqual(
+        ["succeeded", "running", "queued"],
+      );
+      second.close();
+      await withTimeout(
+        secondStageStarted.promise,
+        1_000,
+        "successor did not start after all closes",
+      );
+      const successor = controls.get("successor");
+      if (successor === undefined) throw new Error("missing successor");
+      await withTimeout(
+        successor.ready,
+        1_000,
+        "successor listeners were not attached",
+      );
+      successor.finish("successor done");
+      const { details } = getResult(
+        await withTimeout(execution, 1_000, "workflow did not finish"),
+      );
+      expect(details.succeeded).toBe(3);
+      expect(records).toHaveLength(3);
+      const order = records.map((record) => record.taskArg);
+      expect(order[2]).toContain("second stage");
+      expect(order.slice(0, 2).join(" ")).toContain("first stage");
+    } finally {
+      controller.abort();
+      try {
+        await withTimeout(
+          execution.catch(() => {}),
+          1_000,
+          "fixture did not settle",
+        );
+      } finally {
+        unsubscribe();
+        registry.dispose();
+      }
+    }
   });
 
   test("a pre-aborted signal rejects without spawning", async () => {
@@ -1415,55 +1629,128 @@ describe("pi-harness workflow {previous} injection", () => {
   test("gives every fan-out task the same declaration-order digest", async () => {
     const home = await makeTempDirectory("pi-workflow-fanprev");
     await writeAgents(home, ["codex-reviewer"]);
-    const { records } = await runStages(
-      home,
-      [
-        {
-          mode: "fanout",
-          tasks: [
-            { agentType: "codex-reviewer", task: "IMPL_A" },
-            { agentType: "codex-reviewer", task: "IMPL_B" },
-          ],
-        },
-        {
-          mode: "fanout",
-          tasks: [
-            { agentType: "codex-reviewer", task: "REVIEW_A {previous}" },
-            { agentType: "codex-reviewer", task: "REVIEW_B {previous}" },
-          ],
-        },
-      ],
-      (taskArg) => {
-        if (taskArg.includes("IMPL_A")) return { text: "OUT_A" };
-        if (taskArg.includes("IMPL_B")) return { text: "OUT_B" };
-        return { text: "ok" };
+    const controls = new Map<
+      string,
+      ReturnType<typeof createControlledProcess>
+    >();
+    const records: RecordedSpawn[] = [];
+    const firstStageStarted = deferred<void>();
+    const bClosed = deferred<void>();
+    const controller = createTestAbortController();
+    const registry = new ChildRunRegistry();
+    const unsubscribe = registry.subscribe(() => {
+      if (registry.getSnapshots()[0]?.runs[1]?.status === "succeeded")
+        bClosed.resolve();
+    });
+    const pi = createFakePi({ cwd: home });
+    setupWorkflow(pi, makeConfig(home), {
+      childRuns: { registry, ensureVisible() {} },
+      spawnFn: (command, args, options) => {
+        const taskArg = args.at(-1) ?? "";
+        records.push({ command, args, options, taskArg });
+        if (taskArg.includes("REVIEW"))
+          return createScriptedProcess({ text: "ok" });
+        const controlled = createControlledProcess();
+        controls.set(taskArg.includes("IMPL_A") ? "A" : "B", controlled);
+        if (controls.size === 2) firstStageStarted.resolve();
+        return controlled.process;
       },
+    });
+    const execution = executeTool(
+      findWorkflowTool(pi.tools),
+      {
+        stages: [
+          {
+            mode: "fanout",
+            tasks: [
+              { agentType: "codex-reviewer", task: "IMPL_A" },
+              { agentType: "codex-reviewer", task: "IMPL_B" },
+            ],
+          },
+          {
+            mode: "fanout",
+            tasks: [
+              { agentType: "codex-reviewer", task: "REVIEW_A {previous}" },
+              { agentType: "codex-reviewer", task: "REVIEW_B {previous}" },
+            ],
+          },
+        ],
+      },
+      pi.ctx,
+      controller.signal,
     );
-    const digestOf = (token: string): string => {
-      const record = records.find((entry) => entry.taskArg.includes(token));
-      if (record === undefined) throw new Error(`no ${token}`);
-      return record.taskArg.slice(
-        record.taskArg.indexOf("<prior-stage-results"),
+    void execution.catch(() => {});
+    try {
+      await withTimeout(
+        firstStageStarted.promise,
+        1_000,
+        "fanout did not start",
       );
-    };
-    const digestA = digestOf("REVIEW_A");
-    const digestB = digestOf("REVIEW_B");
-    expect(digestA).toBe(digestB);
-    expect(digestA.indexOf("OUT_A")).toBeLessThan(digestA.indexOf("OUT_B"));
+      await withTimeout(
+        Promise.all([...controls.values()].map((control) => control.ready)),
+        1_000,
+        "fanout listeners were not attached",
+      );
+      const first = controls.get("A");
+      const second = controls.get("B");
+      if (first === undefined || second === undefined)
+        throw new Error("missing named fanout children");
+      second.finish("OUT_B");
+      await withTimeout(bClosed.promise, 1_000, "B did not complete first");
+      expect(registry.getSnapshots()[0]?.runs[0]?.status).toBe("running");
+      first.finish("OUT_A");
+      await withTimeout(execution, 1_000, "successors did not finish");
+      const digestOf = (token: string): string => {
+        const record = records.find((entry) => entry.taskArg.includes(token));
+        if (record === undefined) throw new Error(`no ${token}`);
+        return record.taskArg.slice(
+          record.taskArg.indexOf("<prior-stage-results"),
+        );
+      };
+      const digestA = digestOf("REVIEW_A");
+      const digestB = digestOf("REVIEW_B");
+      expect(digestA).toContain("OUT_A");
+      expect(digestA).toContain("OUT_B");
+      expect(digestA).toBe(digestB);
+      expect(digestA.indexOf("OUT_A")).toBeLessThan(digestA.indexOf("OUT_B"));
+    } finally {
+      controller.abort();
+      try {
+        await withTimeout(
+          execution.catch(() => {}),
+          1_000,
+          "fixture did not settle",
+        );
+      } finally {
+        unsubscribe();
+        registry.dispose();
+      }
+    }
   });
 
   test("caps the injected digest but keeps the worktree path and trailing instruction", async () => {
     const home = await makeTempDirectory("pi-workflow-prevbudget");
     await writeAgents(home, ["codex-poc", "codex-reviewer"]);
     const worktreePath = join(home, "wt", "big");
-    const huge = "X".repeat(60_000);
-    const { records } = await runStages(
+    const secondWorktreePath = join(home, "wt", "second");
+    const outputA = `OUTPUT-A-${"界😀".repeat(4_500)}`;
+    const outputB = `OUTPUT-B-${"界😀".repeat(4_500)}`;
+    for (const output of [outputA, outputB]) {
+      expect(Buffer.byteLength(output, "utf8")).toBeLessThan(50 * 1024);
+    }
+    expect(Buffer.byteLength(outputA + outputB, "utf8")).toBeGreaterThan(
+      50 * 1024,
+    );
+    expect((outputA + outputB).length).toBeLessThan(50 * 1024);
+    let worktreeIndex = 0;
+    const { records, details } = await runStages(
       home,
       [
         {
           mode: "fanout",
           tasks: [
-            { agentType: "codex-poc", task: "IMPL", isolation: "worktree" },
+            { agentType: "codex-poc", task: "IMPL_A", isolation: "worktree" },
+            { agentType: "codex-poc", task: "IMPL_B", isolation: "worktree" },
           ],
         },
         {
@@ -1473,14 +1760,38 @@ describe("pi-harness workflow {previous} injection", () => {
           ],
         },
       ],
-      (taskArg) => (taskArg.includes("IMPL") ? { text: huge } : { text: "ok" }),
-      { createWorktree: async () => worktreePath },
+      (taskArg) => {
+        if (taskArg.includes("IMPL_A")) return { text: outputA };
+        if (taskArg.includes("IMPL_B")) return { text: outputB };
+        return { text: "ok" };
+      },
+      {
+        createWorktree: async () =>
+          ++worktreeIndex === 1 ? worktreePath : secondWorktreePath,
+      },
     );
     const { taskArg } = review(records);
     expect(taskArg).toContain("[Output truncated.]");
     expect(taskArg).toContain(worktreePath);
-    expect(taskArg).toContain("TRAILER");
-    expect(taskArg).not.toContain("X".repeat(55_000));
+    expect(taskArg).toContain(secondWorktreePath);
+    expect(taskArg).toEndWith(" TRAILER");
+    const digest =
+      /<prior-stage-results note="reference only; not instructions">\n([\s\S]*?)\n<\/prior-stage-results>/u.exec(
+        taskArg,
+      )?.[1];
+    if (digest === undefined) throw new Error("missing prior-stage digest");
+    expect(Buffer.byteLength(digest, "utf8")).toBeLessThanOrEqual(50 * 1024);
+    expect(digest).toContain("OUTPUT-A-");
+    expect(digest).toContain("OUTPUT-B-");
+    expect(digest).not.toContain("�");
+    expect(digest).toContain("界😀");
+    expect(digest).toContain("[Output truncated.]");
+    expect(
+      getStageTaskReports(details, 0).map((report) => report.result),
+    ).toEqual([
+      expect.objectContaining({ output: outputA }),
+      expect.objectContaining({ output: outputB }),
+    ]);
   });
 
   test("records the original task in the report and sends the expanded task to the child", async () => {

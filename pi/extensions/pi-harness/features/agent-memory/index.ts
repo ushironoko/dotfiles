@@ -1,6 +1,6 @@
 import type { HarnessConfig } from "../../config";
 import type { CtxLike, PiLike } from "../../lib/pi-like";
-import { capUtf8, stripTerminalControls } from "../../lib/terminal-text";
+import { capUtf8 } from "../../lib/terminal-text";
 import { AgentMemoryCliError, type MemoryAggregate } from "./cli";
 import { AgentMemoryRegistry, type AgentMemoryDataSource } from "./registry";
 import {
@@ -87,7 +87,11 @@ const textResult = (text: string, details?: unknown) => ({
 });
 
 const dataOnly = (value: unknown): string => {
-  const json = stripTerminalControls(JSON.stringify(value, null, 2));
+  const json = JSON.stringify(value, null, 2).replace(
+    /[\u007f-\u009f]/g,
+    (character) =>
+      `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
   return `${DATA_PREAMBLE}\n${BEGIN_DATA}\n${json}\n${END_DATA}`;
 };
 
@@ -113,24 +117,23 @@ const indexEntry = (sourced: SourcedMemoryRecord) => ({
   provenance: { sourceRef: sourced.sourceRef },
 });
 
-const renderBoundedIndex = (aggregate: MemoryAggregate): string | undefined => {
+const renderBoundedIndex = (aggregate: MemoryAggregate): string => {
   const sorted = [...aggregate.merged.entries.values()].sort((left, right) =>
     left.record.path.localeCompare(right.record.path),
   );
-  if (sorted.length === 0) return undefined;
-
   const selected: ReturnType<typeof indexEntry>[] = [];
-  let { truncated } = aggregate;
+  let { truncated, diagnostics } = aggregate;
   const payload = (
     entries: readonly ReturnType<typeof indexEntry>[],
     isTruncated: boolean,
+    diagnosticEntries: readonly string[] = diagnostics,
   ) => ({
     kind: "project-memory-index",
     entries,
     truncated: isTruncated,
-    ...(aggregate.diagnostics.length === 0
+    ...(diagnosticEntries.length === 0
       ? {}
-      : { diagnostics: aggregate.diagnostics }),
+      : { diagnostics: diagnosticEntries }),
     ...(isTruncated
       ? {
           retrieval:
@@ -159,6 +162,36 @@ const renderBoundedIndex = (aggregate: MemoryAggregate): string | undefined => {
   ) {
     selected.pop();
     truncated = true;
+    output = render();
+  }
+  if (Buffer.byteLength(output, "utf8") > MEMORY_INDEX_MAX_BYTES) {
+    truncated = true;
+    diagnostics = [];
+    const fitsDiagnostics = (candidate: readonly string[]): boolean =>
+      Buffer.byteLength(dataOnly(payload(selected, true, candidate)), "utf8") <=
+      MEMORY_INDEX_MAX_BYTES;
+    for (const diagnostic of aggregate.diagnostics) {
+      const candidate = [...diagnostics, diagnostic];
+      if (fitsDiagnostics(candidate)) {
+        diagnostics = candidate;
+        continue;
+      }
+      const prefix = (bytes: number): string =>
+        `${capUtf8(diagnostic, bytes)} [diagnostic truncated]`;
+      if (!fitsDiagnostics([...diagnostics, prefix(0)])) break;
+      let low = 0;
+      let high = Math.min(
+        Buffer.byteLength(diagnostic, "utf8"),
+        MEMORY_INDEX_MAX_BYTES,
+      );
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        if (fitsDiagnostics([...diagnostics, prefix(middle)])) low = middle;
+        else high = middle - 1;
+      }
+      diagnostics = [...diagnostics, prefix(low)];
+      break;
+    }
     output = render();
   }
   return output;
@@ -239,15 +272,7 @@ export default function setupAgentMemory(
       const cwd = deps.cwd ?? ctx.cwd ?? process.cwd();
       const aggregate = await registry.aggregate(cwd, signal);
       if (action === "list") {
-        return textResult(
-          renderBoundedIndex(aggregate) ??
-            dataOnly({
-              kind: "project-memory-index",
-              entries: [],
-              truncated: aggregate.truncated,
-              diagnostics: aggregate.diagnostics,
-            }),
-        );
+        return textResult(renderBoundedIndex(aggregate));
       }
       if (action === "sessions") {
         const sessions = new Map<string, number>();
@@ -395,8 +420,8 @@ export default function setupAgentMemory(
           "warning",
         );
       }
+      if (aggregate.merged.entries.size === 0) return { systemPrompt };
       const content = renderBoundedIndex(aggregate);
-      if (content === undefined) return { systemPrompt };
       return {
         systemPrompt,
         message: {

@@ -24,6 +24,7 @@ interface DoctorOptions {
   verbose: boolean;
   fix: boolean;
   check?: string;
+  config?: string;
 }
 
 interface DoctorContext {
@@ -211,7 +212,9 @@ const checkConflicts = async (ctx: DoctorContext): Promise<void> => {
   addSectionHeader("File/Directory Conflicts", ctx.results);
 
   try {
-    const configManager = await createConfigManager("./");
+    const configManager = await createConfigManager(ctx.options.config, {
+      requireConfig: true,
+    });
     const mappings = configManager.getMappings();
 
     for (const mapping of mappings) {
@@ -421,7 +424,9 @@ const checkDotfilesConfig = async (ctx: DoctorContext): Promise<void> => {
   addSectionHeader("Dotfiles Configuration", ctx.results);
 
   try {
-    const configManager = await createConfigManager("./");
+    const configManager = await createConfigManager(ctx.options.config, {
+      requireConfig: true,
+    });
     const mappings = configManager.getMappings();
 
     // Check if source files exist
@@ -487,9 +492,12 @@ const checkMCPConfig = async (ctx: DoctorContext): Promise<void> => {
 
   const claudeJsonPath = join(homedir(), ".claude.json");
 
-  if (existsSync(claudeJsonPath)) {
-    try {
-      const configManager = await createConfigManager("./");
+  try {
+    const configManager = await createConfigManager(ctx.options.config, {
+      requireConfig: true,
+    });
+
+    if (existsSync(claudeJsonPath)) {
       const mcpConfig = configManager.getMCPConfig();
 
       if (mcpConfig) {
@@ -528,21 +536,21 @@ const checkMCPConfig = async (ctx: DoctorContext): Promise<void> => {
         status: "ok",
         message: "Claude configuration file exists",
       });
-    } catch (error) {
+    } else {
       addResult(ctx, {
         category: "mcp",
-        item: "MCP check",
-        status: "error",
-        message: `Failed to check MCP configuration: ${error}`,
+        item: "~/.claude.json",
+        status: "warning",
+        message: "Claude configuration file doesn't exist",
+        fix: "dotfiles install",
       });
     }
-  } else {
+  } catch (error) {
     addResult(ctx, {
       category: "mcp",
-      item: "~/.claude.json",
-      status: "warning",
-      message: "Claude configuration file doesn't exist",
-      fix: "dotfiles install",
+      item: "MCP check",
+      status: "error",
+      message: `Failed to check MCP configuration: ${error}`,
     });
   }
 };

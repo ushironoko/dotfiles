@@ -333,11 +333,44 @@ export const buildOversizedPermissionRecord = (
     sequence: input.sequence,
     pid: input.pid,
     isChild: input.isChild,
-    lineage: input.lineage,
+    lineage: {
+      lineageId: input.lineage.lineageId,
+      source: input.lineage.source,
+      ...(input.lineage.parentSessionId === undefined
+        ? {}
+        : {
+            parentSessionId: compactIdentifier(input.lineage.parentSessionId),
+          }),
+      ...(input.lineage.childInvocationId === undefined
+        ? {}
+        : {
+            childInvocationId: compactIdentifier(
+              input.lineage.childInvocationId,
+            ),
+          }),
+      ...(input.lineage.childRunId === undefined
+        ? {}
+        : { childRunId: compactIdentifier(input.lineage.childRunId) }),
+    },
     sessionId: compactIdentifier(input.sessionId),
     toolCallId: compactIdentifier(input.toolCallId),
     command: compactCommand,
-    task: { correlation: input.task.correlation },
+    task: {
+      correlation: input.task.correlation,
+      ...(input.task.correlation !== "task" || input.task.task === undefined
+        ? {}
+        : {
+            task: {
+              text: compactIdentifier(input.task.task.text),
+              source: compactIdentifier(input.task.task.source),
+              ...(input.task.task.fingerprint === undefined
+                ? {}
+                : {
+                    fingerprint: compactIdentifier(input.task.task.fingerprint),
+                  }),
+            },
+          }),
+    },
     stages: [
       {
         type: "error",
@@ -349,7 +382,14 @@ export const buildOversizedPermissionRecord = (
     ],
     boundaryDisposition: "block",
     terminalReasonCode: "record-too-large",
-    ...(input.timestamp === undefined ? {} : { timestamp: input.timestamp }),
+    ...(input.timestamp === undefined
+      ? {}
+      : {
+          timestamp:
+            Buffer.byteLength(input.timestamp, "utf8") <= 1024
+              ? input.timestamp
+              : new Date(input.timestamp).toISOString(),
+        }),
     ...(input.decisionId === undefined ? {} : { decisionId: input.decisionId }),
   });
 };

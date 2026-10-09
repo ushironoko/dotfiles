@@ -8,6 +8,7 @@
  * - detached fire-and-forget mode discards output and never blocks the caller
  */
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { sanitizeChildEnv } from "./child-env";
 import type { RawHookResult } from "./claude-hook-io";
 import { PROCESS_FORCE_SETTLE_MS } from "./termination";
@@ -64,8 +65,6 @@ export const runHook = (
       detached: true,
     });
 
-    let stdout = "";
-    let stderr = "";
     let timedOut = false;
     let aborted = false;
     let terminating = false;
@@ -73,10 +72,38 @@ export const runHook = (
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let forceSettleTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const appendCapped = (current: string, chunk: string): string => {
-      if (current.length >= maxOutputBytes) return current;
-      return (current + chunk).slice(0, maxOutputBytes);
+    const captureOutput = () => {
+      const decoder = new StringDecoder("utf8");
+      let output = "";
+      let outputBytes = 0;
+      let capped = false;
+      const appendText = (text: string): void => {
+        if (capped) return;
+        let end = 0;
+        for (const character of text) {
+          const bytes = Buffer.byteLength(character, "utf8");
+          if (outputBytes + bytes > maxOutputBytes) {
+            capped = true;
+            break;
+          }
+          outputBytes += bytes;
+          end += character.length;
+        }
+        output += text.slice(0, end);
+      };
+      return {
+        append: (chunk: Buffer): void => {
+          if (!capped) appendText(decoder.write(chunk));
+        },
+        finish: (suffix = ""): string => {
+          appendText(decoder.end());
+          appendText(suffix);
+          return output;
+        },
+      };
     };
+    const stdout = captureOutput();
+    const stderr = captureOutput();
 
     const removeAbortListener = () => {
       if (
@@ -98,8 +125,8 @@ export const runHook = (
       resolve({
         exitCode,
         timedOut,
-        stdout,
-        stderr: aborted ? appendCapped(stderr, "\nHook aborted.") : stderr,
+        stdout: stdout.finish(),
+        stderr: stderr.finish(aborted ? "\nHook aborted." : ""),
       });
     };
 
@@ -139,10 +166,10 @@ export const runHook = (
     }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout = appendCapped(stdout, chunk.toString("utf8"));
+      stdout.append(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr = appendCapped(stderr, chunk.toString("utf8"));
+      stderr.append(chunk);
     });
 
     child.on("error", () => settle(null));

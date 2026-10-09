@@ -85,40 +85,30 @@ describe("pattern-detector", () => {
     });
 
     it("should respect minFrequency option", () => {
-      const toolUsages: ToolUsage[] = [
-        {
-          timestamp: "2025-01-18T10:00:01Z",
-          toolName: "Glob",
+      const toolUsages: ToolUsage[] = ["Read", "Edit", "Read", "Edit"].map(
+        (toolName, index) => ({
+          timestamp: `2025-01-18T10:00:0${index + 1}Z`,
+          toolName,
           toolInput: {},
           success: true,
-        },
-        {
-          timestamp: "2025-01-18T10:00:02Z",
-          toolName: "Read",
-          toolInput: {},
-          success: true,
-        },
-        {
-          timestamp: "2025-01-18T10:00:03Z",
-          toolName: "Bash",
-          toolInput: {},
-          success: true,
-        },
-        {
-          timestamp: "2025-01-18T10:00:04Z",
-          toolName: "Edit",
-          toolInput: {},
-          success: true,
-        },
-      ];
+        }),
+      );
 
-      const patterns = detectPatterns(toolUsages, {
-        minFrequency: 3,
-        maxSequenceLength: 3,
+      const atTwo = detectPatterns(toolUsages, {
+        minFrequency: 2,
+        maxSequenceLength: 2,
         minSequenceLength: 2,
       });
-
-      expect(patterns.length).toBe(0);
+      expect(
+        atTwo.map(({ sequence, frequency }) => ({ sequence, frequency })),
+      ).toEqual([{ sequence: ["Read", "Edit"], frequency: 2 }]);
+      expect(
+        detectPatterns(toolUsages, {
+          minFrequency: 3,
+          maxSequenceLength: 2,
+          minSequenceLength: 2,
+        }),
+      ).toEqual([]);
     });
 
     it("should exclude specified tools", () => {
@@ -182,69 +172,26 @@ describe("pattern-detector", () => {
 
     it("should sort patterns by frequency", () => {
       const toolUsages: ToolUsage[] = [
-        // Pattern A (3 times)
-        {
-          timestamp: "2025-01-18T10:00:01Z",
-          toolName: "Read",
-          toolInput: {},
-          success: true,
-        },
-        {
-          timestamp: "2025-01-18T10:00:02Z",
-          toolName: "Edit",
-          toolInput: {},
-          success: true,
-        },
-        {
-          timestamp: "2025-01-18T10:00:03Z",
-          toolName: "Read",
-          toolInput: {},
-          success: true,
-        },
-        {
-          timestamp: "2025-01-18T10:00:04Z",
-          toolName: "Edit",
-          toolInput: {},
-          success: true,
-        },
-        {
-          timestamp: "2025-01-18T10:00:05Z",
-          toolName: "Read",
-          toolInput: {},
-          success: true,
-        },
-        {
-          timestamp: "2025-01-18T10:00:06Z",
-          toolName: "Edit",
-          toolInput: {},
-          success: true,
-        },
-        // Pattern B (2 times)
-        {
-          timestamp: "2025-01-18T10:00:07Z",
-          toolName: "Glob",
-          toolInput: {},
-          success: true,
-        },
-        {
-          timestamp: "2025-01-18T10:00:08Z",
-          toolName: "Bash",
-          toolInput: {},
-          success: true,
-        },
-        {
-          timestamp: "2025-01-18T10:00:09Z",
-          toolName: "Glob",
-          toolInput: {},
-          success: true,
-        },
-        {
-          timestamp: "2025-01-18T10:00:10Z",
-          toolName: "Bash",
-          toolInput: {},
-          success: true,
-        },
-      ];
+        "Glob",
+        "Bash",
+        "separator-one",
+        "Glob",
+        "Bash",
+        "separator-two",
+        "Read",
+        "Edit",
+        "separator-three",
+        "Read",
+        "Edit",
+        "separator-four",
+        "Read",
+        "Edit",
+      ].map((toolName, index) => ({
+        timestamp: new Date(Date.UTC(2025, 0, 18, 10, 0, index)).toISOString(),
+        toolName,
+        toolInput: {},
+        success: true,
+      }));
 
       const patterns = detectPatterns(toolUsages, {
         minFrequency: 2,
@@ -252,11 +199,13 @@ describe("pattern-detector", () => {
         minSequenceLength: 2,
       });
 
-      if (patterns.length >= 2) {
-        expect(patterns[0].frequency).toBeGreaterThanOrEqual(
-          patterns[1].frequency,
-        );
-      }
+      expect(patterns).toHaveLength(2);
+      expect(
+        patterns.map(({ sequence, frequency }) => ({ sequence, frequency })),
+      ).toEqual([
+        { sequence: ["Read", "Edit"], frequency: 3 },
+        { sequence: ["Glob", "Bash"], frequency: 2 },
+      ]);
     });
   });
 

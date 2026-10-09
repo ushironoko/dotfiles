@@ -68,9 +68,11 @@ export const runCommand: CommandRunner = async (argv, options = {}) => {
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let timedOut = false;
+  let terminationStartedAt = 0;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   const timeout = setTimeout(() => {
     timedOut = true;
+    terminationStartedAt = Date.now();
     terminateProcessGroup(child.pid, "SIGTERM");
     killTimer = setTimeout(
       () => terminateProcessGroup(child.pid, "SIGKILL"),
@@ -88,9 +90,33 @@ export const runCommand: CommandRunner = async (argv, options = {}) => {
     child.once("close", (exitCode, signal) =>
       resolve({ exitCode, signal: signal ?? undefined }),
     );
-  }).finally(() => {
+  }).finally(async () => {
     clearTimeout(timeout);
-    if (killTimer !== undefined) clearTimeout(killTimer);
+    try {
+      if (timedOut && child.pid !== undefined && process.platform !== "win32") {
+        while (true) {
+          try {
+            process.kill(-child.pid, 0);
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              "code" in error &&
+              error.code === "ESRCH"
+            )
+              break;
+            throw error;
+          }
+          if (Date.now() - terminationStartedAt >= 4_000) {
+            throw new Error(
+              "timed out command process group did not terminate",
+            );
+          }
+          await new Promise<void>((resolve) => setTimeout(resolve, 25));
+        }
+      }
+    } finally {
+      if (killTimer !== undefined) clearTimeout(killTimer);
+    }
   });
 
   return {

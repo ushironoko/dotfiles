@@ -98,20 +98,18 @@ describe("createUsageExtractor — SSE", () => {
 
   it("マルチバイト UTF-8 の途中で分割されても壊れない", () => {
     const ex = createUsageExtractor(ct);
-    const text = sse([
-      MESSAGE_START,
-      {
-        event: "content_block_delta",
-        data: {
-          type: "content_block_delta",
-          delta: { type: "text_delta", text: "宇宙🚀テスト" },
-        },
-      },
-      delta(510, "end_turn"),
-    ]);
-    feedSplit(ex, text, 3); // マルチバイト境界をまたぐ
+    const text = sse([MESSAGE_START, delta(510, "宇宙🚀テスト")]);
+    feedSplit(ex, text, 1);
     ex.end();
-    expect(ex.result().usage?.output_tokens).toBe(510);
+    expect(ex.result()).toEqual({
+      usage: {
+        input_tokens: 2679,
+        cache_creation_input_tokens: 12,
+        cache_read_input_tokens: 34,
+        output_tokens: 510,
+      },
+      stop_reason: "宇宙🚀テスト",
+    });
   });
 
   it("message_start 前に中断すると usage 無し", () => {

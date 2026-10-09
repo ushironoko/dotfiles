@@ -18,6 +18,7 @@ import {
 import type { PermissionAuditStage } from "../../../pi/extensions/pi-harness/features/permission-audit/model";
 import { createPermissionTaskTracker } from "../../../pi/extensions/pi-harness/features/permission-policy/context";
 import setupPermissionPolicy from "../../../pi/extensions/pi-harness/features/permission-policy/index";
+import type { ToolResultEvent } from "../../../pi/extensions/pi-harness/lib/pi-like";
 import type { BridgeHookSpec } from "../../../pi/extensions/pi-harness/features/hook-bridge/registry";
 import {
   CHILD_PERMISSION_SIGNAL_ENV,
@@ -438,14 +439,18 @@ describe("pi-harness hook bridge", () => {
     };
     setupHarness(pi, config);
 
-    const blocked = await pi.emitToolCall({
-      type: "tool_call",
-      toolName: "bash",
-      toolCallId: "fixed-path-1",
-      input: { command: "npx prettier --write ." },
-    });
-    expect(blocked?.reason).toBe(PERMISSION_PREFLIGHT_PATH);
-    expect(blocked?.reason).not.toContain(directory);
+    try {
+      const blocked = await pi.emitToolCall({
+        type: "tool_call",
+        toolName: "bash",
+        toolCallId: "fixed-path-1",
+        input: { command: "npx prettier --write ." },
+      });
+      expect(blocked?.reason).toBe(PERMISSION_PREFLIGHT_PATH);
+      expect(blocked?.reason).not.toContain(directory);
+    } finally {
+      await pi.emitSessionShutdown();
+    }
   });
 
   test("injects ultracode context only for matching prompts", async () => {
@@ -581,13 +586,26 @@ describe("pi-harness hook bridge", () => {
 
   test("trust-gates coding_cycle and runs it safely in a trusted project", async () => {
     const directory = await makeTempDirectory("pi-hook-coding-cycle");
-    await fs.writeFile(join(directory, "package.json"), JSON.stringify({}));
+    const filePath = join(directory, "file.ts");
+    const marker = join(directory, "format-ran.txt");
+    const writeFormatScript = (fail: boolean) =>
+      fs.writeFile(
+        join(directory, "package.json"),
+        JSON.stringify({
+          scripts: {
+            format: fail
+              ? String.raw`printf 'failure\n' >> format-ran.txt; exit 1`
+              : String.raw`printf 'success\n' >> format-ran.txt; printf 'const x = 1;\n' > file.ts`,
+          },
+        }),
+      );
+    await fs.writeFile(filePath, "const x=1\n");
+    await writeFormatScript(false);
     const init = Bun.spawn(["git", "init", "-q", directory], {
       stdout: "ignore",
       stderr: "pipe",
     });
     expect(await init.exited).toBe(0);
-
     const registry = [
       makeSpec(
         "coding-cycle",
@@ -596,28 +614,71 @@ describe("pi-harness hook bridge", () => {
         { matcher: /^(Write|Edit|MultiEdit)$/, requiresTrust: true },
       ),
     ];
-    const event = {
-      type: "tool_result" as const,
-      toolName: "write",
-      toolCallId: "t1",
-      input: { path: join(directory, "file.ts"), content: "const x = 1" },
-      content: [{ type: "text", text: "written" }],
-      isError: false,
-    };
-
     const untrustedPi = createFakePi({ cwd: directory });
+    const trustedPi = createFakePi({ cwd: directory });
     setupHookBridge(untrustedPi, makeConfig(directory), {
       cwd: directory,
       registry,
     });
-    expect(await untrustedPi.emitToolResult(event)).toBeUndefined();
-
-    const trustedPi = createFakePi({ cwd: directory });
     setupHookBridge(trustedPi, makeConfig(directory, [directory]), {
       cwd: directory,
       registry,
     });
-    expect(await trustedPi.emitToolResult(event)).toBeUndefined();
+    const event: ToolResultEvent & {
+      content: { type: string; text: string }[];
+    } = {
+      type: "tool_result",
+      toolName: "write",
+      toolCallId: "coding-cycle-success",
+      input: { path: filePath, content: "const x=1\n" },
+      content: [{ type: "text", text: "written" }],
+      isError: false,
+    };
+    try {
+      expect(await untrustedPi.emitToolResult(event)).toBeUndefined();
+      expect(existsSync(marker)).toBe(false);
+      expect(await fs.readFile(filePath, "utf8")).toBe("const x=1\n");
+      expect(untrustedPi.notifications).toEqual([]);
+
+      expect(await trustedPi.emitToolResult(event)).toBeUndefined();
+      expect(await fs.readFile(marker, "utf8")).toBe("success\n");
+      expect(await fs.readFile(filePath, "utf8")).toBe("const x = 1;\n");
+      expect(trustedPi.notifications).toEqual([]);
+
+      await writeFormatScript(true);
+      const failed = await trustedPi.emitToolResult({
+        ...event,
+        toolCallId: "coding-cycle-failure",
+      });
+      expect(await fs.readFile(marker, "utf8")).toBe("success\nfailure\n");
+      expect(failed?.content?.slice(0, event.content.length)).toEqual(
+        event.content,
+      );
+      expect(failed?.content).toContainEqual({
+        type: "text",
+        text: "編集後の `bun run format` が失敗しました。formatterのエラーを確認し、修正後に再実行してください。",
+      });
+      expect(trustedPi.notifications).toContainEqual({
+        message: "PostToolUse coding cycle: formatter failed",
+        level: "info",
+      });
+      expect(await fs.readFile(filePath, "utf8")).toBe("const x = 1;\n");
+
+      await fs.rm(marker);
+      expect(
+        await untrustedPi.emitToolResult({
+          ...event,
+          toolCallId: "coding-cycle-untrusted-failure",
+        }),
+      ).toBeUndefined();
+      expect(existsSync(marker)).toBe(false);
+      expect(await fs.readFile(filePath, "utf8")).toBe("const x = 1;\n");
+    } finally {
+      await Promise.all([
+        untrustedPi.emitSessionShutdown(),
+        trustedPi.emitSessionShutdown(),
+      ]);
+    }
   });
 
   test("appends type_safety_check feedback to the original result", async () => {

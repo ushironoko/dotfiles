@@ -190,7 +190,14 @@ afterEach(() => {
 
 describe("hearth-tools config", () => {
   test("defaults to the requested maximum-speed profile", () => {
-    expect(parseHearthToolsConfig({})).toEqual(DEFAULT_HEARTH_TOOLS_CONFIG);
+    const parsed = parseHearthToolsConfig({});
+    expect(parsed).toEqual({
+      trustCache: true,
+      warmShell: true,
+      enableOptimizer: true,
+      bashTimeoutMs: 2_147_483_647,
+    });
+    expect(parsed).not.toHaveProperty("maxCachedFiles");
   });
 
   test("rejects malformed and out-of-range fields", () => {

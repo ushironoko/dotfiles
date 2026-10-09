@@ -134,7 +134,78 @@ describe("runHook", () => {
       timeoutMs: 5000,
       maxOutputBytes: 1024,
     });
-    expect(result.stdout.length).toBeLessThanOrEqual(1024);
+    expect(result.exitCode).toBe(0);
+    expect(result.timedOut).toBe(false);
+    expect(result.stdout).toBe("a".repeat(1024));
+    expect(result.stderr).toBe("");
+
+    const multibyteScript = await makeScript(
+      "#!/bin/bash\ncat > /dev/null\nprintf '%s' 'A🙂あZ'\nprintf '%s' '雪🙂E' >&2\n",
+    );
+    const cases: {
+      cap?: number;
+      stdout: string;
+      stderr: string;
+    }[] = [
+      { stdout: "A🙂あZ", stderr: "雪🙂E" },
+      { cap: 32, stdout: "A🙂あZ", stderr: "雪🙂E" },
+      { cap: 9, stdout: "A🙂あZ", stderr: "雪🙂E" },
+      { cap: 8, stdout: "A🙂あ", stderr: "雪🙂E" },
+      { cap: 7, stdout: "A🙂", stderr: "雪🙂" },
+      { cap: 6, stdout: "A🙂", stderr: "雪" },
+      { cap: 4, stdout: "A", stderr: "雪" },
+      { cap: 2, stdout: "A", stderr: "" },
+      { cap: 0, stdout: "", stderr: "" },
+    ];
+    for (const { cap, stdout, stderr } of cases) {
+      const captured = await runHook(multibyteScript, "{}", {
+        timeoutMs: 5_000,
+        ...(cap === undefined ? {} : { maxOutputBytes: cap }),
+      });
+      expect(captured.exitCode).toBe(0);
+      expect(captured.timedOut).toBe(false);
+      expect(captured.stdout).toBe(stdout);
+      expect(captured.stderr).toBe(stderr);
+      if (cap !== undefined) {
+        expect(Buffer.byteLength(captured.stdout, "utf8")).toBeLessThanOrEqual(
+          cap,
+        );
+        expect(Buffer.byteLength(captured.stderr, "utf8")).toBeLessThanOrEqual(
+          cap,
+        );
+      }
+    }
+
+    const splitScript = await makeScript(
+      [
+        "#!/bin/bash",
+        String.raw`printf '\360\237'`,
+        String.raw`printf '\351' >&2`,
+        "cat > /dev/null",
+        String.raw`printf '\231\202Z'`,
+        String.raw`printf '\233\252E' >&2`,
+      ].join("\n"),
+    );
+    for (const [cap, expectedStdout, expectedStderr] of [
+      [32, "🙂Z", "雪E"],
+      [4, "🙂", "雪E"],
+      [2, "", ""],
+    ] as const) {
+      const captured = await runHook(splitScript, "x".repeat(2 * 1024 * 1024), {
+        timeoutMs: 5_000,
+        maxOutputBytes: cap,
+      });
+      expect(captured.exitCode).toBe(0);
+      expect(captured.timedOut).toBe(false);
+      expect(captured.stdout).toBe(expectedStdout);
+      expect(captured.stderr).toBe(expectedStderr);
+      expect(Buffer.byteLength(captured.stdout, "utf8")).toBeLessThanOrEqual(
+        cap,
+      );
+      expect(Buffer.byteLength(captured.stderr, "utf8")).toBeLessThanOrEqual(
+        cap,
+      );
+    }
   });
 });
 
