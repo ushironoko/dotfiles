@@ -280,44 +280,145 @@ describe("permission audit record model", () => {
     ).toEqual([{ line: 1, code: "invalid-record" }]);
   });
 
-  test("retains full corpus canaries and emits a bounded oversized marker", () => {
-    const canary = "secret-token-CANARY";
-    const record = buildPermissionDecisionRecord(
-      baseInput([allowedStage], {
-        command: buildPermissionCommand(`printf %s ${canary}`),
-        task: {
-          correlation: "task",
-          task: { text: `task ${canary}`, source: "rpc" },
-        },
-        runEvidence: {
-          assistantText: `assistant ${canary}`,
-          askUserQuestionResultText: `question result ${canary}`,
-          priorToolResults: [],
-          fingerprint: "canary-run",
-        },
-      }),
-    );
-    expect(JSON.stringify(record)).toContain(canary);
-
-    const oversized = fitPermissionDecisionRecord(
-      baseInput([allowedStage], {
-        command: buildPermissionCommand(
-          "x".repeat(MAX_PERMISSION_AUDIT_RECORD_BYTES),
+  test("retains full corpus canaries and emits a bounded oversized marker", async () => {
+    const root = await tempRoot("pi-permission-audit-corpus");
+    const logDir = join(root, "logs");
+    const huge = "a".repeat(MAX_PERMISSION_AUDIT_RECORD_BYTES + 1);
+    const compacted =
+      "sha256:4a3f0c0c213adea174f9a3d4c13177315b588bdb2e9c1012d3d0bf0453ca0f6a:bytes:1048577";
+    const hugeTimestamp =
+      NOW.toUTCString() + " ".repeat(MAX_PERMISSION_AUDIT_RECORD_BYTES + 1);
+    const writer = createPermissionAuditWriter(logDir, {
+      isChild: false,
+      writerInstanceId: WRITER_ID,
+      dependencies: { now: () => NOW },
+    });
+    try {
+      await writer.append((identity) =>
+        fitPermissionDecisionRecord(
+          baseInput([allowedStage], {
+            ...identity,
+            command: buildPermissionCommand("printf %s COMMAND-CANARY"),
+            task: {
+              correlation: "task",
+              task: { text: "task TASK-CANARY", source: "rpc" },
+            },
+            runEvidence: {
+              assistantText: "assistant ASSISTANT-CANARY",
+              askUserQuestionResultText: "question result QUESTION-CANARY",
+              priorToolResults: [],
+              fingerprint: "canary-run",
+            },
+          }),
         ),
-      }),
+      );
+      await writer.append((identity) =>
+        fitPermissionDecisionRecord(
+          baseInput([allowedStage], {
+            ...identity,
+            command: buildPermissionCommand(
+              "x".repeat(MAX_PERMISSION_AUDIT_RECORD_BYTES),
+            ),
+          }),
+        ),
+      );
+      await writer.append((identity) =>
+        fitPermissionDecisionRecord(
+          baseInput([allowedStage], {
+            ...identity,
+            sessionId: "s".repeat(MAX_PERMISSION_AUDIT_RECORD_BYTES),
+            toolCallId: "t".repeat(MAX_PERMISSION_AUDIT_RECORD_BYTES),
+          }),
+        ),
+      );
+      expect(Date.parse(hugeTimestamp)).toBe(NOW.getTime());
+      await writer.append((identity) =>
+        fitPermissionDecisionRecord(
+          baseInput([allowedStage], {
+            ...identity,
+            timestamp: hugeTimestamp,
+            sessionId: huge,
+            toolCallId: huge,
+            lineage: {
+              lineageId: WRITER_ID,
+              source: "generated",
+              parentSessionId: huge,
+              childInvocationId: huge,
+              childRunId: huge,
+            },
+            task: {
+              correlation: "task",
+              task: { text: huge, source: huge, fingerprint: huge },
+            },
+          }),
+        ),
+      );
+      for (const correlation of ["none", "uncorrelated"] as const) {
+        await writer.append((identity) =>
+          fitPermissionDecisionRecord(
+            baseInput([allowedStage], {
+              ...identity,
+              command: buildPermissionCommand(huge),
+              task: { correlation },
+            }),
+          ),
+        );
+      }
+    } finally {
+      await writer.close();
+    }
+    const path = join(logDir, permissionAuditLogFileName(NOW, WRITER_ID));
+    const persisted = await fs.readFile(path, "utf8");
+    const parsed = parsePermissionAuditJsonl(persisted);
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.records).toHaveLength(6);
+    const [
+      record,
+      oversized,
+      oversizedIdentifiers,
+      oversizedMetadata,
+      noTask,
+      uncorrelated,
+    ] = parsed.records;
+    if (
+      record === undefined ||
+      oversized === undefined ||
+      oversizedIdentifiers === undefined ||
+      oversizedMetadata === undefined ||
+      noTask === undefined ||
+      uncorrelated === undefined
+    ) {
+      throw new Error("missing persisted corpus records");
+    }
+    expect(record.command).toMatchObject({
+      kind: "command",
+      text: "printf %s COMMAND-CANARY",
+    });
+    expect(record.task.task?.text).toBe("task TASK-CANARY");
+    expect(record.runEvidence?.assistantText).toBe(
+      "assistant ASSISTANT-CANARY",
+    );
+    expect(record.runEvidence?.askUserQuestionResultText).toBe(
+      "question result QUESTION-CANARY",
     );
     expect(oversized.command.kind).toBe("omitted");
     expect(oversized.boundaryDisposition).toBe("block");
     expect(oversized.terminalReasonCode).toBe("record-too-large");
+    expect(oversized.toolCallId).toBe("tool-1");
+    expect(oversized.task).toEqual({
+      correlation: "task",
+      task: {
+        text: "Inspect the repository",
+        source: "interactive",
+        fingerprint: "task-fingerprint",
+      },
+    });
+    expect(oversized.process.lineage).toEqual({
+      lineageId: WRITER_ID,
+      source: "generated",
+    });
     expect(Buffer.byteLength(JSON.stringify(oversized))).toBeLessThan(
       MAX_PERMISSION_AUDIT_RECORD_BYTES,
-    );
-
-    const oversizedIdentifiers = fitPermissionDecisionRecord(
-      baseInput([allowedStage], {
-        sessionId: "s".repeat(MAX_PERMISSION_AUDIT_RECORD_BYTES),
-        toolCallId: "t".repeat(MAX_PERMISSION_AUDIT_RECORD_BYTES),
-      }),
     );
     expect(oversizedIdentifiers).toMatchObject({
       command: { kind: "omitted", reason: "record-too-large" },
@@ -326,9 +427,41 @@ describe("permission audit record model", () => {
     });
     expect(oversizedIdentifiers.sessionId).toMatch(/^sha256:/);
     expect(oversizedIdentifiers.toolCallId).toMatch(/^sha256:/);
-    expect(
-      Buffer.byteLength(JSON.stringify(oversizedIdentifiers)),
-    ).toBeLessThan(MAX_PERMISSION_AUDIT_RECORD_BYTES);
+    expect(oversizedIdentifiers.task).toEqual(oversized.task);
+    expect(oversizedMetadata).toMatchObject({
+      timestamp: "2026-07-23T12:00:00.000Z",
+      writerInstanceId: WRITER_ID,
+      sequence: 4,
+      sessionId: compacted,
+      toolCallId: compacted,
+      process: {
+        lineage: {
+          lineageId: WRITER_ID,
+          source: "generated",
+          parentSessionId: compacted,
+          childInvocationId: compacted,
+          childRunId: compacted,
+        },
+      },
+      task: {
+        correlation: "task",
+        task: { text: compacted, source: compacted, fingerprint: compacted },
+      },
+      effectiveDecision: "deny",
+      boundaryDisposition: "block",
+      terminalReasonCode: "record-too-large",
+    });
+    expect(noTask.task).toEqual({ correlation: "none" });
+    expect(uncorrelated.task).toEqual({ correlation: "uncorrelated" });
+    for (const line of persisted.trimEnd().split("\n")) {
+      expect(Buffer.byteLength(line, "utf8")).toBeLessThan(
+        MAX_PERMISSION_AUDIT_RECORD_BYTES,
+      );
+    }
+    const directoryStat = await fs.stat(logDir);
+    const fileStat = await fs.stat(path);
+    expect(directoryStat.mode & 0o777).toBe(0o700);
+    expect(fileStat.mode & 0o777).toBe(0o600);
   });
 });
 

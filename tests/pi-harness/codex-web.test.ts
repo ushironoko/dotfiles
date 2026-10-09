@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildCodexAuthHeaders,
-  CODEX_RESPONSES_ENDPOINT,
   CodexWebError,
   requestCodexWeb,
   type CodexWebClientOptions,
@@ -257,7 +256,7 @@ describe("bounded Codex Responses client", () => {
     };
 
     const result = await requestCodexWeb(baseRequest(), { fetch: fetchMock });
-    expect(capturedUrl).toBe(CODEX_RESPONSES_ENDPOINT);
+    expect(capturedUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(capturedInit?.redirect).toBe("error");
     expect(capturedInit?.credentials).toBe("omit");
     const body = JSON.parse(String(capturedInit?.body)) as Record<

@@ -150,7 +150,7 @@ describe("bit-task lifecycle", () => {
     const branch = "feature/[pi].*+?";
     expect(
       matchesTaskMarker(
-        `#4 [open] ${buildTaskMarker(branch, 8, "task.1")}`,
+        "#4 [open] [task:feature/[pi].*+?#8:task.1]",
         branch,
         "task.1",
       ),
@@ -158,6 +158,34 @@ describe("bit-task lifecycle", () => {
     expect(
       matchesTaskMarker(
         "#5 [open] [task:feature/xpiZZ#8:task.1]",
+        branch,
+        "task.1",
+      ),
+    ).toBe(false);
+    expect(
+      matchesTaskMarker(
+        "#6 [open] [task:feature/[pi].*+?:task.1]",
+        branch,
+        "task.1",
+      ),
+    ).toBe(true);
+    expect(
+      matchesTaskMarker(
+        "#7 [open] [task:feature/[pi].*+?#8:taskX1]",
+        branch,
+        "task.1",
+      ),
+    ).toBe(false);
+    expect(
+      matchesTaskMarker(
+        "#8 [open] [task:feature/[pi].*+?:taskX1]",
+        branch,
+        "task.1",
+      ),
+    ).toBe(false);
+    expect(
+      matchesTaskMarker(
+        "#9 [open] [task:feature/xpiZZ:task.1]",
         branch,
         "task.1",
       ),

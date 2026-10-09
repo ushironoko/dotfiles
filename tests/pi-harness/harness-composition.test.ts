@@ -48,8 +48,18 @@ const config = (
   paths: resolvePaths(`/tmp/${name}`),
 });
 
+const harnessInstances: ReturnType<typeof createFakePi>[] = [];
+const harnessHomes: string[] = [];
+
+const temporaryHarnessPaths = async (prefix: string) => {
+  const home = await fs.mkdtemp(join(tmpdir(), `${prefix}-`));
+  harnessHomes.push(home);
+  return resolvePaths(home);
+};
+
 const registration = (value: HarnessConfig) => {
   const pi = createFakePi({ cwd: value.paths.home });
+  harnessInstances.push(pi);
   const commandCalls: Parameters<PiLike["registerCommand"]>[] = [];
   const api: PiLike = {
     ...pi,
@@ -69,6 +79,17 @@ const registration = (value: HarnessConfig) => {
 };
 
 describe("pi-harness coordination browser composition", () => {
+  afterEach(async () => {
+    await Promise.all(
+      harnessInstances.splice(0).map((pi) => pi.emitSessionShutdown()),
+    );
+    await Promise.all(
+      harnessHomes
+        .splice(0)
+        .map((home) => fs.rm(home, { recursive: true, force: true })),
+    );
+  });
+
   test("mounts the shared browser surface for bit-task only", async () => {
     const registered = registration(
       config("pi-composition-bit", {
@@ -141,6 +162,9 @@ describe("pi-harness coordination browser composition", () => {
       workflow: true,
       "bit-task": false,
     });
+    value.paths = await temporaryHarnessPaths(
+      "pi-composition-invalid-child-runs",
+    );
     value.childRuns = {
       maxConcurrent: 32,
       configurationError: "invalid childRuns fields: maxConcurrent",
@@ -240,7 +264,11 @@ describe("pi-harness coordination browser composition", () => {
       }),
       isChild: true,
     };
+    value.paths = await temporaryHarnessPaths(
+      "pi-composition-codex-pin-failure",
+    );
     const pi = createFakePi({ cwd: value.paths.home, hasUI: false });
+    harnessInstances.push(pi);
     let pinAttempts = 0;
 
     expect(() =>

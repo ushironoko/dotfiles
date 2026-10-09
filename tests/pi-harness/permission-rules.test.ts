@@ -1656,6 +1656,20 @@ describe("loadRules fail-closed behavior", () => {
     expect(evaluateCommand("git reset --hard HEAD~1", rules).verdict).toBe(
       "ask",
     );
+    for (const effectSandboxed of [false, true]) {
+      expect(
+        evaluateCommandWithAudit("git reset --hard HEAD~1", rules, {
+          effectSandboxed,
+        }),
+      ).toEqual({
+        verdict: "ask",
+        reason: "git reset は作業ツリーまたは履歴を変更するため確認が必要です",
+        audit: {
+          basis: "structural-ask",
+          reasonCode: "structural-ask",
+        },
+      });
+    }
   });
 });
 

@@ -214,12 +214,20 @@ describe("Hearth-backed pi tool contracts", () => {
         before: "a\nb\n",
         oldText: "b\n",
         after: "a\n",
+        diff: " 1 a\n-2 b",
+        patch:
+          "--- delete-line.txt\n+++ delete-line.txt\n@@ -1,2 +1,1 @@\n a\n-b\n",
+        firstChangedLine: 2,
       },
       {
         path: "delete-final.txt",
         before: "a",
         oldText: "a",
         after: "",
+        diff: "-1 a",
+        patch:
+          "--- delete-final.txt\n+++ delete-final.txt\n@@ -1,1 +0,0 @@\n-a\n\\ No newline at end of file\n",
+        firstChangedLine: 1,
       },
     ];
 
@@ -236,12 +244,18 @@ describe("Hearth-backed pi tool contracts", () => {
         context,
       );
 
-      expect(result.details?.diff).toBe(
-        generateDiffString(item.before, item.after).diff,
+      expect(await readFile(join(cwd, item.path))).toEqual(
+        Buffer.from(item.after, "utf8"),
       );
-      expect(result.details?.patch).toBe(
-        generateUnifiedPatch(item.path, item.before, item.after),
-      );
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: `Successfully replaced 1 block(s) in ${item.path}.`,
+        },
+      ]);
+      expect(result.details?.diff).toBe(item.diff);
+      expect(result.details?.patch).toBe(item.patch);
+      expect(result.details?.firstChangedLine).toBe(item.firstChangedLine);
     }
   });
 
@@ -828,7 +842,6 @@ describe("Hearth-backed pi tool contracts", () => {
     const pooledShell: ShellSpec = {
       program: "/bin/sh",
       args: ["-c"],
-      transport: "arg" as ShellSpec["transport"],
     };
     const hearth = new HearthEngine({
       cwd,
@@ -841,11 +854,16 @@ describe("Hearth-backed pi tool contracts", () => {
       ...settings,
       shell: pooledShell,
     });
+    const marker = join(cwd, "warm-shell-effects.txt");
+    await writeFile(marker, "");
 
     await expect(
       bash.execute(
         "bash-warm-signal",
-        { command: "kill -9 $$" },
+        {
+          command: "printf 'executed\\n' >> warm-shell-effects.txt; kill -9 $$",
+          timeout: 2,
+        },
         undefined,
         undefined,
         context,
@@ -853,5 +871,6 @@ describe("Hearth-backed pi tool contracts", () => {
     ).rejects.toThrow(
       "Hearth reported an indeterminate command outcome; inspect state before retrying",
     );
+    expect(await readFile(marker, "utf8")).toBe("executed\n");
   });
 });

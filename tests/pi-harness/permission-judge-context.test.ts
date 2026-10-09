@@ -453,114 +453,85 @@ describe("current permission run evidence", () => {
   });
 
   test("excludes failed, reordered, lookalike, orphaned, and duplicate AskUserQuestion results", () => {
-    const evidence = derivePermissionRunEvidence(
-      [
-        { type: "message", message: { role: "user", content: "task" } },
+    const call = (name = "AskUserQuestion") => ({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "question", name }],
+      },
+    });
+    const result = (isError = false, toolName = "AskUserQuestion") => ({
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "question",
+        toolName,
+        content: [{ type: "text", text: "PRIVATE RESULT" }],
+        isError,
+      },
+    });
+    const observe = (entries: readonly unknown[]) => {
+      const authentications: string[] = [];
+      const evidence = derivePermissionRunEvidence(
+        [
+          { type: "message", message: { role: "user", content: "task" } },
+          ...entries,
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: [{ type: "toolCall", id: "current", name: "bash" }],
+            },
+          },
+        ],
+        "current",
         {
-          type: "message",
-          message: {
-            role: "toolResult",
-            toolCallId: "reordered-question",
-            toolName: "AskUserQuestion",
-            content: [{ type: "text", text: "REORDERED PRIVATE RESULT" }],
-            isError: false,
+          matchesAskUserQuestionResult: (id) => {
+            authentications.push(id);
+            return true;
           },
         },
-        {
-          type: "message",
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "reordered-question",
-                name: "AskUserQuestion",
-              },
-              {
-                type: "toolCall",
-                id: "failed-question",
-                name: "AskUserQuestion",
-              },
-            ],
-          },
-        },
-        {
-          type: "message",
-          message: {
-            role: "toolResult",
-            toolCallId: "failed-question",
-            toolName: "AskUserQuestion",
-            content: [{ type: "text", text: "FAILED PRIVATE RESULT" }],
-            isError: true,
-          },
-        },
-        {
-          type: "message",
-          message: {
-            role: "toolResult",
-            toolCallId: "lookalike-question",
-            toolName: "askUserQuestion",
-            content: [{ type: "text", text: "LOOKALIKE PRIVATE RESULT" }],
-            isError: false,
-          },
-        },
-        {
-          type: "message",
-          message: {
-            role: "toolResult",
-            toolCallId: "orphan-question",
-            toolName: "AskUserQuestion",
-            content: [{ type: "text", text: "ORPHAN PRIVATE RESULT" }],
-            isError: false,
-          },
-        },
-        {
-          type: "message",
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "duplicate-question",
-                name: "AskUserQuestion",
-              },
-            ],
-          },
-        },
-        {
-          type: "message",
-          message: {
-            role: "toolResult",
-            toolCallId: "duplicate-question",
-            toolName: "AskUserQuestion",
-            content: [{ type: "text", text: "DUPLICATE PRIVATE RESULT 1" }],
-            isError: false,
-          },
-        },
-        {
-          type: "message",
-          message: {
-            role: "toolResult",
-            toolCallId: "duplicate-question",
-            toolName: "AskUserQuestion",
-            content: [{ type: "text", text: "DUPLICATE PRIVATE RESULT 2" }],
-            isError: false,
-          },
-        },
-        {
-          type: "message",
-          message: {
-            role: "assistant",
-            content: [{ type: "toolCall", id: "current", name: "bash" }],
-          },
-        },
-      ],
-      "current",
-      { matchesAskUserQuestionResult: () => true },
-    );
+      );
+      return { evidence, authentications };
+    };
 
-    expect(evidence?.askUserQuestionResultText).toBeUndefined();
-    expect(JSON.stringify(evidence)).not.toContain("PRIVATE RESULT");
+    const positive = observe([call(), result()]);
+    expect(positive.authentications).toEqual(["question"]);
+    expect(positive.evidence?.askUserQuestionResultText).toBe("PRIVATE RESULT");
+    const cases = [
+      { name: "failed", entries: [call(), result(true)] },
+      { name: "reordered", entries: [result(), call()] },
+      {
+        name: "lookalike",
+        entries: [call("askUserQuestion"), result(false, "askUserQuestion")],
+      },
+      { name: "orphaned", entries: [result()] },
+      { name: "duplicate", entries: [call(), result(), result()] },
+    ];
+    for (const item of cases) {
+      const { evidence, authentications } = observe(item.entries);
+      expect(authentications).toEqual(
+        item.name === "failed" ? ["question"] : [],
+      );
+      expect(evidence).toBeDefined();
+      expect({
+        case: item.name,
+        answer: evidence?.askUserQuestionResultText,
+      }).toEqual({
+        case: item.name,
+        answer: undefined,
+      });
+      expect(JSON.stringify(evidence)).not.toContain("PRIVATE RESULT");
+    }
+    for (const entries of [
+      [call("askUserQuestion"), result()],
+      [call(), result(false, "askUserQuestion")],
+    ]) {
+      const { evidence, authentications } = observe(entries);
+      expect(authentications).toEqual([]);
+      expect(evidence?.askUserQuestionResultText).toBeUndefined();
+      expect(JSON.stringify(evidence)).not.toContain("PRIVATE RESULT");
+    }
   });
 
   test("retains only the latest authenticated AskUserQuestion result", () => {
@@ -1103,37 +1074,92 @@ describe("permission judge project context", () => {
   });
 
   test("uses complete navigable roots beyond the display limit", async () => {
-    const parent = await tempRoot("judge-many-worktrees-");
-    const roots = Array.from({ length: 18 }, (_, index) =>
-      join(parent, `project-${String(index).padStart(2, "0")}`),
+    const roots = Array.from(
+      { length: 18 },
+      (_, index) => `/w/${String(index).padStart(2, "0")}`,
     );
-    await Promise.all(roots.map((root) => mkdir(root)));
-    const [active] = roots;
-    const target = roots.at(17);
-    if (active === undefined || target === undefined) {
-      throw new Error("missing test roots");
-    }
-    const context = await discoverProjectContext(active, {
-      runGit: async () =>
-        ok(
-          worktreeOutput(
-            ...roots.map((root, index) => [
-              `worktree ${root}`,
-              `HEAD ${index}`,
-              `branch refs/heads/worktree-${index}`,
-            ]),
+    const discover = async (paths: string[], target: string) => {
+      const [active] = paths;
+      if (active === undefined) throw new Error("missing active root");
+      return discoverProjectContext(active, {
+        canonicalizeDirectory: async (path) => path,
+        runGit: async () =>
+          ok(
+            worktreeOutput(
+              ...paths.map((path, index) => [
+                `worktree ${path}`,
+                `HEAD ${index}`,
+                `branch refs/heads/worktree-${index}`,
+              ]),
+            ),
           ),
-        ),
-      runGitCommonDir: async () => "/common/.git",
-      leadingCdTarget: target,
+        runGitCommonDir: async () => "/common/.git",
+        leadingCdTarget: target,
+      });
+    };
+    const context = await discover(roots, "/w/17/nested");
+    if (context.kind !== "git")
+      throw new Error(`expected git: ${context.kind}`);
+    expect(context.worktrees).toEqual([
+      "/w/00",
+      "/w/01",
+      "/w/02",
+      "/w/03",
+      "/w/04",
+      "/w/05",
+      "/w/06",
+      "/w/07",
+      "/w/08",
+      "/w/09",
+      "/w/10",
+      "/w/11",
+      "/w/12",
+      "/w/13",
+      "/w/14",
+      "/w/15",
+    ]);
+    expect(context.worktrees).toHaveLength(16);
+    expect(context.navigableRoots).toHaveLength(18);
+    expect(context.navigableRoots).toContain("/w/17");
+    expect(Buffer.byteLength(context.worktrees.join(""), "utf8")).toBe(80);
+    expect(context.leadingNavigation).toEqual({
+      scope: "listed-worktree",
+      sameRepository: true,
+    });
+    const sibling = await discover(roots, "/w/17-escape");
+    expect(sibling.leadingNavigation).toEqual({
+      scope: "outside-listed-worktrees",
+      sameRepository: false,
     });
 
-    expect(context.kind).toBe("git");
-    if (context.kind !== "git") throw new Error("expected git context");
-    expect(context.worktrees).toHaveLength(16);
-    expect(context.worktrees).not.toContain(target);
-    expect(context.navigableRoots).toContain(target);
-    expect(context.leadingNavigation).toEqual({
+    const byteRoots = [
+      "/b/active",
+      ...Array.from(
+        { length: 4 },
+        (_, index) => `/b/${index}${"界".repeat(166)}`,
+      ),
+    ];
+    const byteTarget = byteRoots.at(4);
+    if (byteTarget === undefined) throw new Error("missing byte-budget root");
+    expect(Buffer.byteLength(byteTarget, "utf8")).toBe(502);
+    const byteContext = await discover(byteRoots, byteTarget);
+    if (byteContext.kind !== "git")
+      throw new Error(`expected git: ${byteContext.kind}`);
+    expect(byteContext.worktrees).toEqual(byteRoots);
+    expect(Buffer.byteLength(byteContext.worktrees.join(""), "utf8")).toBe(
+      2_017,
+    );
+
+    const overflowingRoots = [...byteRoots, `/b/4${"界".repeat(166)}`];
+    const overflowTarget = overflowingRoots.at(5);
+    if (overflowTarget === undefined) throw new Error("missing overflow root");
+    const overflow = await discover(overflowingRoots, overflowTarget);
+    if (overflow.kind !== "git")
+      throw new Error(`expected git: ${overflow.kind}`);
+    expect(overflow.worktrees).toEqual(byteRoots);
+    expect(overflow.navigableRoots).toHaveLength(6);
+    expect(overflow.navigableRoots).toContain(overflowTarget);
+    expect(overflow.leadingNavigation).toEqual({
       scope: "listed-worktree",
       sameRepository: true,
     });

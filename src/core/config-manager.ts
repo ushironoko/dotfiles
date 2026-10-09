@@ -6,7 +6,8 @@ import type {
   MCPConfig,
 } from "../types/config.js";
 import { expandPath } from "../utils/paths.js";
-import { join } from "node:path";
+import { statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 const DEFAULT_KEEP_LAST = 10;
 
@@ -73,7 +74,14 @@ export const expandMCPConfig = (
 });
 
 // ConfigManagerを作成
-export const createConfigManager = async (configPath?: string | null) => {
+interface ConfigManagerOptions {
+  requireConfig?: boolean;
+}
+
+export const createConfigManager = async (
+  configPath?: string | null,
+  options: ConfigManagerOptions = {},
+) => {
   // dotfilesレポジトリのルートディレクトリを取得
   // bin/dotfiles経由で実行される場合を考慮
   const getDotfilesRoot = () => {
@@ -89,14 +97,18 @@ export const createConfigManager = async (configPath?: string | null) => {
     return expandPath("~/ghq/github.com/ushironoko/dotfiles");
   };
 
-  // configファイルを読み込み
-  // configPathが空、null、undefined、またはデフォルトの場合はレポジトリルートを使用
+  const hasExplicitPath = Boolean(configPath && configPath !== "./");
+  const selectedPath =
+    hasExplicitPath && configPath ? expandPath(configPath) : getDotfilesRoot();
+  const isConfigFile = statSync(selectedPath, {
+    throwIfNoEntry: false,
+  })?.isFile();
+
   const { config: loadedConfig } = await loadConfig<DotfilesConfig>({
     name: "dotfiles",
-    cwd:
-      configPath && configPath !== "./" && configPath !== ""
-        ? expandPath(configPath)
-        : getDotfilesRoot(),
+    cwd: isConfigFile ? dirname(selectedPath) : selectedPath,
+    configFile: isConfigFile ? basename(selectedPath) : undefined,
+    configFileRequired: Boolean(options.requireConfig && hasExplicitPath),
     defaults: {
       mappings: [], // デフォルトは空配列
       backup: {
@@ -105,6 +117,16 @@ export const createConfigManager = async (configPath?: string | null) => {
         compress: false,
       },
     },
+  }).catch((error: unknown) => {
+    if (options.requireConfig && hasExplicitPath) {
+      throw new Error(
+        `Failed to resolve configuration ${selectedPath}: ${error}`,
+        {
+          cause: error,
+        },
+      );
+    }
+    throw error;
   });
 
   // 検証

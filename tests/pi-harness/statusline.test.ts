@@ -481,10 +481,6 @@ describe("pi-harness statusline lifecycle", () => {
       join(canonicalWorktreeA, ".git"),
     );
 
-    // Every pre-existing check still passes: the copied identity reports A as
-    // its top-level, uses the same common dir, points inside common/worktrees,
-    // and stale registration still lists A. Only B's backlink exposes the
-    // mismatch between the registered path and the detected admin identity.
     const [sourceCommon, replacedCommon, replacedTop, replacedGitDir, list] =
       await Promise.all([
         gitText(canonicalProject, [
@@ -519,6 +515,144 @@ describe("pi-harness statusline lifecycle", () => {
       canonicalWorktreeA,
       canonicalWorktreeA,
     ]);
+  });
+
+  test("rejects a foreign admin backlink with unchanged filesystem and Git identity", async () => {
+    const home = await tempDirectory("pi-statusline-worktree-backlink");
+    const project = join(home, "repo");
+    const worktreeA = join(home, "worktree-a");
+    const worktreeB = join(home, "worktree-b");
+    await fs.mkdir(project, { recursive: true });
+    await markAsProject(project);
+    await runGit(project, ["init", "-b", "main"]);
+    await runGit(project, ["config", "user.email", "test@example.com"]);
+    await runGit(project, ["config", "user.name", "Status Test"]);
+    await runGit(project, ["add", "."]);
+    await runGit(project, ["commit", "-m", "initial"]);
+    await runGit(project, ["worktree", "add", "-b", "topic-a", worktreeA]);
+    await runGit(project, ["worktree", "add", "-b", "topic-b", worktreeB]);
+    const canonicalProject = await fs.realpath(project);
+    const canonicalWorktreeA = await fs.realpath(worktreeA);
+    const canonicalWorktreeB = await fs.realpath(worktreeB);
+    const details = await createdWorktreeDetails(canonicalWorktreeA);
+    const gitDirA = await fs.realpath(details.worktreeIdentity.gitDir);
+    const gitDirB = await gitText(canonicalWorktreeB, [
+      "rev-parse",
+      "--absolute-git-dir",
+    ]);
+    const dotGitA = join(canonicalWorktreeA, ".git");
+    const dotGitB = join(canonicalWorktreeB, ".git");
+    const [rootBefore, dotGitBefore, pointerBefore, backlinkA, backlinkB] =
+      await Promise.all([
+        fs.lstat(canonicalWorktreeA, { bigint: true }),
+        fs.lstat(dotGitA, { bigint: true }),
+        fs.readFile(dotGitA),
+        fs.readFile(join(gitDirA, "gitdir"), "utf8"),
+        fs.readFile(join(gitDirB, "gitdir"), "utf8"),
+      ]);
+    expect(await fs.realpath(backlinkA.trim())).toBe(dotGitA);
+    expect(await fs.realpath(backlinkB.trim())).toBe(dotGitB);
+
+    const gitReads: string[] = [];
+    const pi = createFakePi({ cwd: canonicalProject, gitBranch: "main" });
+    setupStatusline(pi, makeConfig(home, [canonicalProject]), {
+      getGitStatus: async (cwd) => {
+        gitReads.push(cwd);
+        return gitStatus({ repository: undefined });
+      },
+      getBranch: async (cwd) =>
+        cwd === canonicalWorktreeA ? "topic-a" : "main",
+    });
+
+    try {
+      await pi.emitSessionStart({ type: "session_start", reason: "startup" });
+      await pi.emitToolResult({
+        type: "tool_result",
+        toolName: "worktree_create",
+        input: { name: "topic-a" },
+        content: [{ type: "text", text: canonicalWorktreeA }],
+        details,
+        isError: false,
+      });
+      await pi.emitAgentSettled();
+      expect(gitReads).toEqual([
+        canonicalProject,
+        canonicalWorktreeA,
+        canonicalWorktreeA,
+      ]);
+
+      await fs.writeFile(join(gitDirA, "gitdir"), backlinkB);
+      await fs.writeFile(join(gitDirB, "gitdir"), backlinkA);
+      const [rootAfter, dotGitAfter, pointerAfter] = await Promise.all([
+        fs.lstat(canonicalWorktreeA, { bigint: true }),
+        fs.lstat(dotGitA, { bigint: true }),
+        fs.readFile(dotGitA),
+      ]);
+      expect(await fs.realpath(canonicalWorktreeA)).toBe(canonicalWorktreeA);
+      expect(rootAfter.isDirectory()).toBe(true);
+      expect(dotGitAfter.isFile()).toBe(true);
+      expect([rootAfter.dev, rootAfter.ino]).toEqual([
+        rootBefore.dev,
+        rootBefore.ino,
+      ]);
+      expect([dotGitAfter.dev, dotGitAfter.ino]).toEqual([
+        dotGitBefore.dev,
+        dotGitBefore.ino,
+      ]);
+      expect(pointerAfter).toEqual(pointerBefore);
+
+      const [sourceCommon, worktreeCommon, worktreeTop, detectedGitDir, list] =
+        await Promise.all([
+          gitText(canonicalProject, [
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+          ]),
+          gitText(canonicalWorktreeA, [
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+          ]),
+          gitText(canonicalWorktreeA, [
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+          ]),
+          gitText(canonicalWorktreeA, ["rev-parse", "--absolute-git-dir"]),
+          gitText(canonicalProject, ["worktree", "list", "--porcelain"]),
+        ]);
+      expect(await fs.realpath(sourceCommon)).toBe(
+        join(canonicalProject, ".git"),
+      );
+      expect(await fs.realpath(worktreeCommon)).toBe(
+        join(canonicalProject, ".git"),
+      );
+      expect(await fs.realpath(worktreeTop)).toBe(canonicalWorktreeA);
+      expect(await fs.realpath(detectedGitDir)).toBe(gitDirA);
+      expect(dirname(gitDirA)).toBe(
+        join(canonicalProject, ".git", "worktrees"),
+      );
+      expect(list.split("\n")).toContain(`worktree ${canonicalWorktreeA}`);
+      expect(list.split("\n")).toContain(`worktree ${canonicalWorktreeB}`);
+      const backlinkFile = join(gitDirA, "gitdir");
+      const backlinkStats = await fs.lstat(backlinkFile);
+      expect(backlinkStats.isFile()).toBe(true);
+      expect(backlinkStats.size).toBeLessThanOrEqual(4_096);
+      expect(await fs.readFile(backlinkFile, "utf8")).toBe(backlinkB);
+      expect(await fs.realpath(backlinkB.trim())).toBe(dotGitB);
+      expect(await fs.realpath(backlinkB.trim())).not.toBe(
+        await fs.realpath(dotGitA),
+      );
+
+      await pi.emitAgentSettled();
+      expect(gitReads).toEqual([
+        canonicalProject,
+        canonicalWorktreeA,
+        canonicalWorktreeA,
+      ]);
+    } finally {
+      await pi.emitSessionShutdown();
+    }
   });
 
   test("rejects recreation at the same path with the original .git contents", async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import {
   chmod,
   mkdir,
@@ -448,20 +449,154 @@ describe("bounded compatibility subprocesses", () => {
   test("a timeout kills the spawned process group before returning", async () => {
     if (process.platform === "win32") return;
     const root = await mkdtemp(join(tmpdir(), "pi-process-group-"));
-    const pidFile = join(root, "grandchild.pid");
+    const parentFile = join(root, "parent.pid");
+    const childFile = join(root, "child.pid");
+    const readyFile = join(root, "ready.json");
+    let parentPid: number | undefined;
+    let childPid: number | undefined;
+    const cleanup = async () => {
+      const publishedParent = Number(
+        await readFile(parentFile, "utf8").catch(() => ""),
+      );
+      const publishedChild = Number(
+        await readFile(childFile, "utf8").catch(() => ""),
+      );
+      for (const pid of [parentPid, publishedParent]) {
+        if (
+          pid === undefined ||
+          !Number.isSafeInteger(pid) ||
+          pid <= 1 ||
+          pid === process.pid
+        )
+          continue;
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {}
+      }
+      for (const pid of [
+        childPid,
+        publishedChild,
+        parentPid,
+        publishedParent,
+      ]) {
+        if (
+          pid === undefined ||
+          !Number.isSafeInteger(pid) ||
+          pid <= 1 ||
+          pid === process.pid
+        )
+          continue;
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {}
+      }
+    };
+    const childSource = `
+const { writeFileSync, renameSync } = require("node:fs");
+process.on("SIGTERM", () => {});
+setTimeout(() => process.exit(0), 15000);
+writeFileSync(${JSON.stringify(`${readyFile}.tmp`)}, JSON.stringify({ pid: process.pid, parent: process.ppid, termReady: true }));
+renameSync(${JSON.stringify(`${readyFile}.tmp`)}, ${JSON.stringify(readyFile)});
+`;
+    const parentSource = `
+const { spawn } = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+writeFileSync(${JSON.stringify(parentFile)}, String(process.pid));
+process.on("SIGTERM", () => process.exit(0));
+const child = spawn(process.execPath, ["-e", ${JSON.stringify(childSource)}], { stdio: "ignore" });
+child.on("error", () => process.exit(2));
+if (child.pid === undefined) process.exit(3);
+writeFileSync(${JSON.stringify(childFile)}, String(child.pid));
+setTimeout(() => { child.kill("SIGKILL"); process.exit(0); }, 18000);
+`;
+    let watchdogFired = false;
+    const watchdog = setTimeout(() => {
+      watchdogFired = true;
+      void cleanup();
+    }, 12_000);
+    let returned = false;
+    const pending = runCommand([process.execPath, "-e", parentSource], {
+      timeoutMs: 5_000,
+    }).then(
+      (result) => {
+        returned = true;
+        return { result };
+      },
+      (error: unknown) => {
+        returned = true;
+        return { error };
+      },
+    );
     try {
-      const command = `(trap '' TERM; while true; do sleep 1; done) & child=$!; echo $child > ${JSON.stringify(pidFile)}; wait`;
-      const commandResult = await runCommand(["bash", "-c", command], {
-        timeoutMs: 20,
+      const readinessDeadline = Date.now() + 3_000;
+      let readyText: string | undefined;
+      while (Date.now() < readinessDeadline) {
+        expect(returned).toBe(false);
+        parentPid =
+          Number(await readFile(parentFile, "utf8").catch(() => "")) ||
+          undefined;
+        childPid =
+          Number(await readFile(childFile, "utf8").catch(() => "")) ||
+          undefined;
+        readyText = await readFile(readyFile, "utf8").catch(() => undefined);
+        if (
+          readyText !== undefined &&
+          parentPid !== undefined &&
+          childPid !== undefined
+        )
+          break;
+        await Bun.sleep(20);
+      }
+      if (readyText === undefined)
+        throw new Error("process tree did not become ready before deadline");
+      if (parentPid === undefined || childPid === undefined)
+        throw new Error("process tree did not publish both PIDs");
+      expect(Date.now()).toBeLessThan(readinessDeadline);
+      const readyParent = parentPid;
+      const readyChild = childPid;
+      expect(Number.isSafeInteger(parentPid)).toBe(true);
+      expect(Number.isSafeInteger(childPid)).toBe(true);
+      expect(parentPid).toBeGreaterThan(1);
+      expect(childPid).toBeGreaterThan(1);
+      expect(parentPid).not.toBe(childPid);
+      expect(parentPid).not.toBe(process.pid);
+      expect(childPid).not.toBe(process.pid);
+      expect(JSON.parse(readyText)).toEqual({
+        pid: childPid,
+        parent: parentPid,
+        termReady: true,
       });
-      expect(commandResult.timedOut).toBe(true);
-      const pidText = await readFile(pidFile, "utf8");
-      const pid = Number(pidText.trim());
-      expect(() => process.kill(pid, 0)).toThrow();
+      expect(() => process.kill(readyParent, 0)).not.toThrow();
+      expect(() => process.kill(readyChild, 0)).not.toThrow();
+      const relationship = execFileSync(
+        "ps",
+        ["-p", String(childPid), "-o", "ppid=", "-o", "pgid="],
+        {
+          encoding: "utf8",
+          timeout: 1_000,
+        },
+      )
+        .trim()
+        .split(/\s+/)
+        .map(Number);
+      expect(relationship).toEqual([parentPid, parentPid]);
+      expect(returned).toBe(false);
+      const outcome = await pending;
+      if ("error" in outcome) throw outcome.error;
+      expect(watchdogFired).toBe(false);
+      expect(outcome.result.timedOut).toBe(true);
+      expect(() => process.kill(readyParent, 0)).toThrow();
+      expect(() => process.kill(readyChild, 0)).toThrow();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      try {
+        await cleanup();
+        await pending;
+      } finally {
+        clearTimeout(watchdog);
+        await rm(root, { recursive: true, force: true });
+      }
     }
-  });
+  }, 20_000);
 });
 
 describe("global declaration resolution guard", () => {

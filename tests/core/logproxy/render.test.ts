@@ -102,8 +102,9 @@ describe("renderContext — text", () => {
     expect(out).toContain("file body");
   });
   it("応答 usage / stop_reason を含む", () => {
-    expect(out).toContain("end_turn");
-    expect(out).toContain("20"); // output_tokens
+    expect(out).toContain(
+      "──── RESPONSE ────\nstatus=200 in=10 out=20 cacheR=3 cacheW=0 stop=end_turn",
+    );
   });
   it("system が string でも表示できる", () => {
     const s = renderContext(mkReq({ system: "PLAIN SYS" }), undefined, "text");

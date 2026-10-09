@@ -135,10 +135,10 @@ describe("validateWorkflowPlan structure", () => {
   });
 
   test("rejects more tasks than the per-stage cap", () => {
-    const tasks = Array.from({ length: MAX_STAGE_TASKS + 1 }, () =>
-      reviewerTask(),
+    const tasks = Array.from({ length: 65 }, () => reviewerTask());
+    expect(expectErrors(plan([fanout(tasks)]))).toContain(
+      "stages[0].tasks: must contain at most 64 tasks (got 65)",
     );
-    expectErrors(plan([fanout(tasks)]), `${MAX_STAGE_TASKS}`);
   });
 
   test("rejects more tasks than the whole-workflow persistence cap", () => {

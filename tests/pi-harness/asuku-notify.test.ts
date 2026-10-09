@@ -262,27 +262,63 @@ describe("pi-harness asuku-notify", () => {
     const binary = join(home, "asuku-hook");
     await fs.writeFile(binary, "#!/bin/bash\n", { mode: 0o755 });
     let clock = 1_000;
-    const observedTimeouts: number[] = [];
+    const invocations: { kind: string; title: string; timeout?: number }[] = [];
+    const nativeResolvers: ((accepted: boolean) => void)[] = [];
     const pi = createFakePi({ cwd: home });
-    pi.queueConfirm(true);
+    pi.ctx.ui.confirm = async (title, _message, options) => {
+      invocations.push({ kind: "native", title, timeout: options?.timeout });
+      return new Promise<boolean>((resolve) => nativeResolvers.push(resolve));
+    };
     setupAsukuNotify(pi, makeConfig(home), {
       binaryPath: binary,
       now: () => clock,
-      requestPermission: async (_command, _payload, options) => {
-        observedTimeouts.push(options.timeoutMs);
-        clock = 4_000;
+      requestPermission: async (_command, payload, options) => {
+        invocations.push({
+          kind: "asuku",
+          title: payload.tool_input.title,
+          timeout: options.timeoutMs,
+        });
         return undefined;
       },
     });
 
     await pi.emitSessionStart({ type: "session_start", reason: "startup" });
-    const accepted = await pi.ctx.ui.confirm("Permission", "run command", {
+    const first = pi.ctx.ui.confirm("First", "first command", {
       timeout: 5_000,
     });
+    await waitFor(async () => nativeResolvers.length === 1);
+    const second = pi.ctx.ui.confirm("Second", "second command", {
+      timeout: 5_000,
+    });
+    let expiredSettled = false;
+    const expired = pi.ctx.ui
+      .confirm("Expired", "expired command", { timeout: 2_000 })
+      .then((accepted) => {
+        expiredSettled = true;
+        return accepted;
+      });
+    expect(invocations).toEqual([
+      { kind: "asuku", title: "First", timeout: 5_000 },
+      { kind: "native", title: "First", timeout: 5_000 },
+    ]);
 
-    expect(accepted).toBe(true);
-    expect(observedTimeouts).toEqual([5_000]);
-    expect(pi.confirmDialogs[0]?.dialogOptions?.timeout).toBe(5_000);
+    clock = 4_000;
+    nativeResolvers[0]?.(true);
+    expect(await first).toBe(true);
+    await waitFor(async () => nativeResolvers.length === 2);
+    expect(invocations).toEqual([
+      { kind: "asuku", title: "First", timeout: 5_000 },
+      { kind: "native", title: "First", timeout: 5_000 },
+      { kind: "asuku", title: "Second", timeout: 2_000 },
+      { kind: "native", title: "Second", timeout: 2_000 },
+    ]);
+    nativeResolvers[1]?.(false);
+    expect(await second).toBe(false);
+    await waitFor(async () => expiredSettled || invocations.length > 4);
+    expect(nativeResolvers).toHaveLength(2);
+    expect(invocations).toHaveLength(4);
+    expect(invocations.some(({ title }) => title === "Expired")).toBe(false);
+    expect(await expired).toBe(false);
   });
 
   test("aborts a pending asuku request when the native TUI decides first", async () => {

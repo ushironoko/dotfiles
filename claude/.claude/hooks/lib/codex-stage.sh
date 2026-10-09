@@ -105,7 +105,6 @@ run_with_timeout() {
   set -m
   "$@" < "${stdin_file:-/dev/null}" &
   local cmd_pid=$! kill_target="-$!"
-  [ "$monitor_was_enabled" -eq 1 ] || set +m
   (
     sleep "$secs"
     # Mark a timeout only when the process group is still alive at the
@@ -119,6 +118,7 @@ run_with_timeout() {
     fi
   ) &
   local watchdog_pid=$!
+  [ "$monitor_was_enabled" -eq 1 ] || set +m
   local rc=0
   wait "$cmd_pid" || rc=$?
   # A command leader may exit while a background descendant keeps the job's
@@ -127,7 +127,7 @@ run_with_timeout() {
   if kill -0 -- "$kill_target" 2>/dev/null; then
     wait "$watchdog_pid" 2>/dev/null || true
   else
-    kill "$watchdog_pid" 2>/dev/null || true
+    kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
     wait "$watchdog_pid" 2>/dev/null || true
   fi
   if [ -e "$mark" ]; then

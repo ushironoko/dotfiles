@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Component } from "@earendil-works/pi-tui";
 
 import type { MemoryAggregate } from "../../pi/extensions/pi-harness/features/agent-memory/cli";
 import type { SourcedMemoryRecord } from "../../pi/extensions/pi-harness/features/agent-memory/model";
@@ -34,21 +35,40 @@ describe("child-session private focus capability", () => {
   const component = { render: () => ["x"], invalidate() {} };
 
   test("reads a valid focus target and changes focus through the public setter", () => {
-    let focused = component;
+    const editor: Component = { render: () => ["editor"], invalidate() {} };
+    const browser: Component = { render: () => ["browser"], invalidate() {} };
+    let focused: Component | null = editor;
+    const setterCalls: (Component | null)[] = [];
     const tui = {
       get focusedComponent() {
         return focused;
       },
-      setFocus(next: typeof component | null) {
-        if (next !== null) focused = next;
+      setFocus(next: Component | null) {
+        setterCalls.push(next);
+        focused = next;
       },
     };
 
     expect(readFocusedComponent(tui)).toEqual({
       supported: true,
-      component,
+      component: editor,
     });
-    expect(setFocusSafely(tui, component)).toEqual({ ok: true });
+    expect(setFocusSafely(tui, browser)).toEqual({ ok: true });
+    expect(setterCalls).toEqual([browser]);
+    expect(focused).toBe(browser);
+    expect(readFocusedComponent(tui)).toEqual({
+      supported: true,
+      component: browser,
+    });
+    expect(setFocusSafely(tui, editor)).toEqual({ ok: true });
+    expect(setterCalls).toEqual([browser, editor]);
+    expect(focused).toBe(editor);
+    expect(setFocusSafely(tui, null)).toEqual({ ok: true });
+    expect(setterCalls).toEqual([browser, editor, null]);
+    expect(readFocusedComponent(tui)).toEqual({
+      supported: true,
+      component: null,
+    });
   });
 
   test("fails closed for absent, throwing, and changed-shape focus state", () => {
@@ -984,7 +1004,7 @@ describe("project memory detail component", () => {
       record: {
         ...base.record,
         description: "Architecture decision 界😀",
-        content: `${"durable line 界😀 ".repeat(80)}\nCONTENT-END\u001b]2;spoof\u0007`,
+        content: `${"durable line 界😀 ".repeat(80)}\n\u001b]2;spoof\u0007\u009d2;c1-spoof\u009cCONTENT-END`,
       },
     };
     const aggregate: MemoryAggregate = {
@@ -1018,10 +1038,16 @@ describe("project memory detail component", () => {
     const initial = detail.render(24);
     expect(initial.join("\n")).toContain("project/alpha.md");
     expect(initial.every((line) => visibleWidth(line) <= 24)).toBe(true);
-    expect(stripTerminalControls(initial.join("\n"))).not.toContain("spoof");
+    expect(initial.join("\n")).not.toContain("\u001b]");
+    expect(initial.join("\n")).not.toMatch(/[\u0080-\u009f]/u);
 
     detail.handleInput("end");
-    expect(detail.render(24).join("\n")).toContain("CONTENT-END");
+    const final = detail.render(24);
+    expect(final.join("\n")).toContain("CONTENT-END");
+    expect(final.join("\n")).not.toContain("\u001b]");
+    expect(final.join("\n")).not.toMatch(/[\u0080-\u009f]/u);
+    expect(final.join("\n")).not.toContain("spoof");
+    expect(final.every((line) => visibleWidth(line) <= 24)).toBe(true);
     detail.handleInput("b");
     expect(closes).toBe(1);
   });
@@ -1036,7 +1062,7 @@ describe("bit issue detail component", () => {
         bitDetail("issue-a", {
           comments: {
             status: "ready",
-            text: `comment abc\n\n${"long comment 界😀 ".repeat(60)}\u001b]2;spoof\u0007`,
+            text: `comment abc\n\n${"long comment 界😀 ".repeat(60)}\n\u001b]2;spoof\u0007\u009d2;c1-spoof\u009cCOMMENT-END`,
             truncated: false,
           },
         }),
@@ -1063,6 +1089,12 @@ describe("bit issue detail component", () => {
     expect(lines.every((item) => visibleWidth(item) <= 32)).toBe(true);
     detail.handleInput("end");
     expect(detail.getOffset()).toBeGreaterThan(0);
+    const final = detail.render(32);
+    expect(final.join("\n")).toContain("COMMENT-END");
+    expect(final.join("\n")).not.toContain("\u001b]");
+    expect(final.join("\n")).not.toMatch(/[\u0080-\u009f]/u);
+    expect(final.join("\n")).not.toContain("spoof");
+    expect(final.every((line) => visibleWidth(line) <= 32)).toBe(true);
     detail.handleInput("home");
     expect(detail.getOffset()).toBe(0);
   });

@@ -250,6 +250,8 @@ const waitFor = async (condition: () => boolean): Promise<void> => {
 };
 
 const isProcessAlive = (pid: number): boolean => {
+  if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid)
+    return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -1034,25 +1036,20 @@ describe("pi-harness subagent", () => {
     const home = await makeTempDirectory("pi-subagent-group-kill");
     await writeAgent(home);
     const pidFile = join(home, "grandchild.pid");
-    // A fake "pi": spawns a grandchild that ignores SIGTERM (and loops so
-    // killing its inner sleep does not end it), records its own pid, emits an
-    // assistant line, then lingers. Only a group SIGKILL can reap the
-    // grandchild.
     const script = join(home, "fake-pi.sh");
     await fs.writeFile(
       script,
       [
         "#!/bin/bash",
-        `( trap '' TERM; echo $BASHPID > ${JSON.stringify(pidFile)}; while true; do sleep 1; done ) &`,
+        `/bin/bash -c 'trap "" TERM; printf "%s\\n" "$$" > "$1"; while true; do sleep 1; done' _ ${JSON.stringify(pidFile)} &`,
         `printf '%s' ${JSON.stringify(assistantEvent("working"))}`,
         "sleep 30",
       ].join("\n"),
       { mode: 0o755 },
     );
 
-    // Real detached process (mirrors defaultSpawn) so the group kill applies.
     const spawnFn: SpawnFunction = (_command, _args, options) =>
-      spawn("bash", [script], options);
+      spawn("/bin/bash", [script], options);
 
     const pi = createFakePi({ cwd: home });
     setupSubagent(pi, makeConfig(home), { spawnFn, termGraceMs: 50 });
@@ -1064,11 +1061,17 @@ describe("pi-harness subagent", () => {
       abortController.signal,
     );
 
-    await waitFor(() => existsSync(pidFile));
-    const pidText = await fs.readFile(pidFile, "utf8");
-    const grandchildPid = Number(pidText.trim());
+    let grandchildPid = 0;
     try {
-      expect(grandchildPid).toBeGreaterThan(0);
+      await waitFor(
+        () =>
+          existsSync(pidFile) && readFileSync(pidFile, "utf8").trim() !== "",
+      );
+      const pidText = await fs.readFile(pidFile, "utf8");
+      grandchildPid = Number(pidText.trim());
+      expect(Number.isSafeInteger(grandchildPid)).toBe(true);
+      expect(grandchildPid).toBeGreaterThan(1);
+      expect(grandchildPid).not.toBe(process.pid);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
       abortController.abort();
@@ -1077,6 +1080,8 @@ describe("pi-harness subagent", () => {
       await waitFor(() => !isProcessAlive(grandchildPid));
       expect(isProcessAlive(grandchildPid)).toBe(false);
     } finally {
+      abortController.abort();
+      await execution.catch(() => {});
       if (isProcessAlive(grandchildPid)) {
         try {
           process.kill(grandchildPid, "SIGKILL");

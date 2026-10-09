@@ -45,9 +45,101 @@ describe("renderPlist", () => {
     expect(xml).not.toContain("ANTHROPIC_BASE_URL");
   });
 
+  const specialXml = renderPlist({
+    label: `com.example.&<>"'`,
+    bunPath: `/tools/Bun & <runtime>/"bun"`,
+    entryPath: `/repo/space dir/'entry' > main`,
+    port: 9123,
+    host: "127.0.0.1",
+    logDir: `/logs/context & <archive> "quoted" 'single'`,
+    workingDir: `/repo/work & <tree> "quoted"`,
+    home: `/Users/home & <name> "quoted" 'single'`,
+    path: `/tools/space dir & <bin>:"quoted":'single':/usr/bin`,
+    keepDays: 17,
+    gzipIdleMinutes: 43,
+  });
+
   it("妥当な plist XML（doctype と plist 要素）", () => {
     expect(xml.startsWith("<?xml")).toBe(true);
     expect(xml).toContain("<!DOCTYPE plist");
     expect(xml.trimEnd().endsWith("</plist>")).toBe(true);
+    expect(specialXml.startsWith("<?xml")).toBe(true);
+    expect(specialXml).toContain("<!DOCTYPE plist");
+    expect(specialXml.trimEnd().endsWith("</plist>")).toBe(true);
+    expect(specialXml).toContain(
+      `<string>com.example.&amp;&lt;&gt;"'</string>`,
+    );
+    expect(specialXml).toContain(
+      `<string>/tools/Bun &amp; &lt;runtime&gt;/"bun"</string>`,
+    );
+    expect(specialXml).toContain(
+      `<string>/repo/space dir/'entry' &gt; main</string>`,
+    );
+    expect(specialXml).toContain(
+      `<string>/logs/context &amp; &lt;archive&gt; "quoted" 'single'/daemon.out.log</string>`,
+    );
+    expect(specialXml).toContain(
+      `<string>/logs/context &amp; &lt;archive&gt; "quoted" 'single'/daemon.err.log</string>`,
+    );
+    expect(specialXml).toContain(
+      `<string>/repo/work &amp; &lt;tree&gt; "quoted"</string>`,
+    );
+    expect(specialXml).toContain(
+      `<string>/tools/space dir &amp; &lt;bin&gt;:"quoted":'single':/usr/bin</string>`,
+    );
+    expect(specialXml).toContain(
+      `<string>/Users/home &amp; &lt;name&gt; "quoted" 'single'</string>`,
+    );
+    expect(specialXml).not.toContain("ANTHROPIC_BASE_URL");
   });
+
+  it.skipIf(process.platform !== "darwin")(
+    "Darwin plutil preserves the complete plist object",
+    async () => {
+      const parser = Bun.spawn(
+        ["/usr/bin/plutil", "-convert", "json", "-o", "-", "--", "-"],
+        {
+          stdin: new TextEncoder().encode(specialXml),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const [decoded, errors, exitCode] = await Promise.all([
+        new Response(parser.stdout).text(),
+        new Response(parser.stderr).text(),
+        parser.exited,
+      ]);
+      expect(errors).toBe("");
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(decoded)).toEqual({
+        Label: `com.example.&<>"'`,
+        ProgramArguments: [
+          `/tools/Bun & <runtime>/"bun"`,
+          `/repo/space dir/'entry' > main`,
+          "logproxy",
+          "start",
+          "--port",
+          "9123",
+          "--host",
+          "127.0.0.1",
+          "--dir",
+          `/logs/context & <archive> "quoted" 'single'`,
+          "--keepDays",
+          "17",
+          "--gzipIdleMinutes",
+          "43",
+        ],
+        RunAtLoad: true,
+        KeepAlive: true,
+        ThrottleInterval: 10,
+        WorkingDirectory: `/repo/work & <tree> "quoted"`,
+        StandardOutPath: `/logs/context & <archive> "quoted" 'single'/daemon.out.log`,
+        StandardErrorPath: `/logs/context & <archive> "quoted" 'single'/daemon.err.log`,
+        EnvironmentVariables: {
+          PATH: `/tools/space dir & <bin>:"quoted":'single':/usr/bin`,
+          HOME: `/Users/home & <name> "quoted" 'single'`,
+        },
+      });
+    },
+  );
 });

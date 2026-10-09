@@ -68,17 +68,62 @@ describe("setBaseUrlEnv / removeBaseUrlEnv（ファイル I/O）", () => {
     const original = {
       permissions: { allow: ["Bash(bun:*)"] },
       model: "opus[1m]",
+      preferences: { nested: { enabled: true, labels: ["keep"] } },
     };
     await fs.writeFile(path, JSON.stringify(original, null, 2));
 
     await setBaseUrlEnv(path, URL_);
-    const afterSet = JSON.parse(await fs.readFile(path, "utf8"));
-    expect(afterSet.env.ANTHROPIC_BASE_URL).toBe(URL_);
-    expect(afterSet.permissions).toEqual({ allow: ["Bash(bun:*)"] });
-    expect(await fs.readFile(path, "utf8")).toContain('\n  "');
+    const setBytes = await fs.readFile(path, "utf8");
+    expect(JSON.parse(setBytes)).toEqual({
+      permissions: { allow: ["Bash(bun:*)"] },
+      model: "opus[1m]",
+      preferences: { nested: { enabled: true, labels: ["keep"] } },
+      env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8787" },
+    });
+    expect(setBytes).toBe(`{
+  "permissions": {
+    "allow": [
+      "Bash(bun:*)"
+    ]
+  },
+  "model": "opus[1m]",
+  "preferences": {
+    "nested": {
+      "enabled": true,
+      "labels": [
+        "keep"
+      ]
+    }
+  },
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"
+  }
+}
+`);
 
     await removeBaseUrlEnv(path);
-    const afterRemove = JSON.parse(await fs.readFile(path, "utf8"));
-    expect(afterRemove).toEqual(original);
+    const removeBytes = await fs.readFile(path, "utf8");
+    expect(JSON.parse(removeBytes)).toEqual({
+      permissions: { allow: ["Bash(bun:*)"] },
+      model: "opus[1m]",
+      preferences: { nested: { enabled: true, labels: ["keep"] } },
+    });
+    expect(removeBytes).toBe(`{
+  "permissions": {
+    "allow": [
+      "Bash(bun:*)"
+    ]
+  },
+  "model": "opus[1m]",
+  "preferences": {
+    "nested": {
+      "enabled": true,
+      "labels": [
+        "keep"
+      ]
+    }
+  }
+}
+`);
   });
 });

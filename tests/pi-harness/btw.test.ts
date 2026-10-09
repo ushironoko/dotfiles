@@ -821,6 +821,9 @@ describe("BTW answer pane", () => {
 
 describe("BTW parent command", () => {
   test("starts from an immediate snapshot and retains Q/A only as a parent custom entry", async () => {
+    const defaultHarness = commandHarness();
+    setupBtw(defaultHarness.pi);
+    expect(defaultHarness.rendererRegistered()).toBe(false);
     const harness = commandHarness();
     const context = commandContext();
     let received: BtwSnapshot | undefined;
@@ -1205,12 +1208,24 @@ describe("BTW parent command", () => {
     const firstContext = commandContext({ idle: true });
     const secondContext = commandContext({ idle: true });
     let release!: (value: string) => void;
+    let cleaned!: () => void;
+    const cleanup = new Promise<void>((resolve) => {
+      cleaned = resolve;
+    });
+    const { setStatus } = firstContext.ctx.ui;
+    firstContext.ctx.ui.setStatus = (key, value) => {
+      setStatus(key, value);
+      if (key === "pi-harness-btw" && value === undefined) cleaned();
+    };
+    const questions: string[] = [];
     let started!: () => void;
     const hasStarted = new Promise<void>((resolve) => {
       started = resolve;
     });
     setupBtw(harness.pi, {
-      answerQuestion: async () => {
+      answerQuestion: async (_snapshot, question) => {
+        questions.push(question);
+        if (questions.length > 1) return "third answer";
         started();
         return new Promise<string>((resolve) => {
           release = resolve;
@@ -1228,8 +1243,21 @@ describe("BTW parent command", () => {
 
     release("done");
     await first;
-    await waitFor(() => harness.entries.length === 1);
+    await cleanup;
     expect(harness.entries).toHaveLength(1);
+    const thirdContext = commandContext({ idle: true });
+    await harness.command().handler("third", thirdContext.ctx);
+    await waitFor(() => harness.entries.length === 2);
+    expect(questions).toEqual(["first", "third"]);
+    expect(harness.entries[0]?.data).toMatchObject({
+      question: "first",
+      answer: "done",
+    });
+    expect(harness.entries[1]?.data).toMatchObject({
+      question: "third",
+      answer: "third answer",
+    });
+    expect(thirdContext.notifications).toEqual([]);
   });
 
   test("cancels an in-flight child through the command and shortcut", async () => {
@@ -1738,21 +1766,55 @@ describe("BTW parent command", () => {
   });
 
   test("sanitizes terminal controls before persistence and pane rendering", async () => {
-    const harness = commandHarness();
-    const context = commandContext({ idle: true });
-    setupBtw(harness.pi, {
-      createId: () => "safe-id",
-      answerQuestion: async () => "answer\u001b]2;owned\u0007safe",
-    });
-    await harness.command().handler("question\u001b[31mred", context.ctx);
-    await waitFor(() => harness.entries.length === 1);
-    const data = harness.entries[0].data as BtwHistoryData;
-    expect(JSON.stringify(data)).not.toContain("\u001b");
+    const directory = await mkdtemp(join(tmpdir(), "pi-btw-safe-history-"));
+    try {
+      const sessionManager = SessionManager.create("/repo", directory);
+      sessionManager.appendMessage(userMessage("parent question"));
+      sessionManager.appendMessage(assistantMessage("parent answer"));
+      const harness = commandHarness((customType, data) => {
+        sessionManager.appendCustomEntry(customType, data);
+      });
+      const context = commandContext({ idle: true });
+      Object.assign(context.ctx, { sessionManager });
+      setupBtw(harness.pi, {
+        createId: () => "safe-id",
+        answerQuestion: async () => "answer\u001b]2;owned\u0007safe",
+      });
+      await harness.command().handler("question\u001b[31mred", context.ctx);
+      await waitFor(() => harness.entries.length === 1);
+      expect(harness.entries[0]?.data).toMatchObject({
+        question: "questionred",
+        answer: "answersafe",
+      });
+      const sessionFile = sessionManager.getSessionFile();
+      if (sessionFile === undefined) throw new Error("missing session file");
+      const persisted = await readFile(sessionFile, "utf8");
+      const rows: unknown[] = persisted
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const stored = rows.filter(
+        (row) =>
+          typeof row === "object" &&
+          row !== null &&
+          "customType" in row &&
+          row.customType === "pi-harness:btw",
+      );
+      expect(stored).toHaveLength(1);
+      expect(stored[0]).toMatchObject({
+        type: "custom",
+        customType: "pi-harness:btw",
+        data: { id: "safe-id", question: "questionred", answer: "answersafe" },
+      });
 
-    await waitFor(() => context.panes.length === 1);
-    const rendered = context.panes[0]?.component.render(80).join("\n") ?? "";
-    expect(rendered).not.toContain("\u001b");
-    expect(rendered).toContain("answersafe");
+      await waitFor(() => context.panes.length === 1);
+      const rendered = context.panes[0]?.component.render(80).join("\n") ?? "";
+      expect(rendered).not.toContain("\u001b");
+      expect(rendered).toContain("answersafe");
+      await harness.emitSessionShutdown();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
 
     const emptyHarness = commandHarness();
     const emptyContext = commandContext({ idle: true });
@@ -1821,6 +1883,7 @@ describe("BTW umbrella lifecycle", () => {
     parentConfig.features.subagent = false;
     parentConfig.features.workflow = false;
     setupHarness(parent, parentConfig);
+    expect(parent.entryRenderers.has("pi-harness:btw")).toBe(false);
     expect(parent.commands.has("btw")).toBe(true);
     expect(parent.commands.has("btw-history")).toBe(true);
     expect(parent.commands.has("btw-cancel")).toBe(true);

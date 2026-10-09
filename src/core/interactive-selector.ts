@@ -5,9 +5,30 @@ import {
   isCancel,
   multiselect,
   outro,
+  type MultiSelectOptions,
 } from "@clack/prompts";
 import type { FileMapping } from "../types/config.js";
 import type { Logger } from "../utils/logger.js";
+
+export interface SelectionPrompts {
+  intro: typeof intro;
+  outro: typeof outro;
+  cancel: typeof cancel;
+  isCancel: typeof isCancel;
+  confirm: typeof confirm;
+  multiselect: (
+    options: MultiSelectOptions<string>,
+  ) => Promise<string[] | symbol>;
+}
+
+const defaultPrompts: SelectionPrompts = {
+  intro,
+  outro,
+  cancel,
+  isCancel,
+  confirm,
+  multiselect,
+};
 
 interface MappingOption {
   value: string;
@@ -215,9 +236,7 @@ const processSelectedValues = (
             filteredPermissions[file] = originalMapping.permissions[file];
           }
         }
-        if (Object.keys(filteredPermissions).length > 0) {
-          newMapping.permissions = filteredPermissions;
-        }
+        newMapping.permissions = filteredPermissions;
       }
 
       selectedMappings.push(newMapping);
@@ -288,8 +307,9 @@ const findDeselectedMappings = (
 export const selectMappings = async (
   mappings: FileMapping[],
   logger: Logger,
+  prompts: SelectionPrompts = defaultPrompts,
 ): Promise<SelectionResult | undefined> => {
-  intro("Select files to create/remove symbolic links");
+  prompts.intro("Select files to create/remove symbolic links");
 
   const grouped = groupMappingsByType(mappings);
   const optionsWithLabels = buildOptionsWithLabels(grouped);
@@ -301,31 +321,38 @@ export const selectMappings = async (
   );
   logger.debug(`Found ${initialValues.length} existing symlinks`);
 
-  const selected = await multiselect({
+  const selected = await prompts.multiselect({
     message: "Select items to install (Space: toggle, Enter: confirm)",
     options: optionsWithLabels,
     required: false,
     initialValues,
   });
 
-  if (isCancel(selected)) {
-    cancel("Operation cancelled");
+  if (prompts.isCancel(selected)) {
+    prompts.cancel("Operation cancelled");
     return undefined;
   }
 
-  const selectedValues = selected as string[];
+  const selectedValues = selected;
 
   if (selectedValues.length === 0) {
-    const confirmEmpty = await confirm({
+    const confirmEmpty = await prompts.confirm({
       message: "Nothing selected. Continue anyway?",
     });
 
-    if (isCancel(confirmEmpty) || !confirmEmpty) {
-      cancel("Operation cancelled");
+    if (prompts.isCancel(confirmEmpty) || !confirmEmpty) {
+      prompts.cancel("Operation cancelled");
       return undefined;
     }
 
-    return { selected: [], deselected: mappings };
+    return {
+      selected: [],
+      deselected: findDeselectedMappings(
+        initialValues,
+        selectedValues,
+        mappings,
+      ),
+    };
   }
 
   // Process selection results
@@ -336,7 +363,7 @@ export const selectMappings = async (
     mappings,
   );
 
-  outro(
+  prompts.outro(
     `${selectedMappings.length} items selected, ${deselectedMappings.length} items deselected`,
   );
 
@@ -346,6 +373,7 @@ export const selectMappings = async (
 export const confirmMappingSelection = async (
   result: SelectionResult,
   logger: Logger,
+  prompts: SelectionPrompts = defaultPrompts,
 ): Promise<boolean> => {
   const selectedGrouped = groupMappingsByType(result.selected);
   const deselectedGrouped = groupMappingsByType(result.deselected);
@@ -402,14 +430,14 @@ export const confirmMappingSelection = async (
     }
   }
 
-  const proceed = await confirm({
+  const proceed = await prompts.confirm({
     message: "Apply these changes?",
   });
 
-  if (isCancel(proceed)) {
-    cancel("Operation cancelled");
+  if (prompts.isCancel(proceed)) {
+    prompts.cancel("Operation cancelled");
     return false;
   }
 
-  return proceed as boolean;
+  return proceed;
 };

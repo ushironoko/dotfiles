@@ -129,15 +129,32 @@ describe("validateCwdInSameRepo", () => {
     });
     const escape = join(root, "escape");
     await symlink(other, escape);
+    const linkedSubdir = join(linked, "packages", "a");
+    await mkdir(linkedSubdir, { recursive: true });
+    const linkedAlias = join(root, "linked-alias");
+    await symlink(linkedSubdir, linkedAlias);
     await writeFile(join(fake, ".git"), `gitdir: ${join(root, ".git")}\n`);
 
     try {
       const linkedResult = await validateCwdInSameRepo(linked, root);
+      const linkedSubdirResult = await validateCwdInSameRepo(
+        linkedSubdir,
+        root,
+      );
+      const linkedAliasResult = await validateCwdInSameRepo(linkedAlias, root);
       const otherResult = await validateCwdInSameRepo(other, root);
       const escapeResult = await validateCwdInSameRepo(escape, root);
       const forgedGitFileResult = await validateCwdInSameRepo(fake, root);
       const nestedResult = await validateCwdInSameRepo(nested, root);
-      expect(linkedResult.ok).toBe(true);
+      expect(linkedResult).toEqual({ ok: true, canonicalCwd: linked });
+      expect(linkedSubdirResult).toEqual({
+        ok: true,
+        canonicalCwd: linkedSubdir,
+      });
+      expect(linkedAliasResult).toEqual({
+        ok: true,
+        canonicalCwd: linkedSubdir,
+      });
       expect(otherResult.ok).toBe(false);
       expect(escapeResult.ok).toBe(false);
       expect(forgedGitFileResult.ok).toBe(false);

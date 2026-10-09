@@ -1212,51 +1212,83 @@ describe("child-run subagent integration", () => {
     const childRuns = setupChildRuns(runtime.pi);
     const { background } = childRuns;
     if (background === undefined) throw new Error("background unavailable");
+    const controlled = controlledSpawn();
     setupWorkflow(runtime.pi, makeConfig(home), {
       childRuns,
-      spawnFn: scriptedSpawn("workflow background answer"),
+      spawnFn: controlled.spawnFn,
       validateCwd: async (candidate) => ({
         ok: true,
         canonicalCwd: candidate,
       }),
     });
     const tool = findTool(runtime.tools, "workflow");
-    await runtime.emit("agent_start", { type: "agent_start" });
-
-    const accepted = (await Reflect.apply(tool.execute, undefined, [
-      "workflow-parent",
-      {
-        stages: [
+    let startTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await runtime.emit("agent_start", { type: "agent_start" });
+      const startDeadline = new Promise<never>((_resolve, reject) => {
+        startTimer = setTimeout(
+          () => reject(new Error("Background workflow did not start")),
+          2000,
+        );
+      });
+      const accepted = await Promise.race([
+        Reflect.apply(tool.execute, undefined, [
+          "workflow-parent",
           {
-            mode: "single",
-            tasks: [{ agentType: "worker", task: "review" }],
+            stages: [
+              {
+                mode: "single",
+                tasks: [{ agentType: "worker", task: "review" }],
+              },
+            ],
           },
-        ],
-      },
-      undefined,
-      undefined,
-      runtime.ctx,
-    ])) as {
-      content: { text: string }[];
-      details: { background: { invocationId: string } };
-    };
-    const { invocationId } = accepted.details.background;
-    expect(accepted.content[0]?.text).toContain("Background workflow accepted");
-    expect(accepted.content[0]?.text).toContain(
-      "Use subagent_status with this invocation ID",
-    );
+          undefined,
+          undefined,
+          runtime.ctx,
+        ]) as Promise<{
+          content: { text: string }[];
+          details: { background: { invocationId: string } };
+        }>,
+        startDeadline,
+      ]);
+      const { invocationId } = accepted.details.background;
+      expect(accepted.content[0]?.text).toContain(
+        "Background workflow accepted",
+      );
+      expect(accepted.content[0]?.text).toContain(
+        "Use subagent_status with this invocation ID",
+      );
 
-    await background.drain(invocationId);
-    expect(runtime.getAppendedEntries()).toEqual([]);
-    await runtime.emit("message_end", {
-      type: "message_end",
-      message: { role: "toolResult", toolCallId: "workflow-parent" },
-    });
-    expect(runtime.getAppendedEntries()).toHaveLength(1);
-    await runtime.emit("agent_settled", { type: "agent_settled" });
-    const notification = JSON.stringify(runtime.getSentMessages()[0]?.message);
-    expect(notification).toContain("Workflow completed: 1/1");
-    expect(notification).toContain("workflow background answer");
+      await Promise.race([controlled.started, startDeadline]);
+      clearTimeout(startTimer);
+      startTimer = undefined;
+      expect(controlled.isFinished()).toBe(false);
+      expect(background.hasActiveInvocations()).toBe(true);
+      expect(
+        childRuns.registry.getInvocation(invocationId)?.runs[0]?.status,
+      ).toBe("running");
+      expect(runtime.getAppendedEntries()).toEqual([]);
+      expect(runtime.getSentMessages()).toEqual([]);
+      controlled.finish("workflow background answer");
+      await background.drain(invocationId);
+      expect(runtime.getAppendedEntries()).toEqual([]);
+      await runtime.emit("message_end", {
+        type: "message_end",
+        message: { role: "toolResult", toolCallId: "workflow-parent" },
+      });
+      expect(runtime.getAppendedEntries()).toHaveLength(1);
+      await runtime.emit("agent_settled", { type: "agent_settled" });
+      const notification = JSON.stringify(
+        runtime.getSentMessages()[0]?.message,
+      );
+      expect(notification).toContain("Workflow completed: 1/1");
+      expect(notification).toContain("workflow background answer");
+    } finally {
+      if (startTimer !== undefined) clearTimeout(startTimer);
+      if (!controlled.isFinished())
+        controlled.finish("workflow fixture cleanup");
+      await runtime.emit("session_shutdown", { type: "session_shutdown" });
+    }
   });
 
   test("retains every reviewer identity in an oversized four-task background result", async () => {
