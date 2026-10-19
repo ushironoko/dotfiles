@@ -1,4 +1,4 @@
-import type { ElementTable, On } from "claude-code";
+import type { ElementTable, On, RenderSurface } from "claude-code";
 
 const PANE_ID = "file-view";
 const TOOL_NAME = "open_file";
@@ -14,7 +14,13 @@ const FILE_TOOLS: ReadonlySet<string> = new Set([
 
 type Viewed =
   | { kind: "loading"; path: string }
-  | { kind: "text"; path: string; source: string; isTruncated: boolean }
+  | {
+      kind: "text";
+      path: string;
+      source: string;
+      isTruncated: boolean;
+      full: string;
+    }
   | { kind: "error"; path: string; message: string };
 
 interface Engine {
@@ -82,6 +88,7 @@ const loadedOf = async (engine: Engine, path: string): Promise<Viewed> => {
       kind: "text",
       path,
       ...boundedOf(drawableOf(raw.slice(0, MAX_SOURCE_CHARS * 2))),
+      full: raw,
     };
   } catch (error) {
     return { kind: "error", path, message: messageOf(error) };
@@ -219,14 +226,37 @@ export const register = (on: On) => {
       return next(e);
     }
 
-    const { Box, Text, Code } = $.ui.resolve(e);
+    const { Box, Text, Code, Button } = $.ui.resolve(e);
     const shown = viewed;
+
+    const copy = async (text: string, surface: RenderSurface) => {
+      const copied = await $.ui.copy({ text, surface });
+
+      $.ui.toast(
+        copied.isCopied
+          ? `Copied ${text.length.toLocaleString()} characters`
+          : `Copy failed: ${copied.reason}`,
+      );
+    };
 
     return (
       <Box flexDirection="column" paddingRight={1}>
-        <Text bold wrap="truncate-start">
-          {shown?.path ?? "file-view"}
-        </Text>
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text bold wrap="truncate-start">
+            {shown?.path ?? "file-view"}
+          </Text>
+          {shown?.kind === "text" ? (
+            <Button
+              key="copy"
+              plain
+              dimColor
+              label="⎘ copy"
+              onPress={(press) =>
+                void copy(shown.full, press.surface).catch(() => undefined)
+              }
+            />
+          ) : null}
+        </Box>
         {bodyOf({ Box, Text, Code }, shown)}
       </Box>
     );
