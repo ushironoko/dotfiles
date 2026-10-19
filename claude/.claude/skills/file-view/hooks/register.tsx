@@ -1,6 +1,8 @@
 import type { ElementTable, On } from "claude-code";
 
 const PANE_ID = "file-view";
+const TOOL_NAME = "open_file";
+const TOOL_ID = "mcp__file-view__open_file";
 const MAX_SOURCE_CHARS = 10000;
 const FILE_TOOLS: ReadonlySet<string> = new Set([
   "Read",
@@ -33,6 +35,9 @@ const filePathOf = (input: unknown): string | null => {
 
   return typeof path === "string" && path !== "" ? path : null;
 };
+
+const absoluteOf = (path: string, root: string): string =>
+  path.startsWith("/") ? path : `${root.replace(/\/+$/, "")}/${path}`;
 
 const basenameOf = (path: string): string => {
   const trimmed = path.endsWith("/") ? path.slice(0, -1) : path;
@@ -129,6 +134,51 @@ export const register = (on: On) => {
       engine.redraw();
     }
   };
+
+  on("session.start", async ($, e, next) => {
+    await $.tool.register({
+      name: TOOL_NAME,
+      description:
+        "Show a file's contents with syntax highlighting in the file-view pane beside the transcript. Use when the user asks to open, show or display a file in the pane.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description:
+              "Absolute path, or a path relative to the project root",
+          },
+        },
+        required: ["path"],
+      },
+      isDeferred: false,
+    });
+
+    return next(e);
+  });
+
+  on("tool.call", { tool: TOOL_ID }, async ($, e) => {
+    const raw = (e as Record<string, unknown>).path;
+
+    if (typeof raw !== "string" || raw.trim() === "") {
+      return { deny: "path must be a non-empty string." };
+    }
+
+    const path = absoluteOf(raw.trim(), await $.session.root());
+    const engine: Engine = {
+      read: (file) => $.fs.read(file),
+      open: (title) => $.ui.open({ id: PANE_ID, title }),
+      redraw: () => $.ui.invalidate("ui.render"),
+    };
+
+    await show(engine, path);
+
+    return viewed?.kind === "error"
+      ? { deny: `${path}: ${viewed.message}` }
+      : { result: `Opened ${path} in the file-view pane.` };
+  }).catch((_, e) => ({
+    deny: `file-view could not open ${String((e as Record<string, unknown>).path)}.`,
+  }));
 
   on("ui.render", { component: "ToolUse" }, async ($, e, next) => {
     const drawn = await next(e);
