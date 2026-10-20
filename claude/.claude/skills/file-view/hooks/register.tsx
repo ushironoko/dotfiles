@@ -3,7 +3,8 @@ import type { ElementTable, On, RenderSurface } from "claude-code";
 const PANE_ID = "file-view";
 const TOOL_NAME = "open_file";
 const TOOL_ID = "mcp__file-view__open_file";
-const MAX_SOURCE_CHARS = 10000;
+const PAGE_CHARS = 90000;
+const MARKDOWN_PATH = /\.(md|markdown)$/i;
 const FILE_TOOLS: ReadonlySet<string> = new Set([
   "Read",
   "Edit",
@@ -12,13 +13,19 @@ const FILE_TOOLS: ReadonlySet<string> = new Set([
   "NotebookEdit",
 ]);
 
+interface Page {
+  source: string;
+  startLine: number;
+}
+
 type Viewed =
   | { kind: "loading"; path: string }
   | {
       kind: "text";
       path: string;
-      source: string;
-      isTruncated: boolean;
+      pages: readonly Page[];
+      page: number;
+      isMarkdown: boolean;
       full: string;
     }
   | { kind: "error"; path: string; message: string };
@@ -29,7 +36,7 @@ interface Engine {
   redraw: () => void;
 }
 
-type BodyKit = Pick<ElementTable<"terminal">, "Box" | "Text" | "Code">;
+type BodyKit = Pick<ElementTable<"terminal">, "Text" | "Code" | "Markdown">;
 
 const filePathOf = (input: unknown): string | null => {
   if (typeof input !== "object" || input === null) {
@@ -60,17 +67,20 @@ const isDrawable = (char: string): boolean => {
 const drawableOf = (text: string): string =>
   [...text.replaceAll("\r\n", "\n")].filter(isDrawable).join("");
 
-const boundedOf = (text: string): { source: string; isTruncated: boolean } => {
-  if (text.length <= MAX_SOURCE_CHARS) {
-    return { source: text, isTruncated: false };
+const linesIn = (text: string): number => text.split("\n").length - 1;
+
+const pagesOf = (text: string, startLine = 1): Page[] => {
+  if (text.length <= PAGE_CHARS) {
+    return [{ source: text, startLine }];
   }
 
-  const cut = text.lastIndexOf("\n", MAX_SOURCE_CHARS);
+  const cut = text.lastIndexOf("\n", PAGE_CHARS);
+  const end = cut > 0 ? cut : PAGE_CHARS;
+  const source = text.slice(0, end);
+  const rest = text.slice(cut > 0 ? end + 1 : end);
+  const nextLine = startLine + linesIn(source) + (cut > 0 ? 1 : 0);
 
-  return {
-    source: text.slice(0, cut > 0 ? cut : MAX_SOURCE_CHARS - 1),
-    isTruncated: true,
-  };
+  return [{ source, startLine }, ...pagesOf(rest, nextLine)];
 };
 
 const messageOf = (error: unknown): string =>
@@ -87,7 +97,9 @@ const loadedOf = async (engine: Engine, path: string): Promise<Viewed> => {
     return {
       kind: "text",
       path,
-      ...boundedOf(drawableOf(raw.slice(0, MAX_SOURCE_CHARS * 2))),
+      pages: pagesOf(drawableOf(raw)),
+      page: 0,
+      isMarkdown: MARKDOWN_PATH.test(path),
       full: raw,
     };
   } catch (error) {
@@ -95,7 +107,7 @@ const loadedOf = async (engine: Engine, path: string): Promise<Viewed> => {
   }
 };
 
-const bodyOf = ({ Box, Text, Code }: BodyKit, shown: Viewed | null) => {
+const bodyOf = ({ Text, Code, Markdown }: BodyKit, shown: Viewed | null) => {
   if (shown === null) {
     return (
       <Text dimColor>Click a file path under a tool row to show it here.</Text>
@@ -110,13 +122,16 @@ const bodyOf = ({ Box, Text, Code }: BodyKit, shown: Viewed | null) => {
       return <Text color="red">{shown.message}</Text>;
     }
     case "text": {
-      return (
-        <Box flexDirection="column">
-          <Code source={shown.source} path={shown.path} startLine={1} />
-          {shown.isTruncated ? (
-            <Text dimColor>… truncated at {MAX_SOURCE_CHARS} characters</Text>
-          ) : null}
-        </Box>
+      const page = shown.pages[shown.page] ?? { source: "", startLine: 1 };
+
+      return shown.isMarkdown ? (
+        <Markdown key={`md:${shown.page}`} text={page.source} />
+      ) : (
+        <Code
+          source={page.source}
+          path={shown.path}
+          startLine={page.startLine}
+        />
       );
     }
   }
@@ -226,7 +241,7 @@ export const register = (on: On) => {
       return next(e);
     }
 
-    const { Box, Text, Code, Button } = $.ui.resolve(e);
+    const { Box, Text, Code, Markdown, Button } = $.ui.resolve(e);
     const shown = viewed;
 
     const copy = async (text: string, surface: RenderSurface) => {
@@ -239,25 +254,61 @@ export const register = (on: On) => {
       );
     };
 
+    const turn = async (page: number) => {
+      if (viewed?.kind !== "text" || viewed.pages[page] === undefined) {
+        return;
+      }
+
+      viewed = { ...viewed, page };
+      $.ui.invalidate("ui.render");
+      await $.ui.scroll({ in: PANE_ID, to: "start", block: "start" });
+    };
+
+    const pager =
+      shown?.kind === "text" && shown.pages.length > 1 ? (
+        <Box flexDirection="row" gap={1}>
+          <Button
+            key="prev"
+            plain
+            dimColor={shown.page === 0}
+            label="◀"
+            onPress={() => void turn(shown.page - 1).catch(() => undefined)}
+          />
+          <Text dimColor>
+            {shown.page + 1}/{shown.pages.length}
+          </Text>
+          <Button
+            key="next"
+            plain
+            dimColor={shown.page === shown.pages.length - 1}
+            label="▶"
+            onPress={() => void turn(shown.page + 1).catch(() => undefined)}
+          />
+        </Box>
+      ) : null;
+
     return (
       <Box flexDirection="column" paddingRight={1}>
-        <Box flexDirection="row" justifyContent="space-between">
+        <Box flexDirection="row" justifyContent="space-between" gap={1}>
           <Text bold wrap="truncate-start">
             {shown?.path ?? "file-view"}
           </Text>
           {shown?.kind === "text" ? (
-            <Button
-              key="copy"
-              plain
-              dimColor
-              label="⎘ copy"
-              onPress={(press) =>
-                void copy(shown.full, press.surface).catch(() => undefined)
-              }
-            />
+            <Box flexDirection="row" gap={2}>
+              {pager}
+              <Button
+                key="copy"
+                plain
+                dimColor
+                label="⎘ copy"
+                onPress={(press) =>
+                  void copy(shown.full, press.surface).catch(() => undefined)
+                }
+              />
+            </Box>
           ) : null}
         </Box>
-        {bodyOf({ Box, Text, Code }, shown)}
+        {bodyOf({ Text, Code, Markdown }, shown)}
       </Box>
     );
   });
