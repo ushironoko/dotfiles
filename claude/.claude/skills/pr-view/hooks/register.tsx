@@ -107,6 +107,10 @@ const fetchListing = async (host: Host): Promise<Listing> => {
     const root = await host.root();
     const { exitCode, stdout, stderr } = await host.run(
       [
+        "zsh",
+        "-c",
+        '"$@"',
+        "zsh",
         "gh",
         "pr",
         "list",
