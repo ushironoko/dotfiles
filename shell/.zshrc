@@ -105,9 +105,6 @@ export PATH="$PATH:/Applications/Visual Studio Code.app/Contents/Resources/app/b
 # Load additional zsh configurations if exists
 [ -f "$HOME/.zshrc.local" ] && . "$HOME/.zshrc.local"
 
-# gh token from 1Password Environments
-[ -p "$HOME/.config/gh/.env" ] && gh() { GH_TOKEN="$(sed -n 's/^GH_TOKEN=//p' "$HOME/.config/gh/.env")" command gh "$@"; }
-
 # Starship prompt
 # Initialize starship after mise is activated
 eval "$(starship init zsh)"

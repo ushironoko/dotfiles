@@ -64,6 +64,11 @@ export default defineConfig({
       type: "file",
     },
     {
+      source: "./shell/.zshenv",
+      target: "~/.zshenv",
+      type: "file",
+    },
+    {
       source: "./git/.gitconfig",
       target: "~/.gitconfig",
       type: "file",
