@@ -9,6 +9,12 @@
 	# Use ~/.config/git/ignore for global gitignore (Git default location)
 	excludesfile = ~/.config/git/ignore
 
+# Keep the system osxkeychain helper away from GitHub
+[credential "https://github.com"]
+	helper =
+[credential "https://gist.github.com"]
+	helper =
+
 # ============================================================
 # Git Core Developers' Recommended Settings
 # Based on: https://blog.gitbutler.com/how-git-core-devs-configure-git
