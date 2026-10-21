@@ -30,4 +30,7 @@ op = "latest"
 experimental = true
 idiomatic_version_file_enable_tools = ["node"]
 
+[settings.github]
+credential_command = '[ "$MISE_CREDENTIAL_HOST" = github.com ] && sed -n "s/^GH_TOKEN=//p" "$HOME/.config/gh/.env"'
+
 [env]
