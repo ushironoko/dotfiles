@@ -9,11 +9,6 @@
 	# Use ~/.config/git/ignore for global gitignore (Git default location)
 	excludesfile = ~/.config/git/ignore
 
-# GitHub credential helper
-[credential "https://github.com"]
-	helper = 
-	helper = !/Users/ushironoko/.local/share/mise/shims/gh auth git-credential
-
 # ============================================================
 # Git Core Developers' Recommended Settings
 # Based on: https://blog.gitbutler.com/how-git-core-devs-configure-git
@@ -96,10 +91,6 @@
 # [core]
 # 	fsmonitor = true         # Monitor file changes (speeds up git status)
 # 	untrackedCache = true    # Cache untracked files
-[credential "https://gist.github.com"]
-	helper =
-	helper = !/Users/ushironoko/.local/share/mise/shims/gh auth git-credential
-
 
 [include]
 	path = ~/.gitconfig.local
