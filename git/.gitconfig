@@ -100,3 +100,6 @@
 	helper =
 	helper = !/Users/ushironoko/.local/share/mise/shims/gh auth git-credential
 
+
+[include]
+	path = ~/.gitconfig.local

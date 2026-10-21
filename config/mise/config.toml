@@ -23,6 +23,8 @@ gcloud = "567.0.0"
 "github:koalaman/shellcheck" = "v0.10.0"
 zellij = "0.44.3"
 "github:DataDog/pup" = "latest"
+"github:myuron/lazydn" = "0.1.0"
+op = "latest"
 
 [settings]
 experimental = true
