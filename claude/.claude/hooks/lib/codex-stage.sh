@@ -52,8 +52,15 @@
 #   are not. A rate-limited run with no retries left exits 15 so callers can
 #   distinguish "retry later / proceed Claude-only" from a permanent failure.
 #
+# Concurrency (poc and run):
+#   A write-mode run takes an exclusive lock for its git work tree (keyed by the
+#   resolved top-level path, held in the per-user temp directory). A second
+#   write-mode run on the same work tree is refused with exit 16 while the
+#   holder process is alive; a lock whose holder is gone is reclaimed.
+#
 # Exit codes: 0 ok / 11 codex missing / 12 unauthenticated / 13 usage error
 #             14 validation refused (poc) / 15 rate limited (retryable)
+#             16 another write-mode run holds this work tree
 #             124 timed out / else codex's own code.
 set -euo pipefail
 
@@ -122,14 +129,13 @@ run_with_timeout() {
   local rc=0
   wait "$cmd_pid" || rc=$?
   # A command leader may exit while a background descendant keeps the job's
-  # process group alive. In that case retain the watchdog through its deadline
-  # so TERM/KILL still reaches the whole group instead of returning early.
-  if kill -0 -- "$kill_target" 2>/dev/null; then
-    wait "$watchdog_pid" 2>/dev/null || true
-  else
-    kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
-    wait "$watchdog_pid" 2>/dev/null || true
-  fi
+  # process group alive. Keep the watchdog only while that group lives, so
+  # TERM/KILL still reaches it, and stop waiting once the group is gone.
+  while kill -0 -- "$kill_target" 2>/dev/null && kill -0 "$watchdog_pid" 2>/dev/null; do
+    sleep 1
+  done
+  kill -0 -- "$kill_target" 2>/dev/null || kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
   if [ -e "$mark" ]; then
     rm -f "$mark"
     return 124
@@ -186,10 +192,45 @@ buffer_stdin() {
 
 STDERR_FILE=$(mktemp "${TMPDIR:-/tmp}/codex-stage-err.XXXXXX")
 PROMPT_FILE=""
+LOCK_DIR=""
 cleanup() {
   rm -f "$STDERR_FILE" ${PROMPT_FILE:+"$PROMPT_FILE"}
+  if [ -n "$LOCK_DIR" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null || true)" = "$$" ]; then
+    rm -rf -- "$LOCK_DIR"
+  fi
 }
 trap cleanup EXIT
+
+# One write-mode run per git work tree. The lock lives in the per-user temp
+# directory (stable across shells, outside the work tree and its .git) and is
+# named by a digest of the resolved top-level path.
+acquire_write_lock() {
+  local top=$1 base key holder age
+  base=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)
+  base=${base:-${TMPDIR:-/tmp}}
+  mkdir -p "$base/codex-stage-locks" || die "cannot create lock directory" 16
+  key=$(printf '%s' "$top" | shasum -a 256 | cut -c1-32)
+  local dir="$base/codex-stage-locks/$key"
+  if mkdir "$dir" 2>/dev/null; then
+    printf '%s\n' "$$" > "$dir/pid"
+    printf '%s\n' "$top" > "$dir/worktree"
+    LOCK_DIR=$dir
+    return 0
+  fi
+  holder=$(cat "$dir/pid" 2>/dev/null || true)
+  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+    die "another write-mode codex run (pid $holder) holds $top; refusing a concurrent writer" 16
+  fi
+  if [ -z "$holder" ]; then
+    age=$(( $(date +%s) - $(stat -f %m "$dir" 2>/dev/null || date +%s) ))
+    [ "$age" -ge 60 ] || die "a write-mode codex run is starting on $top; refusing a concurrent writer" 16
+  fi
+  rm -rf -- "$dir"
+  mkdir "$dir" 2>/dev/null || die "lost the race for the work-tree lock on $top" 16
+  printf '%s\n' "$$" > "$dir/pid"
+  printf '%s\n' "$top" > "$dir/worktree"
+  LOCK_DIR=$dir
+}
 
 report_failure() {
   local rc=$1
@@ -297,6 +338,7 @@ case $MODE in
     GIT_COMMON_DIR=$(git rev-parse --git-common-dir)
     [ "$GIT_DIR" != "$GIT_COMMON_DIR" ] \
       || die "refusing: $TOPLEVEL is a main repository checkout, not an isolated linked worktree" 14
+    acquire_write_lock "$TOPLEVEL"
     buffer_stdin
     NETWORK_OPT=""
     [ "$NETWORK" -eq 1 ] && NETWORK_OPT="sandbox_workspace_write.network_access=true"
@@ -325,6 +367,7 @@ case $MODE in
     git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
       || die "run mode requires a git work tree (for reviewability): $DIR" 13
     TOPLEVEL=$(git rev-parse --show-toplevel)
+    acquire_write_lock "$TOPLEVEL"
     buffer_stdin
     NETWORK_OPT=""
     [ "$NETWORK" -eq 1 ] && NETWORK_OPT="sandbox_workspace_write.network_access=true"
