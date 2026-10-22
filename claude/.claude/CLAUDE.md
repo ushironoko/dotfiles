@@ -9,7 +9,7 @@ Unearth information that users haven't fully articulated, incorporate it into th
 ## All time requirements
 
 - Regarding technology, always research and apply the latest best practices. Do not rely solely on your own knowledge to make decisions
-- Use `start-work` skill for non-trivial changes
+- By default, use `start-work` skill for non-trivial changes
 - Specify exact versions: `module@5.5.1` (NOT `^5.0.0` or `@latest`)
 - Do not commit to git until explicitly instructed by the user
 
@@ -56,5 +56,7 @@ These rules also apply to the content, examples, and comments within CLAUDE.md i
 
 # 4. Workflow Principles
 
-- Always use `start-work` skill
-- In ultracode workflow scripts, EVERY fan-out subagent defaults to codex (a non-Claude model family): `agentType: 'codex-reviewer'` for read-only review/verification fan-outs, `agentType: 'codex-poc'` (with `isolation: 'worktree'`) for competing implementation PoCs in isolated worktrees, `agentType: 'codex-runner'` for write-capable parallel workers you place yourself (main checkout or a subdirectory, no isolated-worktree requirement — you own their write-scope partitioning). Claude subagents are allowed ONLY as optional additions (+α) that the main (Claude) orchestrator adds at its own discretion — never as the mandatory baseline roster. The main agent itself (Claude) still orchestrates, synthesizes, and judges. All codex calls go through `~/.claude/hooks/lib/codex-stage.sh` (never pass `-m`). Templates: `~/.claude/skills/start-work/references/multi-model-workflows.md`
+These are defaults. When the repository defines its own workflow rules (AGENTS.md, repository skills, or files they point to), follow the repository's rules instead, including where they differ from these defaults.
+
+- By default, use `start-work` skill
+- By default, in ultracode workflow scripts, EVERY fan-out subagent defaults to codex (a non-Claude model family): `agentType: 'codex-reviewer'` for read-only review/verification fan-outs, `agentType: 'codex-poc'` (with `isolation: 'worktree'`) for competing implementation PoCs in isolated worktrees, `agentType: 'codex-runner'` for write-capable parallel workers you place yourself (main checkout or a subdirectory, no isolated-worktree requirement — you own their write-scope partitioning). Claude subagents are allowed ONLY as optional additions (+α) that the main (Claude) orchestrator adds at its own discretion — never as the mandatory baseline roster. The main agent itself (Claude) still orchestrates, synthesizes, and judges. All codex calls go through `~/.claude/hooks/lib/codex-stage.sh` (never pass `-m`). Templates: `~/.claude/skills/start-work/references/multi-model-workflows.md`
