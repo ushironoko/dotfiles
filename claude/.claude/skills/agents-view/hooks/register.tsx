@@ -1,10 +1,30 @@
-import type { ElementTable, On } from "claude-code";
+import type { On } from "claude-code";
+import {
+  colorOf,
+  type Detail,
+  detailView,
+  type Entry,
+  glyphOf,
+  harnessFrameOf,
+  type Kit,
+  promptTextOf,
+  type Summary,
+  tidyOf,
+} from "./detail";
+import {
+  SUMMARY_ARGV,
+  SUMMARY_TIMEOUT_MS,
+  summaryInputOf,
+  summaryTextOf,
+} from "./summary";
 import {
   agentMetaOf,
   recentRunsOf,
   runNamesOf,
   runScansOf,
   sessionPathsOf,
+  transcriptOf,
+  transcriptPathOf,
   type Disk,
   type RunAgent,
   type SessionPaths,
@@ -18,11 +38,13 @@ const SYNC_MS = 3000;
 const PATHS_RETRY_MS = 30_000;
 const NAMES_RETRY_MS = 15_000;
 const MAX_LOOKUPS = 5;
+const MAX_BACKFILLS = 3;
 const PLAIN_TYPES = new Set(["agent", "workflow-subagent"]);
 const MAX_AGENTS = 300;
 const MAX_ENTRIES = 300;
 const MAX_TEXT_CHARS = 2000;
-const MAX_LINE_CHARS = 100;
+const MAX_PROMPT_CHARS = 8000;
+const MAX_LINE_CHARS = 200;
 const MAX_DEPTH = 6;
 const SUMMARY_FIELDS = [
   "file_path",
@@ -34,12 +56,6 @@ const SUMMARY_FIELDS = [
   "description",
   "prompt",
 ] as const;
-
-type Entry =
-  | { kind: "prompt"; text: string }
-  | { kind: "text"; text: string }
-  | { kind: "tool"; name: string; summary: string }
-  | { kind: "result"; text: string; isError: boolean };
 
 interface Tokens {
   input: number;
@@ -60,6 +76,7 @@ interface Tracked {
   workflowIndex?: number;
   phase?: string;
   isResolved: boolean;
+  isBackfilled: boolean;
   lookups: number;
   model?: string;
   effort?: string;
@@ -96,6 +113,7 @@ interface Host {
   list: () => Promise<readonly Listed[]>;
   now: () => Promise<number>;
   disk: Disk;
+  summarize: (input: string) => Promise<string>;
   open: () => Promise<unknown>;
   redraw: () => void;
 }
@@ -106,8 +124,6 @@ interface Row {
   isMeta?: true;
   content: readonly { type: string; [field: string]: unknown }[];
 }
-
-type Kit = Pick<ElementTable<"terminal">, "Box" | "Text" | "Button">;
 
 const isDrawable = (char: string): boolean => {
   const code = char.codePointAt(0) ?? 0;
@@ -136,7 +152,7 @@ const summaryOf = (input: unknown): string => {
     (value): value is string => typeof value === "string" && value !== "",
   );
 
-  return found === undefined ? "" : lineOf(found);
+  return found === undefined ? "" : lineOf(tidyOf(found));
 };
 
 const resultTextOf = (content: unknown): string => {
@@ -160,7 +176,7 @@ const resultTextOf = (content: unknown): string => {
 };
 
 const resultEntryOf = (content: unknown, isError: boolean): Entry => {
-  const text = resultTextOf(content);
+  const text = tidyOf(resultTextOf(content));
   const lines = text === "" ? 0 : text.split("\n").length;
   const head = lineOf(
     text.split("\n").find((line) => line.trim() !== "") ?? "",
@@ -173,20 +189,28 @@ const resultEntryOf = (content: unknown, isError: boolean): Entry => {
   };
 };
 
-const entriesOf = (row: Row, isOpening: boolean): Entry[] =>
+const entriesOf = (row: Row, hasPrompt: boolean): Entry[] =>
   row.content.flatMap((block): Entry[] => {
     if (block.type === "text" && typeof block.text === "string") {
-      const text = drawableOf(block.text, MAX_TEXT_CHARS);
+      const frame =
+        row.role === "user" ? harnessFrameOf(block.text) : undefined;
+
+      if (frame === "user request") {
+        return [];
+      }
+
+      const isPrompt =
+        row.role === "user" &&
+        (frame === "computed task" || (!hasPrompt && frame === undefined));
+      const text = isPrompt
+        ? drawableOf(tidyOf(promptTextOf(block.text)), MAX_PROMPT_CHARS)
+        : drawableOf(tidyOf(block.text.trim()), MAX_TEXT_CHARS);
 
       if (text.trim() === "") {
         return [];
       }
 
-      return [
-        row.role === "user" && isOpening
-          ? { kind: "prompt", text }
-          : { kind: "text", text },
-      ];
+      return [isPrompt ? { kind: "prompt", text } : { kind: "text", text }];
     }
 
     if (block.type === "tool_use") {
@@ -229,43 +253,6 @@ const seededStatusOf = (one: Tracked, member: RunAgent): string => {
   }
 
   return member.isRetried ? "retried" : "completed";
-};
-
-const glyphOf = (status: string): string => {
-  switch (status) {
-    case "running": {
-      return "●";
-    }
-    case "completed": {
-      return "✓";
-    }
-    case "failed": {
-      return "✗";
-    }
-    case "killed": {
-      return "■";
-    }
-    default: {
-      return "○";
-    }
-  }
-};
-
-const colorOf = (status: string): string => {
-  switch (status) {
-    case "running": {
-      return "yellow";
-    }
-    case "completed": {
-      return "green";
-    }
-    case "failed": {
-      return "red";
-    }
-    default: {
-      return "gray";
-    }
-  }
 };
 
 const modelOf = (model: string): string =>
@@ -323,18 +310,55 @@ const chipOf = (agent: Tracked): string =>
     .filter((part) => part !== undefined)
     .join(" ");
 
-const originOf = (agent: Tracked, runs: Runs): string | undefined => {
-  if (agent.workflowRun === undefined) {
-    return undefined;
-  }
+const countedOf = (value: number, noun: string): string =>
+  `${value} ${noun}${value === 1 ? "" : "s"}`;
 
-  return [
-    runs.get(agent.workflowRun) ?? "workflow",
-    agent.workflowRun,
-    agent.workflowIndex === undefined ? undefined : `#${agent.workflowIndex}`,
-  ]
-    .filter((part) => part !== undefined)
-    .join(" ");
+const definedOf = (parts: readonly (string | undefined)[]): string[] =>
+  parts.filter((part): part is string => part !== undefined && part !== "");
+
+const detailOf = (
+  agent: Tracked,
+  runs: Runs,
+  now: number,
+  summary?: Summary,
+): Detail => {
+  const workflow =
+    agent.workflowRun === undefined
+      ? undefined
+      : definedOf([
+          runs.get(agent.workflowRun) ?? "workflow",
+          agent.workflowIndex === undefined
+            ? undefined
+            : `#${agent.workflowIndex}`,
+        ]).join(" ");
+
+  return {
+    id: agent.id,
+    summary,
+    label: agent.label,
+    status: agent.status,
+    elapsed: elapsedOf(agent, now),
+    context: definedOf([
+      agent.type,
+      agent.phase,
+      workflow,
+      agent.isBackground ? "background" : undefined,
+    ]),
+    model: agent.model === undefined ? undefined : modelOf(agent.model),
+    effort: agent.effort,
+    stats: definedOf([
+      countedOf(agent.steps, "step"),
+      countedOf(agent.toolCalls, "tool"),
+      `in ${countOf(agent.tokens.input)}`,
+      `out ${countOf(agent.tokens.output)}`,
+    ]).join(" · "),
+    origin: definedOf([
+      agent.id,
+      agent.parentId === undefined ? undefined : `parent ${agent.parentId}`,
+      agent.workflowRun,
+    ]).join(" · "),
+    entries: agent.entries,
+  };
 };
 
 const freshOf = (id: string, seq: number, now: number): Tracked => ({
@@ -345,6 +369,7 @@ const freshOf = (id: string, seq: number, now: number): Tracked => ({
   isListed: false,
   isBackground: false,
   isResolved: false,
+  isBackfilled: false,
   lookups: 0,
   seq,
   entries: [],
@@ -477,113 +502,13 @@ const signatureOf = (
     ...[...agents.values()].map((one) => trackedSignatureOf(one, now)),
   ].join("|");
 
-const entryView = ({ Text }: Kit, entry: Entry) => {
-  switch (entry.kind) {
-    case "prompt": {
-      return <Text color="cyan">▶ {entry.text}</Text>;
-    }
-    case "text": {
-      return <Text>{entry.text}</Text>;
-    }
-    case "tool": {
-      return (
-        <Text dimColor wrap="truncate-end">
-          → {entry.name} {entry.summary}
-        </Text>
-      );
-    }
-    case "result": {
-      return entry.isError ? (
-        <Text color="red" wrap="truncate-end">
-          {"  "}← {entry.text}
-        </Text>
-      ) : (
-        <Text dimColor wrap="truncate-end">
-          {"  "}← {entry.text}
-        </Text>
-      );
-    }
-  }
-};
-
-const headerView = (
-  { Box, Text }: Kit,
-  agent: Tracked,
-  runs: Runs,
-  now: number,
-) => {
-  const runner = runnerOf(agent);
-  const origin = [
-    agent.id,
-    agent.parentId === undefined ? undefined : `parent ${agent.parentId}`,
-    originOf(agent, runs),
-  ]
-    .filter((part) => part !== undefined)
-    .join(" · ");
-
-  return (
-    <Box flexDirection="column">
-      <Text bold wrap="truncate-end">
-        {agent.label}
-      </Text>
-      <Text>
-        <Text color={colorOf(agent.status)}>
-          {glyphOf(agent.status)} {agent.status}
-        </Text>
-        <Text dimColor>
-          {" "}
-          · {agent.type}
-          {agent.phase === undefined ? "" : ` · ${agent.phase}`} ·{" "}
-          {elapsedOf(agent, now)}
-          {agent.isBackground ? " · bg" : ""}
-        </Text>
-      </Text>
-      <Text wrap="truncate-end">
-        <Text color="magenta">{runner === "" ? "model ?" : runner}</Text>
-        <Text dimColor>
-          {" "}
-          · {agent.steps} steps · {agent.toolCalls} tools · ↑
-          {countOf(agent.tokens.input)} ↓{countOf(agent.tokens.output)}
-        </Text>
-      </Text>
-      <Text dimColor wrap="truncate-end">
-        {origin}
-      </Text>
-    </Box>
-  );
-};
-
-const detailView = (
-  kit: Kit,
-  agent: Tracked | undefined,
-  runs: Runs,
-  now: number,
-) => {
-  const { Box, Text } = kit;
-
-  if (agent === undefined) {
-    return <Text dimColor>Select an agent above.</Text>;
-  }
-
-  return (
-    <Box flexDirection="column">
-      {headerView(kit, agent, runs, now)}
-      <Text> </Text>
-      {agent.entries.length === 0 ? (
-        <Text dimColor>No output recorded yet.</Text>
-      ) : (
-        <Box flexDirection="column">
-          {agent.entries.map((entry) => entryView(kit, entry))}
-        </Box>
-      )}
-    </Box>
-  );
-};
-
 export const register = (on: On) => {
   let agents: ReadonlyMap<string, Tracked> = new Map();
   let runs: Runs = new Map();
   let selectedId: string | null = null;
+  let expandedIds: ReadonlySet<string> = new Set();
+  let summaries: ReadonlyMap<string, Summary & { seq: number }> = new Map();
+  let summarySeq = 0;
   let host: Host | null = null;
   let isOpen = false;
   let hasAutoOpened = false;
@@ -706,6 +631,104 @@ export const register = (on: On) => {
     );
   };
 
+  const backfillAgents = async (
+    disk: Disk,
+    found: SessionPaths,
+    now: number,
+  ) => {
+    const pending = [...agents.values()]
+      .filter(
+        (one) =>
+          !one.isBackfilled &&
+          one.entries.length === 0 &&
+          one.steps === 0 &&
+          (one.workflowRun !== undefined || one.isResolved) &&
+          (isLive(one.status) || one.id === selectedId),
+      )
+      .slice(0, MAX_BACKFILLS);
+    const loaded = await Promise.all(
+      pending.map(
+        async (one) =>
+          [
+            one.id,
+            await transcriptOf(
+              disk,
+              transcriptPathOf(found, one.id, one.workflowRun),
+            ).catch(() => undefined),
+          ] as const,
+      ),
+    );
+
+    loaded.forEach(([id, transcript]) =>
+      upsert(id, now, (one) => {
+        if (transcript === undefined || one.entries.length > 0) {
+          return { ...one, isBackfilled: true };
+        }
+
+        return {
+          ...one,
+          isBackfilled: true,
+          entries: transcript.rows
+            .reduce<Entry[]>(
+              (collected, row) => [
+                ...collected,
+                ...entriesOf(
+                  row,
+                  collected.some((entry) => entry.kind === "prompt"),
+                ),
+              ],
+              [],
+            )
+            .slice(-MAX_ENTRIES),
+          model: one.model ?? transcript.model,
+          effort: one.effort ?? transcript.effort,
+          steps: one.steps + transcript.steps,
+          toolCalls: one.toolCalls + transcript.toolCalls,
+          tokens: {
+            input: one.tokens.input + transcript.input,
+            output: one.tokens.output + transcript.output,
+          },
+        };
+      }),
+    );
+  };
+
+  const requestSummary = async (current: Host, id: string) => {
+    const seq = (summarySeq += 1);
+    const settle = (summary: Summary) => {
+      if (summaries.get(id)?.seq === seq) {
+        summaries = new Map([...summaries, [id, { ...summary, seq }]]);
+        current.redraw();
+      }
+    };
+
+    summaries = new Map([
+      ...summaries,
+      [id, { state: "loading", text: "", seq }],
+    ]);
+    current.redraw();
+
+    const now = await current.now();
+
+    if (paths !== undefined) {
+      await backfillAgents(current.disk, paths, now).catch(() => undefined);
+    }
+
+    const agent = agents.get(id);
+
+    if (agent === undefined) {
+      settle({ state: "error", text: "agent is no longer tracked" });
+
+      return;
+    }
+
+    await current.summarize(summaryInputOf(detailOf(agent, runs, now))).then(
+      (text) => settle({ state: "done", text }),
+      (error: unknown) =>
+        settle({ state: "error", text: lineOf(String(error)) }),
+    );
+  };
+
   const resolveNames = async (disk: Disk, found: SessionPaths, now: number) => {
     const unnamed = [...agents.values()].flatMap((one) =>
       one.workflowRun === undefined ||
@@ -750,6 +773,7 @@ export const register = (on: On) => {
       recent.map((one) => one.run),
       now,
     );
+    await backfillAgents(disk, found, now);
     await resolveNames(disk, found, now);
     syncNote = undefined;
   };
@@ -782,7 +806,11 @@ export const register = (on: On) => {
       }
     }
 
-    const signature = `${syncNote ?? ""}|${signatureOf(agents, runs, now)}`;
+    const signature = [
+      syncNote ?? "",
+      [...summaries].map(([id, one]) => `${id}:${one.seq}:${one.state}`),
+      signatureOf(agents, runs, now),
+    ].join("|");
 
     if (signature !== drawnSignature) {
       drawnSignature = signature;
@@ -791,6 +819,10 @@ export const register = (on: On) => {
   };
 
   on("session.start", async ($, e, next) => {
+    if ((await $.env.get("AGENTS_VIEW_CHILD")) === "1") {
+      return next(e);
+    }
+
     const current: Host = {
       list: () => $.agent.list(),
       now: () => $.clock.now(),
@@ -804,6 +836,21 @@ export const register = (on: On) => {
         home: () => $.env.get("HOME"),
         sessionId: () => $.session.id(),
         roots: async () => [await $.session.root(), await $.session.cwd()],
+      },
+      summarize: async (input) => {
+        const { exitCode, stdout, stderr } = await $.process.run(SUMMARY_ARGV, {
+          stdin: input,
+          env: { AGENTS_VIEW_CHILD: "1" },
+          timeoutMs: SUMMARY_TIMEOUT_MS,
+        });
+
+        if (exitCode !== 0) {
+          throw new Error(
+            lineOf(stderr) || lineOf(stdout) || `claude exited ${exitCode}`,
+          );
+        }
+
+        return summaryTextOf(stdout);
       },
       open: () => $.ui.open({ id: PANE_ID, title: PANE_TITLE }),
       redraw: () => $.ui.invalidate("ui.render"),
@@ -949,7 +996,10 @@ export const register = (on: On) => {
       message.isMeta !== true
     ) {
       upsert(agentId, await $.clock.now(), (one) => {
-        const added = entriesOf(message, one.entries.length === 0);
+        const added = entriesOf(
+          message,
+          one.entries.some((entry) => entry.kind === "prompt"),
+        );
         const opening = added.find((entry) => entry.kind === "prompt");
 
         return {
@@ -1036,6 +1086,11 @@ export const register = (on: On) => {
                       dimColor={!isSelected}
                       onPress={() => {
                         selectedId = one.id;
+                        syncedAt = Number.NEGATIVE_INFINITY;
+
+                        if (host !== null) {
+                          void requestSummary(host, one.id);
+                        }
                         host?.redraw();
                       }}
                     >
@@ -1055,7 +1110,25 @@ export const register = (on: On) => {
           </Box>
         )}
         <Text dimColor>{"─".repeat(Math.max(1, e.props.bodyColumns - 1))}</Text>
-        {detailView(kit, selected, runs, now)}
+        {detailView(
+          kit,
+          selected === undefined
+            ? undefined
+            : detailOf(selected, runs, now, summaries.get(selected.id)),
+          {
+            isExpanded: selected !== undefined && expandedIds.has(selected.id),
+            onToggle: () => {
+              if (selected === undefined) {
+                return;
+              }
+
+              expandedIds = expandedIds.has(selected.id)
+                ? new Set([...expandedIds].filter((id) => id !== selected.id))
+                : new Set([...expandedIds, selected.id]);
+              host?.redraw();
+            },
+          },
+        )}
       </Box>
     );
   });

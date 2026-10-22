@@ -1,4 +1,7 @@
 const RECENT_RUN_MS = 24 * 60 * 60 * 1000;
+const READ_LIMIT = 3_500_000;
+const HEAD_BYTES = 262_144;
+const TAIL_BYTES = 3_000_000;
 const MAX_RECENT_RUNS = 40;
 const RUN_NAME =
   /"workflowName":"((?:[^"\\]|\\.){1,200})","runId":"(wf_[0-9a-f-]+)"/g;
@@ -13,7 +16,7 @@ export interface Disk {
   read: (path: string) => Promise<string>;
   list: (path: string) => Promise<readonly DiskEntry[]>;
   exists: (path: string) => Promise<boolean>;
-  stat: (path: string) => Promise<{ mtimeMs: number }>;
+  stat: (path: string) => Promise<{ mtimeMs: number; size: number }>;
   run: (
     argv: readonly string[],
   ) => Promise<{ exitCode: number; stdout: string }>;
@@ -46,6 +49,22 @@ export interface RunAgent {
 export interface RunScan {
   active: readonly { run: string; agents: readonly RunAgent[] }[];
   ended: readonly string[];
+}
+
+export interface TranscriptRow {
+  type: string;
+  role: string;
+  content: readonly { type: string; [field: string]: unknown }[];
+}
+
+export interface Transcript {
+  rows: readonly TranscriptRow[];
+  model?: string;
+  effort?: string;
+  steps: number;
+  toolCalls: number;
+  input: number;
+  output: number;
 }
 
 export interface AgentMeta {
@@ -275,6 +294,125 @@ export const runScansOf = async (
     active: scans.flatMap((scan) => scan.active),
     ended: scans.flatMap((scan) => scan.ended),
   };
+};
+
+export const transcriptPathOf = (
+  paths: SessionPaths,
+  agentId: string,
+  run?: string,
+): string =>
+  run === undefined
+    ? `${paths.dir}/subagents/agent-${agentId}.jsonl`
+    : `${paths.dir}/subagents/workflows/${run}/agent-${agentId}.jsonl`;
+
+const numberOf = (value: unknown): number =>
+  typeof value === "number" && Number.isFinite(value) ? value : 0;
+
+const blocksOf = (content: unknown): TranscriptRow["content"] => {
+  if (typeof content === "string") {
+    return [{ type: "text", text: content }];
+  }
+
+  return Array.isArray(content)
+    ? content.filter(
+        (block): block is { type: string } =>
+          typeof block === "object" &&
+          block !== null &&
+          typeof (block as Record<string, unknown>).type === "string",
+      )
+    : [];
+};
+
+const rowOf = (record: Record<string, unknown>): TranscriptRow | undefined => {
+  const message = record.message as Record<string, unknown> | undefined;
+  const role = stringOf(message?.role);
+
+  if (
+    (record.type !== "user" && record.type !== "assistant") ||
+    record.isMeta === true ||
+    role === undefined
+  ) {
+    return undefined;
+  }
+
+  return { type: role, role, content: blocksOf(message?.content) };
+};
+
+const transcriptFrom = (
+  records: readonly Record<string, unknown>[],
+  opening: readonly TranscriptRow[],
+): Transcript => {
+  const requests = records.filter((record) => record.type === "api-request");
+  const params = requests.at(-1)?.params as Record<string, unknown> | undefined;
+  const config = params?.output_config as Record<string, unknown> | undefined;
+  const replies = records
+    .filter((record) => record.type === "assistant")
+    .map((record) => record.message as Record<string, unknown> | undefined);
+  const usages = new Map(
+    replies.flatMap((message) => {
+      const id = stringOf(message?.id);
+
+      return id === undefined
+        ? []
+        : [[id, message?.usage as Record<string, unknown> | undefined]];
+    }),
+  );
+  const rows = records.flatMap((record) => rowOf(record) ?? []);
+
+  return {
+    rows: [...opening, ...rows],
+    model: stringOf(params?.model) ?? stringOf(replies.at(-1)?.model),
+    effort: stringOf(config?.effort),
+    steps: usages.size,
+    toolCalls: replies.reduce(
+      (count, message) =>
+        count +
+        blocksOf(message?.content).filter((block) => block.type === "tool_use")
+          .length,
+      0,
+    ),
+    input: [...usages.values()].reduce(
+      (total, usage) =>
+        total +
+        numberOf(usage?.input_tokens) +
+        numberOf(usage?.cache_read_input_tokens) +
+        numberOf(usage?.cache_creation_input_tokens),
+      0,
+    ),
+    output: [...usages.values()].reduce(
+      (total, usage) => total + numberOf(usage?.output_tokens),
+      0,
+    ),
+  };
+};
+
+const recordsOf = (text: string, isCut: boolean): Record<string, unknown>[] =>
+  (isCut ? text.split("\n").slice(1) : text.split("\n")).flatMap((line) => {
+    const record = recordOf(line);
+
+    return record === undefined ? [] : [record];
+  });
+
+export const transcriptOf = async (
+  disk: Disk,
+  path: string,
+): Promise<Transcript> => {
+  const { size } = await disk.stat(path);
+
+  if (size <= READ_LIMIT) {
+    return transcriptFrom(recordsOf(await disk.read(path), false), []);
+  }
+
+  const [head, tail] = await Promise.all([
+    disk.run(["head", "-c", String(HEAD_BYTES), path]),
+    disk.run(["tail", "-c", String(TAIL_BYTES), path]),
+  ]);
+  const opening = recordsOf(head.stdout, false)
+    .flatMap((record) => rowOf(record) ?? [])
+    .filter((row) => row.role === "user")
+    .slice(0, 1);
+
+  return transcriptFrom(recordsOf(tail.stdout, true), opening);
 };
 
 const parsedMetaOf = (text: string, run?: string): AgentMeta | undefined => {
