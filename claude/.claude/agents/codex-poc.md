@@ -1,6 +1,8 @@
 ---
 name: codex-poc
 description: Cross-model implementation PoC via OpenAI Codex CLI (headless, workspace-write). Lets codex write a competing implementation inside an isolated git worktree. Use as a Workflow agentType ('codex-poc', pair with isolation:'worktree') in ultracode implementation phases, or via the Agent tool with an explicit worktree path.
+model: haiku
+effort: xhigh
 pi-codex-stage-modes: poc
 ---
 

@@ -1,6 +1,8 @@
 ---
 name: codex-reviewer
 description: Cross-model review via OpenAI Codex CLI (headless). Reviews plans, designs, diffs, and findings from a non-Claude model family. Usable directly via the Agent tool or as a Workflow agentType ('codex-reviewer') in ultracode review/verification stages; composes with JSON-schema structured output.
+model: haiku
+effort: xhigh
 pi-codex-stage-modes: prompt,review
 ---
 

@@ -1,6 +1,8 @@
 ---
 name: codex-runner
 description: Cross-model write-capable worker via OpenAI Codex CLI (headless, workspace-write). Runs a codex edit/implementation task in a directory the orchestrator chooses — the main checkout or any subdirectory — WITHOUT the isolated-worktree requirement that codex-poc enforces. Use as a Workflow agentType ('codex-runner') when the main agent launches several write-capable codex workers in parallel and owns their placement; use codex-poc instead for a competing PoC that must stay isolated, and codex-reviewer for read-only review.
+model: haiku
+effort: xhigh
 pi-codex-stage-modes: run
 ---
 

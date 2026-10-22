@@ -5,7 +5,8 @@
  * the rest of the file is the agent's system prompt. Only name/description
  * are required. Optional pi-codex-stage-modes values are a trusted,
  * harness-specific capability declaration and are rejected fail-closed when
- * any mode is unknown or duplicated.
+ * any mode is unknown or duplicated. The pi model comes from pi-model; the
+ * Claude Code model key is ignored so its aliases never reach pi's --model.
  */
 
 export const CODEX_STAGE_MODES = ["prompt", "review", "poc", "run"] as const;
@@ -67,8 +68,8 @@ export const parseAgentMarkdown = (
       .map((tool) => tool.trim())
       .filter((tool) => tool !== "");
   }
-  if (fields.model !== undefined && fields.model !== "") {
-    definition.model = fields.model;
+  if (fields["pi-model"] !== undefined && fields["pi-model"] !== "") {
+    definition.model = fields["pi-model"];
   }
   if (
     fields["pi-codex-stage-modes"] !== undefined &&
