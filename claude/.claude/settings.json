@@ -27,7 +27,8 @@
       "Read(**)",
       "Read(~/.bashrc)",
       "Read(~/.zshrc)",
-      "SendMessage"
+      "SendMessage",
+      "Bash(/Users/ushironoko/.claude/jobs/7b133109/bin/air-run.sh:*)"
     ],
     "deny": [
       "Bash(bit issue claim:*)",
@@ -169,10 +170,14 @@
     "typescript-lsp@claude-plugins-official": true
   },
   "language": "Japanese",
+  "subagentPromptCacheTtl": "1h",
   "alwaysThinkingEnabled": true,
   "effortLevel": "xhigh",
   "modelSettings": {
     "claude-fable-5-1": {
+      "effortLevel": "high"
+    },
+    "claude-opus-5-5": {
       "effortLevel": "high"
     }
   },
@@ -181,6 +186,8 @@
   "skipWorkflowUsageWarning": true,
   "verbose": true,
   "autoCompactEnabled": true,
+  "switchModelsOnFlag": false,
+  "autoContinueAtUsageLimit": true,
   "remoteControlAtStartup": true,
   "agentPushNotifEnabled": true,
   "skipAutoPermissionPrompt": true,
