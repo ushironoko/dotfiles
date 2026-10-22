@@ -7,6 +7,7 @@ service_tier = "fast"
 
 
 
+
 [notice]
 hide_rate_limit_model_nudge = true
 
@@ -34,9 +35,6 @@ enabled = true
 [plugins."template-creator@openai-primary-runtime"]
 enabled = true
 
-[plugins."sites@openai-bundled"]
-enabled = true
-
 [plugins."visualize@openai-bundled"]
 enabled = true
 
@@ -47,6 +45,9 @@ enabled = true
 enabled = true
 
 [plugins."unified-computer-use@openai-bundled"]
+enabled = true
+
+[plugins."code-review@openai-bundled"]
 enabled = true
 
 [tui]
@@ -74,7 +75,10 @@ gpt-6-astra = 2
 usePointerCursors = true
 followUpQueueMode = "queue"
 dock-icon-preference = "codex-system"
-avatar-overlay-mascot-width-px = 80
+avatar-overlay-mascot-width-px = 224
+conversationDetailMode = "STEPS_PROSE"
+appshotAlwaysSendToMini = true
+selected-avatar-id = "pet_6ad704f975388191ae3f0877e4bef09d"
 
 [desktop.appearanceLightChromeTheme]
 accent = "#339cff"
@@ -111,6 +115,7 @@ global = "ghostty"
 js_repl = false
 hooks = true
 multi_agent = true
+memories = true
 
 [agents]
 max_threads = 12
@@ -120,4 +125,8 @@ interrupt_message = true
 
 [shell_environment_policy.set]
 NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "323bc3e687e17d7e377238d9f4c69111c4d0e6219103b6316d8c52082489533b"
+
+[memories]
+generate_memories = true
+use_memories = true
 

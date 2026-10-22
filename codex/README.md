@@ -27,7 +27,7 @@ deployment with `bun run src/index.ts install -d` before applying it.
 | `PermissionRequest` | Native `PermissionRequest` adapter                          |
 | `PostToolUse`       | Native `PostToolUse` adapters for `apply_patch`             |
 | `UserPromptSubmit`  | Native hook with Codex-native ultracode context             |
-| `Stop`              | Native notification hook                                   |
+| `Stop`              | Native notification hook                                    |
 | `Notification`      | TUI notifications plus the `Stop` notification adapter      |
 | `TaskCompleted`     | Explicit task-complete command after parent verification    |
 | `WorktreeCreate`    | Native App worktree, or explicit create-and-reopen adapter  |
