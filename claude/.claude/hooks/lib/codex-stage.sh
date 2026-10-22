@@ -128,14 +128,23 @@ run_with_timeout() {
   [ "$monitor_was_enabled" -eq 1 ] || set +m
   local rc=0
   wait "$cmd_pid" || rc=$?
-  # A command leader may exit while a background descendant keeps the job's
-  # process group alive. Keep the watchdog only while that group lives, so
-  # TERM/KILL still reaches it, and stop waiting once the group is gone.
-  while kill -0 -- "$kill_target" 2>/dev/null && kill -0 "$watchdog_pid" 2>/dev/null; do
-    sleep 1
-  done
-  kill -0 -- "$kill_target" 2>/dev/null || kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
+  # Once the leader has exited its result is final; a descendant left in the
+  # group must not hold the caller until the deadline, so stop the watchdog
+  # first and then give leftovers a short grace before ending the group.
+  if [ ! -e "$mark" ]; then
+    kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
+  fi
   wait "$watchdog_pid" 2>/dev/null || true
+  local grace=0
+  while kill -0 -- "$kill_target" 2>/dev/null && [ "$grace" -lt 10 ]; do
+    sleep 1
+    grace=$((grace + 1))
+  done
+  if kill -0 -- "$kill_target" 2>/dev/null; then
+    kill -TERM -- "$kill_target" 2>/dev/null
+    sleep 2
+    kill -KILL -- "$kill_target" 2>/dev/null
+  fi
   if [ -e "$mark" ]; then
     rm -f "$mark"
     return 124
