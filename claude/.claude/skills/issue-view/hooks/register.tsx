@@ -4,8 +4,11 @@ const PANE_ID = "issue-view";
 const PANE_TITLE = "Issues";
 const COMMAND = "issues";
 const REFRESH_MS = 60_000;
-const ISSUE_LIMIT = 50;
+const ISSUE_LIMIT = 500;
 const MAX_TITLE_CHARS = 200;
+const CHROME_ROWS = 6;
+const ROW_LINES = 2;
+const MIN_PAGE_SIZE = 5;
 const GH_FIELDS = "number,title,url,author,labels";
 
 interface Issue {
@@ -34,6 +37,14 @@ interface Host {
 }
 
 type Kit = Pick<ElementTable<"terminal">, "Box" | "Text" | "Button">;
+
+interface Paged<T> {
+  items: readonly T[];
+  page: number;
+  pages: number;
+  first: number;
+  last: number;
+}
 
 const isDrawable = (char: string): boolean => {
   const code = char.codePointAt(0) ?? 0;
@@ -210,10 +221,69 @@ const matchesOf = (issues: readonly Issue[], query: string) => {
       );
 };
 
+const pageSizeOf = (bodyRows: number): number =>
+  Math.max(MIN_PAGE_SIZE, Math.floor((bodyRows - CHROME_ROWS) / ROW_LINES));
+
+const pagedOf = <T,>(
+  items: readonly T[],
+  page: number,
+  size: number,
+): Paged<T> => {
+  const pages = Math.max(1, Math.ceil(items.length / size));
+  const current = Math.min(Math.max(page, 0), pages - 1);
+  const first = current * size;
+
+  return {
+    items: items.slice(first, first + size),
+    page: current,
+    pages,
+    first,
+    last: Math.min(first + size, items.length),
+  };
+};
+
+const pagerView = <T,>(
+  { Box, Text, Button }: Kit,
+  paged: Paged<T>,
+  total: number,
+  onPage: (page: number) => void,
+) =>
+  paged.pages <= 1 ? null : (
+    <Box flexDirection="row" columnGap={2}>
+      {paged.page > 0 ? (
+        <Button
+          key="page:prev"
+          plain
+          hotkey="p"
+          label="‹ prev"
+          onPress={() => onPage(paged.page - 1)}
+        />
+      ) : (
+        <Text dimColor>‹ prev</Text>
+      )}
+      <Text dimColor>
+        page {paged.page + 1}/{paged.pages} · {paged.first + 1}–{paged.last} of{" "}
+        {total}
+      </Text>
+      {paged.page < paged.pages - 1 ? (
+        <Button
+          key="page:next"
+          plain
+          hotkey="n"
+          label="next ›"
+          onPress={() => onPage(paged.page + 1)}
+        />
+      ) : (
+        <Text dimColor>next ›</Text>
+      )}
+    </Box>
+  );
+
 export const register = (on: On) => {
   let listing: Listing = { kind: "idle" };
   let notice: string | null = null;
   let query = "";
+  let page = 0;
   let host: Host | null = null;
   let isOpen = false;
   let generation = 0;
@@ -294,6 +364,7 @@ export const register = (on: On) => {
     const kit: Kit = { Box, Text, Button };
     const issues = issuesOfListing(listing);
     const shown = matchesOf(issues, query);
+    const paged = pagedOf(shown, page, pageSizeOf(e.props.scroll.bodyRows));
     const current = host;
 
     return (
@@ -329,20 +400,26 @@ export const register = (on: On) => {
           value={query}
           onInput={(value) => {
             query = value;
+            page = 0;
             current?.redraw();
           }}
           onSubmit={(value) => {
             query = value;
+            page = 0;
             current?.redraw();
           }}
         />
+        {pagerView(kit, paged, shown.length, (target) => {
+          page = target;
+          current?.redraw();
+        })}
         {statusView(kit, listing)}
         {shown.length === 0 && issues.length > 0 ? (
           <Text dimColor>No issues match "{query.trim()}".</Text>
         ) : null}
         {notice === null ? null : <Text color="red">{notice}</Text>}
         <Box flexDirection="column">
-          {shown.map((issue) => (
+          {paged.items.map((issue) => (
             <Box key={`issue:${issue.number}`} flexDirection="column">
               <Button
                 key={`open:${issue.number}`}
@@ -370,6 +447,7 @@ export const register = (on: On) => {
   on("ui.close", { id: PANE_ID }, (_, e, next) => {
     isOpen = false;
     query = "";
+    page = 0;
     generation += 1;
 
     return next(e);
