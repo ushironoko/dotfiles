@@ -1,0 +1,4 @@
+{
+  "description": "issue-view: /issues toggles a Pane listing open issues of the project root repo via gh; pressing a row opens its URL in the browser",
+  "modules": ["./register.tsx"]
+}
