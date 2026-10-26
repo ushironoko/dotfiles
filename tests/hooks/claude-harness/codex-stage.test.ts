@@ -182,7 +182,7 @@ describe("codex-stage execution boundary", () => {
     expect(exited).toBe(true);
   }, 10_000);
 
-  test("retains the watchdog when the Codex leader exits before its grandchild", async () => {
+  test("returns the leader's exit code and ends a lingering grandchild after the grace period", async () => {
     const fixture = await setupFixture();
     const grandchildPidFile = join(fixture.root, "early-exit-grandchild.pid");
     await fs.writeFile(
@@ -217,12 +217,12 @@ describe("codex-stage execution boundary", () => {
       },
     );
 
-    expect(result.exitCode).toBe(124);
-    expect(result.stderr.toString()).toContain("codex timed out after 1s");
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.toString()).not.toContain("timed out");
     const grandchildPid = Number(await fs.readFile(grandchildPidFile, "utf8"));
     expect(Number.isSafeInteger(grandchildPid)).toBe(true);
     const exited = await waitForProcessExit(grandchildPid);
     if (!exited) process.kill(grandchildPid, "SIGKILL");
     expect(exited).toBe(true);
-  }, 10_000);
+  }, 20_000);
 });
