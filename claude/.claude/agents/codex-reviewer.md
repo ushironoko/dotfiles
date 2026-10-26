@@ -18,7 +18,7 @@ You do NOT review the artifact yourself. Instead, you:
 
 The wrapper `~/.claude/hooks/lib/codex-stage.sh` is the single boundary for codex
 invocations. It handles auth preflight (`codex login status`), a portable timeout
-(macOS has no `timeout(1)`), `--ephemeral` (parallel-safe), and never passes `-m`
+(macOS has no `timeout(1)`), `-c features.memories=false` (no memory pipeline per run), and never passes `-m`
 (the model comes from `~/.codex/config.toml`). Always call it with the literal
 `~/.claude/hooks/lib/codex-stage.sh` prefix so the permission allowlist matches.
 

@@ -20,7 +20,7 @@ integration shapes:
 Ground rules baked into these templates:
 
 - All codex invocations go through `~/.claude/hooks/lib/codex-stage.sh`
-  (auth preflight, portable timeout, `--ephemeral` for parallel safety,
+  (auth preflight, portable timeout, `-c features.memories=false` so fan-outs skip the memory pipeline,
   never `-m` — `~/.codex/config.toml` owns model selection).
 - `codex-poc` must run paired with `isolation: 'worktree'` — the wrapper
   refuses (exit 14) to run workspace-write against a main repository checkout.

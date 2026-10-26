@@ -95,6 +95,21 @@ describe("codex-stage execution boundary", () => {
     expect(result.stderr.toString()).toBe("");
   });
 
+  test("persists the session rollout but keeps the memories pipeline off", async () => {
+    const fixture = await setupFixture();
+    const result = runPrompt(fixture, [
+      "--dir",
+      fixture.target,
+      "--timeout",
+      "10",
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    const stdout = result.stdout.toString();
+    expect(stdout).toContain("<-c> <features.memories=false> <exec>");
+    expect(stdout).not.toContain("<--ephemeral>");
+  });
+
   test("rejects sandbox-external output and unsafe numeric controls", async () => {
     const fixture = await setupFixture();
     const output = join(fixture.root, "review-output.md");

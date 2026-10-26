@@ -64,7 +64,7 @@ git status --porcelain
 ### Phase 2: Codex Invocation
 
 Run codex through the shared wrapper — the single permission/safety boundary
-(auth preflight, portable timeout, `--ephemeral`, `-a never`, never `-m`). Keep
+(auth preflight, portable timeout, `-c features.memories=false`, `-a never`, never `-m`). Keep
 all task text out of Bash by staging it in the sandbox-managed private scratch
 root:
 

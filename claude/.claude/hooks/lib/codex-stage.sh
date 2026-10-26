@@ -5,7 +5,9 @@
 # Centralizes the invariants every codex call must honor, so agents and workflow
 # scripts never re-derive flags:
 #   - never passes -m / --model (model comes from ~/.codex/config.toml)
-#   - always --ephemeral (parallel-safe: no ~/.codex/sessions state collisions)
+#   - persists session rollouts (one UUID-named file per run, so parallel-safe and
+#     visible to usage trackers) but disables the memories feature, whose startup
+#     pipeline would otherwise spend quota on every fan-out run
 #   - auth preflight via `codex login status`
 #   - in-script timeout (macOS ships no timeout(1) / gtimeout)
 #   - poc mode validates the target is an isolated *linked* git worktree in code,
@@ -269,6 +271,7 @@ TITLE=""
 WORKTREE=""
 NETWORK=0
 SELECTOR=()
+CODEX_GLOBAL_OPTS=(-c features.memories=false)
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -304,8 +307,7 @@ case $MODE in
     git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
       || die "review mode requires a git repository: $DIR" 13
     rc=0
-    run_codex "" codex exec review "${SELECTOR[@]}" \
-      --ephemeral \
+    run_codex "" codex "${CODEX_GLOBAL_OPTS[@]}" exec review "${SELECTOR[@]}" \
       ${TITLE:+--title "$TITLE"} || rc=$?
     [ "$rc" -eq 0 ] || { report_failure "$rc"; exit "$rc"; }
     ;;
@@ -316,9 +318,8 @@ case $MODE in
     DIR=$PWD
     buffer_stdin
     rc=0
-    run_codex "$PROMPT_FILE" codex exec \
+    run_codex "$PROMPT_FILE" codex "${CODEX_GLOBAL_OPTS[@]}" exec \
       --sandbox read-only \
-      --ephemeral \
       --skip-git-repo-check \
       ${SCHEMA:+--output-schema "$SCHEMA"} \
       - || rc=$?
@@ -352,9 +353,8 @@ case $MODE in
     NETWORK_OPT=""
     [ "$NETWORK" -eq 1 ] && NETWORK_OPT="sandbox_workspace_write.network_access=true"
     rc=0
-    run_codex "$PROMPT_FILE" codex -a never exec \
+    run_codex "$PROMPT_FILE" codex "${CODEX_GLOBAL_OPTS[@]}" -a never exec \
       --sandbox workspace-write \
-      --ephemeral \
       ${NETWORK_OPT:+-c "$NETWORK_OPT"} \
       - || rc=$?
     [ "$rc" -eq 0 ] || { report_failure "$rc"; exit "$rc"; }
@@ -381,9 +381,8 @@ case $MODE in
     NETWORK_OPT=""
     [ "$NETWORK" -eq 1 ] && NETWORK_OPT="sandbox_workspace_write.network_access=true"
     rc=0
-    run_codex "$PROMPT_FILE" codex -a never exec \
+    run_codex "$PROMPT_FILE" codex "${CODEX_GLOBAL_OPTS[@]}" -a never exec \
       --sandbox workspace-write \
-      --ephemeral \
       ${NETWORK_OPT:+-c "$NETWORK_OPT"} \
       - || rc=$?
     [ "$rc" -eq 0 ] || { report_failure "$rc"; exit "$rc"; }

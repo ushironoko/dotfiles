@@ -104,7 +104,7 @@ Enforced by the codex wrapper and by your task prompts, not by the plan
 validator:
 
 - All codex invocations go through `~/.claude/hooks/lib/codex-stage.sh`
-  (auth preflight, portable timeout, `--ephemeral` for parallel safety, never
+  (auth preflight, portable timeout, `-c features.memories=false` so fan-outs skip the memory pipeline, never
   `-m` — `~/.codex/config.toml` owns model selection).
 - Reviewer `prompt` commands in non-interactive children must match the
   deterministic permission contract:
