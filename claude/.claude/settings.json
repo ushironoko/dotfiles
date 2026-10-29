@@ -170,6 +170,13 @@
     "typescript-lsp@claude-plugins-official": true
   },
   "language": "Japanese",
+  "sandbox": {
+    "network": {
+      "allowUnixSockets": [
+        "/Users/ushironoko/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+      ]
+    }
+  },
   "subagentPromptCacheTtl": "1h",
   "alwaysThinkingEnabled": true,
   "effortLevel": "xhigh",
@@ -190,12 +197,5 @@
   "autoContinueAtUsageLimit": true,
   "remoteControlAtStartup": true,
   "agentPushNotifEnabled": true,
-  "skipAutoPermissionPrompt": true,
-  "sandbox": {
-    "network": {
-      "allowUnixSockets": [
-        "/Users/ushironoko/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
-      ]
-    }
-  }
+  "skipAutoPermissionPrompt": true
 }

@@ -6,27 +6,37 @@ const COMMAND = "issues";
 const REFRESH_MS = 60_000;
 const ISSUE_LIMIT = 500;
 const MAX_TITLE_CHARS = 200;
-const CHROME_ROWS = 6;
+const CHROME_ROWS = 5;
 const ROW_LINES = 2;
 const MIN_PAGE_SIZE = 5;
-const GH_FIELDS = "number,title,url,author,labels";
+const GH_FIELDS = "number,title,url,author,assignees,labels,updatedAt";
+const MINUTE_MS = 60_000;
 
 interface Issue {
   number: number;
   title: string;
   url: string;
   author: string;
+  assignees: readonly string[];
   labels: readonly string[];
+  updatedAt?: number;
 }
 
-type Listing =
-  | { kind: "idle" }
-  | { kind: "loading"; previous: readonly Issue[] }
+interface Listing {
+  issues: readonly Issue[];
+  isLoading: boolean;
+  root?: string;
+  loadedAt?: number;
+  error?: string;
+}
+
+type Fetched =
   | { kind: "loaded"; issues: readonly Issue[]; root: string }
   | { kind: "error"; message: string };
 
 interface Host {
   root: () => Promise<string>;
+  now: () => Promise<number>;
   run: (
     argv: readonly string[],
     cwd?: string,
@@ -89,6 +99,24 @@ const labelsOf = (raw: unknown): string[] =>
       })
     : [];
 
+const timeOf = (raw: unknown): number | undefined => {
+  const time = typeof raw === "string" ? Date.parse(raw) : Number.NaN;
+
+  return Number.isFinite(time) ? time : undefined;
+};
+
+const loginsOf = (raw: unknown): string[] =>
+  Array.isArray(raw)
+    ? raw.flatMap((user: unknown) => {
+        const login =
+          typeof user === "object" && user !== null
+            ? (user as Record<string, unknown>).login
+            : undefined;
+
+        return typeof login === "string" && login !== "" ? [lineOf(login)] : [];
+      })
+    : [];
+
 const issueOf = (raw: unknown): Issue | null => {
   if (typeof raw !== "object" || raw === null) {
     return null;
@@ -106,7 +134,9 @@ const issueOf = (raw: unknown): Issue | null => {
     title: lineOf(typeof record.title === "string" ? record.title : ""),
     url: record.url,
     author: typeof author?.login === "string" ? lineOf(author.login) : "",
+    assignees: loginsOf(record.assignees),
     labels: labelsOf(record.labels),
+    updatedAt: timeOf(record.updatedAt),
   };
 };
 
@@ -122,7 +152,7 @@ const issuesOf = (stdout: string): Issue[] => {
     : [];
 };
 
-const fetchListing = async (host: Host): Promise<Listing> => {
+const fetchListing = async (host: Host): Promise<Fetched> => {
   try {
     const root = await host.root();
     const { exitCode, stdout, stderr } = await host.run(
@@ -172,39 +202,58 @@ const openInBrowser = async (
   }
 };
 
-const issuesOfListing = (listing: Listing): readonly Issue[] => {
-  switch (listing.kind) {
-    case "loaded": {
-      return listing.issues;
-    }
-    case "loading": {
-      return listing.previous;
-    }
-    default: {
-      return [];
+const repoOf = (listing: Listing): string | undefined => {
+  const [first] = listing.issues;
+
+  if (first !== undefined) {
+    const [, owner, repo] = new URL(first.url).pathname.split("/");
+
+    if (owner !== undefined && repo !== undefined) {
+      return `${owner}/${repo}`;
     }
   }
+
+  return listing.root?.split("/").findLast((part) => part !== "");
 };
 
-const statusView = ({ Text }: Kit, listing: Listing) => {
-  switch (listing.kind) {
-    case "idle":
-    case "loading": {
-      return <Text dimColor>Loading…</Text>;
-    }
-    case "error": {
-      return <Text color="red">{listing.message}</Text>;
-    }
-    case "loaded": {
-      return listing.issues.length === 0 ? (
-        <Text dimColor>No open issues.</Text>
-      ) : null;
-    }
+const ageOf = (time: number | undefined, now: number): string => {
+  if (time === undefined) {
+    return "";
   }
+
+  const minutes = Math.max(0, Math.floor((now - time) / MINUTE_MS));
+
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+
+  if (minutes < 60 * 24) {
+    return `${Math.floor(minutes / 60)}h`;
+  }
+
+  if (minutes < 60 * 24 * 30) {
+    return `${Math.floor(minutes / (60 * 24))}d`;
+  }
+
+  return `${Math.floor(minutes / (60 * 24 * 30))}mo`;
 };
 
-const rowLabelOf = (issue: Issue): string =>
-  `#${issue.number} ${issue.title}${issue.author === "" ? "" : ` @${issue.author}`}`;
+const clockOf = (time: number): string => {
+  const date = new Date(time);
+
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+};
+
+const metaOf = (issue: Issue): string =>
+  [
+    issue.author === "" ? undefined : `@${issue.author}`,
+    issue.assignees.length === 0
+      ? undefined
+      : `→ ${issue.assignees.map((login) => `@${login}`).join(", ")}`,
+    issue.labels.length === 0 ? undefined : issue.labels.join(", "),
+  ]
+    .filter((part) => part !== undefined)
+    .join(" · ");
 
 const matchesOf = (issues: readonly Issue[], query: string) => {
   const needle = query.trim().toLowerCase();
@@ -216,6 +265,7 @@ const matchesOf = (issues: readonly Issue[], query: string) => {
           `#${issue.number}`,
           issue.title,
           `@${issue.author}`,
+          ...issue.assignees.map((login) => `@${login}`),
           ...issue.labels,
         ].some((field) => field.toLowerCase().includes(needle)),
       );
@@ -240,6 +290,54 @@ const pagedOf = <T,>(
     first,
     last: Math.min(first + size, items.length),
   };
+};
+
+const freshnessView = ({ Text }: Kit, listing: Listing) => {
+  if (listing.isLoading) {
+    return <Text color="warning">loading…</Text>;
+  }
+
+  return listing.loadedAt === undefined ? null : (
+    <Text dimColor>{clockOf(listing.loadedAt)}</Text>
+  );
+};
+
+const headerView = (
+  { Box, Text, Button }: Kit,
+  listing: Listing,
+  counts: { shown: number; total: number },
+  onRefresh: () => void,
+) => {
+  const repo = repoOf(listing);
+  const count =
+    counts.shown === counts.total
+      ? `${counts.total} open`
+      : `${counts.shown} of ${counts.total} open`;
+
+  return (
+    <Box flexDirection="row" justifyContent="space-between" columnGap={2}>
+      <Box flexShrink={1}>
+        <Text wrap="truncate-end">
+          <Text bold>Issues</Text>
+          <Text dimColor>
+            {"  "}
+            {count}
+            {repo === undefined ? "" : ` · ${repo}`}
+          </Text>
+        </Text>
+      </Box>
+      <Box flexShrink={0} columnGap={2}>
+        {freshnessView({ Box, Text, Button }, listing)}
+        <Button
+          key="refresh"
+          plain
+          dimColor
+          label="↻ refresh"
+          onPress={onRefresh}
+        />
+      </Box>
+    </Box>
+  );
 };
 
 const pagerView = <T,>(
@@ -279,8 +377,66 @@ const pagerView = <T,>(
     </Box>
   );
 
+const stateView = (
+  { Text }: Kit,
+  listing: Listing,
+  counts: { shown: number; total: number },
+  query: string,
+) => {
+  if (listing.error !== undefined) {
+    return <Text color="error">gh: {listing.error}</Text>;
+  }
+
+  if (counts.total === 0) {
+    return (
+      <Text dimColor>
+        {listing.loadedAt === undefined
+          ? "Loading open issues…"
+          : "No open issues."}
+      </Text>
+    );
+  }
+
+  return counts.shown === 0 ? (
+    <Text dimColor>No issues match "{query.trim()}".</Text>
+  ) : null;
+};
+
+const rowView = (
+  { Box, Text, Button }: Kit,
+  issue: Issue,
+  layout: { numberWidth: number; now: number },
+  onOpen: () => void,
+) => {
+  const meta = metaOf(issue);
+
+  return (
+    <Box key={`issue:${issue.number}`} flexDirection="column">
+      <Box flexDirection="row" columnGap={1}>
+        <Box flexGrow={1} flexShrink={1}>
+          <Button key={`open:${issue.number}`} plain onPress={onOpen}>
+            <Text color="success">●</Text>{" "}
+            <Text bold color="suggestion">
+              {`#${issue.number}`.padEnd(layout.numberWidth)}
+            </Text>{" "}
+            <Text wrap="truncate-end">{issue.title}</Text>
+          </Button>
+        </Box>
+        <Box flexShrink={0}>
+          <Text dimColor>{ageOf(issue.updatedAt, layout.now)}</Text>
+        </Box>
+      </Box>
+      <Box paddingLeft={layout.numberWidth + 3}>
+        <Text dimColor wrap="truncate-end">
+          {meta === "" ? " " : meta}
+        </Text>
+      </Box>
+    </Box>
+  );
+};
+
 export const register = (on: On) => {
-  let listing: Listing = { kind: "idle" };
+  let listing: Listing = { issues: [], isLoading: false };
   let notice: string | null = null;
   let query = "";
   let page = 0;
@@ -292,13 +448,22 @@ export const register = (on: On) => {
     generation += 1;
     const mine = generation;
 
-    listing = { kind: "loading", previous: issuesOfListing(listing) };
+    listing = { ...listing, isLoading: true };
     current.redraw();
 
-    const next = await fetchListing(current);
+    const fetched = await fetchListing(current);
+    const now = await current.now();
 
     if (mine === generation) {
-      listing = next;
+      listing =
+        fetched.kind === "loaded"
+          ? {
+              issues: fetched.issues,
+              root: fetched.root,
+              loadedAt: now,
+              isLoading: false,
+            }
+          : { ...listing, isLoading: false, error: fetched.message };
       current.redraw();
     }
   };
@@ -311,6 +476,7 @@ export const register = (on: On) => {
   on("session.start", async ($, e, next) => {
     const current: Host = {
       root: () => $.session.root(),
+      now: () => $.clock.now(),
       run: (argv, cwd) =>
         $.process.run(argv, cwd === undefined ? undefined : { cwd }),
       open: () => $.ui.open({ id: PANE_ID, title: PANE_TITLE }),
@@ -362,41 +528,27 @@ export const register = (on: On) => {
 
     const { Box, Text, Button, Input } = $.ui.resolve(e);
     const kit: Kit = { Box, Text, Button };
-    const issues = issuesOfListing(listing);
-    const shown = matchesOf(issues, query);
+    const now = await $.clock.now();
+    const shown = matchesOf(listing.issues, query);
     const paged = pagedOf(shown, page, pageSizeOf(e.props.scroll.bodyRows));
+    const counts = { shown: shown.length, total: listing.issues.length };
+    const numberWidth = Math.max(
+      2,
+      ...paged.items.map((issue) => `#${issue.number}`.length),
+    );
     const current = host;
 
     return (
       <Box flexDirection="column" paddingRight={1}>
-        <Box flexDirection="row" justifyContent="space-between">
-          <Text bold>
-            Open issues{" "}
-            {shown.length === issues.length
-              ? issues.length
-              : `${shown.length}/${issues.length}`}
-          </Text>
-          <Button
-            key="refresh"
-            plain
-            dimColor
-            label="↻ refresh"
-            onPress={() => {
-              if (current !== null) {
-                void refresh(current).catch(() => undefined);
-              }
-            }}
-          />
-        </Box>
-        {listing.kind === "loaded" ? (
-          <Text dimColor wrap="truncate-start">
-            {listing.root}
-          </Text>
-        ) : null}
+        {headerView(kit, listing, counts, () => {
+          if (current !== null) {
+            void refresh(current).catch(() => undefined);
+          }
+        })}
         <Input
           key="filter"
           label="filter "
-          placeholder="title, #number, label or @author"
+          placeholder="title, #number, label, @author or @assignee"
           value={query}
           onInput={(value) => {
             query = value;
@@ -413,32 +565,16 @@ export const register = (on: On) => {
           page = target;
           current?.redraw();
         })}
-        {statusView(kit, listing)}
-        {shown.length === 0 && issues.length > 0 ? (
-          <Text dimColor>No issues match "{query.trim()}".</Text>
-        ) : null}
-        {notice === null ? null : <Text color="red">{notice}</Text>}
-        <Box flexDirection="column">
-          {paged.items.map((issue) => (
-            <Box key={`issue:${issue.number}`} flexDirection="column">
-              <Button
-                key={`open:${issue.number}`}
-                plain
-                label={rowLabelOf(issue)}
-                onPress={() => {
-                  if (current !== null) {
-                    void press(current, issue.url).catch(() => undefined);
-                  }
-                }}
-              />
-              {issue.labels.length === 0 ? null : (
-                <Text dimColor wrap="truncate-end">
-                  {"   "}
-                  {issue.labels.join(", ")}
-                </Text>
-              )}
-            </Box>
-          ))}
+        {stateView(kit, listing, counts, query)}
+        {notice === null ? null : <Text color="error">{notice}</Text>}
+        <Box flexDirection="column" marginTop={1}>
+          {paged.items.map((issue) =>
+            rowView(kit, issue, { numberWidth, now }, () => {
+              if (current !== null) {
+                void press(current, issue.url).catch(() => undefined);
+              }
+            }),
+          )}
         </Box>
       </Box>
     );

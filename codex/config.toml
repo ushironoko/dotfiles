@@ -1,7 +1,8 @@
 model = "gpt-6.1-sol"
-model_reasoning_effort = "high"
+model_reasoning_effort = "max"
 personality = "pragmatic"
 service_tier = "fast"
+
 
 
 
@@ -47,9 +48,6 @@ enabled = true
 [plugins."unified-computer-use@openai-bundled"]
 enabled = true
 
-[plugins."code-review@openai-bundled"]
-enabled = true
-
 [tui]
 notifications = true
 notification_condition = "unfocused"
@@ -69,7 +67,7 @@ screen_reader_detection_done = true
 "gpt-5.5" = 4
 "gpt-5.6-sol" = 4
 gpt-6-astra = 2
-"gpt-6.1-sol" = 3
+"gpt-6.1-sol" = 4
 
 [desktop]
 usePointerCursors = true
@@ -79,6 +77,7 @@ avatar-overlay-mascot-width-px = 224
 conversationDetailMode = "STEPS_PROSE"
 appshotAlwaysSendToMini = true
 selected-avatar-id = "pet_6ad704f975388191ae3f0877e4bef09d"
+avatar-overlay-pet-visible = false
 
 [desktop.appearanceLightChromeTheme]
 accent = "#339cff"
@@ -129,4 +128,13 @@ NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "323bc3e687e17d7e377238d9f4c69111c4d0
 [memories]
 generate_memories = true
 use_memories = true
+
+[apps.connector_76869538009648d5b282a4bb21c3d157.tools."github.create_tree"]
+approval_mode = "approve"
+
+[apps.connector_76869538009648d5b282a4bb21c3d157.tools."github.create_commit"]
+approval_mode = "approve"
+
+[apps.connector_76869538009648d5b282a4bb21c3d157.tools."github.update_ref"]
+approval_mode = "approve"
 
