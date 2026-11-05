@@ -35,12 +35,14 @@
     "@anthropic-ai/sandbox-runtime": "0.0.26",
     "@clack/prompts": "0.11.0",
     "@hearthdev/napi": "0.3.0",
+    "@ox-content/napi": "3.8.2",
     "c12": "3.2.0",
     "consola": "3.4.2",
     "defu": "6.1.4",
     "gunshi": "0.26.3",
     "ink": "5.1.0",
-    "react": "18.3.1"
+    "react": "18.3.1",
+    "satoru-render": "1.0.13"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.0.4",

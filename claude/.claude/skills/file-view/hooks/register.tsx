@@ -4,6 +4,14 @@ const PANE_ID = "file-view";
 const TOOL_NAME = "open_file";
 const TOOL_ID = "mcp__file-view__open_file";
 const PAGE_CHARS = 90000;
+const MARKDOWN_PAGE_CHARS = 40000;
+const MAX_IMAGE_COLUMNS = 255;
+const PANE_RIGHT_PADDING = 1;
+const RENDER_TIMEOUT_MS = 120000;
+const FIRST_TILE_KEY = "tile:0";
+const ALT_DENIAL = "the Image draws its alt here";
+const PROBE_INTERVAL_MS = 250;
+const PROBE_ATTEMPTS = 8;
 const MARKDOWN_PATH = /\.(md|markdown)$/i;
 const FILE_TOOLS: ReadonlySet<string> = new Set([
   "Read",
@@ -27,8 +35,34 @@ type Viewed =
       page: number;
       isMarkdown: boolean;
       full: string;
+      loadId: number;
     }
   | { kind: "error"; path: string; message: string };
+
+interface Tile {
+  file: string;
+  columns: number;
+  rows: number;
+}
+
+type Rendered =
+  | { kind: "ready"; tiles: readonly Tile[] }
+  | { kind: "failed"; message: string };
+
+interface RenderRequest {
+  key: string;
+  pageKey: string;
+  path: string;
+  source: string;
+  columns: number;
+}
+
+interface Renderer {
+  run: (request: RenderRequest) => Promise<Rendered>;
+  denialOf: (tile: Tile) => Promise<string | null>;
+  wait: (ms: number) => Promise<void>;
+  redraw: () => void;
+}
 
 interface Engine {
   read: (path: string) => Promise<string>;
@@ -36,7 +70,10 @@ interface Engine {
   redraw: () => void;
 }
 
-type BodyKit = Pick<ElementTable<"terminal">, "Text" | "Code" | "Markdown">;
+type BodyKit = Pick<
+  ElementTable<"terminal">,
+  "Box" | "Text" | "Code" | "Markdown" | "Image"
+>;
 
 const filePathOf = (input: unknown): string | null => {
   if (typeof input !== "object" || input === null) {
@@ -69,24 +106,52 @@ const drawableOf = (text: string): string =>
 
 const linesIn = (text: string): number => text.split("\n").length - 1;
 
-const pagesOf = (text: string, startLine = 1): Page[] => {
-  if (text.length <= PAGE_CHARS) {
+const pagesOf = (text: string, limit: number, startLine = 1): Page[] => {
+  if (text.length <= limit) {
     return [{ source: text, startLine }];
   }
 
-  const cut = text.lastIndexOf("\n", PAGE_CHARS);
-  const end = cut > 0 ? cut : PAGE_CHARS;
+  const cut = text.lastIndexOf("\n", limit);
+  const end = cut > 0 ? cut : limit;
   const source = text.slice(0, end);
   const rest = text.slice(cut > 0 ? end + 1 : end);
   const nextLine = startLine + linesIn(source) + (cut > 0 ? 1 : 0);
 
-  return [{ source, startLine }, ...pagesOf(rest, nextLine)];
+  return [{ source, startLine }, ...pagesOf(rest, limit, nextLine)];
 };
 
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-const loadedOf = async (engine: Engine, path: string): Promise<Viewed> => {
+const isTile = (value: unknown): value is Tile => {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const { file, columns, rows } = value as Record<string, unknown>;
+
+  return (
+    typeof file === "string" &&
+    typeof columns === "number" &&
+    typeof rows === "number"
+  );
+};
+
+const tilesIn = (stdout: string): Tile[] | null => {
+  const parsed: unknown = JSON.parse(stdout);
+  const tiles =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>).tiles
+      : null;
+
+  return Array.isArray(tiles) && tiles.every(isTile) ? tiles : null;
+};
+
+const loadedOf = async (
+  engine: Engine,
+  path: string,
+  loadId: number,
+): Promise<Viewed> => {
   try {
     const raw = await engine.read(path);
 
@@ -94,20 +159,70 @@ const loadedOf = async (engine: Engine, path: string): Promise<Viewed> => {
       return { kind: "error", path, message: "Binary file" };
     }
 
+    const isMarkdown = MARKDOWN_PATH.test(path);
+
     return {
       kind: "text",
       path,
-      pages: pagesOf(drawableOf(raw)),
+      pages: pagesOf(
+        drawableOf(raw),
+        isMarkdown ? MARKDOWN_PAGE_CHARS : PAGE_CHARS,
+      ),
       page: 0,
-      isMarkdown: MARKDOWN_PATH.test(path),
+      isMarkdown,
       full: raw,
+      loadId,
     };
   } catch (error) {
     return { kind: "error", path, message: messageOf(error) };
   }
 };
 
-const bodyOf = ({ Text, Code, Markdown }: BodyKit, shown: Viewed | null) => {
+const markdownBodyOf = (
+  { Box, Text, Markdown, Image }: BodyKit,
+  source: string,
+  page: number,
+  rendered: Rendered | null,
+  stale: readonly Tile[] | null,
+) => {
+  if (rendered?.kind === "failed") {
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>Showing plain Markdown: {rendered.message}</Text>
+        <Markdown key={`md:${page}`} text={source} />
+      </Box>
+    );
+  }
+
+  const tiles = rendered?.tiles ?? stale;
+
+  if (tiles === null) {
+    return <Text dimColor>Rendering…</Text>;
+  }
+
+  return (
+    <Box flexDirection="column">
+      {tiles.map(({ file, columns, rows }, index) => (
+        <Image
+          key={`tile:${index}`}
+          source={{ file, format: "png" }}
+          columns={columns}
+          rows={rows}
+          alt=" "
+        />
+      ))}
+    </Box>
+  );
+};
+
+const bodyOf = (
+  kit: BodyKit,
+  shown: Viewed | null,
+  rendered: Rendered | null,
+  stale: readonly Tile[] | null,
+) => {
+  const { Text, Code } = kit;
+
   if (shown === null) {
     return (
       <Text dimColor>Click a file path under a tool row to show it here.</Text>
@@ -125,7 +240,7 @@ const bodyOf = ({ Text, Code, Markdown }: BodyKit, shown: Viewed | null) => {
       const page = shown.pages[shown.page] ?? { source: "", startLine: 1 };
 
       return shown.isMarkdown ? (
-        <Markdown key={`md:${shown.page}`} text={page.source} />
+        markdownBodyOf(kit, page.source, shown.page, rendered, stale)
       ) : (
         <Code
           source={page.source}
@@ -140,16 +255,76 @@ const bodyOf = ({ Text, Code, Markdown }: BodyKit, shown: Viewed | null) => {
 export const register = (on: On) => {
   let viewed: Viewed | null = null;
   let generation = 0;
+  let isRendering = false;
+  let latestTiles: { pageKey: string; tiles: readonly Tile[] } | null = null;
+  let imageDenial: string | null = null;
+  let isImageSupported = false;
+  const renders = new Map<string, Rendered>();
+
+  const probeImageSupport = async (renderer: Renderer, tile: Tile) => {
+    for (let attempt = 0; attempt < PROBE_ATTEMPTS; attempt += 1) {
+      await renderer.wait(PROBE_INTERVAL_MS);
+
+      const denial = await renderer.denialOf(tile);
+
+      if (denial === null) {
+        isImageSupported = true;
+
+        return;
+      }
+
+      if (denial.startsWith(ALT_DENIAL)) {
+        imageDenial = denial;
+        renderer.redraw();
+
+        return;
+      }
+    }
+  };
+
+  const ensureRendered = (renderer: Renderer, request: RenderRequest) => {
+    if (imageDenial !== null || isRendering || renders.has(request.key)) {
+      return;
+    }
+
+    isRendering = true;
+
+    void renderer
+      .run(request)
+      .then((rendered) => {
+        renders.set(request.key, rendered);
+
+        if (rendered.kind === "ready") {
+          latestTiles = { pageKey: request.pageKey, tiles: rendered.tiles };
+
+          const [first] = rendered.tiles;
+
+          if (first !== undefined && !isImageSupported) {
+            void probeImageSupport(renderer, first).catch(() => undefined);
+          }
+        }
+      })
+      .finally(() => {
+        isRendering = false;
+        renderer.redraw();
+      });
+  };
+
+  const forgetRenders = () => {
+    renders.clear();
+    latestTiles = null;
+  };
 
   const show = async (engine: Engine, path: string) => {
     generation += 1;
     const current = generation;
 
     viewed = { kind: "loading", path };
+    forgetRenders();
     await engine.open(basenameOf(path));
     engine.redraw();
 
-    const loaded = await loadedOf(engine, path);
+    const loaded = await loadedOf(engine, path, current);
 
     if (current === generation) {
       viewed = loaded;
@@ -241,8 +416,85 @@ export const register = (on: On) => {
       return next(e);
     }
 
-    const { Box, Text, Code, Markdown, Button } = $.ui.resolve(e);
+    const { Box, Text, Code, Markdown, Image, Button } = $.ui.resolve(e);
     const shown = viewed;
+
+    const renderer: Renderer = {
+      run: async ({ path, source, columns }) => {
+        try {
+          const rows = await $.config.list();
+          const theme = String(
+            rows.find((row) => row.key === "theme")?.value,
+          ).includes("light")
+            ? "light"
+            : "dark";
+          const { exitCode, stdout, stderr } = await $.process.run(
+            [
+              "bun",
+              `${$.plugin.root}/scripts/render-markdown.ts`,
+              "--file",
+              path,
+              "--columns",
+              String(columns),
+              "--theme",
+              theme,
+            ],
+            {
+              cwd: $.plugin.root,
+              stdin: source,
+              timeoutMs: RENDER_TIMEOUT_MS,
+            },
+          );
+          const tiles = exitCode === 0 ? tilesIn(stdout) : null;
+
+          return tiles === null
+            ? { kind: "failed", message: stderr.trim() || "no tiles" }
+            : { kind: "ready", tiles };
+        } catch (error) {
+          return { kind: "failed", message: messageOf(error) };
+        }
+      },
+      denialOf: async ({ file }) => {
+        const blitted = await $.ui.blit({
+          requestId: PANE_ID,
+          key: FIRST_TILE_KEY,
+          source: { file, format: "png" },
+        });
+
+        return blitted.deny ?? null;
+      },
+      wait: (ms) => $.clock.sleep(ms),
+      redraw: () => $.ui.invalidate("ui.render"),
+    };
+
+    const drawnMarkdown = (() => {
+      if (shown?.kind !== "text" || !shown.isMarkdown) {
+        return { rendered: null, stale: null };
+      }
+
+      const columns = Math.max(
+        1,
+        Math.min(MAX_IMAGE_COLUMNS, e.props.bodyColumns - PANE_RIGHT_PADDING),
+      );
+      const pageKey = `${shown.loadId}:${shown.page}`;
+      const key = `${pageKey}:${columns}`;
+
+      ensureRendered(renderer, {
+        key,
+        pageKey,
+        path: shown.path,
+        source: shown.pages[shown.page]?.source ?? "",
+        columns,
+      });
+
+      return {
+        rendered:
+          imageDenial === null
+            ? (renders.get(key) ?? null)
+            : ({ kind: "failed", message: imageDenial } as const),
+        stale: latestTiles?.pageKey === pageKey ? latestTiles.tiles : null,
+      };
+    })();
 
     const copy = async (text: string, surface: RenderSurface) => {
       const copied = await $.ui.copy({ text, surface });
@@ -308,7 +560,12 @@ export const register = (on: On) => {
             </Box>
           ) : null}
         </Box>
-        {bodyOf({ Text, Code, Markdown }, shown)}
+        {bodyOf(
+          { Box, Text, Code, Markdown, Image },
+          shown,
+          drawnMarkdown.rendered,
+          drawnMarkdown.stale,
+        )}
       </Box>
     );
   });
@@ -316,6 +573,7 @@ export const register = (on: On) => {
   on("ui.close", { id: PANE_ID }, (_, e, next) => {
     viewed = null;
     generation += 1;
+    forgetRenders();
 
     return next(e);
   });
