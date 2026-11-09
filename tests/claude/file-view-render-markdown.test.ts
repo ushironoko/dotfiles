@@ -4,14 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import {
-  decodePng,
   fencedFrontmatter,
   htmlOf,
   isReachable,
   renderTiles,
-  sliceIntoCells,
   taskMarkersDrawn,
 } from "../../claude/.claude/skills/file-view/scripts/render-markdown";
+import {
+  decodePng,
+  sliceIntoCells,
+} from "../../claude/.claude/skills/file-view/scripts/tiles";
 
 const SIGNATURE = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10);
 

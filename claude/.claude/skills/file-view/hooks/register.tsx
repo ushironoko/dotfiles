@@ -1,4 +1,9 @@
-import type { ElementTable, On, RenderSurface } from "claude-code";
+import type {
+  ElementTable,
+  EngineInterface,
+  On,
+  RenderSurface,
+} from "claude-code";
 
 const PANE_ID = "file-view";
 const TOOL_NAME = "open_file";
@@ -13,6 +18,7 @@ const ALT_DENIAL = "the Image draws its alt here";
 const PROBE_INTERVAL_MS = 250;
 const PROBE_ATTEMPTS = 8;
 const MARKDOWN_PATH = /\.(md|markdown)$/i;
+const IMAGE_PATH = /\.(png|jpe?g|svg)$/i;
 const FILE_TOOLS: ReadonlySet<string> = new Set([
   "Read",
   "Edit",
@@ -37,6 +43,7 @@ type Viewed =
       full: string;
       loadId: number;
     }
+  | { kind: "image"; path: string; loadId: number }
   | { kind: "error"; path: string; message: string };
 
 interface Tile {
@@ -49,11 +56,13 @@ type Rendered =
   | { kind: "ready"; tiles: readonly Tile[] }
   | { kind: "failed"; message: string };
 
+type RenderJob = { kind: "markdown"; source: string } | { kind: "image" };
+
 interface RenderRequest {
   key: string;
   pageKey: string;
   path: string;
-  source: string;
+  job: RenderJob;
   columns: number;
 }
 
@@ -66,6 +75,7 @@ interface Renderer {
 
 interface Engine {
   read: (path: string) => Promise<string>;
+  isFile: (path: string) => Promise<boolean>;
   open: (title: string) => Promise<unknown>;
   redraw: () => void;
 }
@@ -74,6 +84,13 @@ type BodyKit = Pick<
   ElementTable<"terminal">,
   "Box" | "Text" | "Code" | "Markdown" | "Image"
 >;
+
+const engineOf = ($: EngineInterface): Engine => ({
+  read: (file) => $.fs.read(file),
+  isFile: (file) => $.fs.stat(file).then(({ kind }) => kind === "file"),
+  open: (title) => $.ui.open({ id: PANE_ID, title }),
+  redraw: () => $.ui.invalidate("ui.render"),
+});
 
 const filePathOf = (input: unknown): string | null => {
   if (typeof input !== "object" || input === null) {
@@ -153,6 +170,12 @@ const loadedOf = async (
   loadId: number,
 ): Promise<Viewed> => {
   try {
+    if (IMAGE_PATH.test(path)) {
+      return (await engine.isFile(path))
+        ? { kind: "image", path, loadId }
+        : { kind: "error", path, message: "Not a regular file" };
+    }
+
     const raw = await engine.read(path);
 
     if (raw.includes("\u0000")) {
@@ -178,23 +201,12 @@ const loadedOf = async (
   }
 };
 
-const markdownBodyOf = (
-  { Box, Text, Markdown, Image }: BodyKit,
-  source: string,
-  page: number,
+const tilesBodyOf = (
+  { Box, Text, Image }: BodyKit,
   rendered: Rendered | null,
   stale: readonly Tile[] | null,
 ) => {
-  if (rendered?.kind === "failed") {
-    return (
-      <Box flexDirection="column">
-        <Text dimColor>Showing plain Markdown: {rendered.message}</Text>
-        <Markdown key={`md:${page}`} text={source} />
-      </Box>
-    );
-  }
-
-  const tiles = rendered?.tiles ?? stale;
+  const tiles = rendered?.kind === "ready" ? rendered.tiles : stale;
 
   if (tiles === null) {
     return <Text dimColor>Rendering…</Text>;
@@ -212,6 +224,41 @@ const markdownBodyOf = (
         />
       ))}
     </Box>
+  );
+};
+
+const markdownBodyOf = (
+  kit: BodyKit,
+  source: string,
+  page: number,
+  rendered: Rendered | null,
+  stale: readonly Tile[] | null,
+) => {
+  const { Box, Text, Markdown } = kit;
+
+  if (rendered?.kind === "failed") {
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>Showing plain Markdown: {rendered.message}</Text>
+        <Markdown key={`md:${page}`} text={source} />
+      </Box>
+    );
+  }
+
+  return tilesBodyOf(kit, rendered, stale);
+};
+
+const imageBodyOf = (
+  kit: BodyKit,
+  rendered: Rendered | null,
+  stale: readonly Tile[] | null,
+) => {
+  const { Text } = kit;
+
+  return rendered?.kind === "failed" ? (
+    <Text color="red">Could not draw the image: {rendered.message}</Text>
+  ) : (
+    tilesBodyOf(kit, rendered, stale)
   );
 };
 
@@ -236,6 +283,9 @@ const bodyOf = (
     case "error": {
       return <Text color="red">{shown.message}</Text>;
     }
+    case "image": {
+      return imageBodyOf(kit, rendered, stale);
+    }
     case "text": {
       const page = shown.pages[shown.page] ?? { source: "", startLine: 1 };
 
@@ -248,6 +298,39 @@ const bodyOf = (
           startLine={page.startLine}
         />
       );
+    }
+  }
+};
+
+const renderTargetOf = (
+  shown: Viewed | null,
+): { pageKey: string; job: RenderJob } | null => {
+  if (shown?.kind === "image") {
+    return { pageKey: `${shown.loadId}`, job: { kind: "image" } };
+  }
+
+  if (shown?.kind !== "text" || !shown.isMarkdown) {
+    return null;
+  }
+
+  return {
+    pageKey: `${shown.loadId}:${shown.page}`,
+    job: { kind: "markdown", source: shown.pages[shown.page]?.source ?? "" },
+  };
+};
+
+const copyableOf = (
+  shown: Viewed | null,
+): { label: string; text: string } | null => {
+  switch (shown?.kind) {
+    case "text": {
+      return { label: "⎘ copy", text: shown.full };
+    }
+    case "image": {
+      return { label: "⎘ path", text: shown.path };
+    }
+    default: {
+      return null;
     }
   }
 };
@@ -336,7 +419,7 @@ export const register = (on: On) => {
     await $.tool.register({
       name: TOOL_NAME,
       description:
-        "Show a file's contents with syntax highlighting in the file-view pane beside the transcript. Use when the user asks to open, show or display a file in the pane.",
+        "Show a file in the file-view pane beside the transcript: source with syntax highlighting, Markdown rendered, and PNG, JPEG or SVG images drawn as pictures. Use when the user asks to open, show or display a file in the pane.",
       inputSchema: {
         type: "object",
         properties: {
@@ -362,13 +445,7 @@ export const register = (on: On) => {
     }
 
     const path = absoluteOf(raw.trim(), await $.session.root());
-    const engine: Engine = {
-      read: (file) => $.fs.read(file),
-      open: (title) => $.ui.open({ id: PANE_ID, title }),
-      redraw: () => $.ui.invalidate("ui.render"),
-    };
-
-    await show(engine, path);
+    await show(engineOf($), path);
 
     return viewed?.kind === "error"
       ? { deny: `${path}: ${viewed.message}` }
@@ -389,11 +466,7 @@ export const register = (on: On) => {
 
     const { Box, Button } = $.ui.resolve(e);
 
-    const engine: Engine = {
-      read: (file) => $.fs.read(file),
-      open: (title) => $.ui.open({ id: PANE_ID, title }),
-      redraw: () => $.ui.invalidate("ui.render"),
-    };
+    const engine = engineOf($);
 
     return (
       <Box flexDirection="column">
@@ -419,32 +492,35 @@ export const register = (on: On) => {
     const { Box, Text, Code, Markdown, Image, Button } = $.ui.resolve(e);
     const shown = viewed;
 
+    const themeOf = async (): Promise<"light" | "dark"> => {
+      const rows = await $.config.list();
+
+      return String(rows.find((row) => row.key === "theme")?.value).includes(
+        "light",
+      )
+        ? "light"
+        : "dark";
+    };
+
     const renderer: Renderer = {
-      run: async ({ path, source, columns }) => {
+      run: async ({ path, job, columns }) => {
         try {
-          const rows = await $.config.list();
-          const theme = String(
-            rows.find((row) => row.key === "theme")?.value,
-          ).includes("light")
-            ? "light"
-            : "dark";
-          const { exitCode, stdout, stderr } = await $.process.run(
-            [
-              "bun",
-              `${$.plugin.root}/scripts/render-markdown.ts`,
-              "--file",
-              path,
-              "--columns",
-              String(columns),
-              "--theme",
-              theme,
-            ],
-            {
-              cwd: $.plugin.root,
-              stdin: source,
-              timeoutMs: RENDER_TIMEOUT_MS,
-            },
-          );
+          const common = ["--file", path, "--columns", String(columns)];
+          const argv =
+            job.kind === "image"
+              ? ["bun", `${$.plugin.root}/scripts/render-image.ts`, ...common]
+              : [
+                  "bun",
+                  `${$.plugin.root}/scripts/render-markdown.ts`,
+                  ...common,
+                  "--theme",
+                  await themeOf(),
+                ];
+          const { exitCode, stdout, stderr } = await $.process.run(argv, {
+            cwd: $.plugin.root,
+            ...(job.kind === "markdown" ? { stdin: job.source } : {}),
+            timeoutMs: RENDER_TIMEOUT_MS,
+          });
           const tiles = exitCode === 0 ? tilesIn(stdout) : null;
 
           return tiles === null
@@ -467,8 +543,10 @@ export const register = (on: On) => {
       redraw: () => $.ui.invalidate("ui.render"),
     };
 
-    const drawnMarkdown = (() => {
-      if (shown?.kind !== "text" || !shown.isMarkdown) {
+    const drawnTiles = (() => {
+      const target = renderTargetOf(shown);
+
+      if (shown === null || target === null) {
         return { rendered: null, stale: null };
       }
 
@@ -476,14 +554,14 @@ export const register = (on: On) => {
         1,
         Math.min(MAX_IMAGE_COLUMNS, e.props.bodyColumns - PANE_RIGHT_PADDING),
       );
-      const pageKey = `${shown.loadId}:${shown.page}`;
+      const { pageKey, job } = target;
       const key = `${pageKey}:${columns}`;
 
       ensureRendered(renderer, {
         key,
         pageKey,
         path: shown.path,
-        source: shown.pages[shown.page]?.source ?? "",
+        job,
         columns,
       });
 
@@ -539,32 +617,34 @@ export const register = (on: On) => {
         </Box>
       ) : null;
 
+    const copyable = copyableOf(shown);
+
     return (
       <Box flexDirection="column" paddingRight={1}>
         <Box flexDirection="row" justifyContent="space-between" gap={1}>
           <Text bold wrap="truncate-start">
             {shown?.path ?? "file-view"}
           </Text>
-          {shown?.kind === "text" ? (
+          {copyable === null ? null : (
             <Box flexDirection="row" gap={2}>
               {pager}
               <Button
                 key="copy"
                 plain
                 dimColor
-                label="⎘ copy"
+                label={copyable.label}
                 onPress={(press) =>
-                  void copy(shown.full, press.surface).catch(() => undefined)
+                  void copy(copyable.text, press.surface).catch(() => undefined)
                 }
               />
             </Box>
-          ) : null}
+          )}
         </Box>
         {bodyOf(
           { Box, Text, Code, Markdown, Image },
           shown,
-          drawnMarkdown.rendered,
-          drawnMarkdown.stale,
+          drawnTiles.rendered,
+          drawnTiles.stale,
         )}
       </Box>
     );

@@ -1,4 +1,4 @@
 {
-  "description": "file-view: a ToolUse render hook adds a clickable path under file tool rows; pressing it opens a Pane that draws the file with syntax highlighting; the open_file tool lets the model open a file in that Pane",
+  "description": "file-view: a ToolUse render hook adds a clickable path under file tool rows; pressing it opens a Pane that draws the file with syntax highlighting, or as a picture for PNG, JPEG and SVG; the open_file tool lets the model open a file in that Pane",
   "modules": ["./register.tsx"]
 }
