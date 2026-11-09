@@ -6,6 +6,7 @@ import type {
 } from "claude-code";
 
 const PANE_ID = "file-view";
+const PANE_IDS = /^file-view(?:-\d+)?$/;
 const TOOL_NAME = "open_file";
 const TOOL_ID = "mcp__file-view__open_file";
 const PAGE_CHARS = 90000;
@@ -52,6 +53,12 @@ interface Tile {
   rows: number;
 }
 
+interface PaneState {
+  viewed: Viewed;
+  renders: Map<string, Rendered>;
+  latest: { pageKey: string; tiles: readonly Tile[] } | null;
+}
+
 type Rendered =
   | { kind: "ready"; tiles: readonly Tile[] }
   | { kind: "failed"; message: string };
@@ -76,7 +83,7 @@ interface Renderer {
 interface Engine {
   read: (path: string) => Promise<string>;
   isFile: (path: string) => Promise<boolean>;
-  open: (title: string) => Promise<unknown>;
+  open: (id: string, title: string) => Promise<unknown>;
   redraw: () => void;
 }
 
@@ -88,7 +95,7 @@ type BodyKit = Pick<
 const engineOf = ($: EngineInterface): Engine => ({
   read: (file) => $.fs.read(file),
   isFile: (file) => $.fs.stat(file).then(({ kind }) => kind === "file"),
-  open: (title) => $.ui.open({ id: PANE_ID, title }),
+  open: (id, title) => $.ui.open({ id, title }),
   redraw: () => $.ui.invalidate("ui.render"),
 });
 
@@ -319,6 +326,28 @@ const renderTargetOf = (
   };
 };
 
+const paneIdOf = (slot: number): string =>
+  slot === 1 ? PANE_ID : `${PANE_ID}-${slot}`;
+
+const paneFor = (
+  panes: ReadonlyMap<string, PaneState>,
+  path: string,
+): string => {
+  const shown = [...panes].find(([, { viewed }]) => viewed.path === path);
+
+  if (shown !== undefined) {
+    return shown[0];
+  }
+
+  let slot = 1;
+
+  while (panes.has(paneIdOf(slot))) {
+    slot += 1;
+  }
+
+  return paneIdOf(slot);
+};
+
 const copyableOf = (
   shown: Viewed | null,
 ): { label: string; text: string } | null => {
@@ -336,13 +365,11 @@ const copyableOf = (
 };
 
 export const register = (on: On) => {
-  let viewed: Viewed | null = null;
   let generation = 0;
   let isRendering = false;
-  let latestTiles: { pageKey: string; tiles: readonly Tile[] } | null = null;
   let imageDenial: string | null = null;
   let isImageSupported = false;
-  const renders = new Map<string, Rendered>();
+  const panes = new Map<string, PaneState>();
 
   const probeImageSupport = async (renderer: Renderer, tile: Tile) => {
     for (let attempt = 0; attempt < PROBE_ATTEMPTS; attempt += 1) {
@@ -365,8 +392,12 @@ export const register = (on: On) => {
     }
   };
 
-  const ensureRendered = (renderer: Renderer, request: RenderRequest) => {
-    if (imageDenial !== null || isRendering || renders.has(request.key)) {
+  const ensureRendered = (
+    pane: PaneState,
+    renderer: Renderer,
+    request: RenderRequest,
+  ) => {
+    if (imageDenial !== null || isRendering || pane.renders.has(request.key)) {
       return;
     }
 
@@ -375,10 +406,10 @@ export const register = (on: On) => {
     void renderer
       .run(request)
       .then((rendered) => {
-        renders.set(request.key, rendered);
+        pane.renders.set(request.key, rendered);
 
         if (rendered.kind === "ready") {
-          latestTiles = { pageKey: request.pageKey, tiles: rendered.tiles };
+          pane.latest = { pageKey: request.pageKey, tiles: rendered.tiles };
 
           const [first] = rendered.tiles;
 
@@ -393,26 +424,28 @@ export const register = (on: On) => {
       });
   };
 
-  const forgetRenders = () => {
-    renders.clear();
-    latestTiles = null;
-  };
-
-  const show = async (engine: Engine, path: string) => {
+  const show = async (engine: Engine, path: string): Promise<Viewed> => {
     generation += 1;
     const current = generation;
+    const id = paneFor(panes, path);
+    const pane: PaneState = {
+      viewed: { kind: "loading", path },
+      renders: new Map(),
+      latest: null,
+    };
 
-    viewed = { kind: "loading", path };
-    forgetRenders();
-    await engine.open(basenameOf(path));
+    panes.set(id, pane);
+    await engine.open(id, basenameOf(path));
     engine.redraw();
 
     const loaded = await loadedOf(engine, path, current);
 
-    if (current === generation) {
-      viewed = loaded;
+    if (panes.get(id) === pane) {
+      pane.viewed = loaded;
       engine.redraw();
     }
+
+    return loaded;
   };
 
   on("session.start", async ($, e, next) => {
@@ -445,10 +478,10 @@ export const register = (on: On) => {
     }
 
     const path = absoluteOf(raw.trim(), await $.session.root());
-    await show(engineOf($), path);
+    const loaded = await show(engineOf($), path);
 
-    return viewed?.kind === "error"
-      ? { deny: `${path}: ${viewed.message}` }
+    return loaded.kind === "error"
+      ? { deny: `${path}: ${loaded.message}` }
       : { result: `Opened ${path} in the file-view pane.` };
   }).catch((_, e) => ({
     deny: `file-view could not open ${String((e as Record<string, unknown>).path)}.`,
@@ -485,12 +518,14 @@ export const register = (on: On) => {
   });
 
   on("ui.render", { component: "Pane" }, async ($, e, next) => {
-    if (e.requestId !== PANE_ID || e.surface !== "terminal") {
+    if (!PANE_IDS.test(e.requestId) || e.surface !== "terminal") {
       return next(e);
     }
 
     const { Box, Text, Code, Markdown, Image, Button } = $.ui.resolve(e);
-    const shown = viewed;
+    const paneId = e.requestId;
+    const pane = panes.get(paneId) ?? null;
+    const shown = pane?.viewed ?? null;
 
     const themeOf = async (): Promise<"light" | "dark"> => {
       const rows = await $.config.list();
@@ -532,7 +567,7 @@ export const register = (on: On) => {
       },
       denialOf: async ({ file }) => {
         const blitted = await $.ui.blit({
-          requestId: PANE_ID,
+          requestId: paneId,
           key: FIRST_TILE_KEY,
           source: { file, format: "png" },
         });
@@ -546,7 +581,7 @@ export const register = (on: On) => {
     const drawnTiles = (() => {
       const target = renderTargetOf(shown);
 
-      if (shown === null || target === null) {
+      if (pane === null || shown === null || target === null) {
         return { rendered: null, stale: null };
       }
 
@@ -557,7 +592,7 @@ export const register = (on: On) => {
       const { pageKey, job } = target;
       const key = `${pageKey}:${columns}`;
 
-      ensureRendered(renderer, {
+      ensureRendered(pane, renderer, {
         key,
         pageKey,
         path: shown.path,
@@ -568,9 +603,9 @@ export const register = (on: On) => {
       return {
         rendered:
           imageDenial === null
-            ? (renders.get(key) ?? null)
+            ? (pane.renders.get(key) ?? null)
             : ({ kind: "failed", message: imageDenial } as const),
-        stale: latestTiles?.pageKey === pageKey ? latestTiles.tiles : null,
+        stale: pane.latest?.pageKey === pageKey ? pane.latest.tiles : null,
       };
     })();
 
@@ -585,13 +620,18 @@ export const register = (on: On) => {
     };
 
     const turn = async (page: number) => {
-      if (viewed?.kind !== "text" || viewed.pages[page] === undefined) {
+      const current = panes.get(paneId);
+
+      if (
+        current?.viewed.kind !== "text" ||
+        current.viewed.pages[page] === undefined
+      ) {
         return;
       }
 
-      viewed = { ...viewed, page };
+      current.viewed = { ...current.viewed, page };
       $.ui.invalidate("ui.render");
-      await $.ui.scroll({ in: PANE_ID, to: "start", block: "start" });
+      await $.ui.scroll({ in: paneId, to: "start", block: "start" });
     };
 
     const pager =
@@ -650,10 +690,8 @@ export const register = (on: On) => {
     );
   });
 
-  on("ui.close", { id: PANE_ID }, (_, e, next) => {
-    viewed = null;
-    generation += 1;
-    forgetRenders();
+  on("ui.close", { id: PANE_IDS }, (_, e, next) => {
+    panes.delete(e.id);
 
     return next(e);
   });
