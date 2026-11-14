@@ -1046,9 +1046,9 @@ url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/433138830"
 provenance = "github-attestations"
 
 [[tools.rust]]
-version = "1.95.0"
+version = "1.100.0"
 backend = "core:rust"
-specifiers = ["1.95.0"]
+specifiers = ["1.100.0"]
 
 [[tools.starship]]
 version = "1.25.1"
