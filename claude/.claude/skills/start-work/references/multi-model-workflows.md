@@ -22,19 +22,22 @@ Ground rules baked into these templates:
 - All codex invocations go through `~/.claude/hooks/lib/codex-stage.sh`
   (auth preflight, portable timeout, `-c features.memories=false` so fan-outs skip the memory pipeline,
   never `-m` — `~/.codex/config.toml` owns model selection).
+- Every mode runs codex with `sandbox_mode=danger-full-access` and
+  `approval_policy=never`: mise, cargo, gh, network, `git add`, ps and kill all
+  work, and nothing confines writes to the target directory. History writes
+  stay forbidden — the wrapper prepends a launcher rule to stdin prompts and
+  exits 17 when a run moves HEAD.
 - `codex-poc` must run paired with `isolation: 'worktree'` — the wrapper
-  refuses (exit 14) to run workspace-write against a main repository checkout.
+  refuses (exit 14) to run against a main repository checkout.
   Each parallel `codex-poc` gets its own isolated worktree.
 - `codex-runner` is the write-capable fan-out WITHOUT the worktree requirement:
-  `codex-stage.sh run --dir <abs>` runs workspace-write in a directory you place
+  `codex-stage.sh run --dir <abs>` runs codex from a directory you place
   it in (the main checkout or a subdirectory, which must be a git work tree). The
   wrapper does NOT lock the tree — when you run several in parallel you MUST
   partition their write scope (distinct files/dirs) yourself, or concurrent
   writes to the same path corrupt it. Changes stay uncommitted; never
-  auto-commit or merge. Point a runner at a subdirectory to confine its writes —
-  that confinement is codex-sandbox-enforced (writable root = the `-C` dir), so
-  it depends on `~/.codex/config.toml` not widening `writable_roots`. The
-  wrapper's post-run summary is repo-wide, so under parallel same-checkout runs
+  auto-commit or merge. A subdirectory `--dir` does not confine writes; state
+  the write scope in each runner's prompt. The wrapper's post-run summary is repo-wide, so under parallel same-checkout runs
   only the aggregate review is authoritative (per-runner diffstats overlap).
 - For codex reviewer lens diversity use `prompt` mode (a focused prompt on
   stdin); `review` mode is a single holistic diff pass and takes no focus, so
@@ -362,7 +365,7 @@ const runs = (
   )
 ).filter(Boolean);
 
-// codex-reviewer is read-only, so pointing it at the shared checkout is safe.
+// codex-reviewer is instructed to report findings only, so it shares the checkout.
 phase("Review");
 const review = await agent(
   `Review the uncommitted changes in ${REPO}. Run: ~/.claude/hooks/lib/codex-stage.sh review --uncommitted --dir ${REPO} (Bash timeout 600000 ms). Set reviewer='codex'. Runner reports for context: ${JSON.stringify(runs)}`,
@@ -382,13 +385,13 @@ return { runs, review };
 
 ```bash
 ~/.claude/hooks/lib/codex-stage.sh review [--uncommitted | --base <branch> | --commit <sha>] --dir <abs> [--timeout <sec>]
-~/.claude/hooks/lib/codex-stage.sh prompt [--dir <abs>] [--timeout <sec>]   # prompt on stdin, read-only
-~/.claude/hooks/lib/codex-stage.sh poc --worktree <abs> [--timeout <sec>] [--network]   # spec on stdin, workspace-write, isolated worktree only
-~/.claude/hooks/lib/codex-stage.sh run --dir <abs> [--timeout <sec>] [--network]   # task on stdin, workspace-write, main checkout or subdir allowed (no --out)
+~/.claude/hooks/lib/codex-stage.sh prompt [--dir <abs>] [--timeout <sec>]   # prompt on stdin
+~/.claude/hooks/lib/codex-stage.sh poc --worktree <abs> [--timeout <sec>]   # spec on stdin, isolated worktree only
+~/.claude/hooks/lib/codex-stage.sh run --dir <abs> [--timeout <sec>]   # task on stdin, main checkout or subdir allowed (no --out)
 ```
 
-All modes also accept `--retry <n>` / `--retry-wait <sec>` (rate-limit backoff;
-defaults 1 / 30).
+All modes run with full access, also accept `--retry <n>` / `--retry-wait <sec>`
+(rate-limit backoff; defaults 1 / 30), and exit 17 when codex moves HEAD.
 
 Exit codes: 0 ok / 11 codex missing / 12 unauthenticated (`codex login`) /
 13 usage (also `run`'s non-git-work-tree target) / 14 not an isolated worktree

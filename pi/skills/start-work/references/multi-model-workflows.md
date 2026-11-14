@@ -126,12 +126,13 @@ validator:
 - For codex reviewer lens diversity use `prompt` mode (a focused prompt on
   stdin); `review` mode is a single holistic diff pass and takes no focus, so
   use it at most once per fan-out stage.
-- The wrapper refuses (exit 14) to run `poc` workspace-write against anything
+- Every wrapper mode runs codex with `sandbox_mode=danger-full-access` and
+  `approval_policy=never`; history writes stay forbidden by a launcher rule
+  prepended to stdin prompts, and a run that moves HEAD exits 17.
+- The wrapper refuses (exit 14) to run `poc` against anything
   but an isolated worktree — the engine's worktree provisioning satisfies
   this; never try to point a `codex-poc` at the main checkout.
-- `codex-runner` write confinement is codex-sandbox-enforced (writable root =
-  the `--dir` target), so it depends on `~/.codex/config.toml` not widening
-  `writable_roots`. The engine validates that declared `writeScope`s are
+- Nothing confines `codex-runner` writes to the `--dir` target. The engine validates that declared `writeScope`s are
   disjoint, but the wrapper does not lock the tree — keep each task prompt
   explicit about touching only its own scope. Changes stay uncommitted; never
   auto-commit or merge. The wrapper's post-run summary is repo-wide, so under
@@ -347,9 +348,9 @@ command.
 
 ```bash
 ~/.claude/hooks/lib/codex-stage.sh review [--uncommitted | --base <branch> | --commit <sha>] --dir <abs> [--timeout <sec>]
-~/.claude/hooks/lib/codex-stage.sh prompt [--dir <abs>] [--timeout <sec>]   # prompt on stdin, read-only
-~/.claude/hooks/lib/codex-stage.sh poc --worktree <abs> [--timeout <sec>] [--network]   # spec on stdin, workspace-write, isolated worktree only
-~/.claude/hooks/lib/codex-stage.sh run --dir <abs> [--timeout <sec>] [--network]   # task on stdin, workspace-write, main checkout or subdir allowed (no --out)
+~/.claude/hooks/lib/codex-stage.sh prompt [--dir <abs>] [--timeout <sec>]   # prompt on stdin
+~/.claude/hooks/lib/codex-stage.sh poc --worktree <abs> [--timeout <sec>]   # spec on stdin, isolated worktree only
+~/.claude/hooks/lib/codex-stage.sh run --dir <abs> [--timeout <sec>]   # task on stdin, main checkout or subdir allowed (no --out)
 ```
 
 All modes also accept `--retry <n>` / `--retry-wait <sec>` (rate-limit backoff;

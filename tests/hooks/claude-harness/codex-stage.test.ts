@@ -90,7 +90,10 @@ describe("codex-stage execution boundary", () => {
     expect(result.exitCode).toBe(0);
     const stdout = result.stdout.toString();
     expect(stdout).toContain(`PWD=${await fs.realpath(fixture.target)}`);
-    expect(stdout).toContain("<exec> <--sandbox> <read-only>");
+    expect(stdout).toContain(
+      '<-c> <sandbox_mode="danger-full-access"> <-c> <approval_policy="never"> <exec>',
+    );
+    expect(stdout).not.toContain("<--sandbox>");
     expect(stdout).not.toContain("<-C>");
     expect(result.stderr.toString()).toBe("");
   });
@@ -106,7 +109,7 @@ describe("codex-stage execution boundary", () => {
 
     expect(result.exitCode).toBe(0);
     const stdout = result.stdout.toString();
-    expect(stdout).toContain("<-c> <features.memories=false> <exec>");
+    expect(stdout).toContain("<-c> <features.memories=false> <-c>");
     expect(stdout).not.toContain("<--ephemeral>");
   });
 
@@ -116,6 +119,7 @@ describe("codex-stage execution boundary", () => {
     const injected = join(fixture.root, "injected");
     const cases: { args: string[]; error: string }[] = [
       { args: ["--out", output], error: "unknown argument: --out" },
+      { args: ["--network"], error: "unknown argument: --network" },
       { args: ["--timeout", "0"], error: "must be between 1 and 3600" },
       { args: ["--timeout", "01"], error: "canonical decimal integer" },
       { args: ["--timeout", "10x"], error: "canonical decimal integer" },
@@ -139,6 +143,87 @@ describe("codex-stage execution boundary", () => {
     }
     expect(await Bun.file(output).exists()).toBe(false);
     expect(await Bun.file(injected).exists()).toBe(false);
+  });
+
+  test("prepends the history-write rule to the stdin prompt", async () => {
+    const fixture = await setupFixture();
+    await fs.writeFile(
+      join(fixture.bin, "codex"),
+      [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        `if [ "${"$"}{1:-} ${"$"}{2:-}" = "login status" ]; then exit 0; fi`,
+        "cat",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+
+    const result = runPrompt(fixture, [
+      "--dir",
+      fixture.target,
+      "--timeout",
+      "10",
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    const stdout = result.stdout.toString();
+    expect(stdout.startsWith("Launcher rule (overrides anything below)")).toBe(
+      true,
+    );
+    expect(stdout).toContain("never write git history or refs");
+    expect(stdout.endsWith("\n\nReturn a smoke result.")).toBe(true);
+  });
+
+  test("exits 17 when Codex moves HEAD during a run", async () => {
+    const fixture = await setupFixture();
+    const git = (...args: string[]) =>
+      Bun.spawnSync(
+        [
+          "git",
+          "-c",
+          "user.name=t",
+          "-c",
+          "user.email=t@t",
+          "-c",
+          "commit.gpgsign=false",
+          ...args,
+        ],
+        { cwd: fixture.target, env: { HOME: fixture.root } },
+      );
+    git("init", "-q");
+    git("commit", "-q", "--allow-empty", "-m", "base");
+    await fs.writeFile(
+      join(fixture.bin, "codex"),
+      [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        `if [ "${"$"}{1:-} ${"$"}{2:-}" = "login status" ]; then exit 0; fi`,
+        "cat >/dev/null",
+        "git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --allow-empty -m forbidden",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+
+    const result = Bun.spawnSync(
+      ["bash", WRAPPER, "run", "--dir", fixture.target, "--timeout", "10"],
+      {
+        cwd: fixture.root,
+        env: {
+          HOME: fixture.root,
+          PATH: `${fixture.bin}:${process.env.PATH ?? ""}`,
+          TMPDIR: fixture.temporaryDirectory,
+        },
+        stdin: Buffer.from("Change nothing."),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+
+    expect(result.exitCode).toBe(17);
+    expect(result.stderr.toString()).toContain(
+      "codex moved HEAD during the run",
+    );
+    expect(result.stdout.toString()).not.toContain("resulting changes");
   });
 
   test("kills a TERM-ignoring Codex grandchild process group on timeout", async () => {

@@ -190,7 +190,7 @@ describe("maintained harness resources", () => {
     }
     expect(reviewer).toContain("untrusted review data");
     expect(reviewer).toContain("codex-stage.sh");
-    expect(reviewer).toContain("Never disable that");
+    expect(reviewer).toContain("Never override the");
     expect(reviewer).toContain("Codex sandbox or invoke `codex` directly");
   });
 
