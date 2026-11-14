@@ -12,39 +12,41 @@
 #   - in-script timeout (macOS ships no timeout(1) / gtimeout)
 #   - poc mode validates the target is an isolated *linked* git worktree in code,
 #     not prose — it refuses a main repository checkout
+#   - every mode runs codex with sandbox_mode=danger-full-access and
+#     approval_policy=never, so mise, cargo, gh, network, git index writes,
+#     ps and kill all work; codex is NOT confined to the target directory
+#   - history writes stay forbidden: stdin prompts get a launcher rule prepended
+#     (no commit/merge/rebase/reset/tag/stash/push/ref changes, no GitHub
+#     writes; staging is allowed), and a run whose HEAD moved exits 17
 #
 # Modes:
 #   codex-stage.sh review [--uncommitted | --base <branch> | --commit <sha>]
 #                         [--dir <path>] [--timeout <sec>] [--title <t>]
 #       First-class diff review (codex exec review). `codex exec review` accepts
 #       no -C/--sandbox flags, so the target directory is entered with cd.
-#       Default selector: --uncommitted. Read-only by nature.
+#       Default selector: --uncommitted. Intended to be read-only.
 #
 #   codex-stage.sh prompt [--dir <path>] [--timeout <sec>] [--schema <file>]
-#       Read-only analysis/review with a custom prompt read from stdin.
+#       Analysis/review with a custom prompt read from stdin.
 #       The wrapper pins <dir> with cd before running codex from that cwd.
 #
-#   codex-stage.sh poc --worktree <abs-path> [--timeout <sec>] [--network]
-#       Implementation PoC read from stdin, confined to an isolated linked git
-#       worktree (codex -a never exec --sandbox workspace-write from <worktree>).
-#       Prints `git status --porcelain` + `git diff --stat` of the worktree after
-#       the run so callers get a machine-checkable change summary.
+#   codex-stage.sh poc --worktree <abs-path> [--timeout <sec>]
+#       Implementation PoC read from stdin, run from an isolated linked git
+#       worktree. Prints `git status --porcelain` + `git diff --stat` of the
+#       worktree after the run so callers get a machine-checkable change summary.
 #
-#   codex-stage.sh run --dir <path> [--timeout <sec>] [--network]
-#       Like poc (workspace-write, task read from stdin) but WITHOUT the
-#       isolated-worktree requirement: --dir may be the main repository checkout
-#       or any subdirectory, as long as it is inside a git work tree (writes stay
+#   codex-stage.sh run --dir <path> [--timeout <sec>]
+#       Like poc (task read from stdin) but WITHOUT the isolated-worktree
+#       requirement: --dir may be the main repository checkout or any
+#       subdirectory, as long as it is inside a git work tree (writes stay
 #       reviewable via git). For a write-capable codex subagent the orchestrator
 #       launches in parallel and places itself — the orchestrator owns
 #       collision-avoidance across concurrent runs (partition files/dirs so two
-#       runs never touch the same path). Same rails as poc (codex -a never exec
-#       --sandbox workspace-write from the pinned <dir>; no danger flags, no
-#       --add-dir, no -m). Prints a repo-wide `git status --porcelain` + `git diff --stat`
-#       after the run. Changes stay uncommitted for review. Output is returned
-#       on stdout. run uses exit 13, not poc's 14, for a non-git-work-tree target.
-#       Note: confinement of codex's edits to
-#       <dir> is codex's own workspace-write sandbox (writable root = the -C dir),
-#       not something this wrapper enforces beyond withholding --add-dir.
+#       runs never touch the same path). Prints a repo-wide
+#       `git status --porcelain` + `git diff --stat` after the run. Changes stay
+#       uncommitted for review. run uses exit 13, not poc's 14, for a
+#       non-git-work-tree target. Write scope is the task's contract only; no
+#       sandbox enforces it.
 #
 # Retry (all modes):
 #   --retry <n>        retries when codex fails with a rate-limit error
@@ -63,6 +65,7 @@
 # Exit codes: 0 ok / 11 codex missing / 12 unauthenticated / 13 usage error
 #             14 validation refused (poc) / 15 rate limited (retryable)
 #             16 another write-mode run holds this work tree
+#             17 codex moved HEAD (history write) during the run
 #             124 timed out / else codex's own code.
 set -euo pipefail
 
@@ -194,18 +197,50 @@ run_codex() {
 }
 
 # Buffer stdin to a temp file so the backgrounded codex process gets a stable fd.
+HISTORY_RULE='Launcher rule (overrides anything below): never write git history or refs and never write to GitHub. Do not run git commit, merge, rebase, cherry-pick, revert, tag, stash, push, update-ref, a reset or switch/checkout that moves HEAD, branch creation or deletion, or any gh command that creates or modifies something (pr, issue, release, api writes). Staging with git add/rm is allowed. Leave every change uncommitted.'
+
 buffer_stdin() {
   [ -t 0 ] && die "this mode reads its prompt from stdin (pipe or heredoc)" 13
   PROMPT_FILE=$(mktemp "${TMPDIR:-/tmp}/codex-stage.XXXXXX")
-  cat > "$PROMPT_FILE"
-  [ -s "$PROMPT_FILE" ] || die "empty prompt on stdin" 13
+  BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/codex-stage-body.XXXXXX")
+  cat > "$BODY_FILE"
+  [ -s "$BODY_FILE" ] || die "empty prompt on stdin" 13
+  { printf '%s\n\n' "$HISTORY_RULE"; cat "$BODY_FILE"; } > "$PROMPT_FILE"
+}
+
+head_state() {
+  printf '%s %s' \
+    "$(git rev-parse -q --verify HEAD 2>/dev/null || echo unborn)" \
+    "$(git symbolic-ref -q HEAD 2>/dev/null || echo detached)"
+}
+
+record_head() {
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  HEAD_BEFORE=$(head_state)
+}
+
+check_head() {
+  [ -n "$HEAD_BEFORE" ] || return 0
+  local after
+  after=$(head_state)
+  [ "$after" = "$HEAD_BEFORE" ] && return 0
+  echo "codex-stage: codex moved HEAD during the run ($HEAD_BEFORE -> $after); history writes are forbidden — inspect and undo it before using the result" >&2
+  exit 17
+}
+
+finish_codex() {
+  local rc=$1
+  check_head
+  [ "$rc" -eq 0 ] || { report_failure "$rc"; exit "$rc"; }
 }
 
 STDERR_FILE=$(mktemp "${TMPDIR:-/tmp}/codex-stage-err.XXXXXX")
 PROMPT_FILE=""
+BODY_FILE=""
+HEAD_BEFORE=""
 LOCK_DIR=""
 cleanup() {
-  rm -f "$STDERR_FILE" ${PROMPT_FILE:+"$PROMPT_FILE"}
+  rm -f "$STDERR_FILE" ${PROMPT_FILE:+"$PROMPT_FILE"} ${BODY_FILE:+"$BODY_FILE"}
   if [ -n "$LOCK_DIR" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null || true)" = "$$" ]; then
     rm -rf -- "$LOCK_DIR"
   fi
@@ -269,9 +304,12 @@ DIR=$PWD
 SCHEMA=""
 TITLE=""
 WORKTREE=""
-NETWORK=0
 SELECTOR=()
-CODEX_GLOBAL_OPTS=(-c features.memories=false)
+CODEX_GLOBAL_OPTS=(
+  -c features.memories=false
+  -c 'sandbox_mode="danger-full-access"'
+  -c 'approval_policy="never"'
+)
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -285,7 +323,6 @@ while [ $# -gt 0 ]; do
     --title) TITLE=${2:?--title needs text}; shift ;;
     --schema) SCHEMA=${2:?--schema needs a file}; shift ;;
     --worktree) WORKTREE=${2:?--worktree needs an absolute path}; shift ;;
-    --network) NETWORK=1 ;;
     -h|--help) usage ;;
     *) die "unknown argument: $1" 13 ;;
   esac
@@ -306,10 +343,11 @@ case $MODE in
     DIR=$PWD
     git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
       || die "review mode requires a git repository: $DIR" 13
+    record_head
     rc=0
     run_codex "" codex "${CODEX_GLOBAL_OPTS[@]}" exec review "${SELECTOR[@]}" \
       ${TITLE:+--title "$TITLE"} || rc=$?
-    [ "$rc" -eq 0 ] || { report_failure "$rc"; exit "$rc"; }
+    finish_codex "$rc"
     ;;
 
   prompt)
@@ -317,13 +355,13 @@ case $MODE in
     pin_directory "$DIR"
     DIR=$PWD
     buffer_stdin
+    record_head
     rc=0
     run_codex "$PROMPT_FILE" codex "${CODEX_GLOBAL_OPTS[@]}" exec \
-      --sandbox read-only \
       --skip-git-repo-check \
       ${SCHEMA:+--output-schema "$SCHEMA"} \
       - || rc=$?
-    [ "$rc" -eq 0 ] || { report_failure "$rc"; exit "$rc"; }
+    finish_codex "$rc"
     ;;
 
   poc)
@@ -339,7 +377,7 @@ case $MODE in
     TOPLEVEL=$PWD
     # A linked worktree has its own git-dir under <main>/.git/worktrees/<name>;
     # in a main checkout git-dir == git-common-dir. Refuse main checkouts so a
-    # workspace-write codex run can never touch the primary working copy.
+    # PoC run always starts from an isolated copy, never the primary checkout.
     # Both sides MUST come from the same producer with the same symlink
     # handling: deriving one via --absolute-git-dir (canonicalized) and the
     # other via cd+pwd (not canonicalized) let a main checkout reached through
@@ -350,14 +388,10 @@ case $MODE in
       || die "refusing: $TOPLEVEL is a main repository checkout, not an isolated linked worktree" 14
     acquire_write_lock "$TOPLEVEL"
     buffer_stdin
-    NETWORK_OPT=""
-    [ "$NETWORK" -eq 1 ] && NETWORK_OPT="sandbox_workspace_write.network_access=true"
+    record_head
     rc=0
-    run_codex "$PROMPT_FILE" codex "${CODEX_GLOBAL_OPTS[@]}" -a never exec \
-      --sandbox workspace-write \
-      ${NETWORK_OPT:+-c "$NETWORK_OPT"} \
-      - || rc=$?
-    [ "$rc" -eq 0 ] || { report_failure "$rc"; exit "$rc"; }
+    run_codex "$PROMPT_FILE" codex "${CODEX_GLOBAL_OPTS[@]}" exec - || rc=$?
+    finish_codex "$rc"
     echo ""
     echo "--- codex-stage poc: resulting changes in $TOPLEVEL ---"
     git -C "$TOPLEVEL" status --porcelain
@@ -378,14 +412,10 @@ case $MODE in
     TOPLEVEL=$(git rev-parse --show-toplevel)
     acquire_write_lock "$TOPLEVEL"
     buffer_stdin
-    NETWORK_OPT=""
-    [ "$NETWORK" -eq 1 ] && NETWORK_OPT="sandbox_workspace_write.network_access=true"
+    record_head
     rc=0
-    run_codex "$PROMPT_FILE" codex "${CODEX_GLOBAL_OPTS[@]}" -a never exec \
-      --sandbox workspace-write \
-      ${NETWORK_OPT:+-c "$NETWORK_OPT"} \
-      - || rc=$?
-    [ "$rc" -eq 0 ] || { report_failure "$rc"; exit "$rc"; }
+    run_codex "$PROMPT_FILE" codex "${CODEX_GLOBAL_OPTS[@]}" exec - || rc=$?
+    finish_codex "$rc"
     echo ""
     echo "--- codex-stage run: resulting changes in $TOPLEVEL ---"
     git -C "$TOPLEVEL" status --porcelain

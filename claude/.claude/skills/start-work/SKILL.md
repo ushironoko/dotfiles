@@ -307,7 +307,7 @@ single-model-family biases:
   (a sibling of this session's worktree). Run several codex PoCs with different
   approaches; each PoC diff is reviewed before judging.
 - Write-capable fan-out that is NOT a quarantined PoC uses
-  `agentType: 'codex-runner'` — it runs `codex-stage.sh run` (workspace-write) in
+  `agentType: 'codex-runner'` — it runs `codex-stage.sh run` (full access) from
   a directory you assign (the main checkout or a subdirectory), WITHOUT the
   isolated-worktree requirement. Launch several in parallel, but partition their
   write scope (distinct files/dirs) yourself — the wrapper does not lock the

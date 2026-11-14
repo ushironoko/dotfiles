@@ -312,9 +312,9 @@ wrapper executable into a private read-only file at child startup, preventing
 the child from replacing the home symlink before its authorized launch; the
 wrapper token changes, while every Codex argument remains intact. If that
 snapshot cannot be created, Pi disables the managed capability but still
-registers the normal fail-closed permission policy. `codex-stage.sh`, Codex's
-own read-only/workspace-write sandbox, and the workflow
-isolation/write-scope contracts are authoritative. The wrapper rejects
+registers the normal fail-closed permission policy. `codex-stage.sh` (which
+runs Codex with full access, forbids history writes and exits 17 when HEAD
+moves) and the workflow isolation/write-scope contracts are authoritative. The wrapper rejects
 sandbox-external `--out` files and validates timeout/retry controls before shell
 arithmetic. Pi still rejects an undeclared mode or a shell envelope containing
 substitutions, redirects, extra commands, or a non-literal wrapper. Hard-denied
