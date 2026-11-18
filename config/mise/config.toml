@@ -25,6 +25,7 @@ zellij = "0.44.3"
 "github:DataDog/pup" = "latest"
 "github:myuron/lazydn" = "0.1.0"
 op = "latest"
+go = "1.25.14"
 
 [settings]
 experimental = true

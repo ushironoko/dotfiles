@@ -1,7 +1,9 @@
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 model_reasoning_effort = "xhigh"
 personality = "pragmatic"
-service_tier = "default"
+service_tier = "fast"
+
+
 
 
 
@@ -72,13 +74,13 @@ gpt-6-astra = 2
 
 [desktop]
 usePointerCursors = true
-followUpQueueMode = "queue"
 dock-icon-preference = "codex-system"
 avatar-overlay-mascot-width-px = 224
 conversationDetailMode = "STEPS_PROSE"
 appshotAlwaysSendToMini = true
 selected-avatar-id = "pet_6ad704f975388191ae3f0877e4bef09d"
 avatar-overlay-pet-visible = false
+migratedFollowUpQueueToSteer = true
 
 [desktop.appearanceLightChromeTheme]
 accent = "#339cff"
