@@ -28,6 +28,7 @@ import {
   type Disk,
   type RunAgent,
   type SessionPaths,
+  type Transcript,
 } from "./disk";
 
 const PANE_ID = "agents-view";
@@ -77,6 +78,9 @@ interface Tracked {
   phase?: string;
   isResolved: boolean;
   isBackfilled: boolean;
+  isAppendSeen: boolean;
+  isStepSeen: boolean;
+  diskStamp?: string;
   lookups: number;
   model?: string;
   effort?: string;
@@ -370,6 +374,8 @@ const freshOf = (id: string, seq: number, now: number): Tracked => ({
   isBackground: false,
   isResolved: false,
   isBackfilled: false,
+  isAppendSeen: false,
+  isStepSeen: false,
   lookups: 0,
   seq,
   entries: [],
@@ -378,6 +384,47 @@ const freshOf = (id: string, seq: number, now: number): Tracked => ({
   toolCalls: 0,
   tokens: { input: 0, output: 0 },
 });
+
+const filledOf = (
+  one: Tracked,
+  transcript: Transcript,
+  stamp: string,
+): Tracked => {
+  const entries = transcript.rows
+    .reduce<Entry[]>(
+      (collected, row) => [
+        ...collected,
+        ...entriesOf(
+          row,
+          collected.some((entry) => entry.kind === "prompt"),
+        ),
+      ],
+      [],
+    )
+    .slice(-MAX_ENTRIES);
+  const opening = entries.find((entry) => entry.kind === "prompt");
+  const counters = one.isStepSeen
+    ? {}
+    : {
+        steps: transcript.steps,
+        toolCalls: transcript.toolCalls,
+        tokens: { input: transcript.input, output: transcript.output },
+      };
+
+  return {
+    ...one,
+    ...counters,
+    isBackfilled: true,
+    diskStamp: stamp,
+    entries,
+    label:
+      !one.isListed && one.label === one.id && opening !== undefined
+        ? lineOf(opening.text)
+        : one.label,
+    model: one.model ?? transcript.model,
+    effort: one.effort ?? transcript.effort,
+  };
+};
 
 const orderOf = (agents: ReadonlyMap<string, Tracked>): Tracked[] =>
   [...agents.values()].toSorted((a, b) => {
@@ -465,6 +512,18 @@ const groupsOf = (
   });
 };
 
+const orderedOf = (groups: readonly Group[]): Tracked[] =>
+  groups.flatMap(({ members }) => members.map(({ agent }) => agent));
+
+const selectedOf = (
+  agents: ReadonlyMap<string, Tracked>,
+  ordered: readonly Tracked[],
+  selectedId: string | null,
+): Tracked | undefined =>
+  agents.get(selectedId ?? "") ??
+  ordered.find((one) => isLive(one.status)) ??
+  ordered[0];
+
 const prunedOf = (
   agents: ReadonlyMap<string, Tracked>,
 ): ReadonlyMap<string, Tracked> =>
@@ -481,6 +540,7 @@ const trackedSignatureOf = (one: Tracked, now: number): string =>
     one.id,
     one.status,
     one.entries.length,
+    one.diskStamp,
     one.label,
     one.type,
     one.phase,
@@ -636,60 +696,44 @@ export const register = (on: On) => {
     found: SessionPaths,
     now: number,
   ) => {
+    const focusedId = selectedOf(
+      agents,
+      orderedOf(groupsOf(agents, runs)),
+      selectedId,
+    )?.id;
     const pending = [...agents.values()]
       .filter(
         (one) =>
-          !one.isBackfilled &&
-          one.entries.length === 0 &&
-          one.steps === 0 &&
+          !one.isAppendSeen &&
           (one.workflowRun !== undefined || one.isResolved) &&
-          (isLive(one.status) || one.id === selectedId),
+          (one.id === focusedId || (!one.isBackfilled && isLive(one.status))),
+      )
+      .toSorted(
+        (a, b) => Number(b.id === focusedId) - Number(a.id === focusedId),
       )
       .slice(0, MAX_BACKFILLS);
     const loaded = await Promise.all(
-      pending.map(
-        async (one) =>
-          [
-            one.id,
-            await transcriptOf(
-              disk,
-              transcriptPathOf(found, one.id, one.workflowRun),
-            ).catch(() => undefined),
-          ] as const,
-      ),
+      pending.map(async (one) => {
+        const path = transcriptPathOf(found, one.id, one.workflowRun);
+        const stamp = await disk.stat(path).then(
+          ({ size, mtimeMs }) => `${size}:${mtimeMs}`,
+          () => undefined,
+        );
+        const transcript =
+          stamp === undefined || stamp === one.diskStamp
+            ? undefined
+            : await transcriptOf(disk, path).catch(() => undefined);
+
+        return [one.id, stamp, transcript] as const;
+      }),
     );
 
-    loaded.forEach(([id, transcript]) =>
-      upsert(id, now, (one) => {
-        if (transcript === undefined || one.entries.length > 0) {
-          return { ...one, isBackfilled: true };
-        }
-
-        return {
-          ...one,
-          isBackfilled: true,
-          entries: transcript.rows
-            .reduce<Entry[]>(
-              (collected, row) => [
-                ...collected,
-                ...entriesOf(
-                  row,
-                  collected.some((entry) => entry.kind === "prompt"),
-                ),
-              ],
-              [],
-            )
-            .slice(-MAX_ENTRIES),
-          model: one.model ?? transcript.model,
-          effort: one.effort ?? transcript.effort,
-          steps: one.steps + transcript.steps,
-          toolCalls: one.toolCalls + transcript.toolCalls,
-          tokens: {
-            input: one.tokens.input + transcript.input,
-            output: one.tokens.output + transcript.output,
-          },
-        };
-      }),
+    loaded.forEach(([id, stamp, transcript]) =>
+      upsert(id, now, (one) =>
+        one.isAppendSeen || stamp === undefined || transcript === undefined
+          ? one
+          : filledOf(one, transcript, stamp),
+      ),
     );
   };
 
@@ -959,6 +1003,7 @@ export const register = (on: On) => {
 
     upsert(agentId, await $.clock.now(), (one) => ({
       ...one,
+      isStepSeen: true,
       model: e.model,
       effort: effortOf(e.effort),
     }));
@@ -1004,6 +1049,7 @@ export const register = (on: On) => {
 
         return {
           ...one,
+          isAppendSeen: true,
           label:
             !one.isListed && one.label === one.id && opening !== undefined
               ? lineOf(opening.text)
@@ -1041,13 +1087,8 @@ export const register = (on: On) => {
     const kit: Kit = { Box, Text, Button };
     const now = await $.clock.now();
     const groups = groupsOf(agents, runs);
-    const ordered = groups.flatMap(({ members }) =>
-      members.map(({ agent }) => agent),
-    );
-    const selected =
-      agents.get(selectedId ?? "") ??
-      ordered.find((one) => isLive(one.status)) ??
-      ordered[0];
+    const ordered = orderedOf(groups);
+    const selected = selectedOf(agents, ordered, selectedId);
     const running = ordered.filter((one) => isLive(one.status)).length;
 
     return (
