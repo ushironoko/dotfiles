@@ -155,4 +155,4 @@ expansion = "or --browse"
 
 [[abbr]]
 keyword = "gal"
-expansion = "gcloud auth login"
+expansion = "gcloud auth login --no-browser"
