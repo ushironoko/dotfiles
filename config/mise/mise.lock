@@ -3,53 +3,53 @@
 lockfile_version = 2
 
 [[tools.bun]]
-version = "1.3.13"
+version = "1.4.4"
 backend = "core:bun"
-specifiers = ["1.3.13"]
+specifiers = ["1.4.4"]
 
 [tools.bun."platforms.linux-arm64"]
-checksum = "sha256:70bae41b3908b0a120e1e58c5c8af30e74afae3b8d11b0d3fdd8e787ddfb4b22"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.13/bun-linux-aarch64.zip"
+checksum = "sha256:baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64.zip"
 
 [tools.bun."platforms.linux-arm64-musl"]
-checksum = "sha256:5385e978107ce4934298d8d6afe9bfbb898683f6cc23e6753a0da60bc60c5b81"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.13/bun-linux-aarch64-musl.zip"
+checksum = "sha256:57f01b02ac7113c61c935f28f38c2eab849e3c970dab21f8b640a87b1ef65009"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64-musl.zip"
 
 [tools.bun."platforms.linux-x64"]
-checksum = "sha256:79c0771fa8b92c33aae41e15a0e0d307ea99d0e2f00317c71c6c53237a78e25a"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.13/bun-linux-x64.zip"
+checksum = "sha256:bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64.zip"
 
 [tools.bun."platforms.linux-x64-baseline"]
-checksum = "sha256:9d8a24292a7068090205daac0a5a223f5f69736f5287e37bf88d3b4031edc750"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.13/bun-linux-x64-baseline.zip"
+checksum = "sha256:e0446eb55995772eb9894bebae9a6be368d985a8b9271ee124486f9946eedd76"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64-baseline.zip"
 
 [tools.bun."platforms.linux-x64-musl"]
-checksum = "sha256:5b91a48f0b00df9fd2da8bff1a795d2659d842da966432969203f25da19d1c74"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.13/bun-linux-x64-musl.zip"
+checksum = "sha256:a5a8ccc5e74dcb883fe974f125a7bdb3b41e5195ed1b870e73f17effd3eb2b2d"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64-musl.zip"
 
 [tools.bun."platforms.linux-x64-musl-baseline"]
-checksum = "sha256:88ca7c7ad235b498f549eea2f770f434e9f0f5e9ba95168a2d3a1f235184c394"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.13/bun-linux-x64-musl-baseline.zip"
+checksum = "sha256:6e9c37098b293920aed28bfb51ab240e26d23bfdd9bbfecb3ad428ac166549bc"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64-musl-baseline.zip"
 
 [tools.bun."platforms.macos-arm64"]
-checksum = "sha256:5467e3f65dba526b9fea98f0cce04efafc0c63e169733ec27b876a3ad32da190"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.13/bun-darwin-aarch64.zip"
+checksum = "sha256:c240d7f0ccb90c263a849fcdb09b7ee62630d921348ed6aafda86b9d577bc510"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-darwin-aarch64.zip"
 
 [tools.bun."platforms.macos-x64"]
-checksum = "sha256:e5a6c8b64f419925232d111ecb13e25f0abf55e54f792341f987623fd0778009"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.13/bun-darwin-x64.zip"
+checksum = "sha256:50a3491f73abc2fe81673171a85762d3bc2cc1680ccecadd983de99adf77977e"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-darwin-x64.zip"
 
 [tools.bun."platforms.macos-x64-baseline"]
-checksum = "sha256:a98ba6a480f22fda9b343626b906a4e26aa53618bf85d2bc5928ecf2ba45f0ed"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.13/bun-darwin-x64-baseline.zip"
+checksum = "sha256:d4a155adfbfd09155eb3ba05c9e3a544f39297d7a68616d3c7759f67ab5c47dc"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-darwin-x64-baseline.zip"
 
 [tools.bun."platforms.windows-x64"]
-checksum = "sha256:85b14f3e0584218e9b63407b3aa6b90c4835ec5c32435c1f12cb6fc13667c7c9"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.13/bun-windows-x64.zip"
+checksum = "sha256:cd2c0fccc78f3ede1f50ca827a15f063eda13d4d150a3d0674f4f6e323d864a5"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-windows-x64.zip"
 
 [tools.bun."platforms.windows-x64-baseline"]
-checksum = "sha256:c68c7903c1190101590cc1b2129835f47211b3b37ae87759f2b97d6534aa3ad1"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.13/bun-windows-x64-baseline.zip"
+checksum = "sha256:0f20ce6674d4f2dbcc8c5d59fdf99f7ba45f8c3b367e0f5781cbfa30a1c78d99"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-windows-x64-baseline.zip"
 
 [[tools.ffmpeg]]
 version = "8.0.1"
@@ -612,54 +612,54 @@ url = "https://github.com/myuron/lazydn/releases/download/v0.1.0/lazydn-v0.1.0-a
 url_api = "https://api.github.com/repos/myuron/lazydn/releases/assets/660930173"
 
 [[tools."github:ushironoko/abbrs"]]
-version = "0.2.10"
+version = "0.2.11"
 backend = "github:ushironoko/abbrs"
-specifiers = ["0.2.10"]
+specifiers = ["0.2.11"]
 
 [tools."github:ushironoko/abbrs"."platforms.linux-arm64"]
-checksum = "sha256:86110c7fe2e45a5b72fb26fb4e99c4709e70467080291f4fb49f92f9660da5ba"
-url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.10/abbrs-0.2.10-aarch64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/379592733"
+checksum = "sha256:b2995dd73638c0922ec84be99b03644d365456dc8078767c99fdb4d6b3ad30d4"
+url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.11/abbrs-0.2.11-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/766706982"
 
 [tools."github:ushironoko/abbrs"."platforms.linux-arm64-musl"]
-checksum = "sha256:86110c7fe2e45a5b72fb26fb4e99c4709e70467080291f4fb49f92f9660da5ba"
-url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.10/abbrs-0.2.10-aarch64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/379592733"
+checksum = "sha256:b2995dd73638c0922ec84be99b03644d365456dc8078767c99fdb4d6b3ad30d4"
+url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.11/abbrs-0.2.11-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/766706982"
 
 [tools."github:ushironoko/abbrs"."platforms.linux-x64"]
-checksum = "sha256:7f72117b634759da76b88307ce03b005d9ec79b16eb196c0a7847f3e251b3e76"
-url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.10/abbrs-0.2.10-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/379592741"
+checksum = "sha256:50eea34c2445e91fa3851400e3e7fa1dc4bed4be710946b1bbf009fb3f798dc7"
+url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.11/abbrs-0.2.11-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/766707020"
 
 [tools."github:ushironoko/abbrs"."platforms.linux-x64-baseline"]
-checksum = "sha256:7f72117b634759da76b88307ce03b005d9ec79b16eb196c0a7847f3e251b3e76"
-url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.10/abbrs-0.2.10-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/379592741"
+checksum = "sha256:50eea34c2445e91fa3851400e3e7fa1dc4bed4be710946b1bbf009fb3f798dc7"
+url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.11/abbrs-0.2.11-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/766707020"
 
 [tools."github:ushironoko/abbrs"."platforms.linux-x64-musl"]
-checksum = "sha256:7f72117b634759da76b88307ce03b005d9ec79b16eb196c0a7847f3e251b3e76"
-url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.10/abbrs-0.2.10-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/379592741"
+checksum = "sha256:50eea34c2445e91fa3851400e3e7fa1dc4bed4be710946b1bbf009fb3f798dc7"
+url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.11/abbrs-0.2.11-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/766707020"
 
 [tools."github:ushironoko/abbrs"."platforms.linux-x64-musl-baseline"]
-checksum = "sha256:7f72117b634759da76b88307ce03b005d9ec79b16eb196c0a7847f3e251b3e76"
-url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.10/abbrs-0.2.10-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/379592741"
+checksum = "sha256:50eea34c2445e91fa3851400e3e7fa1dc4bed4be710946b1bbf009fb3f798dc7"
+url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.11/abbrs-0.2.11-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/766707020"
 
 [tools."github:ushironoko/abbrs"."platforms.macos-arm64"]
-checksum = "sha256:ba5b25371a065792f1867194a74c15011fd0184e9ba414150b2c9241bfd32cac"
-url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.10/abbrs-0.2.10-aarch64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/379592736"
+checksum = "sha256:1ec2b7532e57c82051535e92ae07a5c36a4c81b9a1b8eb3ad452dfbcc924a9be"
+url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.11/abbrs-0.2.11-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/766706983"
 
 [tools."github:ushironoko/abbrs"."platforms.macos-x64"]
-checksum = "sha256:8a516f2398f23ce914e78b46b969c231f8edc076e8afba7055d26d1bd670d543"
-url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.10/abbrs-0.2.10-x86_64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/379592735"
+checksum = "sha256:d535dd6991ae6403e7afb50b540b926be5c2d575a2ca2e1d6d342d4803620bc6"
+url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.11/abbrs-0.2.11-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/766706985"
 
 [tools."github:ushironoko/abbrs"."platforms.macos-x64-baseline"]
-checksum = "sha256:8a516f2398f23ce914e78b46b969c231f8edc076e8afba7055d26d1bd670d543"
-url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.10/abbrs-0.2.10-x86_64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/379592735"
+checksum = "sha256:d535dd6991ae6403e7afb50b540b926be5c2d575a2ca2e1d6d342d4803620bc6"
+url = "https://github.com/ushironoko/abbrs/releases/download/v0.2.11/abbrs-0.2.11-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/abbrs/releases/assets/766706985"
 
 [[tools."github:ushironoko/gitfilm"]]
 version = "0.3.0"
@@ -712,103 +712,103 @@ url = "https://github.com/ushironoko/gitfilm/releases/download/v0.3.0/gitfilm-0.
 url_api = "https://api.github.com/repos/ushironoko/gitfilm/releases/assets/386814148"
 
 [[tools."github:ushironoko/octorus"]]
-version = "0.7.2"
+version = "0.7.4"
 backend = "github:ushironoko/octorus"
 specifiers = ["latest"]
 
 [tools."github:ushironoko/octorus"."platforms.linux-arm64"]
-checksum = "sha256:464d509353c4d487048b105a2c26f3a543f391f3f9340140862558afb6511a77"
-url = "https://github.com/ushironoko/octorus/releases/download/v0.7.2/octorus-0.7.2-aarch64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/504735099"
+checksum = "sha256:c80733ae76082fb8cf5b1a70773415475eb056a5a732744e4972a162d87d8a29"
+url = "https://github.com/ushironoko/octorus/releases/download/v0.7.4/octorus-0.7.4-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/729462485"
 
 [tools."github:ushironoko/octorus"."platforms.linux-arm64-musl"]
-checksum = "sha256:464d509353c4d487048b105a2c26f3a543f391f3f9340140862558afb6511a77"
-url = "https://github.com/ushironoko/octorus/releases/download/v0.7.2/octorus-0.7.2-aarch64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/504735099"
+checksum = "sha256:c80733ae76082fb8cf5b1a70773415475eb056a5a732744e4972a162d87d8a29"
+url = "https://github.com/ushironoko/octorus/releases/download/v0.7.4/octorus-0.7.4-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/729462485"
 
 [tools."github:ushironoko/octorus"."platforms.linux-x64"]
-checksum = "sha256:63e2ec25072cd3377fe89f14c4380eed9cbc75febe1412d2bb9477fbd8dc9c33"
-url = "https://github.com/ushironoko/octorus/releases/download/v0.7.2/octorus-0.7.2-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/504735121"
+checksum = "sha256:23ee7fb4e3050451ee2c29d58f5160e3ed7e4bc74a4a22d6158af5b580da512a"
+url = "https://github.com/ushironoko/octorus/releases/download/v0.7.4/octorus-0.7.4-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/729462516"
 
 [tools."github:ushironoko/octorus"."platforms.linux-x64-baseline"]
-checksum = "sha256:63e2ec25072cd3377fe89f14c4380eed9cbc75febe1412d2bb9477fbd8dc9c33"
-url = "https://github.com/ushironoko/octorus/releases/download/v0.7.2/octorus-0.7.2-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/504735121"
+checksum = "sha256:23ee7fb4e3050451ee2c29d58f5160e3ed7e4bc74a4a22d6158af5b580da512a"
+url = "https://github.com/ushironoko/octorus/releases/download/v0.7.4/octorus-0.7.4-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/729462516"
 
 [tools."github:ushironoko/octorus"."platforms.linux-x64-musl"]
-checksum = "sha256:63e2ec25072cd3377fe89f14c4380eed9cbc75febe1412d2bb9477fbd8dc9c33"
-url = "https://github.com/ushironoko/octorus/releases/download/v0.7.2/octorus-0.7.2-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/504735121"
+checksum = "sha256:23ee7fb4e3050451ee2c29d58f5160e3ed7e4bc74a4a22d6158af5b580da512a"
+url = "https://github.com/ushironoko/octorus/releases/download/v0.7.4/octorus-0.7.4-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/729462516"
 
 [tools."github:ushironoko/octorus"."platforms.linux-x64-musl-baseline"]
-checksum = "sha256:63e2ec25072cd3377fe89f14c4380eed9cbc75febe1412d2bb9477fbd8dc9c33"
-url = "https://github.com/ushironoko/octorus/releases/download/v0.7.2/octorus-0.7.2-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/504735121"
+checksum = "sha256:23ee7fb4e3050451ee2c29d58f5160e3ed7e4bc74a4a22d6158af5b580da512a"
+url = "https://github.com/ushironoko/octorus/releases/download/v0.7.4/octorus-0.7.4-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/729462516"
 
 [tools."github:ushironoko/octorus"."platforms.macos-arm64"]
-checksum = "sha256:52fe4c2a5c2066a1b55da4bbe72679424549f27aa5c235a774df4b02fe592002"
-url = "https://github.com/ushironoko/octorus/releases/download/v0.7.2/octorus-0.7.2-aarch64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/504735103"
+checksum = "sha256:e8b717643b85d5f45590b7c8872caf0ddccde48f8052ec2b080e4910849c3cc9"
+url = "https://github.com/ushironoko/octorus/releases/download/v0.7.4/octorus-0.7.4-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/729462482"
 
 [tools."github:ushironoko/octorus"."platforms.macos-x64"]
-checksum = "sha256:9e1a64c926afe8589973338415d539cfe5d655903eab1aaecd1aa5c9c5f29a2d"
-url = "https://github.com/ushironoko/octorus/releases/download/v0.7.2/octorus-0.7.2-x86_64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/504735101"
+checksum = "sha256:77ad881d4c5e802883a4983b644c9766e75c7cb11dff765c8a1f1bcf6ec47717"
+url = "https://github.com/ushironoko/octorus/releases/download/v0.7.4/octorus-0.7.4-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/729462479"
 
 [tools."github:ushironoko/octorus"."platforms.macos-x64-baseline"]
-checksum = "sha256:9e1a64c926afe8589973338415d539cfe5d655903eab1aaecd1aa5c9c5f29a2d"
-url = "https://github.com/ushironoko/octorus/releases/download/v0.7.2/octorus-0.7.2-x86_64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/504735101"
+checksum = "sha256:77ad881d4c5e802883a4983b644c9766e75c7cb11dff765c8a1f1bcf6ec47717"
+url = "https://github.com/ushironoko/octorus/releases/download/v0.7.4/octorus-0.7.4-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/ushironoko/octorus/releases/assets/729462479"
 
 [[tools.go]]
-version = "1.25.14"
+version = "1.26.11"
 backend = "core:go"
-specifiers = ["1.25.14"]
+specifiers = ["1.26.11"]
 
 [tools.go."platforms.linux-arm64"]
-checksum = "sha256:9bf234ea70ffec9347fdf6b22ce4add51717d3386a38a441e8c8743fceb5eaee"
-url = "https://dl.google.com/go/go1.25.14.linux-arm64.tar.gz"
+checksum = "sha256:6c2f29b458b5add0835f18b776f69c8881a6d88428f1484a6da55755e620757e"
+url = "https://dl.google.com/go/go1.26.11.linux-arm64.tar.gz"
 
 [tools.go."platforms.linux-arm64-musl"]
-checksum = "sha256:9bf234ea70ffec9347fdf6b22ce4add51717d3386a38a441e8c8743fceb5eaee"
-url = "https://dl.google.com/go/go1.25.14.linux-arm64.tar.gz"
+checksum = "sha256:6c2f29b458b5add0835f18b776f69c8881a6d88428f1484a6da55755e620757e"
+url = "https://dl.google.com/go/go1.26.11.linux-arm64.tar.gz"
 
 [tools.go."platforms.linux-x64"]
-checksum = "sha256:a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712"
-url = "https://dl.google.com/go/go1.25.14.linux-amd64.tar.gz"
+checksum = "sha256:9849f4e04ee35303714e34fbc3ac8ab44ea3e448a95aa182f91e3b9b79c710ec"
+url = "https://dl.google.com/go/go1.26.11.linux-amd64.tar.gz"
 
 [tools.go."platforms.linux-x64-baseline"]
-checksum = "sha256:a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712"
-url = "https://dl.google.com/go/go1.25.14.linux-amd64.tar.gz"
+checksum = "sha256:9849f4e04ee35303714e34fbc3ac8ab44ea3e448a95aa182f91e3b9b79c710ec"
+url = "https://dl.google.com/go/go1.26.11.linux-amd64.tar.gz"
 
 [tools.go."platforms.linux-x64-musl"]
-checksum = "sha256:a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712"
-url = "https://dl.google.com/go/go1.25.14.linux-amd64.tar.gz"
+checksum = "sha256:9849f4e04ee35303714e34fbc3ac8ab44ea3e448a95aa182f91e3b9b79c710ec"
+url = "https://dl.google.com/go/go1.26.11.linux-amd64.tar.gz"
 
 [tools.go."platforms.linux-x64-musl-baseline"]
-checksum = "sha256:a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712"
-url = "https://dl.google.com/go/go1.25.14.linux-amd64.tar.gz"
+checksum = "sha256:9849f4e04ee35303714e34fbc3ac8ab44ea3e448a95aa182f91e3b9b79c710ec"
+url = "https://dl.google.com/go/go1.26.11.linux-amd64.tar.gz"
 
 [tools.go."platforms.macos-arm64"]
-checksum = "sha256:5b26c0b6f308240fca2614fb02f622cfcc8c0cc3b69c78bba4845489a4590259"
-url = "https://dl.google.com/go/go1.25.14.darwin-arm64.tar.gz"
+checksum = "sha256:e3a42e67a7a8acf450ebada2b074c7ca863000ca514907b7185b45e8f5cdff57"
+url = "https://dl.google.com/go/go1.26.11.darwin-arm64.tar.gz"
 
 [tools.go."platforms.macos-x64"]
-checksum = "sha256:b09087a67d5792a8b0fcbf74212d62560c94ac8a8fd750ff920d8cb5f1e20118"
-url = "https://dl.google.com/go/go1.25.14.darwin-amd64.tar.gz"
+checksum = "sha256:394baae971332f2bc783d6e2004ae57101479bd3b06ed8209a3fe3570d4ce498"
+url = "https://dl.google.com/go/go1.26.11.darwin-amd64.tar.gz"
 
 [tools.go."platforms.macos-x64-baseline"]
-checksum = "sha256:b09087a67d5792a8b0fcbf74212d62560c94ac8a8fd750ff920d8cb5f1e20118"
-url = "https://dl.google.com/go/go1.25.14.darwin-amd64.tar.gz"
+checksum = "sha256:394baae971332f2bc783d6e2004ae57101479bd3b06ed8209a3fe3570d4ce498"
+url = "https://dl.google.com/go/go1.26.11.darwin-amd64.tar.gz"
 
 [tools.go."platforms.windows-x64"]
-checksum = "sha256:119044a92b3987c341cd6aebb256676dd4780d292f7b4e72a3e9976677841697"
-url = "https://dl.google.com/go/go1.25.14.windows-amd64.zip"
+checksum = "sha256:71ae086f0137e665f855a811cc119152b6a783e0bbc1b906e709f46d80141eb0"
+url = "https://dl.google.com/go/go1.26.11.windows-amd64.zip"
 
 [tools.go."platforms.windows-x64-baseline"]
-checksum = "sha256:119044a92b3987c341cd6aebb256676dd4780d292f7b4e72a3e9976677841697"
-url = "https://dl.google.com/go/go1.25.14.windows-amd64.zip"
+checksum = "sha256:71ae086f0137e665f855a811cc119152b6a783e0bbc1b906e709f46d80141eb0"
+url = "https://dl.google.com/go/go1.26.11.windows-amd64.zip"
 
 [[tools.helix]]
 version = "25.07.1"
@@ -948,54 +948,53 @@ backend = "npm:@antfu/ni"
 specifiers = ["30.1.0"]
 
 [[tools.node]]
-version = "24.6.0"
+version = "24.22.3"
 backend = "core:node"
-specifiers = ["24.6.0"]
+specifiers = ["24.22.3"]
 
 [tools.node."platforms.linux-arm64"]
-checksum = "sha256:8956e11dbef5b197d62eb8b5b97a131eb42fbb25347fe0cdc9b62a1c1aa36df5"
-url = "https://nodejs.org/dist/v24.6.0/node-v24.6.0-linux-arm64.tar.gz"
+checksum = "sha256:261af2af250dfd7e9f25cf151d1b2713a0adf8f10a9ad116c4947f68627affe8"
+url = "https://nodejs.org/dist/v24.22.3/node-v24.22.3-linux-arm64.tar.gz"
 
 [tools.node."platforms.linux-arm64-musl"]
-checksum = "sha256:eba12bb7a8bcd8d5e0bebb9d7733f34d3e4854db4e890702c32f1060151097ed"
-url = "https://nodejs.org/dist/v24.6.0/node-v24.6.0.tar.gz"
-install = "source"
+checksum = "sha256:248c96a84f6c8338646b9fd73bf125124678f8fb08db5f23023f462055e0eedc"
+url = "https://unofficial-builds.nodejs.org/download/release/v24.22.3/node-v24.22.3-linux-arm64-musl.tar.gz"
 
 [tools.node."platforms.linux-x64"]
-checksum = "sha256:352ddbc48b586c11f018ec9b886225117909ea93e05b4a04a6db32f3e63d0281"
-url = "https://nodejs.org/dist/v24.6.0/node-v24.6.0-linux-x64.tar.gz"
+checksum = "sha256:061ec3e3062115705b56b51fa9cc330ab50d34b6969387d4e4b1a50c6809acc2"
+url = "https://nodejs.org/dist/v24.22.3/node-v24.22.3-linux-x64.tar.gz"
 
 [tools.node."platforms.linux-x64-baseline"]
-checksum = "sha256:352ddbc48b586c11f018ec9b886225117909ea93e05b4a04a6db32f3e63d0281"
-url = "https://nodejs.org/dist/v24.6.0/node-v24.6.0-linux-x64.tar.gz"
+checksum = "sha256:061ec3e3062115705b56b51fa9cc330ab50d34b6969387d4e4b1a50c6809acc2"
+url = "https://nodejs.org/dist/v24.22.3/node-v24.22.3-linux-x64.tar.gz"
 
 [tools.node."platforms.linux-x64-musl"]
-checksum = "sha256:ea4b8200144432af2f00e781199880cc9ac496698c3f1a186303cf5601a1f453"
-url = "https://unofficial-builds.nodejs.org/download/release/v24.6.0/node-v24.6.0-linux-x64-musl.tar.gz"
+checksum = "sha256:2db4f8a40abe5f5b5d119964223fedc9c4c7c5e7c632901ae860af522c7844b2"
+url = "https://unofficial-builds.nodejs.org/download/release/v24.22.3/node-v24.22.3-linux-x64-musl.tar.gz"
 
 [tools.node."platforms.linux-x64-musl-baseline"]
-checksum = "sha256:ea4b8200144432af2f00e781199880cc9ac496698c3f1a186303cf5601a1f453"
-url = "https://unofficial-builds.nodejs.org/download/release/v24.6.0/node-v24.6.0-linux-x64-musl.tar.gz"
+checksum = "sha256:2db4f8a40abe5f5b5d119964223fedc9c4c7c5e7c632901ae860af522c7844b2"
+url = "https://unofficial-builds.nodejs.org/download/release/v24.22.3/node-v24.22.3-linux-x64-musl.tar.gz"
 
 [tools.node."platforms.macos-arm64"]
-checksum = "sha256:768f14952403e3025fed8e2887500dfa63eeb55628a9b203e4b8ebb0fb09c7eb"
-url = "https://nodejs.org/dist/v24.6.0/node-v24.6.0-darwin-arm64.tar.gz"
+checksum = "sha256:ff6e17d4874b76d272212b908cc020d6e815fba5a6c7eaaa06add725840307fd"
+url = "https://nodejs.org/dist/v24.22.3/node-v24.22.3-darwin-arm64.tar.gz"
 
 [tools.node."platforms.macos-x64"]
-checksum = "sha256:695fc33454821b216d68cb198d646a9ad769c77d7c323e738381233e4666dffe"
-url = "https://nodejs.org/dist/v24.6.0/node-v24.6.0-darwin-x64.tar.gz"
+checksum = "sha256:977614af0504c81045e7fd85596dbca0e5f951b96681516dadafedcca8c447f7"
+url = "https://nodejs.org/dist/v24.22.3/node-v24.22.3-darwin-x64.tar.gz"
 
 [tools.node."platforms.macos-x64-baseline"]
-checksum = "sha256:695fc33454821b216d68cb198d646a9ad769c77d7c323e738381233e4666dffe"
-url = "https://nodejs.org/dist/v24.6.0/node-v24.6.0-darwin-x64.tar.gz"
+checksum = "sha256:977614af0504c81045e7fd85596dbca0e5f951b96681516dadafedcca8c447f7"
+url = "https://nodejs.org/dist/v24.22.3/node-v24.22.3-darwin-x64.tar.gz"
 
 [tools.node."platforms.windows-x64"]
-checksum = "sha256:3a6d32fe5883698e6c59ca5a6554b41c1b2a95db4f7ab7c4edd272f4391780da"
-url = "https://nodejs.org/dist/v24.6.0/node-v24.6.0-win-x64.zip"
+checksum = "sha256:e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f"
+url = "https://nodejs.org/dist/v24.22.3/node-v24.22.3-win-x64.zip"
 
 [tools.node."platforms.windows-x64-baseline"]
-checksum = "sha256:3a6d32fe5883698e6c59ca5a6554b41c1b2a95db4f7ab7c4edd272f4391780da"
-url = "https://nodejs.org/dist/v24.6.0/node-v24.6.0-win-x64.zip"
+checksum = "sha256:e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f"
+url = "https://nodejs.org/dist/v24.22.3/node-v24.22.3-win-x64.zip"
 
 [[tools.op]]
 version = "2.41.0"
@@ -1094,6 +1093,127 @@ url = "https://github.com/pnpm/pnpm/releases/download/v11.5.0/pnpm-win32-x64.zip
 url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/433138830"
 provenance = "github-attestations"
 
+[[tools.python]]
+version = "3.14.10"
+backend = "core:python"
+specifiers = ["3.14.10"]
+
+[tools.python."platforms.linux-arm64"]
+checksum = "sha256:38fd50f07170adc29d481913d1c30b17ecb538fbe290315fe1f83d84fdd5b694"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.14.10+20261110-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
+[tools.python."platforms.linux-arm64-musl"]
+checksum = "sha256:75c04e5fa8105d95f8c84cca05a32b122d000dbbeb4cb4a81a1da5009636a42d"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.14.10+20261110-aarch64-unknown-linux-musl-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
+[tools.python."platforms.linux-x64"]
+checksum = "sha256:c2ff2e97422f5d3896a16e0317fd212ba977bbf2688d93a6f7a03d817506bd30"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.14.10+20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
+[tools.python."platforms.linux-x64-baseline"]
+checksum = "sha256:c2ff2e97422f5d3896a16e0317fd212ba977bbf2688d93a6f7a03d817506bd30"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.14.10+20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
+[tools.python."platforms.linux-x64-musl"]
+checksum = "sha256:eff469445ef67410c1bea2370c9d3032dcacb639e9711c891d92b846a7dc5ec3"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.14.10+20261110-x86_64-unknown-linux-musl-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
+[tools.python."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:eff469445ef67410c1bea2370c9d3032dcacb639e9711c891d92b846a7dc5ec3"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.14.10+20261110-x86_64-unknown-linux-musl-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
+[tools.python."platforms.macos-arm64"]
+checksum = "blake3:761688e9ac9bfa1df33a707fcee0deea3ce2f493df08a23adf664aea1731788c"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.14.10+20261110-aarch64-apple-darwin-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
+[tools.python."platforms.macos-x64"]
+checksum = "sha256:85f8e54798e8e6aa58d2253f013d815c5616343cc0d15cbea882fca78bdfeae2"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.14.10+20261110-x86_64-apple-darwin-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
+[tools.python."platforms.macos-x64-baseline"]
+checksum = "sha256:85f8e54798e8e6aa58d2253f013d815c5616343cc0d15cbea882fca78bdfeae2"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.14.10+20261110-x86_64-apple-darwin-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
+[tools.python."platforms.windows-x64"]
+checksum = "sha256:32b6cf90a03e2bc15fda8d2ab7ff78c4870f138887d612932650ce764efaab8f"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.14.10+20261110-x86_64-pc-windows-msvc-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
+[tools.python."platforms.windows-x64-baseline"]
+checksum = "sha256:32b6cf90a03e2bc15fda8d2ab7ff78c4870f138887d612932650ce764efaab8f"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.14.10+20261110-x86_64-pc-windows-msvc-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
+[[tools.ruby]]
+version = "4.0.10"
+backend = "core:ruby"
+
+[tools.ruby."platforms.windows-x64"]
+url = "https://github.com/oneclick/rubyinstaller2/releases/download/RubyInstaller-4.0.10-1/rubyinstaller-4.0.10-1-x64.7z"
+
+[tools.ruby."platforms.windows-x64-baseline"]
+url = "https://github.com/oneclick/rubyinstaller2/releases/download/RubyInstaller-4.0.10-1/rubyinstaller-4.0.10-1-x64.7z"
+
+[[tools.ruby]]
+version = "4.0.10"
+backend = "core:ruby"
+specifiers = ["4.0.10"]
+
+[tools.ruby.options]
+compile = "false"
+precompiled_url = "jdx/ruby"
+ruby_build_repo = "https://github.com/rbenv/ruby-build.git"
+ruby_install = "false"
+
+[tools.ruby."platforms.linux-arm64"]
+checksum = "sha256:9439219164752a53618cbb09bf32a685770f2cbc230c28784293e38440a8a382"
+url = "https://github.com/jdx/ruby/releases/download/4.0.10-1/ruby-4.0.10.arm64_linux.tar.gz"
+provenance = "github-attestations"
+
+[tools.ruby."platforms.linux-arm64-musl"]
+checksum = "sha256:b53eef3371fa5d3e3b74340edcd015f06d5d8853968d4e539a5264fce41ed9f1"
+url = "https://cache.ruby-lang.org/pub/ruby/4.0/ruby-4.0.10.tar.gz"
+
+[tools.ruby."platforms.linux-x64"]
+checksum = "sha256:ca54d2d9204f9f9724f7aa1620b30538723da3a9365d9195951b82fa6765fd4e"
+url = "https://github.com/jdx/ruby/releases/download/4.0.10-1/ruby-4.0.10.x86_64_linux.tar.gz"
+provenance = "github-attestations"
+
+[tools.ruby."platforms.linux-x64-baseline"]
+checksum = "sha256:ca54d2d9204f9f9724f7aa1620b30538723da3a9365d9195951b82fa6765fd4e"
+url = "https://github.com/jdx/ruby/releases/download/4.0.10-1/ruby-4.0.10.x86_64_linux.tar.gz"
+provenance = "github-attestations"
+
+[tools.ruby."platforms.linux-x64-musl"]
+checksum = "sha256:b53eef3371fa5d3e3b74340edcd015f06d5d8853968d4e539a5264fce41ed9f1"
+url = "https://cache.ruby-lang.org/pub/ruby/4.0/ruby-4.0.10.tar.gz"
+
+[tools.ruby."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:b53eef3371fa5d3e3b74340edcd015f06d5d8853968d4e539a5264fce41ed9f1"
+url = "https://cache.ruby-lang.org/pub/ruby/4.0/ruby-4.0.10.tar.gz"
+
+[tools.ruby."platforms.macos-arm64"]
+checksum = "sha256:624211a09a77f20e7a7f6f743c4b6e0727e10240027ae40c8f369748459b9c9b"
+url = "https://github.com/jdx/ruby/releases/download/4.0.10-1/ruby-4.0.10.macos.tar.gz"
+provenance = "github-attestations"
+
+[tools.ruby."platforms.macos-x64"]
+checksum = "sha256:b53eef3371fa5d3e3b74340edcd015f06d5d8853968d4e539a5264fce41ed9f1"
+url = "https://cache.ruby-lang.org/pub/ruby/4.0/ruby-4.0.10.tar.gz"
+
+[tools.ruby."platforms.macos-x64-baseline"]
+checksum = "sha256:b53eef3371fa5d3e3b74340edcd015f06d5d8853968d4e539a5264fce41ed9f1"
+url = "https://cache.ruby-lang.org/pub/ruby/4.0/ruby-4.0.10.tar.gz"
+
 [[tools.rust]]
 version = "1.100.0"
 backend = "core:rust"
@@ -1160,74 +1280,74 @@ url = "https://github.com/starship/starship/releases/download/v1.25.1/starship-x
 url_api = "https://api.github.com/repos/starship/starship/releases/assets/409313135"
 
 [[tools.uv]]
-version = "0.13.4"
+version = "0.13.9"
 backend = "aqua:astral-sh/uv"
-specifiers = ["0.13.4"]
+specifiers = ["0.13.9"]
 
 [tools.uv."platforms.linux-arm64"]
-checksum = "sha256:1ae72b4718729e2ccc4f1ae2c6d1e531ca8467800e0546e9130b3886023a60ab"
-url = "https://github.com/astral-sh/uv/releases/download/0.13.4/uv-aarch64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/659693320"
+checksum = "sha256:0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.9/uv-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/758513657"
 provenance = "github-attestations"
 
 [tools.uv."platforms.linux-arm64-musl"]
-checksum = "sha256:253a17cadcb659ae77a0fe3b9a2f1c14297528d480c421899e61e64d64f24e8f"
-url = "https://github.com/astral-sh/uv/releases/download/0.13.4/uv-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/659693337"
+checksum = "sha256:37fbb7c5bc66cf99c12aa881949d216181e201dec449772c4329e56487d61179"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.9/uv-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/758513671"
 provenance = "github-attestations"
 
 [tools.uv."platforms.linux-x64"]
-checksum = "sha256:2b428396f12572d4429cf210ca234dd599a33b3af0958a4d5ed569d63e3f344f"
-url = "https://github.com/astral-sh/uv/releases/download/0.13.4/uv-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/659693663"
+checksum = "sha256:a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.9/uv-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/758513954"
 provenance = "github-attestations"
 
 [tools.uv."platforms.linux-x64-baseline"]
-checksum = "sha256:2b428396f12572d4429cf210ca234dd599a33b3af0958a4d5ed569d63e3f344f"
-url = "https://github.com/astral-sh/uv/releases/download/0.13.4/uv-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/659693663"
+checksum = "sha256:a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.9/uv-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/758513954"
 provenance = "github-attestations"
 
 [tools.uv."platforms.linux-x64-musl"]
-checksum = "sha256:28d4385f9f9d1d1c7654d85b3855e0e2615b2f6cc13136a2edff858bbdc16ff1"
-url = "https://github.com/astral-sh/uv/releases/download/0.13.4/uv-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/659693713"
+checksum = "sha256:58ccf5f1792b8a5a88d01bc910ea131a8b3db4a319a17ad5fad75e0845a3e271"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.9/uv-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/758513984"
 provenance = "github-attestations"
 
 [tools.uv."platforms.linux-x64-musl-baseline"]
-checksum = "sha256:28d4385f9f9d1d1c7654d85b3855e0e2615b2f6cc13136a2edff858bbdc16ff1"
-url = "https://github.com/astral-sh/uv/releases/download/0.13.4/uv-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/659693713"
+checksum = "sha256:58ccf5f1792b8a5a88d01bc910ea131a8b3db4a319a17ad5fad75e0845a3e271"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.9/uv-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/758513984"
 provenance = "github-attestations"
 
 [tools.uv."platforms.macos-arm64"]
-checksum = "sha256:e0b1d4743ce64c55d9f0f4a444afa6b81125680070ee04e853fcd0f6c1ebf8f1"
-url = "https://github.com/astral-sh/uv/releases/download/0.13.4/uv-aarch64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/659693291"
+checksum = "sha256:5aeca67f2283f75235de40d0bd9c0a5bbc5fce23b6d48b3bf9fa1b2db08382ca"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.9/uv-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/758513631"
 provenance = "github-attestations"
 
 [tools.uv."platforms.macos-x64"]
-checksum = "sha256:7be2dcd316122f4b3e5a0a7889f6248266c14425374e105ff7dc9779184603a6"
-url = "https://github.com/astral-sh/uv/releases/download/0.13.4/uv-x86_64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/659693620"
+checksum = "sha256:617a3211261b0fc739562f0071aa34e9739797c510208ede8e2977c30903d041"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.9/uv-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/758513912"
 provenance = "github-attestations"
 
 [tools.uv."platforms.macos-x64-baseline"]
-checksum = "sha256:7be2dcd316122f4b3e5a0a7889f6248266c14425374e105ff7dc9779184603a6"
-url = "https://github.com/astral-sh/uv/releases/download/0.13.4/uv-x86_64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/659693620"
+checksum = "sha256:617a3211261b0fc739562f0071aa34e9739797c510208ede8e2977c30903d041"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.9/uv-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/758513912"
 provenance = "github-attestations"
 
 [tools.uv."platforms.windows-x64"]
-checksum = "sha256:ccec7508a07d9933d7cb1261880633efcf1f30d6e6eddab21823f1dae6f23225"
-url = "https://github.com/astral-sh/uv/releases/download/0.13.4/uv-x86_64-pc-windows-msvc.zip"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/659693635"
+checksum = "sha256:edd61f7f5728a56cc62455386661860bdfc7bab65872f39b0c25bdcc1d8e1beb"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.9/uv-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/758513940"
 provenance = "github-attestations"
 
 [tools.uv."platforms.windows-x64-baseline"]
-checksum = "sha256:ccec7508a07d9933d7cb1261880633efcf1f30d6e6eddab21823f1dae6f23225"
-url = "https://github.com/astral-sh/uv/releases/download/0.13.4/uv-x86_64-pc-windows-msvc.zip"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/659693635"
+checksum = "sha256:edd61f7f5728a56cc62455386661860bdfc7bab65872f39b0c25bdcc1d8e1beb"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.9/uv-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/758513940"
 provenance = "github-attestations"
 
 [[tools.zellij]]
