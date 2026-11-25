@@ -5,7 +5,6 @@ import { join } from "node:path";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
 import setupHookBridge from "../../pi/extensions/pi-harness/features/hook-bridge";
 import setupPermissionPolicy from "../../pi/extensions/pi-harness/features/permission-policy";
-import { COMMAND_HYGIENE_GUIDANCE } from "../../pi/extensions/pi-harness/features/permission-policy/command-hygiene";
 import { resolveActiveSkillBashAllows } from "../../pi/extensions/pi-harness/features/permission-policy/skill-allow";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import type { BeforeAgentStartEvent } from "../../pi/extensions/pi-harness/lib/pi-like";
@@ -130,9 +129,10 @@ describe("custom-message agent starts", () => {
       systemPrompt: "base",
       systemPromptOptions,
     };
-    const custom = await pi.emitBeforeAgentStart(event);
-    expect(custom?.systemPrompt).toContain(COMMAND_HYGIENE_GUIDANCE);
-    expect(custom?.systemPrompt).toContain("base");
+    expect(await pi.emitBeforeAgentStartAggregate(event)).toEqual({
+      messages: [],
+      systemPrompt: "base",
+    });
     expect(resolveActiveSkillBashAllows(event, "/skill:safe-release")).toEqual(
       [],
     );

@@ -29,7 +29,6 @@ import {
 import setupHookBridge from "./features/hook-bridge/index";
 import setupGitHubCliReminder from "./features/github-cli-reminder/index";
 import setupProgressReminder from "./features/progress-reminder/index";
-import setupPermissionAskReminder from "./features/permission-ask-reminder/index";
 import {
   buildRegistry,
   partitionBridgeRegistry,
@@ -120,9 +119,6 @@ const setupHarness = (
   // bridge hook rejects before (or after) the mandatory policy handler.
   const blockToolCall = createPermissionBlocker(config.isChild, blockerOptions);
   const permissionTaskTracker = createPermissionTaskTracker();
-  const permissionAskReminder = config.isChild
-    ? undefined
-    : setupPermissionAskReminder(pi);
   // Bash sandbox setup does not register its execution-boundary tool_call
   // handler yet, so the audit starter below remains the first Bash observer.
   // Creating the controller first lets audit begin capture the authenticated
@@ -130,7 +126,6 @@ const setupHarness = (
   const bashSandbox = createBashSandbox(pi, config);
   const permissionAudit = setupPermissionAudit(pi, config, {
     taskTracker: permissionTaskTracker,
-    onDisplayedConfirmation: permissionAskReminder?.recordDisplayedConfirmation,
     executionBoundary: (toolName) => bashSandbox.boundaryFor(toolName),
   });
   const bridgeRegistry = config.features["hook-bridge"]
