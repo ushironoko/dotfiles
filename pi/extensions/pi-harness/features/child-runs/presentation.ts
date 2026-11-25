@@ -46,7 +46,7 @@ class AdaptiveIndent implements Component {
     this.indented.addChild(child);
   }
 
-  render(width: number): string[] {
+  render(width: number): ReturnType<Component["render"]> {
     if (width <= 0) return [""];
     return width === 1 ? this.child.render(width) : this.indented.render(width);
   }

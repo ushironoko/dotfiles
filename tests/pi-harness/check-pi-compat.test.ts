@@ -2,24 +2,25 @@ import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   chmod,
+  cp,
   mkdir,
   mkdtemp,
   readFile,
   realpath,
+  rename,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import {
   assertNoLocalPiResolution,
+  compileExtensionsAgainstGlobalPi,
   PI_HARNESS_RUNTIME_PACKAGES,
 } from "../../scripts/pi-compat/compile";
-import {
-  PI_BASELINE_PACKAGES,
-  PI_LEGACY_BASELINE_PACKAGES,
-} from "../../scripts/pi-compat/baseline";
+import { PI_LEGACY_BASELINE_PACKAGES } from "../../scripts/pi-compat/baseline";
 import { checkPiCompatibility } from "../../scripts/pi-compat/index";
 import {
   discoverPiInstallation,
@@ -92,6 +93,87 @@ const installation = (version = "0.99.0"): PiInstallation => ({
   },
 });
 
+const withSchemaFixture = async (
+  run: (fixture: {
+    repoRoot: string;
+    localModules: string;
+    schemaRoot: string;
+    candidate: PiInstallation;
+  }) => Promise<void>,
+): Promise<void> => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "pi-schema-types-")),
+  );
+  try {
+    const repoRoot = join(root, "repo");
+    const localModules = join(repoRoot, "node_modules");
+    const extensions = join(repoRoot, "pi/extensions");
+    const globalModules = join(root, "global/node_modules");
+    const schema = "@earendil-works/pi-schema";
+    const schemaRoot = join(globalModules, schema);
+    await Promise.all(
+      [
+        ...["pi-harness", "hearth-tools", "codex-web"].map((name) =>
+          join(extensions, name),
+        ),
+        join(localModules, ".bin"),
+        join(localModules, "bun-types"),
+        join(schemaRoot, "dist"),
+      ].map((directory) => mkdir(directory, { recursive: true })),
+    );
+    const repoModules = resolve(import.meta.dir, "../../node_modules");
+    const compilerRoot = await realpath(
+      join(repoModules, "@typescript/native-preview"),
+    );
+    const platformPackage = `native-preview-${process.platform}-${process.arch}`;
+    const platformManifest = createRequire(
+      join(compilerRoot, "package.json"),
+    ).resolve(`@typescript/${platformPackage}/package.json`);
+    const platformRoot = await realpath(dirname(platformManifest));
+    await Promise.all([
+      cp(compilerRoot, join(localModules, "@typescript/native-preview"), {
+        recursive: true,
+      }),
+      cp(platformRoot, join(localModules, "@typescript", platformPackage), {
+        recursive: true,
+      }),
+    ]);
+    await symlink(
+      "../@typescript/native-preview/bin/tsgo.js",
+      join(localModules, ".bin/tsgo"),
+    );
+    await writeFile(join(localModules, "bun-types/index.d.ts"), "export {};");
+    await writeFile(
+      join(extensions, "pi-harness/index.ts"),
+      `export type { Example } from "${schema}";`,
+    );
+    await writeFile(
+      join(schemaRoot, "package.json"),
+      JSON.stringify({
+        name: schema,
+        version: "1.6.0",
+        exports: { ".": { types: "./dist/index.d.ts" } },
+      }),
+    );
+    await writeFile(
+      join(schemaRoot, "dist/index.d.ts"),
+      'export type { Example } from "./part.js";',
+    );
+    await writeFile(
+      join(schemaRoot, "dist/part.d.ts"),
+      "export type Example = number;",
+    );
+    const candidate = installation("1.6.0");
+    candidate.packageRoot = join(globalModules, candidate.packageName);
+    candidate.corePackages = {
+      [schema]: { root: schemaRoot, version: "1.6.0", manifest: {} },
+    };
+    await run({ repoRoot, localModules, schemaRoot, candidate });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+};
+
 describe("pi compatibility policy", () => {
   test("accepts global version drift when compile and runtime contracts pass", async () => {
     const calls: string[] = [];
@@ -152,7 +234,7 @@ describe("real Pi RPC smoke launcher", () => {
     return {
       repoRoot,
       candidate: {
-        ...installation("0.84.4"),
+        ...installation("1.6.0"),
         binaryPath: binaryRealPath,
         binaryRealPath,
         packageRoot,
@@ -297,23 +379,17 @@ describe("global pi installation discovery", () => {
       "@earendil-works/pi-coding-agent",
       "@earendil-works/pi-ai",
       "@earendil-works/pi-agent-core",
-      "@earendil-works/chord",
       "@earendil-works/pi-telemetry",
       "@earendil-works/pi-tui",
       "typebox",
-    ]);
-    expect(piCohortPackagesForVersion("0.99.0")).toEqual([
-      ...PI_BASELINE_PACKAGES,
-    ]);
-    expect(piCohortPackagesForVersion("1.0.4")).toEqual([
-      ...PI_BASELINE_PACKAGES,
+      "@earendil-works/chord",
     ]);
     expect(() => piCohortPackagesForVersion("latest")).toThrow(
       "invalid version",
     );
   });
 
-  test.each(["0.84.1", "1.0.4"])(
+  test.each(["0.83.0", "0.84.1", "1.0.4", "1.6.0"])(
     "uses the non-project pi %s on PATH when sandbox cache isolation breaks Bun global discovery",
     async (packageVersion) => {
       if (process.platform === "win32") return;
@@ -327,10 +403,29 @@ describe("global pi installation discovery", () => {
 
         const globalRoot = join(root, "global");
         const globalModules = join(globalRoot, "node_modules");
+        const chord = "@earendil-works/chord";
+        const schema = "@earendil-works/pi-schema";
+        const packageNames = [...piCohortPackagesForVersion(packageVersion)];
+        const modern = packageVersion === "1.6.0";
+        if (packageVersion === "1.0.4" || modern) packageNames.push(chord);
+        if (modern)
+          packageNames.push(
+            schema,
+            "@earendil-works/pi-client",
+            "@earendil-works/pi-protocol",
+          );
+        const otherVersions: Record<string, string> = {
+          typebox: "1.3.27",
+          [chord]: "1.0.4",
+        };
+        if (modern) {
+          otherVersions["@earendil-works/pi-client"] = "0.84.4";
+          otherVersions["@earendil-works/pi-protocol"] = "0.84.4";
+        }
         let codingAgentRoot = "";
-        for (const name of piCohortPackagesForVersion(packageVersion)) {
+        for (const name of packageNames) {
           const packageRoot = join(globalModules, ...name.split("/"));
-          const version = name === "typebox" ? "1.3.7" : packageVersion;
+          const version = otherVersions[name] ?? packageVersion;
           await mkdir(packageRoot, { recursive: true });
           const manifest: Record<string, unknown> = { name, version };
           if (name === "@earendil-works/pi-coding-agent") {
@@ -342,6 +437,16 @@ describe("global pi installation discovery", () => {
               "#!/usr/bin/env node\n",
             );
             await chmod(join(packageRoot, "dist/cli.js"), 0o755);
+            if (packageVersion === "1.0.4") {
+              manifest.dependencies = { [chord]: "^1.0.4" };
+            }
+          }
+          if (
+            modern &&
+            (name === "@earendil-works/pi-ai" ||
+              name === "@earendil-works/pi-agent-core")
+          ) {
+            manifest.dependencies = { [schema]: "1.6.0" };
           }
           await writeFile(
             join(packageRoot, "package.json"),
@@ -357,32 +462,72 @@ describe("global pi installation discovery", () => {
         );
 
         const calls: string[][] = [];
-        const discovered = await discoverPiInstallation({
-          bunExecutable: "/tools/bun",
-          environment: {
-            PATH: `${localBin}${delimiter}${globalBin}`,
-            XDG_CACHE_HOME: join(root, "sandbox-cache"),
-          },
-          excludedPackageRoots: [localModules],
-          run: async (argv) => {
-            calls.push([...argv]);
-            return {
-              argv: [...argv],
-              exitCode: 0,
-              stdout: `${packageVersion}\n`,
-              stderr: "",
-              timedOut: false,
-              truncated: false,
-            };
-          },
-        });
+        const discover = () =>
+          discoverPiInstallation({
+            bunExecutable: "/tools/bun",
+            environment: {
+              PATH: `${localBin}${delimiter}${globalBin}`,
+              XDG_CACHE_HOME: join(root, "sandbox-cache"),
+            },
+            excludedPackageRoots: [localModules],
+            run: async (argv) => {
+              calls.push([...argv]);
+              return {
+                argv: [...argv],
+                exitCode: 0,
+                stdout: `${packageVersion}\n`,
+                stderr: "",
+                timedOut: false,
+                truncated: false,
+              };
+            },
+          });
+        const discovered = await discover();
 
         expect(discovered.binaryPath).toBe(join(globalBin, "pi"));
         expect(discovered.packageVersion).toBe(packageVersion);
-        expect(Object.keys(discovered.corePackages)).toEqual([
-          ...piCohortPackagesForVersion(packageVersion),
-        ]);
+        if (packageVersion === "1.0.4") {
+          expect(discovered.corePackages[chord]?.version).toBe("1.0.4");
+        } else {
+          expect(discovered.corePackages[chord]).toBeUndefined();
+        }
+        if (modern) {
+          expect(discovered.corePackages[schema]?.version).toBe("1.6.0");
+        } else {
+          expect(discovered.corePackages[schema]).toBeUndefined();
+        }
         expect(calls).toEqual([[join(globalBin, "pi"), "--version"]]);
+
+        if (modern) {
+          expect(
+            discovered.corePackages["@earendil-works/pi-client"],
+          ).toBeUndefined();
+          expect(
+            discovered.corePackages["@earendil-works/pi-protocol"],
+          ).toBeUndefined();
+          const schemaRoot = join(globalModules, schema);
+          const manifestPath = join(schemaRoot, "package.json");
+          await writeFile(
+            manifestPath,
+            JSON.stringify({ name: schema, version: "1.6.0-preview" }),
+          );
+          await expect(discover()).rejects.toThrow(
+            "requires @earendil-works/pi-schema@1.6.0",
+          );
+
+          await writeFile(
+            manifestPath,
+            JSON.stringify({ name: schema, version: "1.6.0" }),
+          );
+          const redirected = join(localModules, "redirected-schema");
+          await rename(schemaRoot, redirected);
+          await expect(discover()).rejects.toThrow(/pi-schema/);
+          await symlink(redirected, schemaRoot, "dir");
+          await expect(discover()).rejects.toThrow(
+            "global package root mismatch: expected @earendil-works/pi-schema",
+          );
+          expect(calls).toHaveLength(1);
+        }
 
         const aliasBin = join(root, "alias-bin");
         await mkdir(aliasBin);
@@ -604,7 +749,7 @@ describe("global declaration resolution guard", () => {
     expect(() =>
       assertNoLocalPiResolution(
         [join("/repo", "node_modules/@earendil-works/pi-tui/dist/index.d.ts")],
-        "/repo",
+        "/repo/node_modules",
         installation(),
       ),
     ).toThrow("repository-local");
@@ -617,7 +762,7 @@ describe("global declaration resolution guard", () => {
           "/global/node_modules/@earendil-works/pi-tui/dist/index.d.ts",
           "/repo/node_modules/@anthropic-ai/sandbox-runtime/dist/index.d.ts",
         ],
-        "/repo",
+        "/repo/node_modules",
         installation(),
       ),
     ).not.toThrow();
@@ -635,10 +780,179 @@ describe("global declaration resolution guard", () => {
     expect(() =>
       assertNoLocalPiResolution(
         ["/other/node_modules/@earendil-works/chord/dist/index.d.ts"],
-        "/repo",
+        "/repo/node_modules",
         installation("1.0.4"),
       ),
     ).toThrow("escaped captured package roots");
+  });
+
+  test("admits pi-schema declarations only from its own captured root", () => {
+    const candidate = installation("1.6.0");
+    const schema = "@earendil-works/pi-schema";
+    const schemaRoot = join("/global/node_modules", schema);
+    const typeFile = join(schemaRoot, "dist/typebox-static.d.ts");
+    expect(() =>
+      assertNoLocalPiResolution([typeFile], "/repo/node_modules", candidate),
+    ).toThrow("escaped captured package roots");
+    candidate.corePackages[schema] = {
+      root: schemaRoot,
+      version: "1.6.0",
+      manifest: {},
+    };
+    expect(() =>
+      assertNoLocalPiResolution([typeFile], "/repo/node_modules", candidate),
+    ).not.toThrow();
+    expect(() =>
+      assertNoLocalPiResolution(
+        [
+          join(
+            candidate.packageRoot,
+            "node_modules",
+            schema,
+            "dist/index.d.ts",
+          ),
+        ],
+        "/repo/node_modules",
+        candidate,
+      ),
+    ).toThrow("escaped captured package roots");
+    expect(() =>
+      assertNoLocalPiResolution(
+        [join("/repo/node_modules", schema, "dist/index.d.ts")],
+        "/repo/node_modules",
+        candidate,
+      ),
+    ).toThrow("repository-local");
+  });
+
+  test("rejects a schema distribution aliased to an unrelated local module", async () => {
+    await withSchemaFixture(
+      async ({ repoRoot, localModules, schemaRoot, candidate }) => {
+        const dist = join(schemaRoot, "dist");
+        const alias = join(localModules, "schema-copy");
+        await rename(dist, alias);
+        await symlink(alias, dist, "dir");
+        const listedFiles: string[] = [];
+        await expect(
+          compileExtensionsAgainstGlobalPi(candidate, {
+            repoRoot,
+            run: async (argv, options) => {
+              const result = await runCommand(argv, options);
+              expect(result.exitCode).toBe(0);
+              listedFiles.push(...result.stdout.split(/\r?\n/));
+              return result;
+            },
+          }),
+        ).rejects.toThrow("escaped captured package roots");
+        expect(listedFiles).toContain(join(alias, "index.d.ts"));
+      },
+    );
+  });
+
+  test("rejects a missing declaration reached through the public exports", async () => {
+    await withSchemaFixture(
+      async ({ repoRoot, localModules, schemaRoot, candidate }) => {
+        await writeFile(
+          join(localModules, "bun-types/index.d.ts"),
+          "type Unused = MissingThirdPartyType;",
+        );
+        const compile = () =>
+          compileExtensionsAgainstGlobalPi(candidate, { repoRoot });
+        await compile();
+        await rm(join(schemaRoot, "dist/part.d.ts"));
+        await expect(compile()).rejects.toThrow(
+          /TS2307: Cannot find module '\.\/part\.js'/,
+        );
+        await writeFile(join(schemaRoot, "dist/part.js"), "export {};");
+        await expect(compile()).rejects.toThrow(
+          /TS7016: Could not find a declaration file for module '\.\/part\.js'/,
+        );
+      },
+    );
+  });
+
+  test("allows declaration links only within the same captured package", async () => {
+    await withSchemaFixture(async ({ repoRoot, schemaRoot, candidate }) => {
+      const part = join(schemaRoot, "dist/part.d.ts");
+      const ownFile = join(schemaRoot, "internal.d.ts");
+      await rename(part, ownFile);
+      await symlink(ownFile, part);
+      const compile = () =>
+        compileExtensionsAgainstGlobalPi(candidate, { repoRoot });
+      await compile();
+
+      const tui = "@earendil-works/pi-tui";
+      const tuiRoot = join(dirname(dirname(schemaRoot)), tui);
+      candidate.corePackages[tui] = {
+        root: tuiRoot,
+        version: "1.6.0",
+        manifest: {},
+      };
+      await mkdir(tuiRoot);
+      const foreignFile = join(tuiRoot, "internal.d.ts");
+      await rename(ownFile, foreignFile);
+      await rm(part);
+      await symlink(foreignFile, part);
+      await expect(compile()).rejects.toThrow("escaped captured package roots");
+
+      const outsideFile = join(repoRoot, "outside.d.ts");
+      await rename(foreignFile, outsideFile);
+      await rm(part);
+      await symlink(outsideFile, part);
+      await expect(compile()).rejects.toThrow("escaped captured package roots");
+    });
+  });
+
+  test("rejects repository-local Pi declarations in a symlinked dependency directory", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(
+      join(await realpath(tmpdir()), "pi-local-types-"),
+    );
+    try {
+      const repo = join(root, "repo");
+      const repoRoot = join(root, "repo-link");
+      const dependencies = join(root, "dependencies");
+      const modules = join(root, "global/node_modules");
+      const candidate = installation("1.6.0");
+      candidate.packageRoot = join(modules, candidate.packageName);
+      const schema = "@earendil-works/pi-schema";
+      const schemaRoot = join(modules, schema);
+      candidate.corePackages = {
+        [schema]: { root: schemaRoot, version: "1.6.0", manifest: {} },
+      };
+      const localSchema = join(dependencies, schema, "index.d.ts");
+      const globalSchema = join(schemaRoot, "index.d.ts");
+      for (const directory of [
+        ...["pi-harness", "hearth-tools", "codex-web"].map((name) =>
+          join(repo, "pi/extensions", name),
+        ),
+        dirname(localSchema),
+        schemaRoot,
+      ]) {
+        await mkdir(directory, { recursive: true });
+      }
+      await symlink(repo, repoRoot, "dir");
+      await symlink(dependencies, join(repo, "node_modules"), "dir");
+      await writeFile(localSchema, "export {}");
+      await writeFile(globalSchema, "export {}");
+
+      const compile = (declaration: string) =>
+        compileExtensionsAgainstGlobalPi(candidate, {
+          repoRoot,
+          run: async (argv) => ({
+            argv,
+            stdout: `${declaration}\n`,
+            stderr: "",
+            exitCode: 0,
+            timedOut: false,
+            truncated: false,
+          }),
+        });
+      await expect(compile(localSchema)).rejects.toThrow("repository-local");
+      await compile(globalSchema);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

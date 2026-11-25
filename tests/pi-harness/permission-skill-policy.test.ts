@@ -42,6 +42,11 @@ const execFileAsync = promisify(execFile);
 
 const temporaryDirectories: string[] = [];
 
+type UserAgentStartEvent = Exclude<
+  BeforeAgentStartEvent,
+  { messageType: "custom" }
+>;
+
 const stripFrontmatter = (markdown: string): string => {
   const normalized = markdown.replace(/\r\n?/g, "\n");
   if (!normalized.startsWith("---")) return normalized.trim();
@@ -64,7 +69,7 @@ const eventFor = (
   filePath: string,
   markdown: string,
   args?: string,
-): BeforeAgentStartEvent => ({
+): UserAgentStartEvent => ({
   type: "before_agent_start",
   prompt: expandedSkillPrompt(name, filePath, markdown, args),
   systemPromptOptions: {
@@ -190,7 +195,7 @@ const emitInput = (
 
 const activateSkill = async (
   pi: FakePi,
-  event: BeforeAgentStartEvent,
+  event: UserAgentStartEvent,
   rawInput: string,
   timestamp = 1,
 ): Promise<void> => {
@@ -301,7 +306,7 @@ describe("active skill allowed-tools permission grants", () => {
         },
         (api) => {
           api.on("before_agent_start", (event) => {
-            expandedPrompt = event.prompt;
+            if (event.messageType === "user") expandedPrompt = event.prompt;
           });
         },
       ],

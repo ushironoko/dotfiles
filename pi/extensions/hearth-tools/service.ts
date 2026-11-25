@@ -1,6 +1,4 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { TSchema } from "typebox";
 import { randomUUID } from "node:crypto";
 import { createHearthReadTool } from "./adapters";
 import type { RuntimeState } from "./index";
@@ -18,7 +16,7 @@ const INVALIDATION_BROKERS = Symbol.for(
 
 export interface HearthReadService {
   generation: string;
-  createReadTool(cwd: string): AgentTool<TSchema, unknown>;
+  createReadTool(cwd: string): ReturnType<typeof createHearthReadTool>;
 }
 
 export interface ExternalWriterLease {

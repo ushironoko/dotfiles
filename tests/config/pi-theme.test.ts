@@ -10,6 +10,10 @@ const TRANSPARENT_BACKGROUND_KEYS = [
 ] as const;
 
 describe("transparent pi theme", () => {
+  test("references the published Pi theme schema", () => {
+    expect(theme.$schema).toBe("https://pi.dev/schemas/theme.schema.json");
+  });
+
   test("keeps only the user-message background opaque", () => {
     expect(theme.vars.transparent).toBe("");
     expect(theme.vars.userMsgBg).toBe("#303354");

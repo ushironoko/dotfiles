@@ -1,6 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
+import {
+  basename,
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  resolve,
+  sep,
+} from "node:path";
 import { homedir, tmpdir } from "node:os";
 import {
   cp,
@@ -11,6 +19,7 @@ import {
   readFile,
   readdir,
   readlink,
+  realpath,
   rename,
   rm,
   stat,
@@ -55,7 +64,7 @@ export interface RecoverySnapshotManifest {
 
 interface RecoveryJournal {
   schema: "pi-harness/update-recovery";
-  version: 7;
+  version: 7 | 8;
   createdAt: string;
   packageName: string;
   previousVersion: string;
@@ -76,6 +85,7 @@ export interface UpdatePiSnapshotStore {
   validate(
     journalPath: string,
     snapshots: RecoverySnapshotManifest,
+    installPackageNames: ReadonlySet<string>,
   ): Promise<void>;
   restoreMetadata(
     journalPath: string,
@@ -89,12 +99,17 @@ export interface UpdatePiSnapshotStore {
     journalPath: string,
     snapshots: RecoverySnapshotManifest,
     installation: PiInstallation,
+    installPackageNames: ReadonlySet<string>,
   ): Promise<void>;
   unrelatedStateMatches(
     journalPath: string,
     snapshots: RecoverySnapshotManifest,
+    installPackageNames: ReadonlySet<string>,
   ): Promise<boolean>;
-  matches(snapshots: RecoverySnapshotManifest): Promise<boolean>;
+  matches(
+    snapshots: RecoverySnapshotManifest,
+    installPackageNames: ReadonlySet<string>,
+  ): Promise<boolean>;
   cleanup(snapshots: RecoverySnapshotManifest): Promise<void>;
   sync(snapshots: RecoverySnapshotManifest): Promise<void>;
   remove(journalPath: string): Promise<void>;
@@ -377,7 +392,17 @@ const pathIsAbsent = async (path: string): Promise<boolean> => {
   }
 };
 
-type SnapshotEntryType = "directory" | "executable" | "file";
+type SnapshotEntryType =
+  | "directory"
+  | "directory or symlink"
+  | "executable"
+  | "file";
+
+const packageSnapshotType = (
+  name: string,
+  installPackageNames: ReadonlySet<string>,
+): SnapshotEntryType =>
+  installPackageNames.has(name) ? "directory" : "directory or symlink";
 
 const assertSnapshotEntryType = async (
   path: string,
@@ -389,6 +414,10 @@ const assertSnapshotEntryType = async (
   switch (expectedType) {
     case "directory": {
       matches = stats.isDirectory();
+      break;
+    }
+    case "directory or symlink": {
+      matches = stats.isDirectory() || stats.isSymbolicLink();
       break;
     }
     case "executable": {
@@ -515,6 +544,14 @@ const rollbackReplacementPath = (
     `.${basename(target)}.pi-harness-rollback-${transactionId}.tmp`,
   );
 
+const assertCanonicalParent = async (target: string): Promise<void> => {
+  let parent = dirname(target);
+  while (await pathIsAbsent(parent)) parent = dirname(parent);
+  if ((await realpath(parent)) !== parent) {
+    throw new Error(`rollback path has a noncanonical parent: ${target}`);
+  }
+};
+
 const restoreSnapshotEntry = async (
   source: string,
   target: string,
@@ -524,6 +561,7 @@ const restoreSnapshotEntry = async (
   transactionId: string,
 ): Promise<void> => {
   await validateSnapshotEntry(source, digest, label, expectedType);
+  await assertCanonicalParent(target);
   if (digest === null) {
     await rm(target, { force: true, recursive: true });
     await syncPath(dirname(target));
@@ -711,7 +749,11 @@ const canonicalJsonValue = (value: unknown): unknown => {
   );
 };
 
-const unrelatedGlobalMetadata = async (path: string): Promise<string> => {
+const unrelatedGlobalMetadata = async (
+  path: string,
+  installPackageNames: ReadonlySet<string>,
+): Promise<string> => {
+  await assertSnapshotEntryType(path, "file", "global package.json");
   const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
   const value = recordValue(parsed);
   if (value === undefined)
@@ -726,7 +768,9 @@ const unrelatedGlobalMetadata = async (path: string): Promise<string> => {
     const section = recordValue(copy[sectionName]);
     if (section === undefined) continue;
     copy[sectionName] = Object.fromEntries(
-      Object.entries(section).filter(([name]) => !piPackageNameSet.has(name)),
+      Object.entries(section).filter(
+        ([name]) => !installPackageNames.has(name),
+      ),
     );
   }
   return JSON.stringify(canonicalJsonValue(copy));
@@ -791,21 +835,20 @@ const fileSystemSnapshotStore: UpdatePiSnapshotStore = {
     try {
       const globalRoot = globalRootForInstallation(installation);
       const packageJsonPath = join(globalRoot, "package.json");
-      await assertSnapshotEntryType(
-        packageJsonPath,
-        "file",
-        "global package.json",
-      );
-      await unrelatedGlobalMetadata(packageJsonPath);
+      await unrelatedGlobalMetadata(packageJsonPath, new Set());
       snapshots.packageInventory = await scanPackageInventory(installation);
-      const packageNames = [
-        ...new Set([
-          ...Object.keys(installation.corePackages),
-          ...candidatePackageNames,
-        ]),
-      ].sort((left, right) => left.localeCompare(right));
+      const packageNames = snapshotPackageNames(
+        Object.keys(installation.corePackages),
+        candidatePackageNames,
+        snapshots.packageInventory,
+      );
+      const installPackageNames = new Set([
+        ...Object.keys(installation.corePackages),
+        ...candidatePackageNames,
+      ]);
       for (const packageName of packageNames) {
         const packageRoot = packageRootForName(installation, packageName);
+        await assertCanonicalParent(packageRoot);
         const discovered = installation.corePackages[packageName];
         if (discovered !== undefined && discovered.root !== packageRoot) {
           throw new Error(`Pi package root is not canonical: ${packageName}`);
@@ -818,7 +861,7 @@ const fileSystemSnapshotStore: UpdatePiSnapshotStore = {
         const digest = await captureSnapshotEntry(
           packageRoot,
           destination,
-          "directory",
+          packageSnapshotType(packageName, installPackageNames),
         );
         if (discovered !== undefined && digest === null) {
           throw new Error(`discovered Pi package is absent: ${packageName}`);
@@ -865,16 +908,18 @@ const fileSystemSnapshotStore: UpdatePiSnapshotStore = {
       throw error;
     }
   },
-  async validate(journalPath, snapshots) {
+  async validate(journalPath, snapshots, installPackageNames) {
     for (const snapshot of snapshots.packages) {
+      await assertCanonicalParent(snapshot.packageRoot);
       await validateSnapshotEntry(
         snapshotPackagePath(journalPath, snapshot.packageName),
         snapshot.digest,
         snapshot.packageName,
-        "directory",
+        packageSnapshotType(snapshot.packageName, installPackageNames),
       );
     }
     for (const snapshot of snapshots.metadata) {
+      await assertCanonicalParent(snapshot.path);
       await validateSnapshotEntry(
         snapshotMetadataPath(journalPath, snapshot.name),
         snapshot.digest,
@@ -883,6 +928,7 @@ const fileSystemSnapshotStore: UpdatePiSnapshotStore = {
       );
     }
     for (const snapshot of snapshots.globalBins) {
+      await assertCanonicalParent(snapshot.path);
       await validateSnapshotEntry(
         snapshotGlobalBinPath(journalPath, snapshot.name),
         snapshot.digest,
@@ -894,7 +940,7 @@ const fileSystemSnapshotStore: UpdatePiSnapshotStore = {
   async restoreMetadata(journalPath, snapshots, installation) {
     await restoreMetadataSnapshots(journalPath, snapshots, installation);
   },
-  async restore(journalPath, snapshots, installation) {
+  async restore(journalPath, snapshots, installation, installPackageNames) {
     for (const snapshot of snapshots.packages) {
       const expectedRoot = packageRootForName(
         installation,
@@ -910,13 +956,13 @@ const fileSystemSnapshotStore: UpdatePiSnapshotStore = {
         snapshot.packageRoot,
         snapshot.digest,
         snapshot.packageName,
-        "directory",
+        packageSnapshotType(snapshot.packageName, installPackageNames),
         snapshots.transactionId,
       );
     }
     await restoreMetadataSnapshots(journalPath, snapshots, installation);
   },
-  async unrelatedStateMatches(journalPath, snapshots) {
+  async unrelatedStateMatches(journalPath, snapshots, installPackageNames) {
     const packageJson = snapshots.metadata.find(
       ({ name }) => name === "package.json",
     );
@@ -925,19 +971,21 @@ const fileSystemSnapshotStore: UpdatePiSnapshotStore = {
       return (
         (await unrelatedGlobalMetadata(
           snapshotMetadataPath(journalPath, packageJson.name),
-        )) === (await unrelatedGlobalMetadata(packageJson.path))
+          installPackageNames,
+        )) ===
+        (await unrelatedGlobalMetadata(packageJson.path, installPackageNames))
       );
     } catch {
       return false;
     }
   },
-  async matches(snapshots) {
+  async matches(snapshots, installPackageNames) {
     for (const snapshot of snapshots.packages) {
       if (
         !(await snapshotEntryMatches(
           snapshot.packageRoot,
           snapshot.digest,
-          "directory",
+          packageSnapshotType(snapshot.packageName, installPackageNames),
         ))
       ) {
         return false;
@@ -994,6 +1042,7 @@ const fileSystemSnapshotStore: UpdatePiSnapshotStore = {
     ]) {
       const target =
         "packageRoot" in snapshot ? snapshot.packageRoot : snapshot.path;
+      await assertCanonicalParent(target);
       await rm(rollbackReplacementPath(target, snapshots.transactionId), {
         force: true,
         recursive: true,
@@ -1016,13 +1065,14 @@ const fileSystemSnapshotStore: UpdatePiSnapshotStore = {
   },
 };
 
-const packageVersionPattern = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/;
+const packageVersionPattern =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const piPackageNameSet = new Set<string>(PI_KNOWN_PACKAGES);
 const validPackageSpec = (value: string): boolean => {
   const separator = value.lastIndexOf("@");
   return (
     separator > 0 &&
-    packageNamePattern.test(value.slice(0, separator)) &&
+    piPackageNameSet.has(value.slice(0, separator)) &&
     packageVersionPattern.test(value.slice(separator + 1))
   );
 };
@@ -1034,6 +1084,11 @@ interface RecordedSignature {
   packageName: string;
   packageVersion: string;
   core: Record<string, { root: string; version: string }>;
+}
+
+interface ParsedRecoveryJournal {
+  journal: RecoveryJournal;
+  signature: RecordedSignature;
 }
 
 const recordValue = (value: unknown): Record<string, unknown> | undefined =>
@@ -1057,12 +1112,14 @@ const parseRecordedSignature = (
     coreValue === undefined ||
     typeof value.packageRoot !== "string" ||
     !isAbsolute(value.packageRoot) ||
+    resolve(value.packageRoot) !== value.packageRoot ||
     typeof value.globalBin !== "string" ||
     !isAbsolute(value.globalBin) ||
+    resolve(value.globalBin) !== value.globalBin ||
     typeof value.binaryRealPath !== "string" ||
-    !isAbsolute(value.binaryRealPath) ||
-    typeof value.packageName !== "string" ||
-    !packageNamePattern.test(value.packageName) ||
+    !value.binaryRealPath.startsWith(`${value.packageRoot}${sep}`) ||
+    resolve(value.binaryRealPath) !== value.binaryRealPath ||
+    value.packageName !== "@earendil-works/pi-coding-agent" ||
     typeof value.packageVersion !== "string" ||
     !packageVersionPattern.test(value.packageVersion)
   ) {
@@ -1074,7 +1131,7 @@ const parseRecordedSignature = (
   for (const [name, rawPackage] of coreEntries) {
     const pkg = recordValue(rawPackage);
     if (
-      !packageNamePattern.test(name) ||
+      !piPackageNameSet.has(name) ||
       pkg === undefined ||
       typeof pkg.root !== "string" ||
       !isAbsolute(pkg.root) ||
@@ -1164,6 +1221,13 @@ const transactionIdPattern =
 const packageNameFromSpec = (spec: string): string =>
   spec.slice(0, spec.lastIndexOf("@"));
 
+const recoveryInstallPackageNames = (journal: RecoveryJournal): Set<string> =>
+  new Set(
+    [...journal.candidatePackages, ...journal.rollbackPackages].map(
+      packageNameFromSpec,
+    ),
+  );
+
 const parseCandidatePackages = (value: unknown): string[] | undefined => {
   if (!Array.isArray(value) || value.length === 0 || value.length > 64) {
     return undefined;
@@ -1183,37 +1247,56 @@ const parseCandidatePackages = (value: unknown): string[] | undefined => {
 const validSnapshotDigest = (value: unknown): value is string | null =>
   value === null || (typeof value === "string" && digestPattern.test(value));
 
+const snapshotPackageNames = (
+  installed: string[],
+  candidates: string[],
+  inventory: RecoveryInventorySnapshot[],
+): string[] =>
+  [
+    ...new Set([
+      ...installed,
+      ...candidates,
+      ...inventory
+        .map(({ packageName }) => packageName)
+        .filter((name) => piPackageNameSet.has(name)),
+    ]),
+  ].sort((left, right) => left.localeCompare(right));
+
 const parsePackageSnapshots = (
   value: unknown,
   signature: RecordedSignature,
   candidatePackages: string[],
+  inventory: RecoveryInventorySnapshot[],
+  version: 7 | 8,
 ): RecoveryPackageSnapshot[] | undefined => {
   if (!Array.isArray(value)) return undefined;
   let expectedRootByName: Map<string, string>;
   try {
-    const names = new Set([
-      ...Object.keys(signature.core),
-      ...candidatePackages.map(packageNameFromSpec),
-    ]);
+    const names = snapshotPackageNames(
+      Object.keys(signature.core),
+      candidatePackages.map(packageNameFromSpec),
+      version === 8 ? inventory : [],
+    );
     expectedRootByName = new Map(
-      [...names]
-        .sort((left, right) => left.localeCompare(right))
-        .map((name) => [
+      names.map((name) => [
+        name,
+        packageRootForName(
+          {
+            packageName: signature.packageName,
+            packageRoot: signature.packageRoot,
+          },
           name,
-          packageRootForName(
-            {
-              packageName: signature.packageName,
-              packageRoot: signature.packageRoot,
-            },
-            name,
-          ),
-        ]),
+        ),
+      ]),
     );
   } catch {
     return undefined;
   }
   if (value.length !== expectedRootByName.size) return undefined;
   const snapshots: RecoveryPackageSnapshot[] = [];
+  const inventoryDigests = new Map(
+    inventory.map(({ packageName, digest }) => [packageName, digest]),
+  );
   let index = 0;
   for (const [expectedName, expectedRoot] of expectedRootByName) {
     const item = recordValue(value[index]);
@@ -1224,7 +1307,8 @@ const parsePackageSnapshots = (
       item.packageRoot !== expectedRoot ||
       (corePackage !== undefined && corePackage.root !== expectedRoot) ||
       !validSnapshotDigest(item.digest) ||
-      (corePackage !== undefined && item.digest === null)
+      (corePackage !== undefined && item.digest === null) ||
+      item.digest !== (inventoryDigests.get(expectedName) ?? null)
     ) {
       return undefined;
     }
@@ -1348,7 +1432,7 @@ const parsePackageInventory = (
 
 const readJournal = async (
   path: string,
-): Promise<RecoveryJournal | undefined> => {
+): Promise<ParsedRecoveryJournal | undefined> => {
   try {
     const value = recordValue(JSON.parse(await readFile(path, "utf8")));
     if (value === undefined) {
@@ -1395,13 +1479,22 @@ const readJournal = async (
     const candidatePackages = parseCandidatePackages(value.candidatePackages);
     const snapshotsValue = recordValue(value.snapshots);
     const { rollbackArgv, rollbackPackages, rollbackExecutableDigest } = value;
+    const packageInventory =
+      signature === undefined
+        ? undefined
+        : parsePackageInventory(snapshotsValue?.packageInventory, signature);
     const packageSnapshots =
-      signature === undefined || candidatePackages === undefined
+      signature === undefined ||
+      candidatePackages === undefined ||
+      packageInventory === undefined ||
+      (value.version !== 7 && value.version !== 8)
         ? undefined
         : parsePackageSnapshots(
             snapshotsValue?.packages,
             signature,
             candidatePackages,
+            packageInventory,
+            value.version,
           );
     const metadataSnapshots =
       signature === undefined
@@ -1411,20 +1504,17 @@ const readJournal = async (
       signature === undefined
         ? undefined
         : parseGlobalBinSnapshots(snapshotsValue?.globalBins, signature);
-    const packageInventory =
-      signature === undefined
-        ? undefined
-        : parsePackageInventory(snapshotsValue?.packageInventory, signature);
     const transactionId = snapshotsValue?.transactionId;
     if (
       value.schema !== "pi-harness/update-recovery" ||
-      value.version !== 7 ||
+      (value.version !== 7 && value.version !== 8) ||
       Object.hasOwn(value, "restorePatches") ||
       typeof value.createdAt !== "string" ||
       typeof value.packageName !== "string" ||
       typeof value.previousVersion !== "string" ||
       typeof value.previousSignature !== "string" ||
       signature === undefined ||
+      serializeSignature(signature) !== value.previousSignature ||
       signature.packageName !== "@earendil-works/pi-coding-agent" ||
       signature.packageName !== value.packageName ||
       signature.packageVersion !== value.previousVersion ||
@@ -1472,7 +1562,7 @@ const readJournal = async (
     if (!validRollbackCommand(journal, expectedPackages)) {
       throw new Error("invalid pi update recovery journal");
     }
-    return journal;
+    return { journal, signature };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -1492,19 +1582,59 @@ export const assertNoPendingUpdateRecovery = async (
 const successful = (result: CommandResult): boolean =>
   !result.timedOut && result.exitCode === 0;
 
-const installationSignature = (installation: PiInstallation): string =>
+const serializeSignature = (signature: RecordedSignature): string =>
   JSON.stringify({
-    packageRoot: installation.packageRoot,
-    globalBin: installation.globalBin,
-    binaryRealPath: installation.binaryRealPath,
-    packageName: installation.packageName,
-    packageVersion: installation.packageVersion,
+    packageRoot: signature.packageRoot,
+    globalBin: signature.globalBin,
+    binaryRealPath: signature.binaryRealPath,
+    packageName: signature.packageName,
+    packageVersion: signature.packageVersion,
     core: Object.fromEntries(
-      Object.entries(installation.corePackages)
+      Object.entries(signature.core)
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([name, pkg]) => [name, { root: pkg.root, version: pkg.version }]),
     ),
   });
+
+const installationSignature = (installation: PiInstallation): string =>
+  serializeSignature({ ...installation, core: installation.corePackages });
+
+const packageIdentityMatches = async (
+  root: string,
+  name: string,
+  version: string,
+): Promise<boolean> => {
+  try {
+    await assertSnapshotEntryType(root, "directory", name);
+    const path = join(root, "package.json");
+    await assertSnapshotEntryType(path, "file", name);
+    const manifest = recordValue(JSON.parse(await readFile(path, "utf8")));
+    return manifest?.name === name && manifest.version === version;
+  } catch {
+    return false;
+  }
+};
+
+const matchesRecoverySignature = async (
+  installation: PiInstallation,
+  journal: RecoveryJournal,
+  signature: RecordedSignature,
+): Promise<boolean> => {
+  if (journal.version === 8) {
+    return installationSignature(installation) === journal.previousSignature;
+  }
+  if (
+    serializeSignature({ ...installation, core: signature.core }) !==
+    journal.previousSignature
+  ) {
+    return false;
+  }
+  for (const [name, { root, version }] of Object.entries(signature.core)) {
+    await assertCanonicalParent(root);
+    if (!(await packageIdentityMatches(root, name, version))) return false;
+  }
+  return true;
+};
 
 const rollbackPackageSpecs = (installation: PiInstallation): string[] => [
   `${installation.packageName}@${installation.packageVersion}`,
@@ -1615,20 +1745,15 @@ const clearRecoveryState = async (
 };
 
 const rollback = async (
-  journal: RecoveryJournal,
+  { journal, signature }: ParsedRecoveryJournal,
   dependencies: UpdatePiDependencies,
   run: CommandRunner,
   journalPath: string,
   snapshotStore: UpdatePiSnapshotStore,
 ): Promise<UpdatePiResult> => {
+  const installPackageNames = recoveryInstallPackageNames(journal);
   let rollbackEnvironment: NodeJS.ProcessEnv;
-  let signature: RecordedSignature;
   try {
-    const parsedSignature = parseRecordedSignature(journal.previousSignature);
-    if (parsedSignature === undefined) {
-      throw new Error("recorded Pi installation signature is invalid");
-    }
-    signature = parsedSignature;
     rollbackEnvironment = globalInstallEnvironment(
       signature,
       journal.rollbackArgv[0] ?? "",
@@ -1649,7 +1774,26 @@ const rollback = async (
     };
   }
   try {
-    await snapshotStore.validate(journalPath, journal.snapshots);
+    await snapshotStore.validate(
+      journalPath,
+      journal.snapshots,
+      installPackageNames,
+    );
+    if (journal.version === 7) {
+      for (const [name, { version }] of Object.entries(signature.core)) {
+        if (
+          !(await packageIdentityMatches(
+            snapshotPackagePath(journalPath, name),
+            name,
+            version,
+          ))
+        ) {
+          throw new Error(
+            `recorded package identity differs from snapshot: ${name}`,
+          );
+        }
+      }
+    }
   } catch (error) {
     return {
       ok: false,
@@ -1660,7 +1804,11 @@ const rollback = async (
     };
   }
   if (
-    !(await snapshotStore.unrelatedStateMatches(journalPath, journal.snapshots))
+    !(await snapshotStore.unrelatedStateMatches(
+      journalPath,
+      journal.snapshots,
+      installPackageNames,
+    ))
   ) {
     return {
       ok: false,
@@ -1695,10 +1843,15 @@ const rollback = async (
   let restorationFailure: unknown;
   try {
     const reinstalled = await dependencies.discover();
-    if (installationSignature(reinstalled) !== journal.previousSignature) {
+    if (!(await matchesRecoverySignature(reinstalled, journal, signature))) {
       throw new Error("reinstalled pi package cohort does not match preflight");
     }
-    await snapshotStore.restore(journalPath, journal.snapshots, reinstalled);
+    await snapshotStore.restore(
+      journalPath,
+      journal.snapshots,
+      reinstalled,
+      installPackageNames,
+    );
   } catch (error) {
     restorationFailure = error;
   }
@@ -1716,11 +1869,17 @@ const rollback = async (
       );
     }
     if (
-      installationSignature(restored.installation) !== journal.previousSignature
+      !(await matchesRecoverySignature(
+        restored.installation,
+        journal,
+        signature,
+      ))
     ) {
       throw new Error("restored pi package cohort does not match preflight");
     }
-    if (!(await snapshotStore.matches(journal.snapshots))) {
+    if (
+      !(await snapshotStore.matches(journal.snapshots, installPackageNames))
+    ) {
       throw new Error("restored pi package contents do not match preflight");
     }
     await clearRecoveryState(journalPath, snapshotStore, journal.snapshots);
@@ -1766,25 +1925,32 @@ export const updatePiSafely = async (
   try {
     const unfinished = await readJournal(journalPath);
     if (unfinished !== undefined) {
+      const { journal, signature } = unfinished;
       try {
         const current = await dependencies.discover();
         const verified = await dependencies.checkCompatibility();
         if (
-          installationSignature(current) === unfinished.previousSignature &&
-          installationSignature(verified.installation) ===
-            unfinished.previousSignature &&
-          (await snapshotStore.matches(unfinished.snapshots))
+          (await matchesRecoverySignature(current, journal, signature)) &&
+          (await matchesRecoverySignature(
+            verified.installation,
+            journal,
+            signature,
+          )) &&
+          (await snapshotStore.matches(
+            journal.snapshots,
+            recoveryInstallPackageNames(journal),
+          ))
         ) {
           await clearRecoveryState(
             journalPath,
             snapshotStore,
-            unfinished.snapshots,
+            journal.snapshots,
           );
           return {
             ok: false,
             updated: false,
             rolledBack: true,
-            previousVersion: unfinished.previousVersion,
+            previousVersion: journal.previousVersion,
             currentVersion: verified.installation.packageVersion,
             message:
               "verified an already-restored installation and cleared its recovery journal; rerun update:pi to update",
@@ -1823,6 +1989,10 @@ export const updatePiSafely = async (
       ...rollbackPackages,
     ];
     const previousSignature = installationSignature(previous);
+    const recordedSignature = parseRecordedSignature(previousSignature);
+    if (recordedSignature === undefined) {
+      throw new Error("preflight Pi installation signature is invalid");
+    }
     const rollbackExecutableDigest = await digestExecutable(
       previous.bunExecutable,
     );
@@ -1834,33 +2004,28 @@ export const updatePiSafely = async (
       journalPath,
       candidatePackages.map(packageNameFromSpec),
     );
-    const recordedSignature = parseRecordedSignature(previousSignature);
+    const packageInventory = parsePackageInventory(
+      createdSnapshots.packageInventory,
+      recordedSignature,
+    );
     const packageSnapshots =
-      recordedSignature === undefined
+      packageInventory === undefined
         ? undefined
         : parsePackageSnapshots(
             createdSnapshots.packages,
             recordedSignature,
             candidatePackages,
+            packageInventory,
+            8,
           );
-    const metadataSnapshots =
-      recordedSignature === undefined
-        ? undefined
-        : parseMetadataSnapshots(createdSnapshots.metadata, recordedSignature);
-    const globalBinSnapshots =
-      recordedSignature === undefined
-        ? undefined
-        : parseGlobalBinSnapshots(
-            createdSnapshots.globalBins,
-            recordedSignature,
-          );
-    const packageInventory =
-      recordedSignature === undefined
-        ? undefined
-        : parsePackageInventory(
-            createdSnapshots.packageInventory,
-            recordedSignature,
-          );
+    const metadataSnapshots = parseMetadataSnapshots(
+      createdSnapshots.metadata,
+      recordedSignature,
+    );
+    const globalBinSnapshots = parseGlobalBinSnapshots(
+      createdSnapshots.globalBins,
+      recordedSignature,
+    );
     if (
       packageSnapshots === undefined ||
       metadataSnapshots === undefined ||
@@ -1873,7 +2038,7 @@ export const updatePiSafely = async (
     }
     const journal: RecoveryJournal = {
       schema: "pi-harness/update-recovery",
-      version: 7,
+      version: 8,
       createdAt: new Date().toISOString(),
       packageName: previous.packageName,
       previousVersion: previous.packageVersion,
@@ -1942,7 +2107,10 @@ export const updatePiSafely = async (
         if (
           installationSignature(verified.installation) ===
             installationSignature(previous) &&
-          (await snapshotStore.matches(journal.snapshots))
+          (await snapshotStore.matches(
+            journal.snapshots,
+            recoveryInstallPackageNames(journal),
+          ))
         ) {
           await clearRecoveryState(
             journalPath,
@@ -1961,7 +2129,13 @@ export const updatePiSafely = async (
       } catch {
         // Metadata can stay unchanged after a partial in-place mutation.
       }
-      return rollback(journal, dependencies, run, journalPath, snapshotStore);
+      return rollback(
+        { journal, signature: recordedSignature },
+        dependencies,
+        run,
+        journalPath,
+        snapshotStore,
+      );
     }
 
     if (successful(updateResult)) {
@@ -1988,7 +2162,13 @@ export const updatePiSafely = async (
       }
     }
 
-    return rollback(journal, dependencies, run, journalPath, snapshotStore);
+    return rollback(
+      { journal, signature: recordedSignature },
+      dependencies,
+      run,
+      journalPath,
+      snapshotStore,
+    );
   } finally {
     await lock.release();
   }

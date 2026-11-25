@@ -607,7 +607,7 @@ const detailContentLines = (
   selected: FlatRun,
   width: number,
   theme: ChildRunTheme,
-): string[] => {
+): readonly string[] => {
   const { invocation, run } = selected;
   const root = new Container();
   const metadata = new Box(1, 0, (text) => theme.bg("selectedBg", text));
@@ -875,7 +875,7 @@ const issueDetailContentLines = (
   detail: BitIssueDetailResult,
   width: number,
   theme: ChildRunTheme,
-): string[] => {
+): readonly string[] => {
   const { issue, comments } = detail;
   const root = new Container();
   const metadata = new Box(1, 0, (text) => theme.bg("selectedBg", text));
@@ -1088,7 +1088,10 @@ export class BitIssueDetailComponent implements ComponentLike {
     return this.offset;
   }
 
-  private contentLines(state: BitIssueDetailState, width: number): string[] {
+  private contentLines(
+    state: BitIssueDetailState,
+    width: number,
+  ): readonly string[] {
     if (state.status === "ready") {
       return issueDetailContentLines(state.detail, width, this.theme);
     }
@@ -1116,7 +1119,7 @@ const memoryDetailContentLines = (
   entry: SourcedMemoryRecord,
   width: number,
   theme: ChildRunTheme,
-): string[] => {
+): readonly string[] => {
   const root = new Container();
   const metadata = new Box(1, 0, (text) => theme.bg("selectedBg", text));
   metadata.addChild(

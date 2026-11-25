@@ -104,10 +104,10 @@ describe("pi-harness GitHub CLI reminder", () => {
       directory,
       manager,
     );
-    const first = await sdk.runner.emitBeforeAgentStart("inspect", undefined, {
-      cwd: directory,
-      forceSystemPrompt: "base",
-    });
+    const first = await sdk.runner.emitBeforeAgentStart(
+      { messageType: "user", prompt: "inspect" },
+      { cwd: directory, forceSystemPrompt: "base" },
+    );
     expect(first.messages).toEqual([
       {
         customType: GITHUB_CLI_REMINDER_TYPE,
@@ -137,8 +137,7 @@ describe("pi-harness GitHub CLI reminder", () => {
       reopened,
     );
     const resumeResult = await resumed.runner.emitBeforeAgentStart(
-      "resume",
-      undefined,
+      { messageType: "user", prompt: "resume" },
       { cwd: directory },
     );
     expect(resumeResult.messages).toEqual([]);
@@ -147,8 +146,7 @@ describe("pi-harness GitHub CLI reminder", () => {
       reopened.buildContextEntries().some((entry) => entry.id === reminderId),
     ).toBe(false);
     const olderBranch = await resumed.runner.emitBeforeAgentStart(
-      "older branch",
-      undefined,
+      { messageType: "user", prompt: "older branch" },
       { cwd: directory },
     );
     expect(olderBranch.messages).toEqual(first.messages);
@@ -164,8 +162,7 @@ describe("pi-harness GitHub CLI reminder", () => {
       reopened.getTree()[0]?.children.map(({ entry }) => entry.id),
     ).toEqual([reminderId, replacementId]);
     const sameBranchResult = await resumed.runner.emitBeforeAgentStart(
-      "same branch",
-      undefined,
+      { messageType: "user", prompt: "same branch" },
       { cwd: directory },
     );
     expect(sameBranchResult.messages).toEqual([]);
@@ -176,8 +173,7 @@ describe("pi-harness GitHub CLI reminder", () => {
         .some((entry) => entry.id === replacementId),
     ).toBe(true);
     const keptResult = await resumed.runner.emitBeforeAgentStart(
-      "kept after compaction",
-      undefined,
+      { messageType: "user", prompt: "kept after compaction" },
       { cwd: directory },
     );
     expect(keptResult.messages).toEqual([]);
@@ -191,8 +187,7 @@ describe("pi-harness GitHub CLI reminder", () => {
       reopened.getEntries().filter((entry) => entry.type === "custom_message"),
     ).toHaveLength(2);
     const droppedResult = await resumed.runner.emitBeforeAgentStart(
-      "dropped after compaction",
-      undefined,
+      { messageType: "user", prompt: "dropped after compaction" },
       { cwd: directory },
     );
     expect(droppedResult.messages).toEqual(first.messages);
@@ -236,7 +231,7 @@ describe("pi-harness GitHub CLI reminder", () => {
     expect(childInjection?.systemPrompt).toBe(COMMAND_HYGIENE_GUIDANCE);
   });
 
-  test("coexists with a hook-bridge before_agent_start message", async () => {
+  test("coexists with the prompt hook on user turns and injects only the reminder on custom turns", async () => {
     const directory = await setupTestDirectory("pi-github-cli-hook-bridge");
     tempDirectories.push(directory);
     const script = join(directory, "prompt-hook.sh");
@@ -244,7 +239,7 @@ describe("pi-harness GitHub CLI reminder", () => {
       script,
       [
         "#!/usr/bin/env bash",
-        "cat > /dev/null",
+        'cat > "$0.stdin"',
         `printf '%s' '{"hookSpecificOutput":{"additionalContext":"hook context"}}'`,
       ].join("\n"),
       { mode: 0o755 },
@@ -274,10 +269,14 @@ describe("pi-harness GitHub CLI reminder", () => {
     setupHookBridge(fake, makeConfig(directory), { cwd: directory, registry });
     setupGitHubCliReminder(fake);
     const { messages } = await sdk.runner.emitBeforeAgentStart(
-      "inspect an issue",
-      undefined,
+      { messageType: "user", prompt: "inspect an issue" },
       { cwd: directory, forceSystemPrompt: "base" },
     );
+    const hookInput = await fs.readFile(`${script}.stdin`, "utf8");
+    expect(JSON.parse(hookInput)).toMatchObject({
+      hook_event_name: "UserPromptSubmit",
+      prompt: "inspect an issue",
+    });
     const aggregate = await fake.emitBeforeAgentStartAggregate({
       type: "before_agent_start",
       prompt: "inspect an issue",
@@ -295,5 +294,28 @@ describe("pi-harness GitHub CLI reminder", () => {
     expect(messages[1]?.content).toBe(GITHUB_CLI_REMINDER);
     expect(sdk.sessionManager.getEntries()).toEqual([]);
     expect(messages.every(({ display }) => display === false)).toBe(true);
+
+    const custom = await sdk.runner.emitBeforeAgentStart(
+      {
+        messageType: "custom",
+        message: {
+          role: "custom",
+          customType: "background-completion",
+          content: "A background agent finished.",
+          display: false,
+          timestamp: 1,
+        },
+      },
+      { cwd: directory, forceSystemPrompt: "base" },
+    );
+    expect(custom.messages).toEqual([
+      {
+        customType: GITHUB_CLI_REMINDER_TYPE,
+        content: GITHUB_CLI_REMINDER,
+        display: false,
+      },
+    ]);
+    expect(await fs.readFile(`${script}.stdin`, "utf8")).toBe(hookInput);
+    expect(sdk.errors).toEqual([]);
   });
 });

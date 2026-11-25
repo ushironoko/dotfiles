@@ -46,9 +46,9 @@
     "satoru-render": "1.0.13"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.0.4",
-    "@earendil-works/pi-coding-agent": "1.0.4",
-    "@earendil-works/pi-tui": "1.0.4",
+    "@earendil-works/pi-ai": "1.6.0",
+    "@earendil-works/pi-coding-agent": "1.6.0",
+    "@earendil-works/pi-tui": "1.6.0",
     "@prettier/plugin-oxc": "0.0.4",
     "@tskm/compiler": "0.4.1",
     "@tskm/core": "0.3.0",

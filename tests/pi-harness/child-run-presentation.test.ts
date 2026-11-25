@@ -67,10 +67,8 @@ const render = (
   result: ToolResultLike,
   options: { expanded?: boolean; isPartial?: boolean } = {},
   width = 120,
-): { raw: string[]; plain: string[] } => {
-  const raw = renderChildRunsResult(result, options, theme, {} as never).render(
-    width,
-  );
+): { raw: readonly string[]; plain: string[] } => {
+  const raw = renderChildRunsResult(result, options, theme).render(width);
   return {
     raw,
     plain: raw.map((line) => stripTerminalControls(line).trimEnd()),

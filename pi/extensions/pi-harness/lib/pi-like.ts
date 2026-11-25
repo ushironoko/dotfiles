@@ -21,13 +21,17 @@ export interface SessionStartEvent {
   reason: string;
 }
 
-export interface BeforeAgentStartEvent {
+interface AgentStartEventBase {
   type: "before_agent_start";
-  prompt: string;
-  images?: unknown[];
   systemPrompt?: string;
   systemPromptOptions?: Record<string, unknown>;
 }
+
+export type BeforeAgentStartEvent = AgentStartEventBase &
+  (
+    | { messageType?: "user"; prompt: string; images?: unknown[] }
+    | { messageType: "custom"; message: unknown }
+  );
 
 export interface InputEvent {
   type: "input";

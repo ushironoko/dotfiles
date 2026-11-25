@@ -14,8 +14,6 @@ import {
 import { ChildRunRegistry } from "../../pi/extensions/pi-harness/features/child-runs/registry";
 import { ChildRunsBrowserComponent } from "../../pi/extensions/pi-harness/features/child-runs/ui";
 
-type BrowserTui = ConstructorParameters<typeof ChildRunsBrowserComponent>[1];
-
 const identity = (text: string): string => text;
 
 const editorTheme: EditorTheme = {
@@ -45,6 +43,7 @@ const createTerminal = (columns: number, rows: number): Terminal => ({
   clearScreen() {},
   setTitle() {},
   setProgress() {},
+  setProgramStatus() {},
 });
 
 const createLayout = async (
@@ -119,7 +118,7 @@ const createLayout = async (
   editor.setText("draft-1\ndraft-2\ndraft-3\ndraft-4\ndraft-5");
   const browser = new ChildRunsBrowserComponent(
     registry,
-    tui as unknown as BrowserTui,
+    tui,
     { matches: () => false },
     () => {},
     () => {},

@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, readFile, realpath } from "node:fs/promises";
+import { access, lstat, readFile, realpath } from "node:fs/promises";
 import {
   basename,
   delimiter,
@@ -11,8 +11,10 @@ import {
   sep,
 } from "node:path";
 import {
-  PI_BASELINE_PACKAGES,
+  PI_CHORD_PACKAGE,
   PI_LEGACY_BASELINE_PACKAGES,
+  PI_MODERN_CORE_PACKAGES,
+  PI_SCHEMA_PACKAGE,
   type PiBaselinePackage,
 } from "./baseline";
 import {
@@ -56,10 +58,14 @@ export interface DiscoverInstallationOptions {
   excludedPackageRoots?: string[];
 }
 
-const readManifest = async (root: string): Promise<PackageManifest> =>
-  JSON.parse(
-    await readFile(join(root, "package.json"), "utf8"),
-  ) as PackageManifest;
+const readManifest = async (root: string): Promise<PackageManifest> => {
+  const path = join(root, "package.json");
+  const stats = await lstat(path);
+  if (!stats.isFile()) {
+    throw new Error(`global package manifest is not a file: ${path}`);
+  }
+  return JSON.parse(await readFile(path, "utf8")) as PackageManifest;
+};
 
 const isWithin = (root: string, target: string): boolean => {
   const relation = relative(resolve(root), resolve(target));
@@ -161,16 +167,19 @@ export const piCohortPackagesForVersion = (
   if (parsed === undefined) {
     throw new Error(`global pi package has an invalid version: ${version}`);
   }
-  if (compareVersion(parsed, [0, 99, 0]) >= 0) return PI_BASELINE_PACKAGES;
+  if (compareVersion(parsed, [0, 99, 0]) >= 0) return PI_MODERN_CORE_PACKAGES;
   if (compareVersion(parsed, [0, 86, 0]) >= 0) {
-    return PI_BASELINE_PACKAGES.filter(
-      (name) =>
-        name !== "@earendil-works/pi-codemode" &&
-        name !== "@earendil-works/pi-mcp",
-    );
+    return [
+      ...PI_MODERN_CORE_PACKAGES.filter(
+        (name) =>
+          name !== "@earendil-works/pi-codemode" &&
+          name !== "@earendil-works/pi-mcp",
+      ),
+      PI_CHORD_PACKAGE,
+    ];
   }
   if (compareVersion(parsed, [0, 85, 0]) >= 0) {
-    return [...PI_LEGACY_BASELINE_PACKAGES, "@earendil-works/chord"];
+    return [...PI_LEGACY_BASELINE_PACKAGES, PI_CHORD_PACKAGE];
   }
   return compareVersion(parsed, [0, 84, 0]) >= 0
     ? PI_LEGACY_BASELINE_PACKAGES
@@ -188,7 +197,11 @@ export const satisfiesManifestRange = (
   const caret = range.startsWith("^");
   const expected = parseVersion(caret ? range.slice(1) : range);
   if (actual === undefined || expected === undefined) return false;
-  if (!caret) return compareVersion(actual, expected) === 0;
+  if (!caret) return version === range;
+  if (version === range.slice(1)) return true;
+  if (!/^\d+\.\d+\.\d+$/.test(version) || !/^\^\d+\.\d+\.\d+$/.test(range)) {
+    return false;
+  }
   if (compareVersion(actual, expected) < 0) return false;
   if (expected[0] > 0) return actual[0] === expected[0];
   if (expected[1] > 0) {
@@ -265,17 +278,74 @@ export const discoverPiInstallation = async (
   const codingManifest = await readManifest(packageRoot);
   const packageName = codingManifest.name;
   const packageVersion = codingManifest.version;
-  if (packageName === undefined || packageVersion === undefined) {
+  if (
+    packageName !== "@earendil-works/pi-coding-agent" ||
+    typeof packageVersion !== "string"
+  ) {
     throw new Error("global pi package manifest lacks name/version");
   }
+  const globalModules = findNodeModulesRoot(packageRoot);
   const binTarget = codingManifest.bin?.pi;
-  if (binTarget === undefined)
+  if (typeof binTarget !== "string")
     throw new Error("global pi manifest lacks bin.pi");
-  if ((await realpath(join(packageRoot, binTarget))) !== binaryRealPath) {
+  if (
+    !isWithin(packageRoot, binaryRealPath) ||
+    (await realpath(join(packageRoot, binTarget))) !== binaryRealPath
+  ) {
     throw new Error(
       "global pi binary does not belong to the discovered package",
     );
   }
+  const packageCohort = new Set(piCohortPackagesForVersion(packageVersion));
+  const corePackages: Record<string, PiCorePackage> = {};
+  for (const name of packageCohort) {
+    const root = join(globalModules, ...name.split("/"));
+    const canonicalRoot = await realpath(root);
+    if (
+      (name === packageName && root !== packageRoot) ||
+      canonicalRoot !== root ||
+      excludedPackageRoots.some((excluded) => isWithin(excluded, root))
+    ) {
+      throw new Error(`global package root mismatch: expected ${name}`);
+    }
+    const manifest =
+      name === packageName ? codingManifest : await readManifest(root);
+    if (manifest.name !== name) {
+      throw new Error(`global package root mismatch: expected ${name}`);
+    }
+    if (
+      typeof manifest.version !== "string" ||
+      parseVersion(manifest.version) === undefined
+    ) {
+      throw new Error(`${name} manifest lacks a version`);
+    }
+    corePackages[name] = {
+      root,
+      version: manifest.version,
+      manifest,
+    };
+    for (const dependency of [PI_SCHEMA_PACKAGE, PI_CHORD_PACKAGE] as const) {
+      if (Object.hasOwn(manifest.dependencies ?? {}, dependency)) {
+        packageCohort.add(dependency);
+      }
+    }
+  }
+
+  for (const [owner, pkg] of Object.entries(corePackages)) {
+    for (const [dependency, range] of Object.entries(
+      pkg.manifest.dependencies ?? {},
+    )) {
+      if (!Object.hasOwn(corePackages, dependency)) continue;
+      const installed = corePackages[dependency];
+      if (installed === undefined) continue;
+      if (!satisfiesManifestRange(installed.version, range)) {
+        throw new Error(
+          `${owner} requires ${dependency}@${range}, installed ${installed?.version ?? "missing"}`,
+        );
+      }
+    }
+  }
+
   const binaryVersion = assertSuccess(
     "global pi version",
     await run([binaryPath, "--version"], options.commandOptions),
@@ -284,46 +354,6 @@ export const discoverPiInstallation = async (
     throw new Error(
       `global pi binary ${binaryVersion} != package ${packageVersion}`,
     );
-  }
-
-  const globalModules = findNodeModulesRoot(packageRoot);
-  const packageCohort = piCohortPackagesForVersion(packageVersion);
-  const corePackages: Record<string, PiCorePackage> = {};
-  for (const name of packageCohort) {
-    const root =
-      name === packageName
-        ? packageRoot
-        : await realpath(join(globalModules, ...name.split("/")));
-    const manifest = await readManifest(root);
-    if (manifest.name !== name) {
-      throw new Error(`global package root mismatch: expected ${name}`);
-    }
-    if (manifest.version === undefined) {
-      throw new Error(`${name} manifest lacks a version`);
-    }
-    corePackages[name] = {
-      root,
-      version: manifest.version,
-      manifest,
-    };
-  }
-
-  const cohortNames = new Set<string>(packageCohort);
-  for (const [owner, pkg] of Object.entries(corePackages)) {
-    for (const [dependency, range] of Object.entries(
-      pkg.manifest.dependencies ?? {},
-    )) {
-      if (!cohortNames.has(dependency)) continue;
-      const installed = corePackages[dependency];
-      if (
-        installed === undefined ||
-        !satisfiesManifestRange(installed.version, range)
-      ) {
-        throw new Error(
-          `${owner} requires ${dependency}@${range}, installed ${installed?.version ?? "missing"}`,
-        );
-      }
-    }
   }
 
   return {

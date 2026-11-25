@@ -780,6 +780,10 @@ describe("public SDK composition authority", () => {
         (api) => second(api, sdkSeen),
         (api) => {
           api.on("before_agent_start", (event, ctx) => {
+            expect(event).toMatchObject({
+              messageType: "user",
+              prompt: "request",
+            });
             expect(ctx.getSystemPrompt()).toBe("base:first:second");
             expect(event.systemPrompt).toBe(ctx.getSystemPrompt());
           });
@@ -791,10 +795,10 @@ describe("public SDK composition authority", () => {
       { customType: "first", content: "first context", display: false },
       { customType: "second", content: "second context", display: false },
     ];
-    const actual = await sdk.runner.emitBeforeAgentStart("request", undefined, {
-      cwd: directory,
-      forceSystemPrompt: "base",
-    });
+    const actual = await sdk.runner.emitBeforeAgentStart(
+      { messageType: "user", prompt: "request" },
+      { cwd: directory, forceSystemPrompt: "base" },
+    );
     const aggregate = await fake.emitBeforeAgentStartAggregate({
       type: "before_agent_start",
       prompt: "request",

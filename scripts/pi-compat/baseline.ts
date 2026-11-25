@@ -1,16 +1,23 @@
-import { readFile, realpath } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { lstat, readFile, realpath } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
-export const PI_BASELINE_PACKAGES = [
+export const PI_MODERN_CORE_PACKAGES = [
   "@earendil-works/pi-coding-agent",
   "@earendil-works/pi-ai",
   "@earendil-works/pi-agent-core",
-  "@earendil-works/chord",
   "@earendil-works/pi-codemode",
   "@earendil-works/pi-mcp",
   "@earendil-works/pi-telemetry",
   "@earendil-works/pi-tui",
   "typebox",
+] as const;
+
+export const PI_SCHEMA_PACKAGE = "@earendil-works/pi-schema";
+export const PI_CHORD_PACKAGE = "@earendil-works/chord";
+
+export const PI_BASELINE_PACKAGES = [
+  ...PI_MODERN_CORE_PACKAGES,
+  PI_SCHEMA_PACKAGE,
 ] as const;
 
 export const PI_LEGACY_BASELINE_PACKAGES = [
@@ -26,6 +33,7 @@ export const PI_LEGACY_BASELINE_PACKAGES = [
 
 export const PI_KNOWN_PACKAGES = [
   ...PI_BASELINE_PACKAGES,
+  PI_CHORD_PACKAGE,
   ...PI_LEGACY_BASELINE_PACKAGES,
 ] as const;
 
@@ -91,14 +99,38 @@ const installedPackage = async (
   repoRoot: string,
   name: PiBaselinePackage,
 ): Promise<{ root?: string; version?: string }> => {
-  const root = join(repoRoot, "node_modules", ...name.split("/"));
+  const modules = join(repoRoot, "node_modules");
+  let root = join(modules, name);
   try {
+    if (!DIRECT_PI_PIN_SET.has(name)) {
+      try {
+        await lstat(root);
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          !("code" in error) ||
+          error.code !== "ENOENT"
+        ) {
+          throw error;
+        }
+        root = join(modules, ".bun", "node_modules", name);
+      }
+    }
     const canonicalRoot = await realpath(root);
-    const canonicalModules = await realpath(join(repoRoot, "node_modules"));
-    if (relative(canonicalModules, canonicalRoot).startsWith("..")) return {};
-    const manifest = await readJsonc<PackageManifest>(
-      join(canonicalRoot, "package.json"),
-    );
+    const canonicalModules = await realpath(modules);
+    const installedPath = relative(canonicalModules, canonicalRoot);
+    if (
+      installedPath === "" ||
+      installedPath === ".." ||
+      installedPath.startsWith(`..${sep}`) ||
+      isAbsolute(installedPath)
+    ) {
+      return {};
+    }
+    const manifestPath = join(canonicalRoot, "package.json");
+    if ((await realpath(manifestPath)) !== manifestPath) return {};
+    const manifest = await readJsonc<PackageManifest>(manifestPath);
+    if (manifest.name !== name) return {};
     return { root: canonicalRoot, version: manifest.version };
   } catch {
     return {};
@@ -152,7 +184,7 @@ export const checkLocalPiBaseline = async (
         `resolved-pin: ${name} resolved=${lockedVersion} direct=${directPin}`,
       );
     }
-    if (lockedVersion === undefined) {
+    if (lockedVersion === undefined || !EXACT_VERSION.test(lockedVersion)) {
       issues.push(`lock-tree: ${name} has no resolved bun.lock entry`);
     } else if (installed.version === undefined) {
       issues.push(`installed-tree: ${name} is not installed`);

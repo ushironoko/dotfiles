@@ -5,14 +5,18 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readlink,
+  realpath,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
+import type { PiBaselinePackage } from "../../scripts/pi-compat/baseline";
 import type { PiCompatibilityResult } from "../../scripts/pi-compat/index";
 import {
+  discoverPiInstallation,
   piCohortPackagesForVersion,
   type PiInstallation,
 } from "../../scripts/pi-compat/installation";
@@ -182,7 +186,7 @@ const memorySnapshotStore: UpdatePiSnapshotStore = {
 };
 
 const paths = async () => {
-  const root = await mkdtemp(join(tmpdir(), "pi-update-test-"));
+  const root = await mkdtemp(join(await realpath(tmpdir()), "pi-update-test-"));
   roots.push(root);
   return {
     lockPath: join(root, "update.lock"),
@@ -192,12 +196,183 @@ const paths = async () => {
   };
 };
 
+const codingAgent = "@earendil-works/pi-coding-agent";
+const chord = "@earendil-works/chord";
+const client = "@earendil-works/pi-client";
+
+const globalFixture = async () => {
+  const {
+    snapshotStore: _snapshotStore,
+    executableDigest: _digest,
+    ...temp
+  } = await paths();
+  const root = dirname(temp.journalPath);
+  const globalRoot = join(root, "global");
+  const globalBin = join(globalRoot, "bin");
+  const binaryPath = join(
+    globalBin,
+    process.platform === "win32" ? "pi.exe" : "pi",
+  );
+  const bunExecutable = join(root, "bun");
+  const packageRoot = (name: string) => join(globalRoot, "node_modules", name);
+  const pkgManifest = (name: string) => join(packageRoot(name), "package.json");
+  const snapshotPath = (name: string) =>
+    join(
+      `${temp.journalPath}.packages`,
+      "packages",
+      createHash("sha256").update(name).digest("hex"),
+    );
+  const cli = join(packageRoot(codingAgent), "dist", "cli.js");
+  const metadata = join(globalRoot, "package.json");
+  const lockfile = join(globalRoot, "bun.lock");
+  const writePackage = async (name: string, version: string) => {
+    await mkdir(packageRoot(name), { recursive: true });
+    await writeFile(
+      pkgManifest(name),
+      JSON.stringify({
+        name,
+        version,
+        ...(name === codingAgent ? { bin: { pi: "dist/cli.js" } } : {}),
+      }),
+    );
+  };
+  const installCohort = async (version: string) => {
+    for (const name of piCohortPackagesForVersion(version)) {
+      await writePackage(name, name === "typebox" ? "1.0.0" : version);
+    }
+    await writeFile(cli, version, { mode: 0o755 });
+  };
+  await mkdir(dirname(cli), { recursive: true });
+  await mkdir(globalBin, { recursive: true });
+  await symlink(relative(globalBin, cli), binaryPath);
+  await writeFile(bunExecutable, "captured Bun executable bytes", {
+    mode: 0o755,
+  });
+  await writeFile(metadata, "{}\n");
+  const discover = () =>
+    discoverPiInstallation({
+      bunExecutable,
+      environment: { PATH: globalBin },
+      run: async (argv) => {
+        expect(argv).toEqual([binaryPath, "--version"]);
+        return { ...result(), stdout: await readFile(binaryPath, "utf8") };
+      },
+    });
+  return {
+    ...temp,
+    root,
+    globalRoot,
+    globalBin,
+    bunExecutable,
+    packageRoot,
+    pkgManifest,
+    snapshotPath,
+    metadata,
+    lockfile,
+    writePackage,
+    installCohort,
+    discover,
+  };
+};
+
+const compatibleCohort = (
+  value: PiInstallation,
+  version: string,
+  names: readonly PiBaselinePackage[] = piCohortPackagesForVersion(version),
+): PiCompatibilityResult => ({
+  installation: value,
+  baseline: {
+    ok: true,
+    issues: [],
+    packages: names.map((name) => ({
+      name,
+      lockedVersion: name === "typebox" ? "1.0.0" : version,
+    })),
+  },
+});
+
+const interruptedV7Fixture = async () => {
+  const fixture = await globalFixture();
+  const previous = "1.2.0";
+  const candidate = "1.0.4";
+  const oldChordVersion = "1.0.4";
+  const metadata = JSON.stringify({
+    dependencies: { [codingAgent]: previous, [chord]: oldChordVersion },
+  });
+  const chordBytes = join(fixture.packageRoot(chord), "patched.js");
+  await fixture.installCohort(previous);
+  await fixture.writePackage(chord, oldChordVersion);
+  await fixture.writePackage(client, "0.84.1");
+  await writeFile(chordBytes, "retained chord preflight bytes");
+  await writeFile(fixture.metadata, metadata);
+  await writeFile(fixture.lockfile, "preflight Bun lock");
+
+  const discovered = await fixture.discover();
+  expect(discovered.corePackages[chord]).toBeUndefined();
+  const legacyInstallation: PiInstallation = {
+    ...discovered,
+    corePackages: {
+      ...discovered.corePackages,
+      [chord]: {
+        root: fixture.packageRoot(chord),
+        version: oldChordVersion,
+        manifest: { name: chord, version: oldChordVersion },
+      },
+    },
+  };
+  await expect(
+    updatePiSafely({
+      ...fixture,
+      checkCompatibility: async () =>
+        compatibleCohort(legacyInstallation, candidate, [
+          ...piCohortPackagesForVersion(candidate),
+          chord,
+        ]),
+      run: async () => {
+        await fixture.installCohort(candidate);
+        await rm(chordBytes);
+        await writeFile(fixture.lockfile, "interrupted candidate Bun lock");
+        throw new Error("interrupted after candidate install");
+      },
+    }),
+  ).rejects.toThrow("interrupted after candidate install");
+  const journal = JSON.parse(await readFile(fixture.journalPath, "utf8")) as {
+    version: number;
+    previousSignature: string;
+    rollbackArgv: string[];
+    rollbackPackages: string[];
+    snapshots: {
+      packages: { packageName: string }[];
+      packageInventory: { packageName: string }[];
+    };
+  };
+  expect(journal.rollbackPackages).toContain(`${chord}@${oldChordVersion}`);
+  expect(journal.snapshots.packageInventory).toContainEqual(
+    expect.objectContaining({ packageName: client }),
+  );
+  journal.version = 7;
+  journal.snapshots.packages = journal.snapshots.packages.filter(
+    ({ packageName }) => packageName !== client,
+  );
+  await rm(fixture.snapshotPath(client), { recursive: true });
+  await writeFile(fixture.journalPath, JSON.stringify(journal));
+  return {
+    ...fixture,
+    previous,
+    candidate,
+    oldChordVersion,
+    chordBytes,
+    metadataBytes: metadata,
+    journal,
+  };
+};
+
 const toLegacyPatchJournal = (
   source: string,
   restorePatches: boolean,
 ): string =>
   source
-    .replace('"version": 7', '"version": 1')
+    .replace('"version": 8', '"version": 1')
     .replace(/\n}\n$/, `,\n  "restorePatches": ${restorePatches}\n}\n`);
 
 describe("safe pi updater", () => {
@@ -236,6 +411,7 @@ describe("safe pi updater", () => {
     const current = {
       ...installation("0.80.7"),
       globalBin: join(globalRoot, "bin"),
+      binaryRealPath: join(packageRoot, "dist", "cli.js"),
       packageRoot,
       corePackages: {
         "@earendil-works/pi-coding-agent": {
@@ -276,6 +452,7 @@ describe("safe pi updater", () => {
     const current = {
       ...installation("0.80.7"),
       globalBin: join(globalRoot, "bin"),
+      binaryRealPath: join(packageRoot, "dist", "cli.js"),
       packageRoot,
       corePackages: {
         "@earendil-works/pi-coding-agent": {
@@ -377,6 +554,7 @@ describe("safe pi updater", () => {
     const atVersion = (version: string): PiInstallation => ({
       ...installation(version),
       globalBin: join(globalRoot, "bin"),
+      binaryRealPath: join(packageRoot, "dist", "cli.js"),
       packageRoot,
       corePackages: {
         "@earendil-works/pi-coding-agent": {
@@ -394,12 +572,10 @@ describe("safe pi updater", () => {
       checkCompatibility: async () => compatible(current),
       discover: async () => current,
       run: async () => {
-        const journal = JSON.parse(await readFile(journalPath, "utf8")) as {
-          version?: number;
-        };
         const snapshotStats = await lstat(`${journalPath}.packages`);
+        const journal = await readFile(journalPath, "utf8");
         recoveryPublished =
-          journal.version === 7 && snapshotStats.isDirectory();
+          journal.includes('"version": 8') && snapshotStats.isDirectory();
         current = atVersion("0.81.0");
         return result();
       },
@@ -563,10 +739,17 @@ describe("safe pi updater", () => {
     "migrates the 0.84 cohort to 1.0.4 with candidate rejection %s",
     async (rejectCandidate) => {
       const temp = await paths();
+      const targetPackages = [
+        ...piCohortPackagesForVersion("1.0.4"),
+        "@earendil-works/chord",
+      ] as const;
       const atVersion = (version: string): PiInstallation => ({
         ...installation(version),
         corePackages: Object.fromEntries(
-          piCohortPackagesForVersion(version).map((name) => [
+          (version === "1.0.4"
+            ? targetPackages
+            : piCohortPackagesForVersion(version)
+          ).map((name) => [
             name,
             {
               root: join("/global/node_modules", name),
@@ -590,7 +773,7 @@ describe("safe pi updater", () => {
             baseline: {
               ok: true,
               issues: [],
-              packages: piCohortPackagesForVersion("1.0.4").map((name) => ({
+              packages: targetPackages.map((name) => ({
                 name,
                 lockedVersion: candidate.corePackages[name]?.version,
               })),
@@ -615,7 +798,7 @@ describe("safe pi updater", () => {
         currentVersion: rejectCandidate ? "0.84.4" : "1.0.4",
       });
       expect(commands[0]?.slice(5)).toEqual(
-        piCohortPackagesForVersion("1.0.4").map(
+        targetPackages.map(
           (name) => `${name}@${candidate.corePackages[name]?.version}`,
         ),
       );
@@ -1029,6 +1212,258 @@ describe("safe pi updater", () => {
     );
   });
 
+  test.each([
+    { previousVersion: "1.0.4", concurrentChordPin: false },
+    { previousVersion: "1.6.0", concurrentChordPin: false },
+    { previousVersion: "1.6.0", concurrentChordPin: true },
+  ])(
+    "handles pi-schema and retained chord during rollback from $previousVersion (pin drift: $concurrentChordPin)",
+    async ({ previousVersion, concurrentChordPin }) => {
+      const { snapshotStore: _snapshotStore, ...temp } = await paths();
+      const globalRoot = join(dirname(temp.journalPath), "global");
+      const modules = join(globalRoot, "node_modules");
+      const globalBin = join(globalRoot, "bin");
+      const metadata = join(globalRoot, "package.json");
+      const coding = "@earendil-works/pi-coding-agent";
+      const chord = "@earendil-works/chord";
+      const schema = "@earendil-works/pi-schema";
+      const packageFile = (name: string) => join(modules, name, "package.json");
+      const writePackage = async (name: string, bytes: string) => {
+        const file = packageFile(name);
+        await mkdir(dirname(file), { recursive: true });
+        await writeFile(file, bytes);
+      };
+      const atVersion = (version: string): PiInstallation => {
+        const coreName = version === "1.0.4" ? chord : schema;
+        const packageRoot = join(modules, coding);
+        return {
+          ...installation(version),
+          globalBin,
+          binaryPath: join(globalBin, "pi"),
+          binaryRealPath: join(packageRoot, "dist/cli.js"),
+          packageRoot,
+          corePackages: {
+            [coding]: { root: packageRoot, version, manifest: {} },
+            [coreName]: {
+              root: join(modules, coreName),
+              version,
+              manifest: {},
+            },
+          },
+        };
+      };
+      const hadSchema = previousVersion === "1.6.0";
+      const originalMetadata = JSON.stringify({
+        dependencies: { [coding]: previousVersion, [chord]: "1.0.4" },
+      });
+      const changedMetadata = JSON.stringify({
+        dependencies: {
+          [coding]: "1.6.0",
+          [schema]: "1.6.0",
+          [chord]: concurrentChordPin ? "1.0.5" : "1.0.4",
+        },
+      });
+      await mkdir(globalBin, { recursive: true });
+      await writeFile(metadata, originalMetadata);
+      await writePackage(coding, "preflight coding-agent bytes");
+      await writePackage(chord, "preflight chord bytes");
+      if (hadSchema) await writePackage(schema, "preflight pi-schema bytes");
+
+      const previous = atVersion(previousVersion);
+      let current = previous;
+      let candidateRunning = false;
+      const calls: string[][] = [];
+      const update = await updatePiSafely({
+        ...temp,
+        discover: async () => current,
+        checkCompatibility: async () => {
+          if (candidateRunning) throw new Error("candidate incompatible");
+          return {
+            baseline: {
+              ok: true,
+              issues: [],
+              packages: [
+                { name: coding, lockedVersion: "1.6.0" },
+                { name: schema, lockedVersion: "1.6.0" },
+              ],
+            },
+            installation: current,
+          };
+        },
+        run: async (argv) => {
+          calls.push(argv.slice(5));
+          if (calls.length === 1) {
+            current = atVersion("1.6.0");
+            candidateRunning = true;
+            await writeFile(metadata, changedMetadata);
+            await writePackage(schema, "candidate pi-schema bytes");
+            await writePackage(chord, "changed chord bytes");
+          } else {
+            expect(await readFile(metadata, "utf8")).toBe(originalMetadata);
+            current = previous;
+            candidateRunning = false;
+            await writePackage(coding, "registry coding-agent bytes");
+            await writePackage(chord, "registry chord bytes");
+            if (hadSchema)
+              await writePackage(schema, "registry pi-schema bytes");
+          }
+          return result();
+        },
+      });
+
+      expect(calls[0]).toEqual([`${coding}@1.6.0`, `${schema}@1.6.0`]);
+      if (concurrentChordPin) {
+        expect(calls).toHaveLength(1);
+        expect(update.message).toContain(
+          "unrelated Bun global metadata changed",
+        );
+        expect(await readFile(metadata, "utf8")).toBe(changedMetadata);
+        await expect(
+          assertNoPendingUpdateRecovery(temp.journalPath),
+        ).rejects.toThrow("recovery is pending");
+        return;
+      }
+      expect(update).toMatchObject({
+        ok: false,
+        rolledBack: true,
+        currentVersion: previousVersion,
+      });
+      expect(calls[1]).toEqual([
+        `${coding}@${previousVersion}`,
+        hadSchema ? `${schema}@1.6.0` : `${chord}@1.0.4`,
+      ]);
+      expect(await readFile(packageFile(coding), "utf8")).toBe(
+        "preflight coding-agent bytes",
+      );
+      expect(await readFile(packageFile(chord), "utf8")).toBe(
+        "preflight chord bytes",
+      );
+      if (hadSchema) {
+        expect(await readFile(packageFile(schema), "utf8")).toBe(
+          "preflight pi-schema bytes",
+        );
+      } else {
+        await expect(lstat(packageFile(schema))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+      await expect(lstat(temp.journalPath)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  test.each(["successful update", "rollback"])(
+    "preserves a retained Bun development symlink during %s",
+    async (outcome) => {
+      const fixture = await globalFixture();
+      const previous = "1.2.0";
+      const candidate = "1.6.0";
+      const linkPath = fixture.packageRoot(client);
+      const target = join(fixture.root, "development-client");
+      const rawTarget = relative(dirname(linkPath), target);
+      const targetFile = join(target, "source.js");
+      await fixture.installCohort(previous);
+      await mkdir(target);
+      await writeFile(targetFile, "external development bytes");
+      await symlink(rawTarget, linkPath);
+      await writeFile(
+        fixture.metadata,
+        JSON.stringify({
+          dependencies: { [client]: "link:development-client" },
+        }),
+      );
+      const calls: string[][] = [];
+      const update = await updatePiSafely({
+        ...fixture,
+        checkCompatibility: async () => {
+          const current = await fixture.discover();
+          if (outcome === "rollback" && current.packageVersion === candidate) {
+            throw new Error("candidate incompatible");
+          }
+          return compatibleCohort(current, candidate);
+        },
+        run: async (argv) => {
+          calls.push(argv.slice(5));
+          if (calls.length === 1) {
+            expect(await readlink(fixture.snapshotPath(client))).toBe(
+              rawTarget,
+            );
+            await fixture.installCohort(candidate);
+            if (outcome === "rollback") {
+              await rm(linkPath);
+              await symlink("missing-replacement-target", linkPath);
+              await writeFile(
+                targetFile,
+                "edited outside the global installation",
+              );
+            }
+          } else {
+            await fixture.installCohort(previous);
+          }
+          return result();
+        },
+      });
+
+      const rolledBack = outcome === "rollback";
+      expect(update).toMatchObject({
+        ok: !rolledBack,
+        updated: !rolledBack,
+        rolledBack,
+        currentVersion: rolledBack ? previous : candidate,
+      });
+      expect(calls).toHaveLength(rolledBack ? 2 : 1);
+      expect(calls.flat().some((spec) => spec.startsWith(`${client}@`))).toBe(
+        false,
+      );
+      expect(await readlink(linkPath)).toBe(rawTarget);
+      expect(await readFile(targetFile, "utf8")).toBe(
+        rolledBack
+          ? "edited outside the global installation"
+          : "external development bytes",
+      );
+      await expect(lstat(fixture.journalPath)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  test.each(["active", "candidate-only"])(
+    "rejects a development symlink at a package root before mutation (%s)",
+    async (scope) => {
+      const fixture = await globalFixture();
+      const previous = "1.2.0";
+      const active = scope === "active";
+      const name = active ? "@earendil-works/pi-tui" : client;
+      await fixture.installCohort(previous);
+      const prior = await fixture.discover();
+      const target = join(fixture.root, "development-package");
+      await mkdir(target);
+      await rm(fixture.packageRoot(name), { force: true, recursive: true });
+      await symlink(target, fixture.packageRoot(name));
+      let runs = 0;
+      await expect(
+        updatePiSafely({
+          ...fixture,
+          checkCompatibility: async () =>
+            compatibleCohort(prior, "1.6.0", [
+              ...piCohortPackagesForVersion("1.6.0"),
+              ...(active ? [] : ([client] as const)),
+            ]),
+          run: async () => {
+            runs += 1;
+            return result();
+          },
+        }),
+      ).rejects.toThrow("is not a directory");
+      expect(runs).toBe(0);
+      expect(await readlink(fixture.packageRoot(name))).toBe(target);
+      await expect(lstat(fixture.journalPath)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
   test("validates recovery snapshots before reinstalling rollback packages", async () => {
     const temp = await paths();
     let current = installation("0.80.7");
@@ -1127,13 +1562,24 @@ describe("safe pi updater", () => {
     );
     const journal = await readFile(temp.journalPath, "utf8");
     expect(journal).toContain("pi-harness/update-recovery");
-    expect(journal).toContain('"version": 7');
+    expect(journal).toContain('"version": 8');
     expect(journal).not.toContain("restorePatches");
     await writeFile(
       temp.journalPath,
       journal.replace(
         "@earendil-works/pi-tui@0.80.7",
         "@earendil-works/pi-tui@0.80.8",
+      ),
+    );
+    await expect(
+      assertNoPendingUpdateRecovery(temp.journalPath),
+    ).rejects.toThrow("invalid pi update recovery journal");
+
+    await writeFile(
+      temp.journalPath,
+      journal.replaceAll(
+        "@earendil-works/pi-tui",
+        "@earendil-works/pi-unrecognized",
       ),
     );
     await expect(
@@ -1206,7 +1652,7 @@ describe("safe pi updater", () => {
       expect(failed.manualRecoveryArgv).toBeDefined();
       const currentJournal = await readFile(temp.journalPath, "utf8");
       const legacyJournal = currentJournal.replace(
-        '"version": 7',
+        '"version": 8',
         `"version": ${version}`,
       );
       await writeFile(temp.journalPath, legacyJournal);
@@ -1374,7 +1820,7 @@ describe("safe pi updater", () => {
     expect(calls).toBe(callsBeforeRecovery);
   });
 
-  test("recovers an unfinished journal before attempting another update", async () => {
+  test("recovers an unfinished v8 journal before attempting another update", async () => {
     const temp = await paths();
     let current = installation("0.80.7");
     let rollbackAvailable = false;
@@ -1404,6 +1850,175 @@ describe("safe pi updater", () => {
     expect(recovered).toMatchObject({ ok: false, rolledBack: true });
     expect(current.packageVersion).toBe("0.80.7");
   });
+
+  test.each([
+    { drift: "none", failure: "" },
+    { drift: "already restored", failure: "" },
+    {
+      drift: "reinstalled name",
+      failure: "reinstalled pi package cohort does not match preflight",
+    },
+    {
+      drift: "reinstalled version",
+      failure: "reinstalled pi package cohort does not match preflight",
+    },
+    {
+      drift: "restored version",
+      failure: "restored pi package cohort does not match preflight",
+    },
+  ])(
+    "recovers a v7 Pi 1.2 journal with retained chord (drift: $drift)",
+    async ({ drift, failure }) => {
+      const fixture = await interruptedV7Fixture();
+      const alreadyRestored = drift === "already restored";
+      if (alreadyRestored) {
+        await fixture.installCohort(fixture.previous);
+        await writeFile(fixture.chordBytes, "retained chord preflight bytes");
+        await writeFile(fixture.lockfile, "preflight Bun lock");
+      }
+      const calls: string[][] = [];
+      const recovered = await updatePiSafely({
+        ...fixture,
+        checkCompatibility: async () => {
+          const current = await fixture.discover();
+          expect(current.corePackages[chord]).toBeUndefined();
+          if (
+            current.packageVersion === fixture.previous &&
+            drift === "restored version"
+          ) {
+            await fixture.writePackage(chord, "1.0.5");
+          }
+          return compatibleCohort(current, fixture.candidate);
+        },
+        run: async (argv, options) => {
+          calls.push(argv);
+          expect(options?.env).toMatchObject({
+            BUN_INSTALL_GLOBAL_DIR: fixture.globalRoot,
+            BUN_INSTALL_BIN: fixture.globalBin,
+          });
+          expect(await readFile(fixture.metadata, "utf8")).toBe(
+            fixture.metadataBytes,
+          );
+          expect(await readFile(fixture.lockfile, "utf8")).toBe(
+            "preflight Bun lock",
+          );
+          await fixture.installCohort(fixture.previous);
+          await fixture.writePackage(
+            chord,
+            drift === "reinstalled version" ? "1.0.5" : fixture.oldChordVersion,
+          );
+          if (drift === "reinstalled name") {
+            await writeFile(
+              fixture.pkgManifest(chord),
+              JSON.stringify({
+                name: client,
+                version: fixture.oldChordVersion,
+              }),
+            );
+          }
+          await writeFile(fixture.chordBytes, "registry chord bytes");
+          return result();
+        },
+      });
+      expect(calls).toEqual(
+        alreadyRestored ? [] : [fixture.journal.rollbackArgv],
+      );
+      expect(recovered).toMatchObject({
+        ok: false,
+        rolledBack: failure === "",
+      });
+      if (failure) {
+        expect(recovered.message).toContain(failure);
+        expect(await readFile(fixture.journalPath, "utf8")).toBe(
+          JSON.stringify(fixture.journal),
+        );
+      } else {
+        await expect(lstat(fixture.journalPath)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+      expect(await readFile(fixture.chordBytes, "utf8")).toBe(
+        drift.startsWith("reinstalled")
+          ? "registry chord bytes"
+          : "retained chord preflight bytes",
+      );
+    },
+  );
+
+  test.each([
+    { tamper: "recorded path", failure: "invalid pi update recovery journal" },
+    {
+      tamper: "recorded version and argv",
+      failure: "recorded package identity differs from snapshot",
+    },
+    {
+      tamper: "snapshot contents",
+      failure: "rollback snapshot digest mismatch",
+    },
+    {
+      tamper: "Bun executable",
+      failure: "captured Bun executable digest changed",
+    },
+  ])(
+    "retains a tampered v7 journal without reinstalling ($tamper)",
+    async ({ tamper, failure }) => {
+      const fixture = await interruptedV7Fixture();
+      const { journal } = fixture;
+      if (tamper === "recorded path") {
+        journal.previousSignature = journal.previousSignature.replace(
+          fixture.packageRoot(chord),
+          fixture.packageRoot(client),
+        );
+      } else if (tamper === "recorded version and argv") {
+        const oldSpec = `${chord}@${fixture.oldChordVersion}`;
+        const newSpec = `${chord}@1.0.5`;
+        journal.previousSignature = journal.previousSignature.replace(
+          `"root":${JSON.stringify(fixture.packageRoot(chord))},"version":"${fixture.oldChordVersion}"`,
+          `"root":${JSON.stringify(fixture.packageRoot(chord))},"version":"1.0.5"`,
+        );
+        journal.rollbackPackages = journal.rollbackPackages.map((spec) =>
+          spec === oldSpec ? newSpec : spec,
+        );
+        journal.rollbackArgv = journal.rollbackArgv.map((arg) =>
+          arg === oldSpec ? newSpec : arg,
+        );
+      } else if (tamper === "snapshot contents") {
+        await writeFile(
+          join(fixture.snapshotPath(chord), "patched.js"),
+          "tampered chord snapshot",
+        );
+      } else {
+        await writeFile(
+          fixture.bunExecutable,
+          "different Bun executable bytes",
+        );
+      }
+      const journalBytes = JSON.stringify(journal);
+      await writeFile(fixture.journalPath, journalBytes);
+      let runs = 0;
+      const recovery = updatePiSafely({
+        ...fixture,
+        checkCompatibility: async () =>
+          compatibleCohort(await fixture.discover(), fixture.candidate),
+        run: async () => {
+          runs += 1;
+          return result();
+        },
+      });
+      if (tamper === "recorded path") {
+        await expect(recovery).rejects.toThrow(failure);
+      } else {
+        const refused = await recovery;
+        expect(refused).toMatchObject({ ok: false, rolledBack: false });
+        expect(refused.message).toContain(failure);
+      }
+      expect(runs).toBe(0);
+      expect(await readFile(fixture.lockfile, "utf8")).toBe(
+        "interrupted candidate Bun lock",
+      );
+      expect(await readFile(fixture.journalPath, "utf8")).toBe(journalBytes);
+    },
+  );
 
   test("recovers with the captured Bun after the current runtime path changes", async () => {
     const temp = await paths();
