@@ -342,17 +342,6 @@ arithmetic. Pi still rejects an undeclared mode or a shell envelope containing
 substitutions, redirects, extra commands, or a non-literal wrapper. Hard-denied
 relay/import commands remain denied before both execution paths.
 
-The safety layer also appends soft command-hygiene guidance to every parent and
-child system prompt: prefer dedicated file tools, literal project-bounded
-commands, existing repository scripts, and `rg --no-config`; run independent
-inspections and checks sequentially as separate Bash calls, inspect each result
-before choosing the next command, and reserve short pipelines for genuine
-producer/consumer data flow instead of batching with `;`, `&&`, or multiline
-blocks; pass long or multiline CLI data through a file-input option rather than
-shell-escaped one-liners; explain necessity and exact scope before genuinely
-required dynamic shell or ad-hoc scripts instead of sacrificing correctness.
-This generation preference does not relax any permission boundary.
-
 The safety layer includes a default-on Codex CLI fallback for Bash commands
 that remain ambiguous after deterministic routing. It invokes
 `gpt-5.6-luna` with low reasoning through bounded `codex exec`. Each call uses
@@ -802,17 +791,6 @@ jq -s '
 Pure parsing, diagnostics, aggregation, and unlabeled candidate conversion live
 in `features/permission-audit/analysis.ts`. Malformed and truncated JSONL tails
 are reported rather than silently treated as valid records.
-
-### Repeated ASK reminder
-
-In a parent session, every third Bash confirmation that was actually displayed
-(`accepted`, `rejected`, or `aborted`) schedules one hidden transient system
-reminder for the next agent context. Intermediate ASK verdicts and headless
-`not-shown` outcomes are not counted. The reminder asks the agent to preserve
-intent while narrowing the next command, separating navigation from action,
-and avoiding unnecessary compound or indirect shell syntax. It never changes a
-permission decision, weakens policy, or promotes prior approval into an ALLOW
-rule or qualification label. The counter resets at the session boundary.
 
 ## provider-log scope (V10, measured 2026-07-11)
 

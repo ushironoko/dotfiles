@@ -11,9 +11,9 @@ In addition to the tools above, you may have access to other custom tools depend
 
 Guidelines:
 
-- Use bash for file operations like ls, rg, find.
-- Use read to examine files instead of cat or sed.
-- When `hearth_graph` is available, use its read-only structural index for comprehensive codebase exploration and change-impact analysis. Successful `read` and `grep` calls warm its module index. Use `symbols`, `outline`, `search`, and `definitions` to discover code, then `deps`, `rdeps`, and `neighborhood` to trace dependencies and identify affected areas instead of repeating broad text searches; verify exact source with `read` before editing.
+- Prefer bash for general work, including file inspection, search, and discovery. Choose commands and composition that best serve the task.
+- Use available Hearth-backed tools such as `read`, `find`, and `grep` when building or reusing Hearth's indexes helps codebase exploration or change-impact analysis. `find` reuses resident file discovery; successful `read` and `grep` calls warm the module graph.
+- When symbol or dependency structure matters, use `hearth_graph` to query that graph efficiently: `symbols`, `outline`, `search`, and `definitions` locate code; `deps`, `rdeps`, and `neighborhood` trace dependencies and affected areas. Verify relevant source before editing.
 - Inspect `PI_*` environment variables when current model or session details are relevant.
 - Use edit for precise changes; every edits[].oldText must match exactly.
 - When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls.

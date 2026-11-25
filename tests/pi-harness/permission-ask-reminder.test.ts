@@ -1,46 +1,37 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { HarnessConfig } from "../../pi/extensions/pi-harness/config";
-import setupPermissionAskReminder, {
-  PERMISSION_ASK_REMINDER_CUSTOM_TYPE,
-  PERMISSION_ASK_REMINDER_THRESHOLD,
-} from "../../pi/extensions/pi-harness/features/permission-ask-reminder/index";
 import { setupHarness } from "../../pi/extensions/pi-harness/index";
 import { resolvePaths } from "../../pi/extensions/pi-harness/lib/paths";
 import { createFakePi } from "./fake-pi";
 
-const config = async (): Promise<HarnessConfig> => ({
-  isChild: false,
-  features: {
-    "hook-bridge": false,
-    subagent: false,
-    workflow: false,
-    "bit-task": false,
-    statusline: false,
-    "provider-log": false,
-    "asuku-notify": false,
-    "ask-user-question": false,
-  },
-  trust: { trustedRoots: [] },
-  paths: resolvePaths(await mkdtemp(join(tmpdir(), "pi-ask-reminder-"))),
-});
+const directories: string[] = [];
+const harnesses: ReturnType<typeof createFakePi>[] = [];
 
-const reminders = (messages: readonly unknown[]) =>
-  messages.filter(
-    (message) =>
-      typeof message === "object" &&
-      message !== null &&
-      "customType" in message &&
-      message.customType === PERMISSION_ASK_REMINDER_CUSTOM_TYPE,
-  );
-
-const setupReminderHarness = (
-  pi: ReturnType<typeof createFakePi>,
-  value: HarnessConfig,
-): void => {
-  setupHarness(pi, value, {
+const setupConfirmationHarness = async (hasUI: boolean) => {
+  const home = await mkdtemp(join(tmpdir(), "pi-confirmation-"));
+  directories.push(home);
+  const config: HarnessConfig = {
+    isChild: false,
+    features: {
+      "hook-bridge": false,
+      subagent: false,
+      workflow: false,
+      "bit-task": false,
+      "agent-memory": false,
+      statusline: false,
+      "provider-log": false,
+      "asuku-notify": false,
+      "ask-user-question": false,
+    },
+    trust: { trustedRoots: [] },
+    paths: resolvePaths(home),
+  };
+  const pi = createFakePi({ cwd: home, hasUI });
+  harnesses.push(pi);
+  setupHarness(pi, config, {
     setupBashSandbox: () => ({
       async registerWritableWorktree() {},
       async revokeWritableWorktree() {},
@@ -52,82 +43,46 @@ const setupReminderHarness = (
       registerExecutionBoundary() {},
     }),
   });
+  return pi;
 };
 
-describe("permission ASK reminder", () => {
-  test("injects one hidden reminder after every three displayed confirmations", async () => {
-    const pi = createFakePi();
-    const reminder = setupPermissionAskReminder(pi);
+afterEach(async () => {
+  await Promise.all(harnesses.splice(0).map((pi) => pi.emitSessionShutdown()));
+  await Promise.all(
+    directories
+      .splice(0)
+      .map((path) => rm(path, { recursive: true, force: true })),
+  );
+});
 
-    for (let index = 1; index < PERMISSION_ASK_REMINDER_THRESHOLD; index += 1) {
-      reminder.recordDisplayedConfirmation();
-    }
-    expect(await pi.emitContext([])).toEqual([]);
+describe("permission confirmations without command coaching", () => {
+  test.each([
+    [true, true],
+    [true, false],
+    [false, false],
+  ])(
+    "preserves confirmation behavior with UI=%s and approval=%s",
+    async (hasUI, approved) => {
+      const pi = await setupConfirmationHarness(hasUI);
+      const messages = [{ role: "user", content: "continue" }];
 
-    reminder.recordDisplayedConfirmation();
-    const first = reminders(await pi.emitContext([]));
-    expect(first).toHaveLength(1);
-    expect(first[0]).toMatchObject({
-      role: "custom",
-      customType: PERMISSION_ASK_REMINDER_CUSTOM_TYPE,
-      display: false,
-    });
-    expect(JSON.stringify(first[0])).toContain(
-      "3 Bash permission confirmations",
-    );
-    expect(JSON.stringify(first[0])).toContain("Do not weaken or bypass");
-    expect(reminders(await pi.emitContext([]))).toEqual([]);
-
-    for (let index = 0; index < PERMISSION_ASK_REMINDER_THRESHOLD; index += 1) {
-      reminder.recordDisplayedConfirmation();
-    }
-    expect(JSON.stringify(reminders(await pi.emitContext([]))[0])).toContain(
-      "6 Bash permission confirmations",
-    );
-
-    await pi.emitSessionStart({ type: "session_start", reason: "resume" });
-    reminder.recordDisplayedConfirmation();
-    reminder.recordDisplayedConfirmation();
-    expect(await pi.emitContext([])).toEqual([]);
-  });
-
-  test("counts accepted policy challenges but excludes UI-less not-shown outcomes", async () => {
-    const value = await config();
-    const pi = createFakePi({ cwd: value.paths.home });
-    setupReminderHarness(pi, value);
-
-    for (let index = 0; index < PERMISSION_ASK_REMINDER_THRESHOLD; index += 1) {
-      pi.queueConfirm(true);
-      expect(
-        await pi.emitToolCall({
+      for (let index = 0; index < 6; index += 1) {
+        if (hasUI) pi.queueConfirm(approved);
+        const result = await pi.emitToolCall({
           type: "tool_call",
           toolName: "bash",
-          toolCallId: `displayed-${index}`,
+          toolCallId: `confirmation-${index}`,
           input: { command: "git push origin main" },
-        }),
-      ).toBeUndefined();
-    }
-    expect(reminders(await pi.emitContext([]))).toHaveLength(1);
-    await pi.emitSessionShutdown();
+        });
+        if (hasUI && approved) {
+          expect(result).toBeUndefined();
+        } else {
+          expect(result).toMatchObject({ block: true });
+        }
+        expect(await pi.emitContext(messages)).toEqual(messages);
+      }
 
-    const headlessValue = await config();
-    const headless = createFakePi({
-      cwd: headlessValue.paths.home,
-      hasUI: false,
-    });
-    setupReminderHarness(headless, headlessValue);
-
-    for (let index = 0; index < PERMISSION_ASK_REMINDER_THRESHOLD; index += 1) {
-      expect(
-        await headless.emitToolCall({
-          type: "tool_call",
-          toolName: "bash",
-          toolCallId: `not-shown-${index}`,
-          input: { command: "git push origin main" },
-        }),
-      ).toMatchObject({ block: true });
-    }
-    expect(await headless.emitContext([])).toEqual([]);
-    await headless.emitSessionShutdown();
-  });
+      expect(pi.confirmDialogs).toHaveLength(hasUI ? 6 : 0);
+    },
+  );
 });

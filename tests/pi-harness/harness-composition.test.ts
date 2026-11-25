@@ -106,14 +106,12 @@ describe("pi-harness coordination browser composition", () => {
     expect(registered.tools).not.toContain("subagent");
     expect(registered.tools).not.toContain("subagent_status");
     expect(registered.tools).not.toContain("workflow");
-    const injection = await registered.pi.emitBeforeAgentStart({
+    const start = await registered.pi.emitBeforeAgentStartAggregate({
       type: "before_agent_start",
       prompt: "inspect local issues",
       systemPrompt: "base",
     });
-    expect(injection?.systemPrompt).not.toContain(
-      "Background agent completion",
-    );
+    expect(start.systemPrompt).toBe("base");
   });
 
   test("does not register the bit source for child-only composition", () => {

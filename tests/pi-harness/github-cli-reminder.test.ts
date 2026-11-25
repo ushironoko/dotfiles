@@ -9,7 +9,6 @@ import setupGitHubCliReminder, {
   GITHUB_CLI_REMINDER,
   GITHUB_CLI_REMINDER_TYPE,
 } from "../../pi/extensions/pi-harness/features/github-cli-reminder/index";
-import { COMMAND_HYGIENE_GUIDANCE } from "../../pi/extensions/pi-harness/features/permission-policy/command-hygiene";
 import setupHookBridge from "../../pi/extensions/pi-harness/features/hook-bridge/index";
 import type { BridgeHookSpec } from "../../pi/extensions/pi-harness/features/hook-bridge/registry";
 import { setupHarness } from "../../pi/extensions/pi-harness/index";
@@ -208,27 +207,38 @@ describe("pi-harness GitHub CLI reminder", () => {
     expect(resumed.errors).toEqual([]);
   });
 
-  test("the umbrella registers the reminder only for parent pi sessions", async () => {
+  test("the harness keeps the system prompt and injects the reminder only in parent sessions", async () => {
     const directory = await setupTestDirectory("pi-github-cli-reminder");
     tempDirectories.push(directory);
 
-    const parent = createFakePi({ cwd: directory });
-    setupHarness(parent, makeConfig(directory));
-    const parentInjection = await parent.emitBeforeAgentStart({
-      type: "before_agent_start",
-      prompt: "inspect GitHub",
-    });
-    expect(parentInjection?.message?.customType).toBe(GITHUB_CLI_REMINDER_TYPE);
-    expect(parentInjection?.message?.display).toBe(false);
+    const event = { messageType: "user" as const, prompt: "inspect GitHub" };
+    const options = { cwd: directory, forceSystemPrompt: "base" };
+    const parent = await createSdkExtensionRunner(
+      [(api) => setupHarness(api, makeConfig(directory))],
+      directory,
+    );
+    const parentStart = await parent.runner.emitBeforeAgentStart(
+      event,
+      options,
+    );
+    expect(parentStart.messages).toEqual([
+      {
+        customType: GITHUB_CLI_REMINDER_TYPE,
+        content: GITHUB_CLI_REMINDER,
+        display: false,
+      },
+    ]);
+    expect(parentStart.systemPromptOptions.forceSystemPrompt).toBe("base");
+    expect(parent.errors).toEqual([]);
 
-    const child = createFakePi({ cwd: directory, hasUI: false });
-    setupHarness(child, makeConfig(directory, true));
-    const childInjection = await child.emitBeforeAgentStart({
-      type: "before_agent_start",
-      prompt: "inspect GitHub",
-    });
-    expect(childInjection?.message).toBeUndefined();
-    expect(childInjection?.systemPrompt).toBe(COMMAND_HYGIENE_GUIDANCE);
+    const child = await createSdkExtensionRunner(
+      [(api) => setupHarness(api, makeConfig(directory, true))],
+      directory,
+    );
+    const childStart = await child.runner.emitBeforeAgentStart(event, options);
+    expect(childStart.messages).toEqual([]);
+    expect(childStart.systemPromptOptions.forceSystemPrompt).toBe("base");
+    expect(child.errors).toEqual([]);
   });
 
   test("coexists with the prompt hook on user turns and injects only the reminder on custom turns", async () => {

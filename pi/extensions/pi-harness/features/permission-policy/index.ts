@@ -13,7 +13,6 @@ import {
 } from "../../config";
 import type { BashExecutionBoundary } from "../bash-sandbox";
 import { createPermissionBlocker, type PermissionBlockResult } from "./block";
-import { appendCommandHygiene } from "./command-hygiene";
 import {
   authorizeCodexStageEscalation,
   consumeCodexStageCapability,
@@ -452,11 +451,7 @@ const setupPermissionPolicy = (
     if (event.messageType === "custom") {
       taskTracker.clear();
       clearSkillLifecycle();
-      return {
-        systemPrompt: appendCommandHygiene(
-          typeof event.systemPrompt === "string" ? event.systemPrompt : "",
-        ),
-      };
+      return;
     }
     taskTracker.activate(event.prompt);
     activeSkillBashAllows = [];
@@ -474,11 +469,6 @@ const setupPermissionPolicy = (
         invocation === undefined
           ? []
           : resolveActiveSkillBashAllows(event.prompt, invocation),
-    };
-    return {
-      systemPrompt: appendCommandHygiene(
-        typeof event.systemPrompt === "string" ? event.systemPrompt : "",
-      ),
     };
   });
 
