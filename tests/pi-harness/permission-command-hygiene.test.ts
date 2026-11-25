@@ -40,10 +40,11 @@ describe("permission command hygiene prompt", () => {
     expect(prompt).toContain(
       "Do not create a temporary file merely to inspect, filter, summarize",
     );
-    expect(prompt).toContain("prefer the first applicable option");
+    expect(prompt).toContain("Prefer ordinary Bash by default");
     expect(prompt).toContain(
-      "An available dedicated read, edit, or write tool",
+      "Use available dedicated tools when they are clearer or more precise, or when they avoid unnecessary permission prompts",
     );
+    expect(prompt).toContain("Prefer the first applicable Bash form");
     expect(prompt).toContain("Never assume a tool exists");
     expect(prompt).toContain("native --summary, --format, or --json mode");
     expect(prompt).toContain("directly executable literal command");
