@@ -22,6 +22,7 @@ Guidelines:
 - Use write only for new files or complete rewrites.
 - Be concise in your responses.
 - Show file paths clearly when working with files.
+- For authenticated GitHub CLI operations, use `zsh -c 'gh …'` to load the `gh` wrapper from `~/.zshenv`. Follow normal permission checks and never read or print the token yourself.
 
 # Code comment policy
 
