@@ -343,14 +343,16 @@ substitutions, redirects, extra commands, or a non-literal wrapper. Hard-denied
 relay/import commands remain denied before both execution paths.
 
 The safety layer also appends soft command-hygiene guidance to every parent and
-child system prompt: prefer dedicated file tools, literal project-bounded
-commands, existing repository scripts, and `rg --no-config`; run independent
-inspections and checks sequentially as separate Bash calls, inspect each result
-before choosing the next command, and reserve short pipelines for genuine
-producer/consumer data flow instead of batching with `;`, `&&`, or multiline
-blocks; pass long or multiline CLI data through a file-input option rather than
-shell-escaped one-liners; explain necessity and exact scope before genuinely
-required dynamic shell or ad-hoc scripts instead of sacrificing correctness.
+child system prompt: prefer ordinary Bash for routine work and use dedicated
+tools when they are clearer, more precise, or avoid unnecessary permission
+prompts. Prefer literal project-bounded commands, existing repository scripts,
+and `rg --no-config`; run independent inspections and checks sequentially as
+separate Bash calls, inspect each result before choosing the next command, and
+reserve short pipelines for genuine producer/consumer data flow instead of
+batching with `;`, `&&`, or multiline blocks; pass long or multiline CLI data
+through a file-input option rather than shell-escaped one-liners; explain
+necessity and exact scope before genuinely required dynamic shell or ad-hoc
+scripts instead of sacrificing correctness.
 This generation preference does not relax any permission boundary.
 
 The safety layer includes a default-on Codex CLI fallback for Bash commands

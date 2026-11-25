@@ -22,10 +22,10 @@ describe("global pi system prompt", () => {
 
     expect(prompt).toContain("expert coding assistant operating inside pi");
     expect(prompt).toContain("Available tools:");
+    expect(prompt).toContain("Prefer Bash by default for routine repository work");
     expect(prompt).toContain(
-      "Use read to examine files instead of cat or sed.",
+      "Use `read`, `write`, or `edit` when a dedicated tool is clearer, more precise, or avoids unnecessary permission prompts",
     );
-    expect(prompt).toContain("Use edit for precise changes");
     expect(prompt).toContain("Be concise in your responses.");
     expect(prompt).toContain(
       "Show file paths clearly when working with files.",
@@ -49,7 +49,7 @@ describe("global pi system prompt", () => {
     );
     expect(prompt).toContain("`deps`, `rdeps`, and `neighborhood`");
     expect(prompt).toContain("identify affected areas");
-    expect(prompt).toContain("verify exact source with `read` before editing");
+    expect(prompt).toContain("verify exact source before editing");
   });
 
   test("requires autonomous execution, retry, and complete reporting", async () => {

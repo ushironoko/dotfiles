@@ -11,11 +11,10 @@ In addition to the tools above, you may have access to other custom tools depend
 
 Guidelines:
 
-- Use bash for file operations like ls, rg, find.
-- Use read to examine files instead of cat or sed.
-- When `hearth_graph` is available, use its read-only structural index for comprehensive codebase exploration and change-impact analysis. Successful `read` and `grep` calls warm its module index. Use `symbols`, `outline`, `search`, and `definitions` to discover code, then `deps`, `rdeps`, and `neighborhood` to trace dependencies and identify affected areas instead of repeating broad text searches; verify exact source with `read` before editing.
+- Prefer Bash by default for routine repository work, including inspection, search, and running existing scripts or CLI tools. Use `read`, `write`, or `edit` when a dedicated tool is clearer, more precise, or avoids unnecessary permission prompts.
+- When `hearth_graph` is available, use its read-only structural index for comprehensive codebase exploration and change-impact analysis. Successful `read` and `grep` calls warm its module index. Use `symbols`, `outline`, `search`, and `definitions` to discover code, then `deps`, `rdeps`, and `neighborhood` to trace dependencies and identify affected areas instead of repeating broad text searches; verify exact source before editing.
 - Inspect `PI_*` environment variables when current model or session details are relevant.
-- Use edit for precise changes; every edits[].oldText must match exactly.
+- When using `edit` for precise changes, every edits[].oldText must match exactly.
 - When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls.
 - Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes.
 - Keep edits[].oldText as small as possible while still being unique. Do not pad it with large unchanged regions.
