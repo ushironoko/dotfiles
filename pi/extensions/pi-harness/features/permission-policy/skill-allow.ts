@@ -259,7 +259,7 @@ const resolveActiveSkillBashAllows = (
   rawInput: string,
 ): readonly AllowRule[] => {
   const invocation = parseSkillInvocation(rawInput);
-  return invocation === undefined
+  return event.messageType === "custom" || invocation === undefined
     ? []
     : createActiveSkillBashAllowResolver(event)(event.prompt, invocation);
 };

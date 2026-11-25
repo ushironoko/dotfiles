@@ -238,6 +238,7 @@ export default function setupHookBridge(
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
+    if (event.messageType === "custom") return undefined;
     const cwd = resolveCwd(ctx);
     const specs = selectMatchingSpecs(registry, "before_agent_start");
     for (const spec of specs) {

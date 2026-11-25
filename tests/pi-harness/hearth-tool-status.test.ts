@@ -119,6 +119,10 @@ const renderContext = (
   expanded: false,
   showImages: true,
   isError: false,
+  durationMs: undefined,
+  outputPad: 1,
+  keyText: () => "ctrl+o",
+  keyHint: (_keybinding, description) => `ctrl+o ${description}`,
   ...overrides,
 });
 
@@ -177,6 +181,7 @@ describe("Hearth tool status title", () => {
   });
 
   test("colors wrapped title rows but preserves preview and diff rows", () => {
+    const cachedLines = new Map<number, readonly string[]>();
     const definition: ToolDefinition<typeof schema> = {
       name: "preview",
       label: "preview",
@@ -191,6 +196,8 @@ describe("Hearth tool status title", () => {
       renderCall(_args, renderTheme) {
         return {
           render: (width) => {
+            const cached = cachedLines.get(width);
+            if (cached !== undefined) return cached;
             const titleRows =
               width <= 8
                 ? [
@@ -202,7 +209,7 @@ describe("Hearth tool status title", () => {
                     renderTheme.fg("toolTitle", "edit"),
                     renderTheme.fg("toolTitle", "file.ts"),
                   ];
-            return [
+            const lines = Object.freeze([
               ...titleRows,
               "",
               truncateToWidth(
@@ -213,7 +220,9 @@ describe("Hearth tool status title", () => {
                 width,
                 "",
               ),
-            ];
+            ]);
+            cachedLines.set(width, lines);
+            return lines;
           },
           invalidate() {},
         };
@@ -234,8 +243,11 @@ describe("Hearth tool status title", () => {
     expect(lines[2]).toBe("");
     expect(lines[3]).toStartWith("\x1b[92m+const kept = true;");
     expect(visibleWidth(lines[3])).toBe(80);
+    expect(cachedLines.get(78)?.[0]).toBe("\x1b[36medit\x1b[39m");
 
     const narrowLines = component.render(8);
+    expect(cachedLines.get(8)).toBe(narrowLines);
+    expect(component.render(8)).toBe(narrowLines);
     expect(narrowLines[0]).toBe("\x1b[36medit\x1b[39m");
     expect(narrowLines[2]).toBe("\x1b[36mfile.ts\x1b[39m");
     expect(narrowLines.join("")).not.toContain("✓");

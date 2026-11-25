@@ -52,7 +52,7 @@ interface LineRange {
   end: number;
 }
 
-const firstContentBlock = (lines: string[]): LineRange | undefined => {
+const firstContentBlock = (lines: readonly string[]): LineRange | undefined => {
   const start = lines.findIndex((line) => !isBlankRenderedLine(line));
   if (start === -1) return undefined;
   const separator = lines.findIndex(
@@ -63,6 +63,7 @@ const firstContentBlock = (lines: string[]): LineRange | undefined => {
 
 type SettledStatus = "success" | "error";
 type StatusTitleScope = "first-block" | "all-content";
+type RenderedLines = ReturnType<Component["render"]>;
 const MIN_FIRST_BLOCK_STATUS_WIDTH = 12;
 
 const settledStatus = (context: {
@@ -74,7 +75,7 @@ const settledStatus = (context: {
 };
 
 class StatusTitleComponent implements Component {
-  private cache: { width: number; lines: string[] } | undefined;
+  private cache: { width: number; lines: RenderedLines } | undefined;
 
   constructor(
     private inner: Component,
@@ -98,13 +99,13 @@ class StatusTitleComponent implements Component {
     return this.inner;
   }
 
-  private remember(width: number, lines: string[]): string[] {
+  private remember(width: number, lines: RenderedLines): RenderedLines {
     this.cache = { width, lines };
     return lines;
   }
 
   private styleTitleLines(
-    lines: string[],
+    lines: readonly string[],
     status: SettledStatus,
     icon: string,
     indentContinuations: boolean,
@@ -129,7 +130,7 @@ class StatusTitleComponent implements Component {
     });
   }
 
-  render(width: number): string[] {
+  render(width: number): RenderedLines {
     const { status } = this;
     if (status === undefined) return this.inner.render(width);
     if (this.cache?.width === width) return this.cache.lines;

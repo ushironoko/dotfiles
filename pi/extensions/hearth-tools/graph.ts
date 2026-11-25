@@ -242,7 +242,7 @@ class GraphCallTitle implements Component {
     this.text = text;
   }
 
-  render(width: number): string[] {
+  render(width: number): ReturnType<Component["render"]> {
     return truncateToVisualLines(this.text, Number.MAX_SAFE_INTEGER, width)
       .visualLines;
   }

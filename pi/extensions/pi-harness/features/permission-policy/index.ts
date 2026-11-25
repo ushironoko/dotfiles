@@ -449,6 +449,15 @@ const setupPermissionPolicy = (
   };
 
   pi.on("before_agent_start", (event) => {
+    if (event.messageType === "custom") {
+      taskTracker.clear();
+      clearSkillLifecycle();
+      return {
+        systemPrompt: appendCommandHygiene(
+          typeof event.systemPrompt === "string" ? event.systemPrompt : "",
+        ),
+      };
+    }
     taskTracker.activate(event.prompt);
     activeSkillBashAllows = [];
     clearQueuedInputs();

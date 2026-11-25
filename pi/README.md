@@ -25,7 +25,7 @@ child-process behavior): `tests/fixtures/pi-harness/raw/`.
 
 ```bash
 bun install --frozen-lockfile                           # reproducible local baseline
-bun install -g @earendil-works/pi-coding-agent@1.0.4   # initial known-good global install
+bun install -g @earendil-works/pi-coding-agent@1.6.0   # install the same version as the local baseline
 bun run src/index.ts install                            # deploys the symlinks
 pi                                                      # /login → provider of choice
 bun run check:pi-compat                                 # compile + offline real-pi RPC smoke
@@ -42,6 +42,21 @@ when its public declarations compile the self-contained extensions and its real
 CLI passes the isolated RPC probe. `check:pi-version` remains as a
 backward-compatible alias for `check:pi-compat`.
 
+The 1.6.0 baseline pins `pi-coding-agent`, `pi-ai`, and `pi-tui` directly.
+`pi-schema` comes from the exact dependencies of `pi-ai` and
+`pi-agent-core`. The coding agent still depends on TypeBox. Global discovery
+captures `pi-schema` and `chord` when the installed manifests require them.
+Pi 1.0.4 requires `chord`, and Pi 1.6.0 can have it installed globally without
+using it in the active Pi package cohort.
+
+The full compatibility check passes on Pi 1.6.0, including public declaration
+compilation and the isolated RPC probe. Renderers accept cached readonly output,
+and custom-message starts do not run user-prompt hooks or inherit skill grants.
+
+Use the global install command above only for a fresh installation. For upgrades,
+update the local exact pins, run `bun install`, then `bun run update:pi` so every
+package in the validated Pi cohort is updated together.
+
 Pi 1.0.4 provides the fullscreen viewport natively. The tracked settings select
 `tuiMode: "fullscreen"` and `fullscreenScrollbar: "hidden"`, so extension
 widgets, the editor, status, and footer stay in the bottom dock while the
@@ -53,14 +68,18 @@ mouse-mode startup and shutdown for this viewport.
 
 Prefer `bun run update:pi` over raw `pi update`. It verifies the current install
 before mutation, acquires an atomic update lock, and records the validated exact
-package cohort in a v6 recovery journal. A temporary, private snapshot preserves
+package cohort in a v8 recovery journal. A temporary, private snapshot preserves
 the actual preflight bytes of every cohort package tree (including a patched
-0.83 source), any pre-existing candidate-only package tree, Bun's global
-`package.json`, `bun.lock`, and `bun.lockb`, internal `node_modules/.bin`, and
-the actual global `pi`/`pi-ai` executable entries. It records absent paths plus
-the name, canonical root, and SHA-256 of every global package tree. Newly created
-recovery ancestors, snapshot data and directories, the journal, and all rename
-parent directories are synced to durable storage before mutation. The updater
+0.83 source), any pre-existing candidate-only package tree, retained known Pi
+packages, Bun's global `package.json`, `bun.lock`, and `bun.lockb`, internal
+`node_modules/.bin`, and the actual global `pi`/`pi-ai` executable entries.
+Retained packages outside the update and rollback cohorts can be Bun development
+symlinks. The updater hashes and restores the literal link targets without
+following them. Package roots in either command cohort must be real directories.
+The journal records absent paths and the name, root path, and SHA-256 of every
+installed global package entry. Newly created recovery ancestors, snapshot data
+and directories, the journal, and all rename parent directories are synced to
+durable storage before mutation. The updater
 then uses the captured Bun installation to install the exact Pi cohort validated
 from the local lockfile and checks the candidate. The journal records that
 executable's SHA-256, allowing recovery after the current Bun path moves while
@@ -92,7 +111,10 @@ v3 journals without Bun global metadata and absent-package state, v4 journals
 without the package inventory and executable-link snapshot, and v5 journals
 without actual global-bin state, inventory content digests, and collision-free
 transaction staging are retained and rejected explicitly because they cannot
-truthfully restore and verify the historical global installation.
+truthfully restore and verify the historical global installation. V6 journals
+are also rejected because they used non-portable symlink mode digests. V7
+recovery verifies each package recorded in the journal, including retained
+Chord packages from older Pi installations, before and after restoring snapshots.
 The compatibility smoke uses temporary HOME/config/session directories, runs
 no model turn/provider request, and never reads user auth or sessions.
 
@@ -817,7 +839,7 @@ successful-response quota headers available to this bridge.
 Host-dependent checks:
 
 - [x] `bun run check:pi-baseline` passes (local lock/install integrity)
-- [x] `bun run check:pi-compat` passes (global declarations + isolated RPC)
+- [ ] `bun run check:pi-compat` passes on Pi 1.6.0 (global declarations + isolated RPC)
 - [x] pi startup shows no pi-harness load errors
 - [x] Phase 2: matching `npx`/`bunx` rejected by the npm-script preflight
       before local judging; other commands reach permission-policy;

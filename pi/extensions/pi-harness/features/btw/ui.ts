@@ -83,7 +83,7 @@ const contentLines = (
   record: BtwHistoryData,
   width: number,
   theme: BtwPaneTheme,
-): string[] => {
+): readonly string[] => {
   const root = new Container();
   const metadata = new Box(1, 0, (text) => theme.bg("selectedBg", text));
   metadata.addChild(
