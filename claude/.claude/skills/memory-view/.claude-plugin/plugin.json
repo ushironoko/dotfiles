@@ -1,0 +1,8 @@
+{
+  "name": "memory-view",
+  "version": "0.1.0",
+  "description": "A pane listing this project's memory files; open one to read or edit it, or delete it from the list.",
+  "author": {
+    "name": "ushironoko"
+  }
+}

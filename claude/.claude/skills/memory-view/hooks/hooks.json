@@ -1,0 +1,4 @@
+{
+  "description": "memory-view: /memories toggles a Pane listing project memory files; Enter opens one, h or Esc goes back, x deletes, i edits and Esc saves",
+  "modules": ["./register.tsx"]
+}
